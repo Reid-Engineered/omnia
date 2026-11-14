@@ -1,7 +1,7 @@
 use gpui::{
     App, Bounds, Context, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
-use std::{num::NonZeroU64, process::ExitCode};
+use std::{num::NonZeroU64, process::ExitCode, time::Duration};
 
 // Temporary until T1.2 generates omnia-theme tokens. Theme/stage/paper in omnia.figcraft.
 const STAGE_PAPER: u32 = 0xEFEDE6;
@@ -52,6 +52,17 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if let Some(frames) = frames_remaining {
+        // Rule 9: a bounded run must end even if the window is never drawn (GPUI skips
+        // drawing hidden or minimized windows), so a stalled run exits non-zero.
+        let per_frame_ms = frames.get().saturating_mul(50);
+        let limit = Duration::from_secs(30) + Duration::from_millis(per_frame_ms);
+        std::thread::spawn(move || {
+            std::thread::sleep(limit);
+            eprintln!("omnia-app: --frames {frames} did not finish within {limit:?}");
+            std::process::exit(3);
+        });
+    }
     gpui_platform::application().run(move |cx: &mut App| {
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
