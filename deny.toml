@@ -1,0 +1,35 @@
+# cargo-deny configuration for Omnia (roadmap T0.7).
+#
+# The licence allow-list is exactly the list in canvas-plan.md section 10:
+# MIT, Apache-2.0, BSD, ISC, Zlib and Unicode. "BSD" is recorded here as the
+# two SPDX BSD variants (BSD-2-Clause and BSD-3-Clause) and "Unicode" as
+# Unicode-3.0. Nothing else is allowed: a transitive dependency under any
+# other licence fails `cargo deny check` and must be listed in the roadmap
+# log, never silently added here.
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+]
+# The workspace crates are private (publish = false) and carry no licence
+# expression; only published dependencies are licence-checked.
+private = { ignore = true }
+
+[sources]
+# Git sources are limited to the pinned Zed checkout for gpui/gpui_platform
+# (canvas-plan.md section 10) and the git sources that checkout itself pins
+# in Cargo.lock. Any other git or unknown source is denied.
+allow-git = [
+    "https://github.com/zed-industries/zed",
+    "https://github.com/zed-industries/font-kit",
+    "https://github.com/zed-industries/oo7",
+    "https://github.com/zed-industries/scap",
+    "https://github.com/zed-industries/wasm_thread",
+    "https://github.com/gfx-rs/wgpu",
+]
