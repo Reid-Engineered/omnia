@@ -620,6 +620,20 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        Zlib, Unicode as Unicode-3.0), ignores only the private workspace
                        crates, and allows only the six git sources pinned in Cargo.lock
                        (zed plus font-kit, oo7, scap, wasm_thread, gfx-rs/wgpu).
+                       Plan section 10 names only the Zed checkout; the other five git
+                       sources are pulled in by that checkout through Cargo.lock and are
+                       recorded here with the licence of every crate they provide (from
+                       cargo metadata, cross-checked against each repo's licence file):
+                       gfx-rs/wgpu at cddb2f5d — naga, naga-types, wgpu, wgpu-core,
+                       wgpu-hal, wgpu-types and the wgpu-core-deps-* crates, all
+                       MIT OR Apache-2.0; zed-industries/font-kit at 94b0f281 —
+                       zed-font-kit 0.14.1-zed, MIT OR Apache-2.0; zed-industries/oo7
+                       at 731c1215 — oo7 0.6.0, MIT; zed-industries/scap at b5c86ec5 —
+                       zed-scap 0.0.8-zed, MIT; zed-industries/wasm_thread at
+                       0cf96c77 — wasm_thread 0.3.3, Apache-2.0 OR MIT; the Zed
+                       checkout itself (15d136bf) — gpui, gpui_platform and the other
+                       in-repo crates, all Apache-2.0. Every git-sourced crate is
+                       inside the section 10 allow-list; none adds a licence exception.
                        Local run on the T0.1 host (Windows 11 x64, i7-14650HX, RTX 5060
                        Laptop + Intel UHD, 100% DPI): fmt passed; clippy passed in
                        1m 47s; cargo test --workspace passed (INV12 ok); cargo deny check
