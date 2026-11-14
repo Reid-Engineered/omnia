@@ -1,0 +1,7 @@
+{
+  "name": "omnia-mockups",
+  "private": true,
+  "type": "module",
+  "description": "Generators for the Omnia FigCraft mockups (run with figcraft-cli run)",
+  "dependencies": { "opentype.js": "1.3.4" }
+}
