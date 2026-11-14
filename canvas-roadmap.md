@@ -122,7 +122,7 @@ of the `canvas` lane.
   `canvas-roadmap.md`.
 - Done when: `vendor/electronic-symbols/SVG/` holds 116 SVGs and `omnia.figcraft` is present.
 
-### T0.1 Workspace scaffold · todo
+### T0.1 Workspace scaffold · done
 - Lane: canvas · Depends: T0.0 · Read: plan sections 4, 9, 10
 - Owns: root `Cargo.toml`, `rust-toolchain.toml`, a stub `lib.rs` or `main.rs` per crate
 - Do: create the workspace and the six crates plus `xtask`. Pin `gpui` and `gpui_platform`
@@ -551,3 +551,50 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
 2026-11-14 T0.0 done — local main reset to origin/main (172be3c); canvas-plan.md and
                        canvas-roadmap.md kept untracked. vendor/electronic-symbols/SVG/ has 116
                        SVGs; omnia.figcraft is at the repo root.
+2026-11-14 T0.1 done — created the resolver-3, edition-2024 workspace with omnia-doc,
+                       omnia-symbols, omnia-theme, omnia-canvas, omnia-bench, omnia-app and
+                       xtask; Rust pinned to 1.98.1. Cargo.lock records the resolved graph.
+                       gpui and gpui_platform are pinned only in workspace.dependencies to
+                       15d136bf8e72ae43b284183ec46940c009460f5c. Read hello_world.rs,
+                       gpui_platform.rs, window.rs, app.rs and example_support/fonts.rs at
+                       that pin before using their APIs; no conflicting G facts found.
+                       omnia-app opens one paper rectangle. Its temporary #EFEDE6 constant
+                       matches Theme/stage/paper in both omnia.figcraft modes and stays in
+                       omnia-app only until T1.2 replaces it with omnia-theme tokens.
+                       --frames N requests frames only for the bounded run, then quits on
+                       the next-frame callback after the final presentation; ordinary idle
+                       mode schedules no continuous callbacks. Invalid limits exit 2.
+                       INV12 in xtask checks resolved names, all targets/features and normal,
+                       build/dev/transitive edges. Negative tests rejected an optional,
+                       renamed Windows-only GPUI dependency in omnia-doc and a transitive
+                       dependency via omnia-canvas in omnia-symbols; plants were restored.
+                       Checks passed: cargo build --workspace --release; cargo run -p
+                       omnia-app -- --frames 60 (exit 0); cargo fmt --all --check;
+                       cargo clippy --workspace --all-targets -- -D warnings;
+                       cargo test --workspace (INV12 passed); git diff --check.
+                       Release build after prerequisites: 150.47 s (Cargo: 2m 30s), dependency
+                       fetch excluded, partially warm cache from failed prerequisites.
+                       First attempt: 127.18 s including fetch/cache wait, failed without
+                       link.exe. Intermediate attempts during setup failed for missing SDK
+                       libraries; no check or build profile was weakened.
+                       Host: Windows 11 x64, Intel Core i7-14650HX, NVIDIA RTX 5060 Laptop
+                       GPU + Intel UHD Graphics; displays 1920x1080 and 1920x1200, both 60 Hz;
+                       system DPI 96 (100%). Q4: no reference machine named, no budget gated.
+                       Prerequisites installed: VS 2022 Build Tools 17.14.37906.3, VCTools
+                       workload with recommended components (MSVC 14.44.35207), Windows SDK
+                       10.0.26100.0; x64 fxc.exe file version 10.0.26100.9457. Release GPUI
+                       compiles HLSL with fxc (PATH, GPUI_FXC_PATH, or SDK registry lookup).
+                       Setup completed successfully; plain cargo commands then worked.
+                       T0.2: bundle Inter/Source Code Pro bytes and explicitly call
+                       cx.text_system().add_fonts(Vec<Cow<'static, [u8]>>) before opening the
+                       window. The pinned example helper only loads fonts on wasm; its
+                       native branch is a no-op. Wire other bundled assets with
+                       gpui_platform::application().with_assets(AssetSource) before run;
+                       none are needed for the solid rectangle. T1.2 owns token generation.
+                       T0.3: omnia-bench is an empty binary; enable GPUI profiler/test-support
+                       where needed, preserve callback-free idle mode. No fonts are bundled
+                       yet. T0.7: cache Cargo git/registry data and run cargo fetch --locked
+                       before the offline all-target INV12 check; audit transitive licences
+                       with cargo-deny (not required in T0.1). No new direct dependency
+                       outside plan section 10. Measurements are kept in this task log to
+                       stay within T0.1's owned files; no docs/ lane files were changed.

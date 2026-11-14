@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/*", "xtask"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+publish = false
+
+[workspace.dependencies]
+gpui = { git = "https://github.com/zed-industries/zed", rev = "15d136bf8e72ae43b284183ec46940c009460f5c" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "15d136bf8e72ae43b284183ec46940c009460f5c" }
