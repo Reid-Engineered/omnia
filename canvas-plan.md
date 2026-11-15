@@ -49,10 +49,31 @@ Repository facts:
 
 ## 2. Budgets
 
-Measured on the reference machine (Q4): mid-range Windows laptop, integrated graphics, 4K,
-125% and 150% scaling, release build, plugged in. `bench` means
+Measured on the reference machine (Q4): ASUS TUF Gaming F16 (FX608JMR), Intel Core
+i7-14650HX, Intel UHD Graphics (integrated) as the render adapter, 32 GB, Windows 11, at a
+4K viewport, 125% and 150% scaling, release build, plugged in. Every timed run follows the
+reference protocol in section 2.1. `bench` means
 `cargo run --release -p omnia-bench --`. Sheets: `empty`, `100`, `1k`, `10k` (10,000 parts and
 20,000 wires), `dense`, `text`.
+
+### 2.1 Reference protocol
+
+The reference laptop is not the "mid-range" machine the brief describes, and it has no 4K
+panel, so these rules keep its numbers honest:
+
+- **Adapter.** GPUI must render on the integrated Intel UHD Graphics, not the RTX 5060. Every
+  result records the adapter; a run on any other adapter is not a reference run.
+- **Viewport.** The panel is 1920x1200 (165 Hz). A 4K viewport is a 3072x1728 logical window
+  at 125%, or 2560x1440 at 150% (3840x2160 device either way), enforced with `window_min_size` and larger than the panel.
+  Record this. Present-interval and dirty-to-present numbers are taken from it, but B4's
+  "120 fps" is judged with the panel at its 165 Hz mode, never at 60 Hz.
+- **Power and noise.** On AC, Windows power mode Best performance, the bench window in the
+  foreground, other apps closed. Each result records the power source and power mode.
+- **Repetitions.** Ten repetitions per case, interleaved (case order rotates each pass), not
+  one pass per repetition. The gate uses the median of run p99s and reports the range.
+- **CPU headroom.** The i7-14650HX is faster than a mid-range CPU. A budget that passes with
+  less than 25% margin on a CPU-bound metric (paint, hit test, start-up) is reported as
+  "met on reference, marginal for mid-range" so the owner can decide.
 
 | ID | Budget | Measured by |
 | --- | --- | --- |
@@ -532,7 +553,7 @@ Each has a default. Build to the default; the owner's answer replaces it here.
 | Q1 | Stroke weight across zoom: scale with zoom, or constant on screen? | Scale with zoom, floor of one device pixel (K5). |
 | Q2 | Canvas colours are not tokens. Only `stage/paper` is; `build-omnia.mjs` hard-codes the rest. Will tokens be added to the `Theme` collection? | Keep them in `canvas-tokens.toml`, same value in both themes: `stage/ink` `#1D1D1F`, `stage/ink-secondary` `#6B6B70`, `stage/grid` `#00000022`, `stage/select` `#2F6FEB`, `stage/select-halo` `#9DBDFF`, `stage/hover` = select-halo, `stage/net-highlight` = select, `stage/snap` = `accent/mint`, `stage/tag-bg` `#111112`, `stage/tag-text` `#F2F2F2`, `stage/instrument-body` `#FBFAF6`, `probe/a` = select, `probe/b` `#7A5AF8`. A token that later appears in `omnia.figcraft` wins. |
 | Q3 | Label font: the brief says Source Code Pro for designators and values; the mockup uses Inter SemiBold. | Follow the mockup (K8). |
-| Q4 | Which laptop is the reference machine (model, GPU, panel refresh rate)? Can it run gates as a self-hosted CI runner? | None named. No budget can be marked met; record numbers with the hardware they came from. |
+| Q4 | Which laptop is the reference machine (model, GPU, panel refresh rate)? Can it run gates as a self-hosted CI runner? | **Answered 2026-11-15:** the owner's ASUS TUF Gaming F16 (i7-14650HX, Intel UHD as render adapter, 1920x1200 panel up to 165 Hz, 4K viewport by window size), under the protocol in section 2.1. Self-hosted CI runner: not decided; frame-time gates run by hand on it until then. The Orion laptop (ThinkPad T470, i5-7300U, HD 620, Arch Linux, 1080p) is a later Linux and low-end check, not a reference. |
 | Q5 | Does B10 cover GPUI's internal allocations? | No: our code only. Total is reported, not gated. |
 | Q6 | When a part moves, do attached wires stretch? | No. Roadmap T6.3 stays blocked. |
 | Q7 | If the spike lands on Plan C, is a patched GPUI fork acceptable? | No default. Stop and ask. |

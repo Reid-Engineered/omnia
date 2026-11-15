@@ -25,7 +25,8 @@ Statuses: `todo`, `doing`, `done`, `blocked (reason)`, `needs-human`.
    set the task to `blocked` and log what you measured.
 4. **Report numbers with their hardware.** Write measurements to
    `docs/measurements/<task-id>.md` with CPU, GPU, resolution, scale factor and refresh rate.
-   Only the reference machine (Q4) can mark a budget met. On any other machine a gate task
+   Only the reference machine (Q4: the owner's ASUS TUF F16, under plan section 2.1) can mark
+   a budget met. On any other machine, or on it outside the section 2.1 protocol, a gate task
    ends as `needs-human`, with the numbers recorded.
 5. **Open questions have defaults.** Use the default in plan section 12. Do not ask again and
    do not pick a different answer. Name the `Q` id in the pull request description.
@@ -109,7 +110,7 @@ of the `canvas` lane.
 | H2 | During T3.3 | Approves the first golden images against the mockup. |
 | H3 | During T0.5 | Performs the touchpad and mouse gestures for S7 while the logger runs. |
 | H4 | After T7.5 | Reads the final budget report. |
-| — | Any time | Answers Q1 to Q7; names the reference machine (Q4). |
+| — | Any time | Answers Q1 to Q7 (Q4 answered 2026-11-15). |
 
 ---
 
@@ -774,3 +775,13 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        skip DM update() via an early return, and events.rs:1380 drops drained
                        events when there is no input callback. Both are candidates for an
                        upstream issue at the next GPUI pin task.
+2026-11-15 Q4 answered  — owner named the reference machine: this laptop (ASUS TUF Gaming F16
+                       FX608JMR, i7-14650HX, Intel UHD as render adapter, 1920x1200 panel up to
+                       165 Hz). Plan section 2.1 adds the reference protocol: integrated adapter
+                       only, 4K viewport by window size, AC + Best performance + foreground,
+                       ten interleaved repetitions, power state recorded, and a "marginal for
+                       mid-range" flag for CPU-bound budgets within 25%. The Orion laptop
+                       (T470, Arch Linux, 1080p, no hardware Vulkan yet) is a later Linux and
+                       low-end check. T0.4's numbers were taken on this machine but not under
+                       the protocol (3 reps, one pass per rep, power state unrecorded); S1 is
+                       re-run under it before T0.6.
