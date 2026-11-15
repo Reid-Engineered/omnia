@@ -152,7 +152,7 @@ of the `canvas` lane.
   doctored file; ten repeated `bench run` results and their spread are in
   `docs/measurements/T0.3.md`.
 
-### T0.4 Spike scenes S1 to S6 and S8 · todo
+### T0.4 Spike scenes S1 to S6 and S8 · needs-human (150% and no-GPU verification on Q4)
 - Lane: bench · Depends: T0.3 · Read: plan section 8, G1 to G8, G12, G14, G15
 - Owns: `crates/omnia-bench/src/spike/`
 - Do: implement `bench spike s1` to `s6` and `s8` exactly as the S table describes, each
@@ -774,3 +774,29 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        skip DM update() via an early return, and events.rs:1380 drops drained
                        events when there is no input callback. Both are candidates for an
                        upstream issue at the next GPUI pin task.
+
+2026-11-14 T0.4 needs-human - Implemented S1-S6/S8; integrated landed S7 and PR #4 fixes.
+                       Read pinned GPUI 15d136bf before writing GPUI code; supplied G
+                       corrections apply. resvg 0.46.0: Apache-2.0 OR MIT, verified from
+                       Cargo.toml; optional readback, never default test-support.
+                       39 cases x three 600-frame runs at 3840x2160, 125%, 60 Hz;
+                       i7-14650HX, RTX 5060 Laptop + UHD; active Intel UHD, driver
+                       32.0.101.7088. window_min_size avoids desktop clamping. Q4:
+                       non-reference, no budget marked met. Raw results and spreads:
+                       docs/measurements/T0.4.md. Median p99: 25k quads 5.235 ms;
+                       70k 7.971 ms [7.488,18.301]; 15k sprites add 6.806 ms;
+                       inferred atlas 11.52 GB/1494 pages after two sweeps; paths
+                       4.849 us/path, 0 ours/30 total allocations; 12k glyphs add
+                       6.298 ms, zero warm paint allocations; 60k replay 75.0%.
+                       S8 GPU 4K readback works; cold median 139.318 ms, idle zero
+                       frames/0.781% CPU; visible DPI 125->100->125 recorded.
+                       G1's B10 consequence needs Q5 qualification: GPUI allocations
+                       count in total, not ours. SVG keys include both snapped
+                       dimensions despite width-only raster sizing; atlas retention
+                       and count-dependent payload are findings. Provisional numbers
+                       point to Plan C's 25k-quad row; T0.6 decides.
+                       Live 150% and no-GPU render_to_image: not measured on this
+                       machine; to do on the reference machine (Q4). No settings
+                       changed; orchestrator requested wrap-up without more movement.
+                       Standard fmt/Clippy/tests/deny and feature Clippy/release passed;
+                       S7 summariser dispatch smoke passed. No check was weakened.

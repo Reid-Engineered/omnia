@@ -3366,6 +3366,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "hdrhistogram",
+ "resvg",
  "serde_json",
 ]
 

@@ -19,8 +19,8 @@ usage: bench <command> [options]
 
   run     [--sheet empty|placeholder] [--script pan] [--frames 600] [--warmup 60]
           [--size 1280x800] [--json FILE]
-  start   [--sheet empty|placeholder] [--runs 10] [--json FILE]
-  idle    [--seconds 10] [--settle-ms 1000] [--json FILE]
+  spike   s1..s6|s8 [--count N] [--mode fixed|sweep|square|rounded|sprite|direct|direct-sweep|cached|repaint|quality|monitors|displays]\n          [--frames 600] [--warmup 60] [--size 3072x1728] [--json FILE]\n  start   [--sheet empty|placeholder] [--runs 10] [--size 960x640] [--json FILE]
+  idle    [--seconds 10] [--settle-ms 1000] [--size 960x640] [--json FILE]
   compare BASE.json NEW.json [--max-regression 10] [--metrics PREFIX[,PREFIX..]]
           [--json FILE]
   spike   s7 [--seconds 60] [--out FILE] | s7 --summarise FILE
@@ -94,13 +94,10 @@ fn main() -> ExitCode {
     let command = args.next().unwrap_or_default();
     let result = match command.as_str() {
         "run" => cmd_run(args),
+        "spike" => cmd_spike(args),
         "start" => cmd_start(args),
         "idle" => cmd_idle(args),
         "compare" => cmd_compare(args),
-        "spike" => omnia_bench::spike::run(args.collect()).map_err(|e| match e {
-            SpikeError::Usage(message) => Failure::Usage(message),
-            SpikeError::Run(message) => Failure::Run(message),
-        }),
         "start-child" => cmd_start_child(args),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
@@ -153,9 +150,10 @@ fn cmd_run(args: impl Iterator<Item = String>) -> Result<(), Failure> {
 }
 
 fn cmd_start(args: impl Iterator<Item = String>) -> Result<(), Failure> {
-    let args = usage(Args::parse(args, &["sheet", "runs", "json"]))?;
+    let args = usage(Args::parse(args, &["sheet", "runs", "size", "json"]))?;
     usage(args.no_positionals())?;
     let config = StartConfig {
+        size: usage(parse_size(args.get("size").unwrap_or("960x640")))?,
         sheet: usage(Sheet::parse(args.get("sheet").unwrap_or("empty")))?,
         runs: positive("runs", usage(args.number("runs", 10))?)?,
     };
@@ -164,14 +162,18 @@ fn cmd_start(args: impl Iterator<Item = String>) -> Result<(), Failure> {
 }
 
 fn cmd_start_child(args: impl Iterator<Item = String>) -> Result<(), Failure> {
-    let args = usage(Args::parse(args, &["sheet"]))?;
+    let args = usage(Args::parse(args, &["sheet", "size"]))?;
     usage(args.no_positionals())?;
     let sheet = usage(Sheet::parse(args.get("sheet").unwrap_or("empty")))?;
-    harness::start_child(sheet).map_err(Failure::Run)
+    harness::start_child(
+        sheet,
+        usage(parse_size(args.get("size").unwrap_or("960x640")))?,
+    )
+    .map_err(Failure::Run)
 }
 
 fn cmd_idle(args: impl Iterator<Item = String>) -> Result<(), Failure> {
-    let args = usage(Args::parse(args, &["seconds", "settle-ms", "json"]))?;
+    let args = usage(Args::parse(args, &["seconds", "settle-ms", "size", "json"]))?;
     usage(args.no_positionals())?;
     let seconds: f64 = usage(args.number("seconds", 10.0))?;
     if !(seconds.is_finite() && seconds > 0.0 && seconds <= 3600.0) {
@@ -179,6 +181,7 @@ fn cmd_idle(args: impl Iterator<Item = String>) -> Result<(), Failure> {
     }
     let settle_ms: u64 = usage(args.number("settle-ms", 1000))?;
     let config = IdleConfig {
+        size: usage(parse_size(args.get("size").unwrap_or("960x640")))?,
         seconds,
         settle: Duration::from_millis(settle_ms),
     };
@@ -283,4 +286,34 @@ fn write_json(path: &str, value: &Value) -> Result<(), Failure> {
         .map_err(|e| Failure::Run(format!("write {path}: {e}")))?;
     eprintln!("bench: wrote {path}");
     Ok(())
+}
+
+fn cmd_spike(args: impl Iterator<Item = String>) -> Result<(), Failure> {
+    let args: Vec<String> = args.collect();
+    if args.first().is_some_and(|scene| scene == "s7") {
+        return omnia_bench::spike::run(args).map_err(|e| match e {
+            SpikeError::Usage(message) => Failure::Usage(message),
+            SpikeError::Run(message) => Failure::Run(message),
+        });
+    }
+    let args = usage(Args::parse(
+        args,
+        &["count", "mode", "frames", "warmup", "size", "json"],
+    ))?;
+    let [scene] = args.positional.as_slice() else {
+        return Err(Failure::Usage("spike needs s1..s8".into()));
+    };
+    let config = usage(omnia_bench::spike::Config::parse(
+        scene,
+        usage(args.number("count", 0))?,
+        args.get("mode").unwrap_or("fixed"),
+    ))?;
+    let report = omnia_bench::spike::run_scene(
+        config,
+        positive("frames", usage(args.number("frames", 600))?)?,
+        positive("warmup", usage(args.number("warmup", 60))?)?,
+        usage(parse_size(args.get("size").unwrap_or("3072x1728")))?,
+    )
+    .map_err(Failure::Run)?;
+    finish(&report, args.get("json"))
 }
