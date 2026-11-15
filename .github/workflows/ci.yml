@@ -1,0 +1,130 @@
+# Continuous integration for Omnia (roadmap T0.7).
+#
+# Runs the standard checks from canvas-roadmap.md on a hosted Windows
+# runner. Hosted runners have no interactive desktop session and no GPU,
+# so any test that opens a window or calls `render_to_image` fails there;
+# tests like that must be gated to the reference machine by the tasks that
+# add them, not loosened or deleted here. Window tests skip themselves when
+# OMNIA_HEADLESS_CI is set (today: crates/omnia-app/tests/fonts.rs) and run
+# on every machine with a desktop session, including the reference machine.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Standard checks (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the channel (1.98.1) and the rustfmt and
+      # clippy components; this action installs exactly that toolchain.
+      - name: Install the pinned Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      # Cache the Cargo registry and git checkouts (so the pinned Zed git
+      # dependency is not cloned on every run) plus the build output.
+      # Restore and save are separate steps so the cache is saved even
+      # when a later check fails (see the save step at the end).
+      - name: Restore Cargo data and target directory from cache
+        id: cargo-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # Building GPUI needs MSVC, the Windows SDK and fxc (the DirectX
+      # shader compiler); see the T0.1 log entry in canvas-roadmap.md.
+      # Hosted windows-latest images ship all three: this step puts MSVC
+      # on PATH and fails loudly if any prerequisite is missing.
+      - name: Set up MSVC and verify Windows build prerequisites
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Verify link.exe, the Windows SDK and fxc.exe are present
+        shell: pwsh
+        run: |
+          $link = Get-Command link.exe -ErrorAction SilentlyContinue
+          if (-not $link) { throw "link.exe (MSVC) not found on PATH" }
+          Write-Host "link.exe: $($link.Source)"
+          $fxc = Get-Command fxc.exe -ErrorAction SilentlyContinue
+          if (-not $fxc) {
+            $sdkBin = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
+            $fxc = Get-ChildItem -Path $sdkBin -Filter fxc.exe -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '\\x64\\' } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1
+          }
+          if (-not $fxc) { throw "fxc.exe (Windows SDK DirectX shader compiler) not found" }
+          Write-Host "fxc.exe: $($fxc.Source ?? $fxc.FullName)"
+          Write-Host "Windows SDK bin: $sdkBin"
+
+      # Fetch every dependency before the checks: the INV12 test in xtask
+      # runs `cargo tree --offline`, so the Cargo git and registry caches
+      # must already be populated.
+      - name: Fetch dependencies (required before the offline INV12 test)
+        run: cargo fetch --locked
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run Clippy with warnings denied
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Headless limitation: this runs on a hosted runner with no
+      # interactive desktop, where GPUI refuses to open windows. Only
+      # window-free tests run here; any future test that opens a window or
+      # uses render_to_image must be gated to the reference machine by its
+      # own task. Do not weaken or delete such a test to make this pass.
+      - name: Run tests (headless hosted runner - window tests skip themselves)
+        env:
+          OMNIA_HEADLESS_CI: "1"
+        run: cargo test --workspace
+
+      # Pinned to the cargo-deny version used for the local audit in the
+      # T0.7 log entry; deny.toml holds the section-10 licence allow-list.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny@0.20.2
+
+      - name: Check licences, advisories, bans and sources with cargo-deny
+        run: cargo deny check
+
+      # Save the Cargo and target cache even when a check above failed,
+      # so a red run still warms the cache for the next one. Skipped on
+      # an exact cache hit, when there is nothing new to save.
+      - name: Save Cargo data and target directory to cache
+        if: always() && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}

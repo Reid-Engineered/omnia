@@ -265,6 +265,13 @@ fn count_ink_row_bands(raw: &[u8], width: u32, height: u32, paper_rgba: [u8; 4])
 }
 
 fn main() {
+    // GPUI on Windows cannot open windows without an interactive desktop, which hosted CI
+    // runners lack. CI sets OMNIA_HEADLESS_CI=1 to skip this test there; it runs everywhere
+    // else, including the reference machine.
+    if std::env::var_os("OMNIA_HEADLESS_CI").is_some() {
+        eprintln!("fonts test skipped: OMNIA_HEADLESS_CI is set (no interactive desktop)");
+        return;
+    }
     // Rule 9: ensure even a stalled hidden-window test exits cleanly in CI.
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(30));

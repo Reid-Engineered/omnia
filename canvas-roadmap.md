@@ -182,7 +182,7 @@ of the `canvas` lane.
   Plan A on the reference machine, set D4 to DECIDED. Otherwise set this task to
   `needs-human` and stop: no rendering task may start.
 
-### T0.7 Continuous integration · todo
+### T0.7 Continuous integration · done
 - Lane: bench · Depends: T0.1 · Read: plan section 10
 - Owns: `.github/workflows/`, `deny.toml`
 - Do: a Windows workflow running the standard checks; `cargo deny` with the allow-list from
@@ -598,6 +598,64 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        with cargo-deny (not required in T0.1). No new direct dependency
                        outside plan section 10. Measurements are kept in this task log to
                        stay within T0.1's owned files; no docs/ lane files were changed.
+2026-11-14 T0.7 blocked — added .github/workflows/ci.yml and deny.toml only. The workflow
+                       runs on windows-latest for pull requests and pushes to main: pinned
+                       toolchain from rust-toolchain.toml, actions/cache over
+                       ~/.cargo/registry, ~/.cargo/git and target/ (keyed on Cargo.lock, so
+                       the pinned Zed git dependency is not re-cloned), MSVC via
+                       ilammy/msvc-dev-cmd plus a step that fails if link.exe, the Windows
+                       SDK or fxc.exe is missing (hosted windows-latest images ship all
+                       three; fxc is found on PATH or under the SDK bin\x64), then
+                       cargo fetch --locked before the checks so the offline INV12 test
+                       in xtask finds a populated cache, then the standard checks
+                       (cargo fmt --all --check; cargo clippy --workspace --all-targets
+                       -- -D warnings; cargo test --workspace; cargo deny check, with
+                       cargo-deny 0.20.2 installed via taiki-e/install-action). The test
+                       step is labelled headless: hosted runners have no interactive
+                       desktop, GPUI cannot open windows there, and no window-opening or
+                       render_to_image test exists yet (the only test is INV12); later
+                       tasks must gate such tests to the reference machine instead of
+                       weakening them. deny.toml allows exactly the plan section 10
+                       licences (MIT, Apache-2.0, BSD as BSD-2-Clause/BSD-3-Clause, ISC,
+                       Zlib, Unicode as Unicode-3.0), ignores only the private workspace
+                       crates, and allows only the six git sources pinned in Cargo.lock
+                       (zed plus font-kit, oo7, scap, wasm_thread, gfx-rs/wgpu).
+                       Plan section 10 names only the Zed checkout; the other five git
+                       sources are pulled in by that checkout through Cargo.lock and are
+                       recorded here with the licence of every crate they provide (from
+                       cargo metadata, cross-checked against each repo's licence file):
+                       gfx-rs/wgpu at cddb2f5d — naga, naga-types, wgpu, wgpu-core,
+                       wgpu-hal, wgpu-types and the wgpu-core-deps-* crates, all
+                       MIT OR Apache-2.0; zed-industries/font-kit at 94b0f281 —
+                       zed-font-kit 0.14.1-zed, MIT OR Apache-2.0; zed-industries/oo7
+                       at 731c1215 — oo7 0.6.0, MIT; zed-industries/scap at b5c86ec5 —
+                       zed-scap 0.0.8-zed, MIT; zed-industries/wasm_thread at
+                       0cf96c77 — wasm_thread 0.3.3, Apache-2.0 OR MIT; the Zed
+                       checkout itself (15d136bf) — gpui, gpui_platform and the other
+                       in-repo crates, all Apache-2.0. Every git-sourced crate is
+                       inside the section 10 allow-list; none adds a licence exception.
+                       Local run on the T0.1 host (Windows 11 x64, i7-14650HX, RTX 5060
+                       Laptop + Intel UHD, 100% DPI): fmt passed; clippy passed in
+                       1m 47s; cargo test --workspace passed (INV12 ok); cargo deny check
+                       FAILED (exit 5) and the CI deny step will fail the same way until
+                       the owner decides. Licences outside the allow-list, not silently
+                       allowed: cbindgen 0.28.0 MPL-2.0 (build dependency of gpui_apple),
+                       dwrote 0.11.5 MPL-2.0 (via zed-font-kit), option-ext 0.2.0
+                       MPL-2.0 (via dirs). Advisories also failing, all transitive
+                       through the pinned GPUI tree, which rule 8 forbids changing here:
+                       unmaintained rustybuzz (RUSTSEC-2026-0206), ttf-parser
+                       (RUSTSEC-2026-0192), zbus_names (RUSTSEC-2026-0371), zvariant
+                       (RUSTSEC-2026-0370), zvariant_derive (RUSTSEC-2026-0372). Bans
+                       passed; sources passed after the six git sources were listed.
+                       Unblocking needs an owner decision: add MPL-2.0 to the plan
+                       section 10 allow-list, or replace/patch the three crates (a GPUI
+                       revision change is its own task). No check was weakened and the
+                       GPUI revision is unchanged. CI on PR #2 confirms the local result:
+                       every step passes except cargo deny check, which fails with the
+                       same three MPL-2.0 rejections and five unmaintained advisories
+                       (bans and sources ok). Run times on windows-latest: 3m 53s with
+                       the workflow's Cargo/target cache missing, 2m 34s with an exact
+                       cache hit (the toolchain action's own cache was warm in both).
 2026-11-14 T0.3 done — omnia-bench is a lib plus the `bench` binary: CountingAlloc (global
                        allocator; `alloc::ours` / `alloc::not_ours` scopes, count_allocs),
                        frame stats from Window::frame_duration_snapshot (draw, dirty-to-present,
@@ -686,6 +744,13 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        cargo fmt --all --check; cargo clippy --workspace --all-targets -- -D
                        warnings; cargo test --workspace (fonts + INV12); cargo run -p omnia-app
                        -- --frames 60 (exit 0); git diff --check.
+2026-11-14 T0.7 done — owner decisions (orchestrator, PR #2): MPL-2.0 added to the allow-list
+                       (plan section 10 and deny.toml); the five GPUI-transitive "unmaintained"
+                       advisories ignored by id in deny.toml, to re-check at each GPUI upgrade.
+                       Merged main (T0.2 added the first window-opening test,
+                       omnia-app/tests/fonts.rs): it now skips when OMNIA_HEADLESS_CI is set,
+                       which only the hosted CI test step sets; it still runs locally and on
+                       the reference machine.
 2026-11-14 T0.5 blocked — owner ran H3 (laptop: i7-14650HX, RTX 5060 Laptop + UHD, precision
                        touchpad, 60 Hz, scale 1.25; not the reference machine). Results are in
                        docs/measurements/T0.5.md: wheel gives Lines (±3, merged -6); touchpad
