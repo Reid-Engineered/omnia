@@ -37,12 +37,12 @@ jobs:
 
       # Cache the Cargo registry and git checkouts (so the pinned Zed git
       # dependency is not cloned on every run) plus the build output.
-      - name: Cache Cargo data and target directory
-        uses: actions/cache@v4
+      # Restore and save are separate steps so the cache is saved even
+      # when a later check fails (see the save step at the end).
+      - name: Restore Cargo data and target directory from cache
+        id: cargo-cache
+        uses: actions/cache/restore@v4
         with:
-          # Save even when a later step fails, so a red run still warms
-          # the cache for the next one.
-          save-always: true
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
@@ -109,3 +109,18 @@ jobs:
 
       - name: Check licences, advisories, bans and sources with cargo-deny
         run: cargo deny check
+
+      # Save the Cargo and target cache even when a check above failed,
+      # so a red run still warms the cache for the next one. Skipped on
+      # an exact cache hit, when there is nothing new to save.
+      - name: Save Cargo data and target directory to cache
+        if: always() && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
