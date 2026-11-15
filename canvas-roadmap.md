@@ -132,9 +132,9 @@ of the `canvas` lane.
 - Done when: `cargo build --workspace --release` succeeds; `cargo run -p omnia-app -- --frames 60`
   exits 0; the build time and any build prerequisites found are logged.
 
-### T0.2 Fonts and vendored assets · todo
+### T0.2 Fonts and vendored assets · done
 - Lane: assets · Depends: T0.1
-- Owns: `vendor/fonts/`, `THIRD_PARTY.md`
+- Owns: `vendor/fonts/`, `THIRD_PARTY.md`, `crates/omnia-app/` (font loading and lib split)
 - Do: add Inter and Source Code Pro (OFL 1.1) with their licence files; load them at start
   the way `crates/gpui/examples/example_support/fonts.rs` does at the pinned revision.
 - Done when: `omnia-app --frames 60` draws a line of each font (checked with
@@ -634,3 +634,23 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        use --features scene-counts for primitive counts and record it.
                        T2.6: owns scripts.rs (the driver lives in driver.rs); gate in hosted CI
                        with `compare --metrics allocs_per_frame.ours,primitives`.
+2026-11-14 T0.2 done — vendored Inter v4.1 (400 Regular, 500 Medium, 600 SemiBold) from
+                       rsms/inter and Source Code Pro 2.042R-u/1.062R-i (400 Regular, 500
+                       Medium, 600 Semibold) from adobe-fonts/source-code-pro with their SIL
+                       OFL 1.1 licences under vendor/fonts/, and recorded both in
+                       THIRD_PARTY.md. Split omnia-app window setup and bundled font
+                       registration (cx.text_system().add_fonts) into crates/omnia-app/src/lib.rs
+                       while keeping main.rs thin with the --frames CLI and wall-clock watchdog;
+                       Workspace draws one line in Inter SemiBold 17 px and one in Source Code
+                       Pro Medium 13 px. Added gpui_platform/test-support as dev-dependency only
+                       with a harness = false integration test (tests/fonts.rs). render_to_image
+                       worked on this Windows 11 machine (Intel Core i7-14650HX, NVIDIA RTX 5060
+                       Laptop GPU + Intel UHD Graphics, 125% DPI in test window) using
+                       gpui_platform::application().run with hidden windows (show: false,
+                       focus: false), window.resize() in open_window, and window.draw(cx).clear(cx)
+                       followed by window.render_to_image() inside cx.spawn; verified distinct
+                       FontIds across weights 400/500/600, two non-blank ink bands in Workspace,
+                       and differing renders between Inter and Source Code Pro. Checks passed:
+                       cargo fmt --all --check; cargo clippy --workspace --all-targets -- -D
+                       warnings; cargo test --workspace (fonts + INV12); cargo run -p omnia-app
+                       -- --frames 60 (exit 0); git diff --check.
