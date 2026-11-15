@@ -21,9 +21,12 @@ usage: bench <command> [options]
   start   [--sheet empty|placeholder] [--runs 10] [--json FILE]
   idle    [--seconds 10] [--settle-ms 1000] [--json FILE]
   compare BASE.json NEW.json [--max-regression 10] [--metrics PREFIX[,PREFIX..]]
+          [--json FILE]
 
 Every command exits by itself. Exit codes: 0 ok; 1 compare found a regression or a missing
-metric; 2 usage or input error; 3 the run failed or timed out.";
+metric; 2 usage or input error, including reports that cannot be compared or a --metrics
+prefix that selects no base metric; 3 the run failed or timed out. compare --json writes
+the per-metric result and the verdict whether it passes or finds a regression.";
 
 /// Command-line options after the subcommand: `--name value` pairs and positionals.
 struct Args {
@@ -135,7 +138,7 @@ fn cmd_run(args: impl Iterator<Item = String>) -> Result<(), Failure> {
         sheet: usage(Sheet::parse(args.get("sheet").unwrap_or("placeholder")))?,
         script: usage(Script::parse(args.get("script").unwrap_or("pan")))?,
         frames: positive("frames", usage(args.number("frames", 600))?)?,
-        // Warmup 1 is the minimum: the baseline snapshot is taken at the first measured frame.
+        // Warmup 1 is the minimum: the baseline is taken after the last warm-up frame.
         warmup: positive("warmup", usage(args.number("warmup", 60))?)?,
         size,
     };
@@ -178,7 +181,7 @@ fn cmd_idle(args: impl Iterator<Item = String>) -> Result<(), Failure> {
 }
 
 fn cmd_compare(args: impl Iterator<Item = String>) -> Result<(), Failure> {
-    let args = usage(Args::parse(args, &["max-regression", "metrics"]))?;
+    let args = usage(Args::parse(args, &["max-regression", "metrics", "json"]))?;
     let [base_path, new_path] = args.positional.as_slice() else {
         return Err(Failure::Usage(
             "compare needs exactly two report files".into(),
@@ -219,8 +222,11 @@ fn cmd_compare(args: impl Iterator<Item = String>) -> Result<(), Failure> {
             change.percent()
         );
     }
-    for metric in &outcome.missing {
+    for (metric, _) in &outcome.missing {
         println!("MISSING     {metric}: in the base report, not in the new one");
+    }
+    if let Some(path) = args.get("json") {
+        write_json(path, &outcome.to_json(max_regression, &only))?;
     }
     let checked = outcome.compared.len() + outcome.regressions.len() + outcome.missing.len();
     if outcome.passed() {
@@ -260,9 +266,15 @@ fn finish(report: &Value, json_path: Option<&str>) -> Result<(), Failure> {
     let text = serde_json::to_string_pretty(report).expect("reports serialise");
     println!("{text}");
     if let Some(path) = json_path {
-        std::fs::write(path, format!("{text}\n"))
-            .map_err(|e| Failure::Run(format!("write {path}: {e}")))?;
-        eprintln!("bench: wrote {path}");
+        write_json(path, report)?;
     }
+    Ok(())
+}
+
+fn write_json(path: &str, value: &Value) -> Result<(), Failure> {
+    let text = serde_json::to_string_pretty(value).expect("reports serialise");
+    std::fs::write(path, format!("{text}\n"))
+        .map_err(|e| Failure::Run(format!("write {path}: {e}")))?;
+    eprintln!("bench: wrote {path}");
     Ok(())
 }
