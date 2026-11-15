@@ -446,7 +446,7 @@ Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 
 | Command | Reports |
 | --- | --- |
-| `bench run --sheet S --script pan\|zoom\|drag-part\|drag-wire\|hover [--frames 600]` | Frame, draw and dirty-to-present ms (p50, p95, p99, max); `allocs_per_frame` (ours, total); `memory_mb`; primitive counts by kind |
+| `bench run --sheet S --script pan\|zoom\|drag-part\|drag-wire\|hover [--frames 600]` | Frame, draw and dirty-to-present ms (p50, p95, p99, max); `allocs_per_frame` (ours, total); `memory_mb`; primitive counts by kind (build with `--features scene-counts`, which needs GPUI's `bench-support`) |
 | `bench start [--sheet S] [--runs 10]` | Process start to first interactive frame, median and max |
 | `bench idle --seconds N` | Frames drawn; CPU percent |
 | `bench hit --sheet S` | Hit-test time, p50 and p99 |
@@ -478,14 +478,19 @@ Build-time steps:
 | `serde`, `ron` | Test-sheet save and load | MIT or Apache-2.0 |
 | `profiling`, `tracy-client` (feature `tracy`) | Spans, on the same timeline as GPUI's | MIT or Apache-2.0 |
 | `hdrhistogram` | Bench percentiles | MIT or Apache-2.0 |
+| `serde_json` | Bench JSON reports | MIT or Apache-2.0 |
 | `usvg`, `zip`, `serde_json`, `toml` (xtask only) | Codegen | Apache-2.0 or MIT; `zip` MIT |
 | `proptest`, `criterion`, `image` (dev only) | Property tests, micro-benchmarks, golden comparison | MIT or Apache-2.0 |
 | electronic-symbols, Tabler Icons | Symbols, icons | MIT |
 | Inter, Source Code Pro | Fonts | SIL OFL 1.1 |
 
 The crates.io licences are from memory and GPUI's transitive tree is unaudited. Roadmap T0.7
-adds `cargo deny` with an allow-list of MIT, Apache-2.0, BSD, ISC, Zlib and Unicode. A
-dependency not in this table needs its licence recorded in the roadmap log before it is added.
+adds `cargo deny` with an allow-list of MIT, Apache-2.0, BSD, ISC, Zlib, Unicode and MPL-2.0
+(MPL-2.0 added by the owner on 2026-11-14 for cbindgen, dwrote and option-ext, all transitive
+through GPUI). Five "unmaintained" advisories reached through GPUI (rustybuzz, ttf-parser,
+zbus_names, zvariant, zvariant_derive) are ignored by id in `deny.toml` and re-checked at each
+GPUI upgrade. A dependency not in this table needs its licence recorded in the roadmap log
+before it is added.
 
 GPUI pin, in `[workspace.dependencies]` only:
 

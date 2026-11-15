@@ -4,8 +4,9 @@
 # runner. Hosted runners have no interactive desktop session and no GPU,
 # so any test that opens a window or calls `render_to_image` fails there;
 # tests like that must be gated to the reference machine by the tasks that
-# add them, not loosened or deleted here. No such test exists yet: the only
-# test today is the offline INV12 check in xtask.
+# add them, not loosened or deleted here. Window tests skip themselves when
+# OMNIA_HEADLESS_CI is set (today: crates/omnia-app/tests/fonts.rs) and run
+# on every machine with a desktop session, including the reference machine.
 
 name: CI
 
@@ -98,7 +99,9 @@ jobs:
       # window-free tests run here; any future test that opens a window or
       # uses render_to_image must be gated to the reference machine by its
       # own task. Do not weaken or delete such a test to make this pass.
-      - name: Run tests (headless hosted runner - no window-opening tests)
+      - name: Run tests (headless hosted runner - window tests skip themselves)
+        env:
+          OMNIA_HEADLESS_CI: "1"
         run: cargo test --workspace
 
       # Pinned to the cargo-deny version used for the local audit in the

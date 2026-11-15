@@ -24,3 +24,24 @@ Interface icons (toolbar, window controls, instruments strip, Home navigation) c
 [Tabler Icons](https://github.com/tabler/tabler-icons) v3.19.0 by Paweł Kuna. Only the outline icons the
 mockup uses are vendored in `vendor/tabler-icons/outline/`. MIT License, full text in
 `vendor/tabler-icons/LICENSE`.
+
+## Inter
+
+UI and canvas label sans-serif font, from
+[rsms/inter](https://github.com/rsms/inter) v4.1 (`Inter-4.1.zip`, `extras/ttf/`). Only the
+static hinted weights the mockup uses (400 Regular, 500 Medium, 600 SemiBold) are vendored in
+`vendor/fonts/inter/`.
+
+SIL Open Font License 1.1, Copyright (c) 2016 The Inter Project Authors. Full text:
+`vendor/fonts/inter/LICENSE.txt`.
+
+## Source Code Pro
+
+Monospace font for numeric readouts, tags and shortcuts, from
+[adobe-fonts/source-code-pro](https://github.com/adobe-fonts/source-code-pro) release
+`2.042R-u/1.062R-i/1.026R-vf` (`TTF-source-code-pro-2.042R-u_1.062R-i.zip`). Only the weights
+the mockup uses (400 Regular, 500 Medium, 600 Semibold) are vendored in
+`vendor/fonts/source-code-pro/`.
+
+SIL Open Font License 1.1, Copyright © 2023 Adobe (Reserved Font Name 'Source'). Full text:
+`vendor/fonts/source-code-pro/LICENSE.md`.

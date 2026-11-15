@@ -8,3 +8,10 @@ publish.workspace = true
 [dependencies]
 gpui.workspace = true
 gpui_platform.workspace = true
+
+[dev-dependencies]
+gpui_platform = { workspace = true, features = ["test-support"] }
+
+[[test]]
+name = "fonts"
+harness = false

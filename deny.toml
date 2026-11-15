@@ -1,7 +1,7 @@
 # cargo-deny configuration for Omnia (roadmap T0.7).
 #
 # The licence allow-list is exactly the list in canvas-plan.md section 10:
-# MIT, Apache-2.0, BSD, ISC, Zlib and Unicode. "BSD" is recorded here as the
+# MIT, Apache-2.0, BSD, ISC, Zlib, Unicode and MPL-2.0. "BSD" is recorded here as the
 # two SPDX BSD variants (BSD-2-Clause and BSD-3-Clause) and "Unicode" as
 # Unicode-3.0. Nothing else is allowed: a transitive dependency under any
 # other licence fails `cargo deny check` and must be listed in the roadmap
@@ -16,6 +16,9 @@ allow = [
     "ISC",
     "Zlib",
     "Unicode-3.0",
+    # Owner decision 2026-11-14: MPL-2.0 allowed (weak copyleft; reached only
+    # transitively through the pinned GPUI: cbindgen, dwrote, option-ext).
+    "MPL-2.0",
 ]
 # The workspace crates are private (publish = false) and carry no licence
 # expression; only published dependencies are licence-checked.
@@ -32,4 +35,17 @@ allow-git = [
     "https://github.com/zed-industries/scap",
     "https://github.com/zed-industries/wasm_thread",
     "https://github.com/gfx-rs/wgpu",
+]
+
+[advisories]
+# Owner decision 2026-11-14: ignore exactly these "unmaintained" notices, all
+# reached only through the pinned GPUI. Every other advisory, and every
+# vulnerability, still fails. Re-check each at the next GPUI upgrade (plan
+# section 10 upgrade routine).
+ignore = [
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained; via pinned GPUI" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained; via pinned GPUI" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; via pinned GPUI" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; via pinned GPUI" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; via pinned GPUI" },
 ]

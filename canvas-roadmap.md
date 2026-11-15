@@ -132,15 +132,15 @@ of the `canvas` lane.
 - Done when: `cargo build --workspace --release` succeeds; `cargo run -p omnia-app -- --frames 60`
   exits 0; the build time and any build prerequisites found are logged.
 
-### T0.2 Fonts and vendored assets · todo
+### T0.2 Fonts and vendored assets · done
 - Lane: assets · Depends: T0.1
-- Owns: `vendor/fonts/`, `THIRD_PARTY.md`
+- Owns: `vendor/fonts/`, `THIRD_PARTY.md`, `crates/omnia-app/` (font loading and lib split)
 - Do: add Inter and Source Code Pro (OFL 1.1) with their licence files; load them at start
   the way `crates/gpui/examples/example_support/fonts.rs` does at the pinned revision.
 - Done when: `omnia-app --frames 60` draws a line of each font (checked with
   `render_to_image` in a test, G12); `THIRD_PARTY.md` lists both fonts.
 
-### T0.3 Bench harness · todo
+### T0.3 Bench harness · done
 - Lane: bench · Depends: T0.1 · Read: plan sections 2, 9 (bench command line), G13
 - Owns: `crates/omnia-bench/`
 - Do: `CountingAlloc` as the global allocator with a scope that separates "ours" from
@@ -182,7 +182,7 @@ of the `canvas` lane.
   Plan A on the reference machine, set D4 to DECIDED. Otherwise set this task to
   `needs-human` and stop: no rendering task may start.
 
-### T0.7 Continuous integration · blocked (MPL-2.0 transitive licences outside the plan section 10 allow-list; see log)
+### T0.7 Continuous integration · done
 - Lane: bench · Depends: T0.1 · Read: plan section 10
 - Owns: `.github/workflows/`, `deny.toml`
 - Do: a Windows workflow running the standard checks; `cargo deny` with the allow-list from
@@ -656,3 +656,66 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        (bans and sources ok). Run times on windows-latest: 3m 53s with
                        the workflow's Cargo/target cache missing, 2m 34s with an exact
                        cache hit (the toolchain action's own cache was warm in both).
+2026-11-14 T0.3 done — omnia-bench is a lib plus the `bench` binary: CountingAlloc (global
+                       allocator; `alloc::ours` / `alloc::not_ours` scopes, count_allocs),
+                       frame stats from Window::frame_duration_snapshot (draw, dirty-to-present,
+                       present interval, and per-frame work as frame_ms), `run`, `start`,
+                       `idle`, `compare` with --json, a pan driver moving one device pixel per
+                       frame, and a placeholder scene (paper, K3 dot grid, 2,000 seeded wire
+                       quads) painted from a custom Element inside one paint_layer. Measured on
+                       i7-14650HX, RTX 5060 Laptop + UHD (adapter in use unknown), 125%
+                       (scale 1.25), 60 Hz, plugged in; not the reference machine (Q4), no
+                       budget marked. idle --seconds 10 on the T0.1 window: 0 frames, CPU
+                       0.3-1.1% when nothing touches it; every non-zero frame seen was a focus
+                       change, which the report's per-render log shows (window_active flips).
+                       Ten `bench run` (600 frames, 1600x1000 device): frame_ms p99 0.76-1.19
+                       (median 0.93), draw p99 0.74-1.11, dirty-to-present p99 1.43-2.80,
+                       allocs_per_frame.ours 0 in every frame, total about 8 per frame (GPUI);
+                       timing p50 bimodal (0.29-0.40 or about 0.76), spread 71% at p50, 40-46%
+                       at p99. Two real runs differ beyond 10% on 25 of 50 metrics, so gate
+                       timings only on the reference machine. start --runs 10: median 299 ms,
+                       max 500 ms. compare: a.json against itself exits 0; a doctored file
+                       (+11% draw p99, ours 0 to 1, a missing metric) exits 1; mismatched
+                       kind or config exits 2. Details in docs/measurements/T0.3.md.
+                       Deviations: per the PR #1 review, gpui is built with `profiler` only;
+                       Window::rendered_scene (primitive counts) needs GPUI's bench-support
+                       (criterion, bench_metrics), so it is behind the opt-in omnia-bench
+                       feature `scene-counts` and reports record `config.scene_counts`. Plan
+                       section 9 updated to say so. serde_json (MIT or Apache-2.0, already in
+                       GPUI's tree) is now a bench dependency for JSON reports; plan section 10
+                       updated. hdrhistogram 7 matches GPUI's. Run windows disable GPUI's
+                       inactive/low-power/thermal frame caps. Windows' foreground lock can
+                       leave a run window inactive, and GPUI then records no present
+                       intervals, so present_interval_ms is missing and the report warns.
+                       T0.4: implement scene::BenchScene and add a `spike` arm to main.rs;
+                       paint runs inside alloc::ours, wrap GPUI calls in alloc::not_ours;
+                       use --features scene-counts for primitive counts and record it.
+                       T2.6: owns scripts.rs (the driver lives in driver.rs); gate in hosted CI
+                       with `compare --metrics allocs_per_frame.ours,primitives`.
+2026-11-14 T0.2 done — vendored Inter v4.1 (400 Regular, 500 Medium, 600 SemiBold) from
+                       rsms/inter and Source Code Pro 2.042R-u/1.062R-i (400 Regular, 500
+                       Medium, 600 Semibold) from adobe-fonts/source-code-pro with their SIL
+                       OFL 1.1 licences under vendor/fonts/, and recorded both in
+                       THIRD_PARTY.md. Split omnia-app window setup and bundled font
+                       registration (cx.text_system().add_fonts) into crates/omnia-app/src/lib.rs
+                       while keeping main.rs thin with the --frames CLI and wall-clock watchdog;
+                       Workspace draws one line in Inter SemiBold 17 px and one in Source Code
+                       Pro Medium 13 px. Added gpui_platform/test-support as dev-dependency only
+                       with a harness = false integration test (tests/fonts.rs). render_to_image
+                       worked on this Windows 11 machine (Intel Core i7-14650HX, NVIDIA RTX 5060
+                       Laptop GPU + Intel UHD Graphics, 125% DPI in test window) using
+                       gpui_platform::application().run with hidden windows (show: false,
+                       focus: false), window.resize() in open_window, and window.draw(cx).clear(cx)
+                       followed by window.render_to_image() inside cx.spawn; verified distinct
+                       FontIds across weights 400/500/600, two non-blank ink bands in Workspace,
+                       and differing renders between Inter and Source Code Pro. Checks passed:
+                       cargo fmt --all --check; cargo clippy --workspace --all-targets -- -D
+                       warnings; cargo test --workspace (fonts + INV12); cargo run -p omnia-app
+                       -- --frames 60 (exit 0); git diff --check.
+2026-11-14 T0.7 done — owner decisions (orchestrator, PR #2): MPL-2.0 added to the allow-list
+                       (plan section 10 and deny.toml); the five GPUI-transitive "unmaintained"
+                       advisories ignored by id in deny.toml, to re-check at each GPUI upgrade.
+                       Merged main (T0.2 added the first window-opening test,
+                       omnia-app/tests/fonts.rs): it now skips when OMNIA_HEADLESS_CI is set,
+                       which only the hosted CI test step sets; it still runs locally and on
+                       the reference machine.
