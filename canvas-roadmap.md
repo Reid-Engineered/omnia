@@ -650,4 +650,9 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        Unblocking needs an owner decision: add MPL-2.0 to the plan
                        section 10 allow-list, or replace/patch the three crates (a GPUI
                        revision change is its own task). No check was weakened and the
-                       GPUI revision is unchanged.
+                       GPUI revision is unchanged. CI on PR #2 confirms the local result:
+                       every step passes except cargo deny check, which fails with the
+                       same three MPL-2.0 rejections and five unmaintained advisories
+                       (bans and sources ok). Run times on windows-latest: 3m 53s with
+                       the workflow's Cargo/target cache missing, 2m 34s with an exact
+                       cache hit (the toolchain action's own cache was warm in both).
