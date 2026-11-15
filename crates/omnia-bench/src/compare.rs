@@ -4,9 +4,11 @@
 //! regresses when `new > base + |base| * PCT / 100`. A zero base therefore regresses on any
 //! increase (B8 frames and B10 allocations are zero budgets). A metric in `base` that is
 //! missing from `new` fails the comparison. Reports must have the same `schema`, `kind` and
-//! `config`; `environment` may differ and only produces a warning.
+//! `config`; `environment` may differ and only produces a warning. Every `--metrics` prefix
+//! must select at least one metric of the base report, so a mistyped or absent prefix cannot
+//! pass by comparing nothing.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 pub const SCHEMA: u64 = 1;
@@ -33,13 +35,75 @@ impl Change {
 pub struct Outcome {
     pub compared: Vec<Change>,
     pub regressions: Vec<Change>,
-    pub missing: Vec<String>,
+    /// Metrics in the base report but not the new one, with their base values.
+    pub missing: Vec<(String, f64)>,
     pub warnings: Vec<String>,
 }
 
 impl Outcome {
     pub fn passed(&self) -> bool {
         self.regressions.is_empty() && self.missing.is_empty()
+    }
+
+    /// The comparison as JSON: one entry per metric, sorted by name, and the verdict.
+    /// `change_percent` is null when the base is zero and the new value is not.
+    pub fn to_json(&self, max_regression_percent: f64, only: &[String]) -> Value {
+        let mut results: Vec<(String, Value)> = Vec::new();
+        let mut push = |change: &Change, pass: bool| {
+            let percent = change.percent();
+            let direction = if change.new < change.base {
+                "better"
+            } else if change.new > change.base {
+                "worse"
+            } else {
+                "same"
+            };
+            results.push((
+                change.metric.clone(),
+                json!({
+                    "metric": change.metric,
+                    "baseline": change.base,
+                    "candidate": change.new,
+                    "change_percent": percent.is_finite().then_some(percent),
+                    "direction": direction,
+                    "pass": pass,
+                }),
+            ));
+        };
+        for change in &self.compared {
+            push(change, true);
+        }
+        for change in &self.regressions {
+            push(change, false);
+        }
+        for (metric, base) in &self.missing {
+            results.push((
+                metric.clone(),
+                json!({
+                    "metric": metric,
+                    "baseline": base,
+                    "candidate": null,
+                    "change_percent": null,
+                    "direction": "missing",
+                    "pass": false,
+                }),
+            ));
+        }
+        results.sort_by(|a, b| a.0.cmp(&b.0));
+        json!({
+            "schema": SCHEMA,
+            "kind": "compare",
+            "max_regression_percent": max_regression_percent,
+            "metrics_filter": only,
+            "verdict": if self.passed() { "pass" } else { "fail" },
+            "counts": {
+                "compared": self.compared.len() + self.regressions.len() + self.missing.len(),
+                "regressions": self.regressions.len(),
+                "missing": self.missing.len(),
+            },
+            "warnings": self.warnings,
+            "results": results.into_iter().map(|(_, v)| v).collect::<Vec<_>>(),
+        })
     }
 }
 
@@ -72,6 +136,18 @@ pub fn compare(
 
     let base_metrics = metrics(base, "base")?;
     let new_metrics = metrics(new, "new")?;
+    for prefix in only {
+        let matches = |m: &BTreeMap<String, f64>| m.keys().any(|k| k.starts_with(prefix.as_str()));
+        if !matches(&base_metrics) {
+            return Err(if matches(&new_metrics) {
+                format!(
+                    "--metrics prefix `{prefix}` matches metrics only in the new report;                      nothing to compare"
+                )
+            } else {
+                format!("--metrics prefix `{prefix}` matches no metric in either report")
+            });
+        }
+    }
     let selected = |key: &str| only.is_empty() || only.iter().any(|p| key.starts_with(p.as_str()));
 
     let mut outcome = Outcome::default();
@@ -83,7 +159,7 @@ pub fn compare(
     }
     for (key, &base_value) in base_metrics.iter().filter(|(k, _)| selected(k)) {
         let Some(&new_value) = new_metrics.get(key) else {
-            outcome.missing.push(key.clone());
+            outcome.missing.push((key.clone(), base_value));
             continue;
         };
         let change = Change {
@@ -219,6 +295,79 @@ mod tests {
     }
 
     #[test]
+    fn every_metrics_prefix_must_match() {
+        let base = report(2.0, 0.0, 10.0);
+        let mut no_primitives = base.clone();
+        no_primitives["metrics"]
+            .as_object_mut()
+            .unwrap()
+            .remove("primitives");
+        // One prefix matches, the other matches nothing in either report: an error naming it.
+        let only = [
+            "allocs_per_frame.ours".to_string(),
+            "primitives".to_string(),
+        ];
+        let error = compare(&no_primitives, &no_primitives, 10.0, &only).unwrap_err();
+        assert!(error.contains("`primitives`"), "{error}");
+        // A prefix only the new report has compares nothing either.
+        let error = compare(&no_primitives, &base, 10.0, &only).unwrap_err();
+        assert!(error.contains("`primitives`"), "{error}");
+        // Both prefixes match: the comparison runs.
+        assert!(compare(&base, &base, 10.0, &only).unwrap().passed());
+    }
+
+    #[test]
+    fn json_lists_every_metric_and_the_verdict() {
+        let base = report(2.0, 0.0, 10.0);
+        let mut new = report(1.0, 1.0, 10.0);
+        new["metrics"]["frame_ms"]
+            .as_object_mut()
+            .unwrap()
+            .remove("p50");
+        let outcome = compare(&base, &new, 10.0, &[]).unwrap();
+        let json = outcome.to_json(10.0, &[]);
+        assert_eq!(json["kind"], "compare");
+        assert_eq!(json["verdict"], "fail");
+        assert_eq!(json["counts"]["compared"], 4);
+        assert_eq!(json["counts"]["regressions"], 1);
+        assert_eq!(json["counts"]["missing"], 1);
+        let results = json["results"].as_array().unwrap();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r["metric"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "allocs_per_frame.ours.max",
+                "frame_ms.p50",
+                "frame_ms.p99",
+                "primitives.quads"
+            ]
+        );
+        assert_eq!(
+            results[0],
+            json!({ "metric": "allocs_per_frame.ours.max", "baseline": 0.0, "candidate": 1.0,
+                    "change_percent": null, "direction": "worse", "pass": false })
+        );
+        assert_eq!(
+            results[1],
+            json!({ "metric": "frame_ms.p50", "baseline": 1.0, "candidate": null,
+                    "change_percent": null, "direction": "missing", "pass": false })
+        );
+        assert_eq!(
+            results[2],
+            json!({ "metric": "frame_ms.p99", "baseline": 2.0, "candidate": 1.0,
+                    "change_percent": -50.0, "direction": "better", "pass": true })
+        );
+        assert_eq!(results[3]["direction"], "same");
+        assert_eq!(results[3]["pass"], true);
+
+        let passing = compare(&base, &base, 10.0, &[]).unwrap().to_json(10.0, &[]);
+        assert_eq!(passing["verdict"], "pass");
+    }
+
+    #[test]
     fn missing_metric_fails() {
         let base = report(2.0, 0.0, 10.0);
         let mut new = base.clone();
@@ -227,7 +376,7 @@ mod tests {
             .unwrap()
             .remove("quads");
         let outcome = compare(&base, &new, 10.0, &[]).unwrap();
-        assert_eq!(outcome.missing, ["primitives.quads"]);
+        assert_eq!(outcome.missing, [("primitives.quads".to_string(), 10.0)]);
         assert!(!outcome.passed());
     }
 

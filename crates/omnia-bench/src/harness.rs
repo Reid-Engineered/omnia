@@ -150,6 +150,35 @@ impl RunConfig {
     }
 }
 
+/// What a `run` render schedules after drawing frame `frame`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AfterFrame {
+    /// Draw the next frame.
+    Draw,
+    /// Frame `frame` is the last warm-up frame. Before the first measured frame, take the
+    /// baseline snapshot, then draw. The snapshot is taken in a next-frame callback, which
+    /// GPUI runs before it dirties the window and before `Window::draw`, so it is outside the
+    /// first measured frame's draw, work and dirty-to-present spans and its allocations.
+    BaselineThenDraw,
+    /// Frame `frame` read the last measured frame's costs: report and quit.
+    Report,
+    /// Past the end: nothing more.
+    Stop,
+}
+
+fn after_frame(frame: u32, warmup: u32, frames: u32) -> AfterFrame {
+    let last = warmup + frames;
+    if frame == last {
+        AfterFrame::Report
+    } else if frame > last {
+        AfterFrame::Stop
+    } else if frame + 1 == warmup {
+        AfterFrame::BaselineThenDraw
+    } else {
+        AfterFrame::Draw
+    }
+}
+
 struct RunView {
     config: RunConfig,
     scene: Option<Rc<RefCell<dyn BenchScene>>>,
@@ -174,9 +203,18 @@ impl Render for RunView {
 
         // Frame `k`'s costs are read at the start of render `k + 1`. GPUI has drawn and
         // presented frame `k` by then, so its histograms include it.
-        if frame == first_measured {
-            // Taken before the counters are read: this clone lands in an unmeasured frame.
-            self.baseline = Some(window.frame_duration_snapshot());
+        if frame == first_measured && self.baseline.is_none() {
+            // The baseline must already cover every warm-up frame and nothing after it.
+            *self.outcome.borrow_mut() = Some(Err(
+                "baseline snapshot was not taken before the first measured frame".into(),
+            ));
+            window.on_next_frame(|_, cx| cx.quit());
+            return content(
+                self.config.sheet,
+                &None,
+                Camera::default(),
+                &self.paint_time,
+            );
         }
         let counts = AllocCounts::now();
         let paint = self.paint_time.take();
@@ -188,12 +226,24 @@ impl Render for RunView {
         }
         self.previous_counts = counts;
 
-        if frame == last {
-            let report = self.report(window, cx);
-            *self.outcome.borrow_mut() = Some(report);
-            window.on_next_frame(|_, cx| cx.quit());
-        } else if frame < last {
-            window.request_animation_frame();
+        match after_frame(frame, self.config.warmup, self.config.frames) {
+            AfterFrame::Draw => window.request_animation_frame(),
+            AfterFrame::BaselineThenDraw => {
+                let view = cx.entity();
+                window.on_next_frame(move |window, cx| {
+                    let baseline = window.frame_duration_snapshot();
+                    view.update(cx, |view, cx| {
+                        view.baseline = Some(baseline);
+                        cx.notify();
+                    });
+                });
+            }
+            AfterFrame::Report => {
+                let report = self.report(window, cx);
+                *self.outcome.borrow_mut() = Some(report);
+                window.on_next_frame(|_, cx| cx.quit());
+            }
+            AfterFrame::Stop => {}
         }
 
         let script = self.config.script;
@@ -209,6 +259,7 @@ impl RunView {
         let delta =
             |later, earlier| stats::delta(later, earlier).ok_or("histogram subtraction failed");
 
+        let baseline_draws = base.draw_duration_histogram.len();
         let draw = delta(&end.draw_duration_histogram, &base.draw_duration_histogram)?;
         let dirty_to_present = delta(
             &end.dirty_to_present_histogram,
@@ -288,6 +339,13 @@ impl RunView {
         metrics.insert("primitives".into(), primitive_counts(window));
 
         let mut warnings = Vec::new();
+        // The baseline should hold exactly the warm-up draws.
+        if baseline_draws != u64::from(self.config.warmup) {
+            warnings.push(format!(
+                "baseline snapshot covers {baseline_draws} draws, expected {} warm-up frames",
+                self.config.warmup
+            ));
+        }
         if drawn != u64::from(self.config.frames) {
             warnings.push(format!(
                 "GPUI drew {drawn} frames, expected {}",
@@ -548,5 +606,39 @@ pub fn start_child(sheet: Sheet) -> Result<(), String> {
     match outcome.borrow_mut().take() {
         Some(Err(error)) => Err(error),
         _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn baseline_is_scheduled_between_warmup_and_the_first_measured_frame() {
+        let (warmup, frames) = (3, 4);
+        let plan: Vec<_> = (0..=8).map(|f| after_frame(f, warmup, frames)).collect();
+        use AfterFrame::*;
+        // Frames 0..3 are warm-up, 3..7 are measured, render 7 reads frame 6 and reports.
+        assert_eq!(
+            plan,
+            [
+                Draw,
+                Draw,
+                BaselineThenDraw,
+                Draw,
+                Draw,
+                Draw,
+                Draw,
+                Report,
+                Stop
+            ]
+        );
+        // Only the last warm-up frame schedules it, so no measured render takes it.
+        for f in warmup..warmup + frames {
+            assert_ne!(after_frame(f, warmup, frames), BaselineThenDraw);
+        }
+        assert_eq!(after_frame(0, 1, 1), BaselineThenDraw);
+        assert_eq!(after_frame(1, 1, 1), Draw);
+        assert_eq!(after_frame(2, 1, 1), Report);
     }
 }

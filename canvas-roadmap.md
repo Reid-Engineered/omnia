@@ -132,9 +132,9 @@ of the `canvas` lane.
 - Done when: `cargo build --workspace --release` succeeds; `cargo run -p omnia-app -- --frames 60`
   exits 0; the build time and any build prerequisites found are logged.
 
-### T0.2 Fonts and vendored assets · todo
+### T0.2 Fonts and vendored assets · done
 - Lane: assets · Depends: T0.1
-- Owns: `vendor/fonts/`, `THIRD_PARTY.md`
+- Owns: `vendor/fonts/`, `THIRD_PARTY.md`, `crates/omnia-app/` (font loading and lib split)
 - Do: add Inter and Source Code Pro (OFL 1.1) with their licence files; load them at start
   the way `crates/gpui/examples/example_support/fonts.rs` does at the pinned revision.
 - Done when: `omnia-app --frames 60` draws a line of each font (checked with
@@ -161,7 +161,7 @@ of the `canvas` lane.
 - Done when: every scene runs unattended at every listed size and writes its JSON; raw
   results are in `docs/measurements/T0.4.md`.
 
-### T0.5 Spike S7: real input log · needs-human (H3)
+### T0.5 Spike S7: real input log · blocked (no PinchEvent reached GPUI on the owner's touchpad; see log)
 - Lane: bench · Depends: T0.3 · Read: G9, G10
 - Owns: `crates/omnia-bench/src/spike/s7.rs`
 - Do: `bench spike s7 --seconds 60` opens a window, logs every `ScrollEvent`, `PinchEvent`,
@@ -666,3 +666,34 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                          cargo run --release -p omnia-bench -- spike s7 --summarise target/s7-input.jsonl
                        The next agent writes docs/measurements/T0.5.md from that summary and sets
                        T0.5 to done.
+2026-11-14 T0.2 done — vendored Inter v4.1 (400 Regular, 500 Medium, 600 SemiBold) from
+                       rsms/inter and Source Code Pro 2.042R-u/1.062R-i (400 Regular, 500
+                       Medium, 600 Semibold) from adobe-fonts/source-code-pro with their SIL
+                       OFL 1.1 licences under vendor/fonts/, and recorded both in
+                       THIRD_PARTY.md. Split omnia-app window setup and bundled font
+                       registration (cx.text_system().add_fonts) into crates/omnia-app/src/lib.rs
+                       while keeping main.rs thin with the --frames CLI and wall-clock watchdog;
+                       Workspace draws one line in Inter SemiBold 17 px and one in Source Code
+                       Pro Medium 13 px. Added gpui_platform/test-support as dev-dependency only
+                       with a harness = false integration test (tests/fonts.rs). render_to_image
+                       worked on this Windows 11 machine (Intel Core i7-14650HX, NVIDIA RTX 5060
+                       Laptop GPU + Intel UHD Graphics, 125% DPI in test window) using
+                       gpui_platform::application().run with hidden windows (show: false,
+                       focus: false), window.resize() in open_window, and window.draw(cx).clear(cx)
+                       followed by window.render_to_image() inside cx.spawn; verified distinct
+                       FontIds across weights 400/500/600, two non-blank ink bands in Workspace,
+                       and differing renders between Inter and Source Code Pro. Checks passed:
+                       cargo fmt --all --check; cargo clippy --workspace --all-targets -- -D
+                       warnings; cargo test --workspace (fonts + INV12); cargo run -p omnia-app
+                       -- --frames 60 (exit 0); git diff --check.
+2026-11-14 T0.5 blocked — owner ran H3 (laptop: i7-14650HX, RTX 5060 Laptop + UHD, precision
+                       touchpad, 60 Hz, scale 1.25; not the reference machine). Results are in
+                       docs/measurements/T0.5.md: wheel gives Lines (±3, merged -6); touchpad
+                       pan gives Pixels with started/moved/ended phases; events per frame are
+                       p50 1, p99 15, max 21, with 0 dropped mid-draw; drag dirty-to-present is
+                       p50 16.1 ms, p99 26.6 ms, with draw time 1.3 ms. Blocked because GPUI
+                       delivered no PinchEvent at all, although the owner pinched and pinch
+                       works in other apps; two vertical-only, back-and-forth Pixels gestures
+                       suggest the pinches arrived as scroll. Root cause is under investigation.
+                       PR #5 review notes for a follow-up: move the logger's file writes off the
+                       UI thread before B6 is judged, and log the final frame before quitting.
