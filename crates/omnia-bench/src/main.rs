@@ -4,6 +4,7 @@ use omnia_bench::compare::compare;
 use omnia_bench::driver::Script;
 use omnia_bench::harness::{self, IdleConfig, RunConfig};
 use omnia_bench::scene::Sheet;
+use omnia_bench::spike::SpikeError;
 use omnia_bench::start::{self, StartConfig};
 use omnia_bench::{CountingAlloc, stats::round};
 use serde_json::Value;
@@ -22,6 +23,7 @@ usage: bench <command> [options]
   idle    [--seconds 10] [--settle-ms 1000] [--json FILE]
   compare BASE.json NEW.json [--max-regression 10] [--metrics PREFIX[,PREFIX..]]
           [--json FILE]
+  spike   s7 [--seconds 60] [--out FILE] | s7 --summarise FILE
 
 Every command exits by itself. Exit codes: 0 ok; 1 compare found a regression or a missing
 metric; 2 usage or input error, including reports that cannot be compared or a --metrics
@@ -95,6 +97,10 @@ fn main() -> ExitCode {
         "start" => cmd_start(args),
         "idle" => cmd_idle(args),
         "compare" => cmd_compare(args),
+        "spike" => omnia_bench::spike::run(args.collect()).map_err(|e| match e {
+            SpikeError::Usage(message) => Failure::Usage(message),
+            SpikeError::Run(message) => Failure::Run(message),
+        }),
         "start-child" => cmd_start_child(args),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");

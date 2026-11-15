@@ -10,6 +10,7 @@ pub mod compare;
 pub mod driver;
 pub mod harness;
 pub mod scene;
+pub mod spike;
 pub mod start;
 pub mod stats;
 pub mod sys;
