@@ -40,6 +40,9 @@ jobs:
       - name: Cache Cargo data and target directory
         uses: actions/cache@v4
         with:
+          # Save even when a later step fails, so a red run still warms
+          # the cache for the next one.
+          save-always: true
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
