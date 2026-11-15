@@ -634,3 +634,35 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        use --features scene-counts for primitive counts and record it.
                        T2.6: owns scripts.rs (the driver lives in driver.rs); gate in hosted CI
                        with `compare --metrics allocs_per_frame.ours,primitives`.
+2026-11-14 T0.5 needs-human (H3) — the S7 logger is ready; nothing measured yet. `bench spike s7
+                       [--seconds 60] [--out FILE]` opens a 1100x760 window listing the five
+                       gestures, logs every ScrollEvent (delta kind, dx/dy, touch_phase, source,
+                       modifiers), PinchEvent (delta, phase), mouse move/down/up, each with t_ns
+                       since start (Instant at dispatch, not the OS time stamp) and the index of
+                       the frame that shows it, as JSON lines (schema omnia-bench/s7-log/1). Every
+                       event dirties the view; a left drag draws a dot at the cursor. One `frame`
+                       line per drawn frame holds dirty-to-present and draw ms from the difference
+                       of two frame_duration_snapshot()s (G13), with the draw count it covers.
+                       Exits by itself after N s (watchdog N+30 s), then prints the summary.
+                       `bench spike s7 --summarise FILE`: delta kind and phases per input shape
+                       with the device inferred from GPUI's Windows code, a timeline of bursts,
+                       events per frame p50/p99/max (all and per shape, plus GPUI's own
+                       InputLatencySnapshot), each pinch's phase sequence, scroll->pinch switches,
+                       and dirty-to-present p50/p95/p99/max over frames with a left-button move.
+                       Unit tests cover a synthetic log, an empty file and a log with no input.
+                       It never overwrites an existing --out (exit 2). Smoke: `spike s7 --seconds 5`
+                       exits 0; the owner's mouse happened to be over the window, so that run
+                       logged incidental hover moves and wheel notches (not a measurement); the
+                       summariser handles a 0-byte log and the same log with input lines removed.
+                       G10 is imprecise: direct_manipulation.rs OnContentUpdated allows Scroll ->
+                       Pinch within one gesture (it emits scroll Ended, then pinch Started), never
+                       Pinch -> Scroll. Wheel events are Lines with phase Moved only; touchpad
+                       events are drained once per WM_PAINT, and inertia arrives as more Moved
+                       scrolls. Plan section 4 is not changed here (outside T0.5's files).
+                       Owner, at the touchpad and mouse (about 60 s; keep the pointer over the
+                       window, pause between steps):
+                         cargo run --release -p omnia-bench -- spike s7 --seconds 60 --out target/s7-input.jsonl
+                       Then, or any time later:
+                         cargo run --release -p omnia-bench -- spike s7 --summarise target/s7-input.jsonl
+                       The next agent writes docs/measurements/T0.5.md from that summary and sets
+                       T0.5 to done.
