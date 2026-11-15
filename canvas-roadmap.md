@@ -161,7 +161,7 @@ of the `canvas` lane.
 - Done when: every scene runs unattended at every listed size and writes its JSON; raw
   results are in `docs/measurements/T0.4.md`.
 
-### T0.5 Spike S7: real input log · blocked (no PinchEvent reached GPUI on the owner's touchpad; see log)
+### T0.5 Spike S7: real input log · done
 - Lane: bench · Depends: T0.3 · Read: G9, G10
 - Owns: `crates/omnia-bench/src/spike/s7.rs`
 - Do: `bench spike s7 --seconds 60` opens a window, logs every `ScrollEvent`, `PinchEvent`,
@@ -762,3 +762,15 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        suggest the pinches arrived as scroll. Root cause is under investigation.
                        PR #5 review notes for a follow-up: move the logger's file writes off the
                        UI thread before B6 is judged, and log the final frame before quitting.
+2026-11-14 T0.5 done — pinch was recorded in a follow-up owner session; details are in
+                       docs/measurements/T0.5.md. A standalone DM probe showed Windows reports
+                       pinch scale on this touchpad (×0.42 to ×1.47). S7, built against GPUI
+                       15d136bf with trace logging only, got 3 pinch gestures and 213
+                       PinchEvents: Started (delta 0), Moved (delta = scale ratio - 1), Ended.
+                       Nothing was dropped. The first session's zero pinches are unexplained;
+                       the likely cause is that a gesture which starts as a pan stays a pan
+                       under DM rails. T1.5 must not expect "pan then pinch" in one gesture.
+                       Two GPUI defects were found that did not bite here: events.rs:1376 can
+                       skip DM update() via an early return, and events.rs:1380 drops drained
+                       events when there is no input callback. Both are candidates for an
+                       upstream issue at the next GPUI pin task.
