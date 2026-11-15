@@ -140,7 +140,7 @@ of the `canvas` lane.
 - Done when: `omnia-app --frames 60` draws a line of each font (checked with
   `render_to_image` in a test, G12); `THIRD_PARTY.md` lists both fonts.
 
-### T0.3 Bench harness · todo
+### T0.3 Bench harness · done
 - Lane: bench · Depends: T0.1 · Read: plan sections 2, 9 (bench command line), G13
 - Owns: `crates/omnia-bench/`
 - Do: `CountingAlloc` as the global allocator with a scope that separates "ours" from
@@ -598,3 +598,39 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        with cargo-deny (not required in T0.1). No new direct dependency
                        outside plan section 10. Measurements are kept in this task log to
                        stay within T0.1's owned files; no docs/ lane files were changed.
+2026-11-14 T0.3 done — omnia-bench is a lib plus the `bench` binary: CountingAlloc (global
+                       allocator; `alloc::ours` / `alloc::not_ours` scopes, count_allocs),
+                       frame stats from Window::frame_duration_snapshot (draw, dirty-to-present,
+                       present interval, and per-frame work as frame_ms), `run`, `start`,
+                       `idle`, `compare` with --json, a pan driver moving one device pixel per
+                       frame, and a placeholder scene (paper, K3 dot grid, 2,000 seeded wire
+                       quads) painted from a custom Element inside one paint_layer. Measured on
+                       i7-14650HX, RTX 5060 Laptop + UHD (adapter in use unknown), 125%
+                       (scale 1.25), 60 Hz, plugged in; not the reference machine (Q4), no
+                       budget marked. idle --seconds 10 on the T0.1 window: 0 frames, CPU
+                       0.3-1.1% when nothing touches it; every non-zero frame seen was a focus
+                       change, which the report's per-render log shows (window_active flips).
+                       Ten `bench run` (600 frames, 1600x1000 device): frame_ms p99 0.76-1.19
+                       (median 0.93), draw p99 0.74-1.11, dirty-to-present p99 1.43-2.80,
+                       allocs_per_frame.ours 0 in every frame, total about 8 per frame (GPUI);
+                       timing p50 bimodal (0.29-0.40 or about 0.76), spread 71% at p50, 40-46%
+                       at p99. Two real runs differ beyond 10% on 25 of 50 metrics, so gate
+                       timings only on the reference machine. start --runs 10: median 299 ms,
+                       max 500 ms. compare: a.json against itself exits 0; a doctored file
+                       (+11% draw p99, ours 0 to 1, a missing metric) exits 1; mismatched
+                       kind or config exits 2. Details in docs/measurements/T0.3.md.
+                       Deviations: per the PR #1 review, gpui is built with `profiler` only;
+                       Window::rendered_scene (primitive counts) needs GPUI's bench-support
+                       (criterion, bench_metrics), so it is behind the opt-in omnia-bench
+                       feature `scene-counts` and reports record `config.scene_counts`. Plan
+                       section 9 updated to say so. serde_json (MIT or Apache-2.0, already in
+                       GPUI's tree) is now a bench dependency for JSON reports; plan section 10
+                       updated. hdrhistogram 7 matches GPUI's. Run windows disable GPUI's
+                       inactive/low-power/thermal frame caps. Windows' foreground lock can
+                       leave a run window inactive, and GPUI then records no present
+                       intervals, so present_interval_ms is missing and the report warns.
+                       T0.4: implement scene::BenchScene and add a `spike` arm to main.rs;
+                       paint runs inside alloc::ours, wrap GPUI calls in alloc::not_ours;
+                       use --features scene-counts for primitive counts and record it.
+                       T2.6: owns scripts.rs (the driver lives in driver.rs); gate in hosted CI
+                       with `compare --metrics allocs_per_frame.ours,primitives`.
