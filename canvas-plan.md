@@ -446,7 +446,7 @@ Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 
 | Command | Reports |
 | --- | --- |
-| `bench run --sheet S --script pan\|zoom\|drag-part\|drag-wire\|hover [--frames 600]` | Frame, draw and dirty-to-present ms (p50, p95, p99, max); `allocs_per_frame` (ours, total); `memory_mb`; primitive counts by kind |
+| `bench run --sheet S --script pan\|zoom\|drag-part\|drag-wire\|hover [--frames 600]` | Frame, draw and dirty-to-present ms (p50, p95, p99, max); `allocs_per_frame` (ours, total); `memory_mb`; primitive counts by kind (build with `--features scene-counts`, which needs GPUI's `bench-support`) |
 | `bench start [--sheet S] [--runs 10]` | Process start to first interactive frame, median and max |
 | `bench idle --seconds N` | Frames drawn; CPU percent |
 | `bench hit --sheet S` | Hit-test time, p50 and p99 |
@@ -478,6 +478,7 @@ Build-time steps:
 | `serde`, `ron` | Test-sheet save and load | MIT or Apache-2.0 |
 | `profiling`, `tracy-client` (feature `tracy`) | Spans, on the same timeline as GPUI's | MIT or Apache-2.0 |
 | `hdrhistogram` | Bench percentiles | MIT or Apache-2.0 |
+| `serde_json` | Bench JSON reports | MIT or Apache-2.0 |
 | `usvg`, `zip`, `serde_json`, `toml` (xtask only) | Codegen | Apache-2.0 or MIT; `zip` MIT |
 | `proptest`, `criterion`, `image` (dev only) | Property tests, micro-benchmarks, golden comparison | MIT or Apache-2.0 |
 | electronic-symbols, Tabler Icons | Symbols, icons | MIT |

@@ -4,3 +4,17 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+
+[features]
+# Primitive and batch counts from Window::rendered_scene, which GPUI gates behind its
+# bench-support feature. bench-support adds criterion and bench_metrics as normal GPUI
+# dependencies, so it is opt-in: `cargo run --release -p omnia-bench --features scene-counts`.
+scene-counts = ["gpui/bench-support"]
+
+[dependencies]
+# profiler: Window::frame_duration_snapshot (G13).
+gpui = { workspace = true, features = ["profiler"] }
+gpui_platform.workspace = true
+# Same major version and features as GPUI's, so FrameDurationSnapshot's histograms are this type.
+hdrhistogram = { version = "7", default-features = false }
+serde_json = "1"
