@@ -9,19 +9,27 @@ pub const STAGE_PAPER: u32 = 0xEFEDE6;
 pub const STAGE_INK: u32 = 0x1D1D1F;
 
 pub fn load_fonts(cx: &App) -> gpui::Result<()> {
+    load_fonts_with(cx, Cow::Borrowed)
+}
+
+#[doc(hidden)]
+pub fn load_fonts_with(
+    cx: &App,
+    mut transform: impl FnMut(&'static [u8]) -> Cow<'static, [u8]>,
+) -> gpui::Result<()> {
     cx.text_system().add_fonts(vec![
-        Cow::Borrowed(include_bytes!("../../../vendor/fonts/inter/Inter-Regular.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../vendor/fonts/inter/Inter-Medium.ttf").as_slice()),
-        Cow::Borrowed(include_bytes!("../../../vendor/fonts/inter/Inter-SemiBold.ttf").as_slice()),
-        Cow::Borrowed(
+        transform(include_bytes!("../../../vendor/fonts/inter/Inter-Regular.ttf").as_slice()),
+        transform(include_bytes!("../../../vendor/fonts/inter/Inter-Medium.ttf").as_slice()),
+        transform(include_bytes!("../../../vendor/fonts/inter/Inter-SemiBold.ttf").as_slice()),
+        transform(
             include_bytes!("../../../vendor/fonts/source-code-pro/SourceCodePro-Regular.ttf")
                 .as_slice(),
         ),
-        Cow::Borrowed(
+        transform(
             include_bytes!("../../../vendor/fonts/source-code-pro/SourceCodePro-Medium.ttf")
                 .as_slice(),
         ),
-        Cow::Borrowed(
+        transform(
             include_bytes!("../../../vendor/fonts/source-code-pro/SourceCodePro-Semibold.ttf")
                 .as_slice(),
         ),
