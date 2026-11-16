@@ -3395,6 +3395,11 @@ dependencies = [
 [[package]]
 name = "omnia-canvas"
 version = "0.1.0"
+dependencies = [
+ "gpui",
+ "omnia-doc",
+ "proptest",
+]
 
 [[package]]
 name = "omnia-doc"

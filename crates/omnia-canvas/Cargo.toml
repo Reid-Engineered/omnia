@@ -4,3 +4,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+
+[dependencies]
+gpui.workspace = true
+omnia-doc = { path = "../omnia-doc" }
+
+[dev-dependencies]
+proptest = "1"
