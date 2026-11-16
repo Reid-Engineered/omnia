@@ -1,5 +1,6 @@
-//! What the bench window draws: the T0.1 paper window, or a placeholder scene painted from
-//! a custom `Element` until T2.5 renders real sheets.
+//! What the bench window draws: the real empty sheet (`omnia-canvas`'s `SheetView`, T1.4),
+//! the T0.1 paper window, or a placeholder scene painted from a custom `Element` until T2.5
+//! renders real sheets.
 
 use crate::alloc::{not_ours, ours};
 use crate::driver::Camera;
@@ -7,6 +8,8 @@ use gpui::{
     App, Bounds, Element, ElementId, GlobalElementId, Hsla, InspectorElementId, LayoutId, Pixels,
     Style, Window, fill, point, px, relative, rgb, rgba, size,
 };
+use omnia_canvas::{Camera as SheetCamera, SheetView};
+use omnia_doc::Pt;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -26,8 +29,11 @@ const WIRE_STROKE: f32 = 1.8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sheet {
-    /// The T0.1 window: one `stage/paper` rectangle, drawn exactly as `omnia-app` draws it.
+    /// The milestone-1 empty sheet: `SheetView`'s paper and K10 dot grid in the Graphite
+    /// theme, under the script's camera.
     Empty,
+    /// The T0.1 window: one `stage/paper` rectangle, as `omnia-app` drew it at T0.1.
+    T01,
     /// Paper, a dot grid and orthogonal wire quads that follow the camera.
     Placeholder,
     Spike(crate::spike::Config),
@@ -37,12 +43,13 @@ impl Sheet {
     pub fn parse(name: &str) -> Result<Self, String> {
         match name {
             "empty" => Ok(Self::Empty),
+            "t01" => Ok(Self::T01),
             "placeholder" => Ok(Self::Placeholder),
             "100" | "1k" | "10k" | "dense" | "text" => Err(format!(
                 "sheet `{name}` needs the T2.4 generators and T2.5 sheet rendering"
             )),
             _ => Err(format!(
-                "unknown sheet `{name}` (available: empty, placeholder)"
+                "unknown sheet `{name}` (available: empty, t01, placeholder)"
             )),
         }
     }
@@ -50,6 +57,7 @@ impl Sheet {
     pub fn name(self) -> &'static str {
         match self {
             Self::Empty => "empty",
+            Self::T01 => "t01",
             Self::Placeholder => "placeholder",
             Self::Spike(_) => "spike",
         }
@@ -58,7 +66,8 @@ impl Sheet {
     /// The scene painted by a [`SceneElement`], or `None` for the T0.1 window.
     pub fn scene(self) -> Option<Rc<RefCell<dyn BenchScene>>> {
         match self {
-            Self::Empty => None,
+            Self::T01 => None,
+            Self::Empty => Some(Rc::new(RefCell::new(EmptySheet))),
             Self::Spike(config) => Some(Rc::new(RefCell::new(crate::spike::Scene::new(config)))),
             Self::Placeholder => Some(Rc::new(RefCell::new(Placeholder::new(0x0A11_CE5E)))),
         }
@@ -138,6 +147,29 @@ impl Element for SceneElement {
             ours(|| scene.borrow_mut().paint(bounds, camera, window, cx));
         });
         self.paint_time.set(Some(start.elapsed()));
+    }
+}
+
+/// The empty sheet: [`SheetView::paint_quads`] is the whole body of `SheetView`'s paint,
+/// with the GPUI call left to the sink so GPUI's allocations count only in "total" (Q5).
+/// The camera is centred on the sheet origin at the script's zoom, then panned by the
+/// script's offset (positive x moves the view right, so the sheet moves left).
+pub struct EmptySheet;
+
+impl BenchScene for EmptySheet {
+    fn paint(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        camera: Camera,
+        window: &mut Window,
+        _cx: &mut App,
+    ) {
+        let scale = window.scale_factor();
+        let (dx, dy) = camera.logical(scale);
+        let mut view = SheetCamera::new(Pt::ZERO, camera.zoom, bounds);
+        view.pan_by(point(-f64::from(dx), -f64::from(dy)));
+        SheetView::new(view, &omnia_theme::GRAPHITE)
+            .paint_quads(bounds, scale, |quad| not_ours(|| window.paint_quad(quad)));
     }
 }
 
@@ -281,9 +313,11 @@ mod tests {
     #[test]
     fn sheet_names() {
         assert_eq!(Sheet::parse("empty"), Ok(Sheet::Empty));
+        assert_eq!(Sheet::parse("t01"), Ok(Sheet::T01));
         assert_eq!(Sheet::parse("placeholder"), Ok(Sheet::Placeholder));
         assert!(Sheet::parse("10k").unwrap_err().contains("T2.5"));
         assert!(Sheet::parse("nope").is_err());
-        assert!(Sheet::Empty.scene().is_none() && Sheet::Placeholder.scene().is_some());
+        assert!(Sheet::T01.scene().is_none() && Sheet::Placeholder.scene().is_some());
+        assert!(Sheet::Empty.scene().is_some());
     }
 }

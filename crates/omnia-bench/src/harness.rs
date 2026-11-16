@@ -55,7 +55,7 @@ fn run_app(
         .unwrap_or_else(|| Err(format!("bench {what}: the app quit without a result")))
 }
 
-/// The window content for `sheet`. The empty sheet is the T0.1 view, built the same way.
+/// The window content for `sheet`. The `t01` sheet is the T0.1 view, built the same way.
 fn content(
     sheet: Sheet,
     scene: &Option<Rc<RefCell<dyn BenchScene>>>,
@@ -495,6 +495,7 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct IdleConfig {
+    pub sheet: Sheet,
     pub size: (f32, f32),
     pub seconds: f64,
     /// Time allowed for start-up frames before the idle window is measured.
@@ -512,19 +513,23 @@ struct RenderEvent {
 
 type RenderLog = Rc<RefCell<Vec<RenderEvent>>>;
 
-/// The T0.1 window: the same view and window options as `omnia-app` without `--frames`.
-struct T01View {
+/// The idle window: `sheet` at rest, with the same window options as `omnia-app` without
+/// `--frames`.
+struct IdleView {
+    sheet: Sheet,
+    scene: Option<Rc<RefCell<dyn BenchScene>>>,
+    paint_time: Rc<Cell<Option<Duration>>>,
     renders: RenderLog,
 }
 
-impl Render for T01View {
+impl Render for IdleView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         self.renders.borrow_mut().push(RenderEvent {
             at: Instant::now(),
             active: window.is_window_active(),
             hovered: window.is_window_hovered(),
         });
-        div().size_full().bg(rgb(PAPER))
+        content(self.sheet, &self.scene, Camera::default(), &self.paint_time)
     }
 }
 
@@ -540,7 +545,10 @@ pub fn idle(config: IdleConfig) -> Result<Value, String> {
                 move |_window, cx| {
                     #[cfg(not(target_os = "linux"))]
                     _window.resize(size(px(config.size.0), px(config.size.1)));
-                    cx.new(|_| T01View {
+                    cx.new(|_| IdleView {
+                        sheet: config.sheet,
+                        scene: config.sheet.scene(),
+                        paint_time: Rc::new(Cell::new(None)),
                         renders: view_renders,
                     })
                 },
@@ -612,6 +620,7 @@ async fn measure_idle(
         "schema": SCHEMA,
         "kind": "idle",
         "config": {
+            "sheet": config.sheet.name(),
             "seconds": config.seconds,
             "settle_ms": config.settle.as_millis() as u64,
             "window_logical": [config.size.0, config.size.1],

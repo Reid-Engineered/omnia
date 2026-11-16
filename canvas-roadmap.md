@@ -253,7 +253,7 @@ of the `canvas` lane.
 - Done when: simulated-input tests show the world point under the cursor fixed across a
   zoom, and a status update notifies neither `SheetView` nor the window root.
 
-### T1.6 Gate: milestone 1 · todo
+### T1.6 Gate: milestone 1 · doing
 - Lane: bench · Depends: T1.5
 - Do: run and record:
 
