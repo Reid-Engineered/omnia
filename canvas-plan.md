@@ -467,6 +467,23 @@ impl SpatialIndex {                                        // D3 (T2.2); Send, n
     pub fn bounds(&self, item: ItemId) -> Option<Rect>;
     pub fn query(&self, area: Rect, out: &mut Vec<ItemId>); // replaces out; no alloc if room
 }
+pub struct Connectivity { /* private: point map, components, logical nets */ }
+impl Connectivity {                                        // D2, INV10 (T4.1)
+    pub fn new() -> Self;
+    pub fn clear(&mut self);
+    pub fn net_count(&self) -> usize;
+    pub fn net_of(&self, wire: WireId) -> Option<NetId>;
+    pub fn net_at(&self, at: Pt) -> Option<NetId>;
+    pub fn net_wires(&self, net: NetId, out: &mut Vec<WireId>); // replaces out; no alloc if room
+    pub fn net_labels(&self, net: NetId, out: &mut Vec<Arc<str>>);
+    pub fn rebuild<W, L, LB>(wires: W, labels: L) -> Self
+        where W: IntoIterator<Item = (WireId, Wire)>,
+              L: IntoIterator<Item = (LabelId, LB)>, LB: std::borrow::Borrow<Label>;
+    pub fn add_wire(&mut self, id: WireId, wire: Wire);
+    pub fn remove_wire(&mut self, id: WireId) -> Option<Wire>;
+    pub fn add_label(&mut self, id: LabelId, label: &Label);
+    pub fn remove_label(&mut self, id: LabelId) -> Option<Label>;
+}
 
 // ---- omnia-symbols ----
 pub struct SymbolId(u16);
