@@ -75,7 +75,7 @@ for ((r=1; r<=repeats; r++)); do
         power before
         code=0
         if [[ $s == baseline ]]; then
-            "$bench" run --sheet empty --frames 600 --size "$size" --json "$json" > "$json.log" 2>&1 || code=$?
+            "$bench" run --sheet t01 --frames 600 --size "$size" --json "$json" > "$json.log" 2>&1 || code=$?
         else
             "$bench" spike "$s" --count "$n" --mode "$m" --frames 600 --size "$size" --json "$json" > "$json.log" 2>&1 || code=$?
         fi

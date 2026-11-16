@@ -253,14 +253,14 @@ of the `canvas` lane.
 - Done when: simulated-input tests show the world point under the cursor fixed across a
   zoom, and a status update notifies neither `SheetView` nor the window root.
 
-### T1.6 Gate: milestone 1 · todo
+### T1.6 Gate: milestone 1 · needs-human
 - Lane: bench · Depends: T1.5
 - Do: run and record:
 
   | Budget | Command | Pass |
   | --- | --- | --- |
   | B1 | `bench start` | < 400 ms |
-  | B3 | `bench run --sheet empty --script pan` and `zoom` | p99 < 16.7 ms |
+  | B3 | `bench run --sheet empty --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes) |
   | B8 | `bench idle --seconds 10` | 0 frames |
   | B10 | same `run` reports | `allocs_per_frame.ours == 0` |
 
@@ -334,8 +334,8 @@ of the `canvas` lane.
   | Budget | Command | Pass |
   | --- | --- | --- |
   | B2 | `bench start --sheet 1k` minus `bench start` | < 300 ms |
-  | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, median present interval ≤ one refresh, max ≤ 33.3 ms |
-  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, median present interval ≤ two refreshes, max ≤ 50 ms |
+  | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes), max ≤ 33.3 ms |
+  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes, max ≤ 50 ms |
   | B9 | `memory_mb` in the `10k` run | < 300 |
   | B10 | all reports | `allocs_per_frame.ours == 0` |
 
@@ -1165,3 +1165,28 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        split 7.09 us (all >130x under 1 ms); full 10k rebuild 8.44 ms.
                        Standard checks passed: cargo fmt --all --check; cargo clippy --workspace
                        --all-targets -- -D warnings; cargo test --workspace; cargo deny check.
+2026-11-16 T1.6 needs-human — Milestone-1 gate on Orion (HD 620, Mesa ANV 26.2.3, not
+                       llvmpipe; full-screen 1920x1080 at 60.008 Hz, at 100% and 125%; AC;
+                       governor powersave; no power profile available), commit 20d9f9e,
+                       10 interleaved repetitions per case. Medians of run values:
+                       B1 start 198.1 / 192.2 ms (< 400): PASS. B3 frame p99 pan 3.734 /
+                       2.554 ms, zoom 3.637 / 2.355 ms (< 16.7): PASS. B8 idle 0 frames in
+                       every run: PASS. B10 allocs_per_frame.ours 0 in all 40 runs: PASS.
+                       B3's second half, by owner decision 2026-11-16 (plan section 2 and
+                       the T1.6/T2.7 tables updated; B4 likewise: no present interval
+                       > 2.5 refreshes): zero missed refreshes, a present interval > 1.5
+                       refreshes being one. Judged per run from the reports' max interval:
+                       0 in 39 of 40 runs; 100% pan run 7 has one 30.87 ms interval (>= 1
+                       miss; frame work max 9.38 ms, 0 late frames). The old median wording
+                       read 14 to 31 us over 16.664 ms through timestamp jitter. Still
+                       needs-human: T3 Code desktop and other user apps were running (not
+                       closed over SSH; bench window active in every run). A person reruns
+                       gate.sh at the desk with them closed; that rerun decides B3.
+                       Bench changes (lane bench): `--sheet empty` paints omnia-canvas
+                       SheetView via paint_quads (T0.1 window kept as `--sheet t01`, spike
+                       scripts' baseline updated); `--script zoom` (K4 sweep, geometric,
+                       about centre, 600-frame cycle); `idle --sheet`; run reports now carry
+                       missed_refreshes (owner definition), present_intervals_over_2_5_
+                       refreshes and max_present_interval_ms, with GPUI's work-based count
+                       renamed work_missed_refreshes. omnia-bench gains workspace deps only.
+                       Numbers and rerun steps: docs/measurements/T1.6.md.

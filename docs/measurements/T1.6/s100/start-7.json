@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "kind": "start",
+  "config": {
+    "sheet": "empty",
+    "runs": 10,
+    "window_logical": [
+      1920.0,
+      1080.0
+    ]
+  },
+  "environment": {
+    "os": "linux",
+    "arch": "x86_64",
+    "logical_cpus": 4
+  },
+  "samples_ms": [
+    207.4217,
+    196.3763,
+    192.8783,
+    210.1131,
+    207.8683,
+    206.928,
+    235.5809,
+    311.7371,
+    251.6185,
+    293.6297
+  ],
+  "metrics": {
+    "start_ms": {
+      "median": 208.9907,
+      "max": 311.7371
+    }
+  }
+}

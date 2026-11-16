@@ -13,7 +13,7 @@ foreach ($n in 2000,6000,12000) {foreach ($m in "fixed","sweep","direct","direct
 foreach ($n in 20000,60000) {foreach ($m in "cached","repaint") {$cases += ,@("s6",$n,$m)}}
 for ($r=1; $r -le $Repeats; $r++) {
     if (!(Test-Path "$dir/baseline-$r.json")) {
-    & $Bench run --sheet empty --frames 600 --size $Size --json "$dir/baseline-$r.json" > "$dir/baseline-$r.stdout.log" 2>&1
+    & $Bench run --sheet t01 --frames 600 --size $Size --json "$dir/baseline-$r.json" > "$dir/baseline-$r.stdout.log" 2>&1
     if ($LASTEXITCODE -ne 0) {throw "baseline failed"}
     }
     foreach ($case in $cases) {

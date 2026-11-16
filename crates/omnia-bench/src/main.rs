@@ -17,10 +17,10 @@ static GLOBAL: CountingAlloc = CountingAlloc;
 const USAGE: &str = "\
 usage: bench <command> [options]
 
-  run     [--sheet empty|placeholder] [--script pan] [--frames 600] [--warmup 60]
+  run     [--sheet empty|t01|placeholder] [--script pan|zoom] [--frames 600] [--warmup 60]
           [--size 1280x800] [--json FILE]
-  spike   s1..s6|s8 [--count N] [--mode fixed|sweep|square|rounded|sprite|direct|direct-sweep|cached|repaint|quality|monitors|displays]\n          [--frames 600] [--warmup 60] [--size 3072x1728] [--json FILE]\n  start   [--sheet empty|placeholder] [--runs 10] [--size 960x640] [--json FILE]
-  idle    [--seconds 10] [--settle-ms 1000] [--size 960x640] [--json FILE]
+  spike   s1..s6|s8 [--count N] [--mode fixed|sweep|square|rounded|sprite|direct|direct-sweep|cached|repaint|quality|monitors|displays]\n          [--frames 600] [--warmup 60] [--size 3072x1728] [--json FILE]\n  start   [--sheet empty|t01|placeholder] [--runs 10] [--size 960x640] [--json FILE]
+  idle    [--sheet empty|t01|placeholder] [--seconds 10] [--settle-ms 1000] [--size 960x640] [--json FILE]
   compare BASE.json NEW.json [--max-regression 10] [--metrics PREFIX[,PREFIX..]]
           [--json FILE]
   spike   s7 [--seconds 60] [--out FILE] | s7 --summarise FILE
@@ -145,6 +145,11 @@ fn cmd_run(args: impl Iterator<Item = String>) -> Result<(), Failure> {
         warmup: positive("warmup", usage(args.number("warmup", 60))?)?,
         size,
     };
+    if config.script == Script::Zoom && config.sheet != Sheet::Empty {
+        return Err(Failure::Usage(
+            "--script zoom needs --sheet empty (other sheets ignore zoom)".into(),
+        ));
+    }
     let report = harness::run(config).map_err(Failure::Run)?;
     finish(&report, args.get("json"))
 }
@@ -173,7 +178,10 @@ fn cmd_start_child(args: impl Iterator<Item = String>) -> Result<(), Failure> {
 }
 
 fn cmd_idle(args: impl Iterator<Item = String>) -> Result<(), Failure> {
-    let args = usage(Args::parse(args, &["seconds", "settle-ms", "size", "json"]))?;
+    let args = usage(Args::parse(
+        args,
+        &["sheet", "seconds", "settle-ms", "size", "json"],
+    ))?;
     usage(args.no_positionals())?;
     let seconds: f64 = usage(args.number("seconds", 10.0))?;
     if !(seconds.is_finite() && seconds > 0.0 && seconds <= 3600.0) {
@@ -181,6 +189,7 @@ fn cmd_idle(args: impl Iterator<Item = String>) -> Result<(), Failure> {
     }
     let settle_ms: u64 = usage(args.number("settle-ms", 1000))?;
     let config = IdleConfig {
+        sheet: usage(Sheet::parse(args.get("sheet").unwrap_or("empty")))?,
         size: usage(parse_size(args.get("size").unwrap_or("960x640")))?,
         seconds,
         settle: Duration::from_millis(settle_ms),

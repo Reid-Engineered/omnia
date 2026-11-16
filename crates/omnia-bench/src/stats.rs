@@ -69,6 +69,19 @@ pub fn round(value: f64) -> f64 {
     (value * 10_000.0).round() / 10_000.0
 }
 
+/// How many recorded values in a nanosecond histogram are longer than `threshold` refresh
+/// intervals of `refresh_nanos` each. A value counts when the top of its histogram bucket is
+/// above the limit, so with GPUI's three significant figures this can only over-count, by
+/// values within 0.1% of the limit; it never misses one.
+pub fn count_over_refreshes(histogram: &Histogram<u64>, refresh_nanos: u64, threshold: f64) -> u64 {
+    let limit = refresh_nanos as f64 * threshold;
+    histogram
+        .iter_recorded()
+        .filter(|v| v.value_iterated_to() as f64 > limit)
+        .map(|v| v.count_at_value())
+        .sum()
+}
+
 /// Merges histograms into one. `None` when there is nothing to merge.
 pub fn merged<'a>(
     histograms: impl IntoIterator<Item = &'a Histogram<u64>>,
@@ -136,5 +149,21 @@ mod tests {
         let m = merged([&early, &d]).unwrap();
         assert_eq!(m.len(), 3);
         assert!(merged([]).is_none());
+    }
+
+    #[test]
+    fn present_intervals_over_refreshes() {
+        let refresh = 16_664_000_u64; // 60.008 Hz
+        let mut h = Histogram::<u64>::new(3).unwrap();
+        for ms in [16.6, 16.7, 18.6, 24.9, 25.2, 30.9, 33.2, 41.8] {
+            h.record((ms * 1e6) as u64).unwrap();
+        }
+        // 1.5 refreshes = 24.996 ms; 2.5 refreshes = 41.66 ms.
+        assert_eq!(count_over_refreshes(&h, refresh, 1.5), 4);
+        assert_eq!(count_over_refreshes(&h, refresh, 2.5), 1);
+        assert_eq!(
+            count_over_refreshes(&Histogram::new(3).unwrap(), refresh, 1.5),
+            0
+        );
     }
 }
