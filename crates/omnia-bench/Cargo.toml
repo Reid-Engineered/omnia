@@ -13,6 +13,8 @@ scene-counts = ["gpui/bench-support"]
 readback = ["gpui/test-support", "gpui_platform/test-support", "dep:resvg"]
 
 [dependencies]
+omnia-doc = { path = "../omnia-doc" }
+omnia-symbols = { path = "../omnia-symbols" }
 # profiler: Window::frame_duration_snapshot (G13).
 gpui = { workspace = true, features = ["profiler"] }
 gpui_platform.workspace = true
