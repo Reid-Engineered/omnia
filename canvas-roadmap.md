@@ -278,7 +278,7 @@ of the `canvas` lane.
 - Done when: tests pass for: `restore` after `remove` returns the same id; INV1 is enforced
   at insert; INV3 holds on generated sheets against a brute-force count.
 
-### T2.2 Spatial index · todo
+### T2.2 Spatial index · done
 - Lane: doc · Depends: T2.1 · Read: D3, K12
 - Owns: `crates/omnia-doc/src/index.rs`
 - Do: the uniform grid with insert, remove and `query(area, out)`; long wires registered in
@@ -1018,3 +1018,35 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        test --workspace three times in a row, deny). Host: Windows 11 x64,
                        i7-14650HX, RTX 5060 Laptop + Intel UHD, 1920x1200 at 125%, 60 Hz;
                        nothing timed, no budget gated. Next: T1.5 replaces the fixed camera.
+2026-11-16 T2.2 done — crates/omnia-doc/src/index.rs: SpatialIndex, a uniform grid of K12
+                       cells (INDEX_CELL_NM = 20,320,000 nm; 99 x 99 cover K1). insert(item,
+                       bounds) registers an ItemId in every cell its bounds meet (a long wire
+                       in every cell it crosses) and moves an item already present; remove;
+                       bounds; query(area, out) replaces out with items whose bounds meet area
+                       (edges inclusive, as Rect::intersects), order unspecified, deduplicated
+                       by a per-item generation stamp (wrap at 2^32 resets all stamps). Per-kind
+                       tables are indexed by arena id, so no hash map. Stamps are Cells so query
+                       takes &self as Doc::query does: the index is Send, not Sync (D8: the UI
+                       thread owns Doc; jobs use a snapshot). Plan section 9 sketch updated.
+                       Not wired into Doc: doc.rs is T2.1's file. Whoever adds Doc::query
+                       (T2.5's culling needs it; likely T4.1/T5.1 in the doc lane) keeps a
+                       SpatialIndex in Doc and calls insert/remove next to the arenas, with
+                       part bounds from the symbol box and wire bounds from the segment plus
+                       half the K5 stroke. Tests: property test (256 cases, up to 200 random
+                       inserts/moves/removes/queries over the whole K1 sheet, rectangles from
+                       points to sheet-spanning, ids colliding) equals a brute-force scan, no
+                       duplicates, cell occupancy exact; a planted removal of the stamp check
+                       made it fail. tests/index_alloc.rs (test-local counting allocator, the
+                       sheet_alloc pattern): 0 allocations per query with capacity, control
+                       query without capacity allocates. Bench benches/index.rs (criterion 0.8,
+                       plan section 10, dev only, already locked through GPUI; default features
+                       off): T2.4's generator does not exist yet, so the bench builds a seeded
+                       synthetic sheet of exactly 10,000 parts and 20,000 wires (2% long buses).
+                       4K viewport at 100%: 3.3 to 4.8 µs (1,314 items); whole sheet 0.18 to
+                       0.27 ms (30,000 items). i7-14650HX, Windows 11, on battery, Silent
+                       scheme, machine shared with other builds; docs/measurements/T2.2.md. Not
+                       the reference machine; no budget gated. No Q ids needed. New files
+                       outside index.rs: tests/index_alloc.rs, benches/index.rs and the
+                       measurements file, all named by this task's Done-when line. During the
+                       run C: hit 0 bytes free once (cause not checked); it cleared
+                       without action from this task.

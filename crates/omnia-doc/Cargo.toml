@@ -7,3 +7,9 @@ publish.workspace = true
 
 [dev-dependencies]
 proptest = "1"
+# Plan section 10 (dev only, MIT OR Apache-2.0); already in Cargo.lock through GPUI.
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "index"
+harness = false
