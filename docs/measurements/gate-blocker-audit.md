@@ -6,7 +6,10 @@ gate, threshold, plan or roadmap text; it records what the written requirements 
 say, what the existing evidence does and does not establish, and the smallest
 fixed-schedule experiment that would close each gap. GPUI citations are against the pinned
 revision `15d136bf8e72ae43b284183ec46940c009460f5c`
-(`~/.cargo/git/checkouts/zed-a70e2ad075855582/15d136b`).
+(`~/.cargo/git/checkouts/zed-a70e2ad075855582/15d136b`). Historical file:line references
+below identify that audited snapshot. Review corrections also account for T5.1,
+merged at `e81aab6`: public `Doc::apply`, undo and redo are now available for
+whole-command measurements. No protocol exception is adopted by this audit.
 
 ## 1. What the gates actually say
 
@@ -48,7 +51,7 @@ motion runs have zero misses; `docs/measurements/T1.6/s125/pan-1.json` has
 `present_intervals_over_2_5_refreshes=1`, `late_frames=0`, `work_missed_refreshes=0`,
 `frame_ms` p99 1.9446 / max 3.0802, `dirty_to_present_ms` max 5.3371, no warnings, and **no
 `diagnostic_trace`** (untraced run). At 60.008 Hz, 1.5 refreshes = 24.997 ms
-(T1.6.md "Budget verdict"). The eight traced diagnostic runs (T1.6-debug.md) all had zero
+(T1.6.md "Budget verdict"). The eight diagnostic runs (six traced, two untraced; T1.6-debug.md) all had zero
 misses; largest raw traced interval 22.936100 ms at measured index 364 (warmup 600).
 
 ### 2.2 Pinned timing semantics (verified against source)
@@ -72,28 +75,34 @@ misses; largest raw traced interval 22.936100 ms at measured index 364 (warmup 6
   FRAME_RETRY_INTERVAL = 16.667 ms (wayland/client.rs:200, :645).
 - Next-frame callbacks run before the draw decision in the frame handler:
   window.rs:2040-2056.
-- Samples are dropped only on suspend/hidden via journal.rs:978
-  (`frame_sample_is_valid`); the failing run had none (drawn 600, no warnings).
+- Journal validity filtering applies to the pending frame, dirty timestamp and previous
+  present timestamp (profiler.rs:1504-1521; journal.rs `frame_sample_is_valid`). The
+  aggregate counts and absence of warnings do not reconstruct every sample's validity
+  history or establish that the longest interval has a usable dirty timestamp.
 
 ### 2.3 Findings (evidence-supported; no causal claim)
 
-1. **No evidence-supported bug in our code explains the interval.** In the failing run,
-   work max 3.0802 ms and dirty-to-present max 5.3371 ms bound the in-frame cost; the
-   remaining ~44 ms of the 49.7746 ms interval sits between present_end and the next
-   frame's dirty/signal — i.e. in signal wait, client scheduling, or the platform
-   present call, all outside `work` by construction (profiler.rs:891-908, 1131). The
-   histogram cannot distinguish those three; per the standing instruction, no compositor
-   cause is claimed.
+1. **No cause is established for the interval.** Work max 3.0802 ms and
+   dirty-to-present max 5.3371 ms are separate aggregate summaries, not matched
+   timestamps for the frame ending the 49.7746 ms interval. If that frame has a
+   valid dirty sample, its dirty-to-present span would be bounded by the latter
+   maximum, placing roughly 44.4 ms before dirtying. The report does not establish
+   that condition. Work excludes waiting for the signal and the platform present
+   call (profiler.rs:891-908,1131), so low work alone cannot locate the delay.
+   A matched failing trace is needed; no scheduling, compositor or rendering cause
+   is inferred from these summaries.
 2. **Discriminant gap 1 — the trace has no frame-request source.** The diagnostic trace
    records signal/dirty/draw/present timestamps and the raw interval
    (crates/omnia-bench/src/trace.rs:34-47) but not `FrameRequestSource`
    (native callback vs the 16.667 ms local retry timer, wayland/client.rs:200), so even a
    failing traced run cannot by itself separate "compositor callback late" from "client
    event loop descheduled / retry timer drove the frame". WAYLAND_DEBUG=client
-   correlation is the available discriminator without a code change.
+   adds callback correlation, but its client-side timestamps alone may still be
+   insufficient to distinguish server delay from client descheduling. Correlated
+   scheduler/compositor evidence may be required.
 3. **Discriminant gap 2 — the failing run is untraced, so the miss index is unknown.**
    pan-1.json carries no `diagnostic_trace`; only a failing traced run can locate the
-   miss. All eight traced runs were clean (T1.6-debug.md), so no failing trace exists.
+   miss. All six traced diagnostic runs were clean (T1.6-debug.md), so no failing trace exists.
 4. **Warmup-baseline boundary (bench-side, bounded, unproven).** The baseline snapshot is
    taken in an `on_next_frame` callback between the last warmup frame and the first
    measured frame (harness.rs:172-177 comment, :185-186 `frame + 1 == warmup`,
@@ -110,14 +119,16 @@ misses; largest raw traced interval 22.936100 ms at measured index 364 (warmup 6
    0.1% below 24.997 ms can be counted as misses; it never under-counts (comment :72-75).
    It cannot explain 49.7746 ms; `missed_refreshes` is an upper bound, not exact.
    Reported at harness.rs:344, :397.
-6. **Frame pacer ruled out in the bench config.** The bench sets
+6. **Configured policy caps are disabled in the bench.** The bench sets
    `inactive_frame_interval = low_power_frame_interval = thermal_frame_interval = None`
    (harness.rs:93-96, overriding the platform defaults at platform.rs:2850-2852); on Orion
    `power_mode` stays `Unknown` (default, platform.rs:552-553; no power-profiles daemon),
    so `minimum_frame_interval` returns `None` (window.rs:1374-1396) and `should_defer` is
-   always false (window.rs:1351-1372, called at :1999). No pacer-induced 2x intervals.
-7. **Sample invalidation ruled out** for the failing run (journal.rs:978 drops only on
-   suspend/hidden; DPMS on but no suspend recorded; drawn=600, unmeasured=0).
+   false for that configuration (window.rs:1351-1372, called at :1999). This excludes
+   the named configured caps as an explanation, not every runtime source of pacing delay.
+7. **Sample-level validity remains unobserved.** The failing run records 600 draws,
+   zero unmeasured work frames and no warnings. Those aggregates are useful checks,
+   but do not replace the matched event/dirty-timestamp evidence described above.
 
 **Conclusion for T1.6:** the gate stays blocked under the unchanged all-run zero-miss
 rule; no render/pacing fix is justified by current evidence; the discriminants that would
@@ -147,43 +158,51 @@ index-0 baseline hypothesis. No subset rerun or aggregation change is accepted.
 
 ### 3.2 Does section 2.1 require GPU/foreground/two-scale conditions for CPU-only runs?
 
-Exact text: canvas-plan.md:55 makes 2.1 binding on "every timed run"; the 2.1 bullets
-(:65-79) include Adapter/Viewport/Refresh (inherently window/GPU) and the Power-and-noise
-bullet :72-73, which bundles a window requirement ("the bench window in the foreground")
-with a machine-level one ("other apps closed"). For a CPU-only runner with no window, the
-adapter/viewport/refresh bullets are **vacuous, not violated**; requiring a foreground
-rendered window or two scale-factor passes for a CPU connectivity run is **not supported by
-the exact text as a requirement on that run** — it is prior interpretation. The defensible
-reading for CPU-only runs is {reference machine, AC, governor/profile recorded, other apps
-closed, ten interleaved repetitions, median of run p99s}. Even under that reading the
-Orion runs fall short: Konsole and KDE/Akonadi services remained, so "other apps closed"
-was unmet (T2.8-reference.md "Protocol limits"; T2.8-optimization.md limitations). The
-docs themselves correctly decline to certify a full 2.1 pass. This is a recommendation
-only; no plan text is changed.
+Exact text: canvas-plan.md:55 makes section 2.1 binding on "every timed run".
+The bullets include Adapter/Viewport/Refresh (:65-71), foreground bench window and
+other apps closed (:72-73), and ten rotating repetitions (:74-75). There is no
+explicit CPU-only exception. Some window/GPU requirements do not map naturally to
+a standalone CPU runner, but that ambiguity does not authorize this audit to
+waive them or certify an alternative subset of conditions.
+
+A CPU-specific protocol could reasonably retain reference hardware, AC,
+governor/profile and process records, other user apps closed, and the same fixed
+repetitions/statistic. That is a proposed clarification, not the current accepted
+protocol. Until clarified or satisfied, the existing CPU-only results remain
+limited evidence. Konsole was an open user app; its presence is a concrete noise
+limitation. KDE/Akonadi services are recorded background processes, not automatically
+additional user apps that must be terminated. This audit requires neither shutting
+down the desktop session nor separate approval for every background service.
 
 ### 3.3 Is `needs-human` justified?
 
-Yes, by the letter of roadmap rule 4 (canvas-roadmap.md:27-30): the runs were on Orion but
-**outside** the section 2.1 protocol (apps not all closed), so the gate task ends
+Yes. The existing runs do not establish complete section 2.1 compliance and retain
+an open user app. Under roadmap rule 4 (canvas-roadmap.md:27-30), the gate task ends
 `needs-human` with numbers recorded — which is exactly what T2.8-optimization.md does.
 Independently, the measured quantity (connectivity-only) is not the Doc command D8/T5.1
 target, so even a protocol-perfect connectivity run would not close D8's "per command".
 
 ### 3.4 Precise evidence required to close T2.8
 
-1. On Orion, AC, governor and power profile recorded, named apps closed (already
-   achievable) **and** the remaining desktop services either closed or explicitly accepted
-   by the owner as background for CPU-only runs (owner decision needed; currently Konsole
-   + KDE services remained).
-2. Fixed schedule (same as T2.8-reference/run.sh): 10 rotating interleaved passes per
-   case, 1,000 observations per operation per pass, 30 s timeout with TERM/KILL 5 s grace.
-   Cases: real 10k leaf, 5k GND/VCC label bridge, 20k chain middle, 10k index query —
-   **measured at Doc level** (`Doc::insert_wire`/`Doc::remove_wire`, doc.rs:286-333,
-   including `SpatialIndex`), not Connectivity-only. After T5.1 lands, add one `Move` of
-   100 items on 10k via `Doc::apply` (that is T5.1's own done-when, roadmap:472-474, but it
-   is the number D8's "per command" ultimately means).
-3. Pass criterion: median of the ten run p99s **strictly under 1 ms** for one add and one
-   remove on `10k` and in each worst case; `>=1 ms` counts reported as diagnostics.
+1. Meet the accepted reference protocol on Orion, or first record an explicit
+   CPU-only clarification. Record AC, governors/profile and the process inventory;
+   close other user apps. Normal desktop services must not be silently reclassified
+   as user apps or terminated merely to satisfy this audit.
+2. Use ten rotating interleaved passes per case, with 1,000 observations per operation
+   per pass and the existing timeout/grace. Retain the Connectivity-only cases for
+   comparison, and add public `Doc::apply` cases for effective add/delete and Move
+   of 100 items on the actual 10k workload. T5.1 has now landed. Time the command
+   boundary, including validation, index/connectivity maintenance and inverse/history
+   work. Use undo/redo or setup outside the measured span to restore the starting
+   workload; document exactly which operation is timed. The historical
+   `Doc::insert_wire`/`remove_wire` helpers are crate-private, so an external runner
+   must not bypass the command boundary or change visibility just for this measurement.
+3. Evaluate the median of all ten run p99s against the unchanged strict 1 ms target
+   for the inline edit cases; report the range and diagnostic `>=1 ms` counts. Keep
+   workload and case definitions explicit: T2.8 asks to record worst-case behavior,
+   while D8 targets per-command latency and T5.1 requires Move-of-100 latency.
+   Do not introduce a new all-samples gate or claim that one Connectivity-only
+   statistic satisfies all these acceptance conditions.
 4. Functional items via `cargo test --workspace`: `load(save(doc)) == doc`, INV10 property
    + internal consistency after every step, `Doc::query` alloc-free with capacity
    (roadmap:322-325).
@@ -197,8 +216,8 @@ The T2.8 heading (canvas-roadmap.md:310) still reads "blocked (20k split exceeds
 Orion; full protocol confirmation pending)". PR27 (f551e3c) did not touch
 canvas-roadmap.md (last roadmap commit de4e45c); the heading predates the 0.868915 ms
 numeric pass and is stale relative to T2.8-optimization.md, which is the current authority
-(needs-human). Roadmap edits belong to the doc/roadmap lane (T5.1 work in progress), so
-this audit leaves it alone.
+(needs-human). T5.1 has since merged, but this audit still leaves roadmap status
+changes to a separate correction; no gate is declared complete here.
 
 ## 4. Smallest fixed-schedule acceptance experiments
 
@@ -208,31 +227,33 @@ this audit leaves it alone.
   interleaved rotating repetitions at 100% then 125%, warmup 60, frames 600 — but with
   **every run** launched with `OMNIA_BENCH_TRACE=1` and `WAYLAND_DEBUG=client`, capturing
   a per-run Wayland log. No code change; the trace already exists (trace.rs).
-- Stop conditions: stop the campaign at the **first run with `missed_refreshes >= 1`** and
-  preserve that run's JSON trace + Wayland log (this is the failing trace T1.6-debug.md
-  asks for). If all 40 runs are clean, stop and report "not reproduced in 40 traced runs".
-  No until-green retries. Only if the first campaign is clean, one bounded second campaign
-  of 10 traced 125%-pan runs at **warmup 600** tests the index-0/baseline hypothesis
-  (harness.rs:246-256); then stop regardless.
+- Stop conditions: finish the fixed campaign, retaining the first failing trace and
+  all subsequent results. If all 40 motion runs are clean, stop and report "not
+  reproduced in 40 motion runs" (80 total case invocations across both scales).
+  A timeout, crash or unsafe condition may stop it early; label that diagnostic
+  dataset incomplete. No automatic second campaign or until-green retries. Even a
+  complete traced campaign is diagnostic evidence, not an untraced gate verdict.
 - Artifacts: per-run JSON with `diagnostic_trace`, per-run WAYLAND_DEBUG log, before/after
   condition snapshots (AC, governors, scale, process inventory), binary SHA-256 and source
-  commit, summarize.py output.
-- Analysis on a captured miss: locate the measured index; decompose prev present_end ->
-  signal -> dirty -> draw start/end -> present start/end; correlate `wl_surface.frame`
-  callback timestamps in the Wayland log to classify late compositor callback vs client
-  descheduling/retry-timer vs long platform present (acquire/submit, wgpu_renderer.rs:1130,
-  1165) vs index-0 baseline artifact. No cause is claimed without that correlation.
+  commit and per-run trace analysis. Run the gate summarizer only on complete datasets.
+- Analysis on a captured miss: locate the measured index and order the actual
+  signal/dirty/draw/present timestamps; signal and dirty need not occur in a fixed
+  order. Correlate Wayland callback traffic and inspect platform-present duration
+  and the index-0 baseline hypothesis. Client logs alone may leave scheduler versus
+  compositor attribution unresolved; collect correlated evidence before claiming a cause.
 
 ### 4.2 T2.8 (CPU-only; only Orion certifies, diagnostics anywhere)
 
-- Schedule: exactly T2.8-reference/run.sh (10 rotating passes, 1,000 observations per
-  operation per pass, 30 s timeout + TERM/KILL 5 s grace) over {real_10k_leaf,
-  label_5k_gnd_vcc_bridge, chain_20k_middle, index_10k} **plus new Doc-level cases** driving
-  `Doc::insert_wire`/`Doc::remove_wire` on the real seeded 10k generator and the 20k chain
-  built through `Doc`; after T5.1, add the Move-of-100 `Doc::apply` case.
-- Stop conditions: stop at the first pass where the median run p99 >= 1 ms for any required
-  case and report fail (no retry); if all 10 passes pass the statistic, stop and record
-  pass. No until-green, no discarded cases.
+- Schedule: the same fixed ten-pass rotating structure, 1,000 observations per
+  operation and existing timeout/grace, with case selection extended to the public
+  command-boundary measurements in section 3.4. Freeze the case list and source/binary
+  before the first timed run; document setup/undo outside each measured operation.
+- Stop conditions: complete all ten scheduled repetitions per case before calculating
+  the acceptance median of ten run p99s. An interim p99 or interim median does not
+  establish the final verdict. A timeout, invalid sample, crash or unsafe condition
+  may abort the campaign; retain all completed data and report it as incomplete or
+  invalid, not a completed ten-run timing pass/fail. Do not retry until green, discard
+  observations, or replace cases after seeing results.
 - Artifacts: raw CSVs, order.txt, before/after snapshots (AC, governors, loadavg, process
   inventory), source/binary hashes, run.sh, summarize.py output; functional checks via
   `cargo test --workspace`.
@@ -243,9 +264,9 @@ this audit leaves it alone.
   strong; T1.6-debug.md already retracts it. The interval includes signal wait and the
   platform present call by construction (profiler.rs:891-908, 1131, 1514-1521); no
   evidence separates them yet (findings 2.2.1-2.2.3).
-- Objection: treating the 100%/125% two-scale, foreground-window requirements as
-  applicable to CPU-only connectivity runs — not supported by the exact 2.1 text
-  (section 3.2); the only CPU-relevant unmet element is "other apps closed".
+- Objection: declaring CPU-only tests exempt from window/two-scale requirements
+  without an accepted clarification. Section 2.1 says "every timed run"; record
+  the ambiguity instead of silently changing the protocol (section 3.2).
 - Objection: reading T2.8's 1 ms as satisfied by connectivity-only numbers — D8 says "per
   command" (plan:284-285) and T5.1's done-when times the whole `apply`; Doc-level timing is
   still missing (section 3.1).
@@ -255,7 +276,7 @@ this audit leaves it alone.
 - Risk: traced runs carry diagnostic overhead (T1.6-debug.md), so a traced campaign is
   evidence-gathering, not itself a gate pass; the gate rerun must stay untraced per
   gate.sh, with tracing used only in the bounded diagnostic campaign above.
-- Next tasks: (1) run experiment 4.1 on Orion when available; (2) owner decision on
-  whether desktop services count as "apps closed" for CPU-only runs; (3) add Doc-level
-  cases to the T2.8 runner and run experiment 4.2 after T5.1 lands; (4) roadmap lane to
-  refresh the stale T2.8 heading (section 3.5).
+- Next tasks: (1) prepare public command-boundary cases using the now-merged T5.1;
+  (2) resolve CPU-only protocol scope before claiming acceptance; (3) run the bounded
+  diagnostic and fixed acceptance schedules when Orion is available; (4) refresh the
+  stale T2.8 heading separately, without treating the numeric improvement as a full pass.
