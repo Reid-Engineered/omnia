@@ -1,0 +1,52 @@
+# Symbol placement and pin definitions for `cargo xtask symbols` (K2, K7, plan section 9).
+#
+# Coordinates in `anchor` and `pin.at` are in the vendor SVG's 150-unit viewBox (Y-down).
+# `size_px` is the placed size in logical pixels at 100% zoom (K3: 1 px = 127,000 nm).
+# `anchor` defaults to [75.0, 75.0] (box centre) and maps to (0, 0) in symbol-local nm.
+# Every pin must land on the 1.27 mm (1,270,000 nm) K2 pin lattice relative to `anchor`.
+
+[symbols.Resistor-IEEE-Standard]
+size_px = 80
+pins = [
+  { number = "1", at = [0.0, 75.0] },
+  { number = "2", at = [150.0, 75.0] },
+]
+
+[symbols.Resistor-IEEE-Potentiometer]
+size_px = 80
+pins = [
+  { number = "1", at = [0.0, 75.0] },
+  { number = "2", at = [150.0, 75.0] },
+  { number = "3", at = [75.0, 150.0] },
+]
+
+[symbols.Capacitor-IEEE-NonPolarized]
+size_px = 80
+pins = [
+  { number = "1", at = [0.0, 75.0] },
+  { number = "2", at = [150.0, 75.0] },
+]
+
+[symbols.Diode-COM-Standard]
+size_px = 80
+pins = [
+  { number = "1", at = [0.0, 75.0] },
+  { number = "2", at = [150.0, 75.0] },
+]
+
+[symbols.IC-COM-OpAmp]
+size_px = 180
+pins = [
+  { number = "3", at = [0.0, 50.0] },
+  { number = "2", at = [0.0, 100.0] },
+  { number = "1", at = [150.0, 75.0] },
+  { number = "8", at = [75.0, 0.0] },
+  { number = "4", at = [75.0, 150.0] },
+]
+
+[symbols.Ground-COM-General]
+size_px = 48
+anchor = [75.0, 0.0]
+pins = [
+  { number = "1", at = [75.0, 0.0] },
+]

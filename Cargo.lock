@@ -3553,6 +3553,10 @@ dependencies = [
 [[package]]
 name = "omnia-symbols"
 version = "0.1.0"
+dependencies = [
+ "omnia-doc",
+ "resvg",
+]
 
 [[package]]
 name = "omnia-theme"
@@ -6491,8 +6495,10 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "omnia-doc",
  "serde_json",
  "toml 1.2.1+spec-1.1.0",
+ "usvg",
  "zip",
 ]
 
