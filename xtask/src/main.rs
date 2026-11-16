@@ -1,6 +1,28 @@
-//! Asset generation commands; implemented by subsequent asset tasks.
+//! Asset generation commands: `cargo xtask tokens` (T1.2); symbols and golden come later.
 
-fn main() {}
+use std::process::ExitCode;
+
+mod tokens;
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
+        ["tokens"] => tokens::run(&tokens::workspace_root()),
+        _ => Err("usage: cargo xtask tokens".to_owned()),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("xtask: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {

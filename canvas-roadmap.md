@@ -214,7 +214,7 @@ of the `canvas` lane.
   `snap_to` is idempotent (INV9) and never moves a point more than half a step; no
   operation on in-range points overflows.
 
-### T1.2 Theme tokens · todo
+### T1.2 Theme tokens · done
 - Lane: assets · Depends: T0.1 · Read: plan section 9 (Tokens), Q2
 - Owns: `crates/omnia-theme/`, `xtask/src/tokens.rs`
 - Do: `cargo xtask tokens` reads the `Theme` collection from `omnia.figcraft` and the
@@ -830,3 +830,23 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        --all --check; cargo clippy --workspace --all-targets -- -D warnings;
                        cargo test --workspace (45 passed); cargo deny check (advisories,
                        bans, licenses and sources ok; existing dependency warnings).
+2026-11-15 T1.2 done — `cargo xtask tokens` reads the `Theme` collection of omnia.figcraft
+                       (repo root; modes Graphite and Gray) and the new overlay
+                       crates/omnia-theme/canvas-tokens.toml (the Q2 default values, unchanged),
+                       and writes crates/omnia-theme/src/generated.rs: 35 colour tokens per
+                       theme, 22 from the file (its one number variable, space/rail-shell, is
+                       not a colour and is left out) and 13 from the overlay. Overlay values are
+                       hex or a token name resolved per theme, so stage/snap follows accent/mint
+                       in each; a token the file also has is taken from the file. Output is
+                       sorted and rustfmt-clean; a second run gives no diff, and an xtask test
+                       fails if generated.rs is stale. INV6 test is omnia-theme/tests/inv6.rs; a
+                       scratch run with "#2F6FEB" planted in omnia-canvas/src/lib.rs, and with
+                       gpui::rgb(..) in a nested file, failed it as expected. Dependencies: zip
+                       9 (MIT; zip 8.6 fails cargo deny on RUSTSEC-2026-0367/0368/0369/0429),
+                       serde_json, toml, all from plan section 10 and xtask only. zip adds
+                       typed-path (MIT or Apache-2.0), nix (MIT) and constant_time_eq (CC0-1.0,
+                       MIT-0 or Apache-2.0), all inside the deny allow-list. Outside the owned
+                       files: xtask/src/main.rs gains the `tokens` dispatch and
+                       .cargo/config.toml adds the `cargo xtask` alias; both are needed for the
+                       command to exist. crates/omnia-theme/.gitattributes keeps generated.rs LF
+                       on Windows checkouts.
