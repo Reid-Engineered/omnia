@@ -2,6 +2,8 @@ use gpui::{
     App, Bounds, Context, FontWeight, Window, WindowBounds, WindowHandle, WindowOptions, div,
     prelude::*, px, rgb, size,
 };
+use omnia_canvas::{Camera, SheetView};
+use omnia_doc::Pt;
 use std::{borrow::Cow, num::NonZeroU64};
 
 // Temporary until T1.2 generates omnia-theme tokens. Theme/stage/paper and stage/ink in omnia.figcraft / Q2.
@@ -38,11 +40,23 @@ pub fn load_fonts_with(
 
 pub struct Workspace {
     frames_remaining: Option<NonZeroU64>,
+    sheet: Option<Camera>,
 }
 
 impl Workspace {
+    /// The text-only workspace (the T0.2 font check renders this one).
     pub fn new(frames_remaining: Option<NonZeroU64>) -> Self {
-        Self { frames_remaining }
+        Self {
+            frames_remaining,
+            sheet: None,
+        }
+    }
+
+    /// Adds the sheet (T1.4: paper and grid) below the text, with a fixed camera at 100%
+    /// centred on the sheet origin. Pan and zoom arrive with T1.5.
+    pub fn with_sheet(mut self) -> Self {
+        self.sheet = Some(Camera::new(Pt::ZERO, 1.0, Bounds::default()));
+        self
     }
 }
 
@@ -58,10 +72,7 @@ impl Render for Workspace {
                 window.on_next_frame(|_, cx| cx.quit());
             }
         }
-        div()
-            .size_full()
-            .bg(rgb(STAGE_PAPER))
-            .text_color(rgb(STAGE_INK))
+        let header = div()
             .p_4()
             .gap_2()
             .flex()
@@ -79,7 +90,22 @@ impl Render for Workspace {
                     .font_weight(FontWeight::MEDIUM)
                     .text_size(px(13.0))
                     .child("grid 2.54  zoom 100% — Source Code Pro Medium 13 px"),
-            )
+            );
+        div()
+            .size_full()
+            .bg(rgb(STAGE_PAPER))
+            .text_color(rgb(STAGE_INK))
+            .flex()
+            .flex_col()
+            .child(header)
+            .when_some(self.sheet.clone(), |root, camera| {
+                root.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(SheetView::new(camera, &omnia_theme::GRAPHITE)),
+                )
+            })
     }
 }
 
@@ -100,7 +126,7 @@ pub fn open_workspace(
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()
         },
-        |_, cx| cx.new(|_| Workspace::new(frames)),
+        |_, cx| cx.new(|_| Workspace::new(frames).with_sheet()),
     )?;
     cx.activate(true);
     Ok(window)

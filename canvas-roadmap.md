@@ -234,7 +234,7 @@ of the `canvas` lane.
   above, at the sheet limits and at both ends of the zoom range; a pan of d pixels moves
   every on-screen point by exactly d.
 
-### T1.4 Sheet element: paper and grid · todo
+### T1.4 Sheet element: paper and grid · done
 - Lane: canvas · Depends: T1.2, T1.3, T0.6 (Plan A confirmed) · Read: D4, D5, K6, K10, G3, G5, G8
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `crates/omnia-canvas/src/snap_px.rs`
 - Do: `SheetView` as a type implementing `Element` directly. Paint the paper and the
@@ -977,3 +977,44 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        machine: cargo fmt --all --check; cargo clippy --workspace --all-targets
                        -- -D warnings; cargo test --workspace (65 passed); cargo deny check
                        (advisories, bans, licenses, sources ok); cargo xtask symbols (up to date).
+2026-11-16 T1.4 done    — SheetView (crates/omnia-canvas/src/sheet.rs) implements Element
+                       directly and paints paper (stage/paper) and the dot grid (stage/grid)
+                       inside one paint_layer, under a content mask of its bounds. Dots are
+                       plain square quads of max(1, round(1.2 × scale factor)) device px
+                       (K6: 1, 2, 2 at 1.0, 1.25, 1.5), centred on the nearest device pixel.
+                       snap_px.rs holds the rounding helpers (to_device, round_device,
+                       snap_logical, stroke_device_px, device_to_logical, device_rect,
+                       centered_square): pick whole device pixels, pass device/scale to
+                       GPUI, whose own snap (util.rs round_to_device_pixel, read at the pin)
+                       maps them straight back; a proptest checks that against a restatement
+                       of GPUI's formula at seven scale factors. grid_level(scale) is K10:
+                       pitch in [20, 40) px; over [35, 40) the next finer level's extra dots
+                       fade in (alpha 0 at 35 px, full at 40 px), so no dot pops. Plan K10
+                       clarified (rule 12): above 200% k is negative (grid subdivisions,
+                       k = -1 is the pin lattice), k runs -5..5 over K4, all whole nm.
+                       Paint walks the lattice and emits quads directly: no buffers at all.
+                       Tests: pitch unit test (100,001-point log sweep of K4 plus every wheel
+                       notch both ways and the ends); sheet_alloc (test-local counting
+                       allocator; 600 frames panning/zooming across K4 at 1.0/1.25/1.5,
+                       0 allocations in every frame; the first frame also 0); sheet_render
+                       (harness = false, hidden window, Window::set_scale_factor and
+                       render_to_image, both test-support): at 1.0, 1.25 and 1.5, at zoom 1,
+                       1.875 (faded level), 0.37 and 6.1 with fractional pans, every dot in
+                       the image is a solid one-colour square of exactly the requested device
+                       rectangle and size, and no other ink: 5,001 dots compared. A planted
+                       unsnapped 1.2 px dot made it fail (2x1 dot at 1.0). Skips under
+                       OMNIA_HEADLESS_CI and on Linux like fonts.rs; the comment in ci.yml
+                       naming only fonts.rs is T0.7's file and was left as is. The scene
+                       scale is overridden, not the monitor's; the image is the window at
+                       its real DPI, so only the overlap is checked.
+                       omnia-app: Workspace::with_sheet() adds a SheetView (fixed camera,
+                       100%, GRAPHITE) under the two text lines; open_workspace uses it.
+                       Workspace::new stays text-only so the fonts test's text-band check is
+                       not satisfied by grid dots. `cargo run -p omnia-app -- --frames 60`
+                       exits 0 by itself (4.4 s wall incl. cargo). New Cargo entries:
+                       omnia-canvas → omnia-theme; dev gpui/gpui_platform test-support (and
+                       wayland on Linux); omnia-app → omnia-canvas, omnia-doc, omnia-theme.
+                       No new external crate. Standard checks pass (fmt, clippy -D warnings,
+                       test --workspace three times in a row, deny). Host: Windows 11 x64,
+                       i7-14650HX, RTX 5060 Laptop + Intel UHD, 1920x1200 at 125%, 60 Hz;
+                       nothing timed, no budget gated. Next: T1.5 replaces the fixed camera.

@@ -113,7 +113,7 @@ All from `build-omnia.mjs` unless marked "chosen". Screen sizes are logical pixe
 | K7 | Symbol art box | 150 units square. Placed size: resistor, capacitor, diode 80 px (4 grid steps); op-amp 180 px (9); ground 48 px (2.4, anchored by its pin). |
 | K8 | Text | Designator and value: Inter SemiBold 17 px (Q3). Net label and pin number: Inter Medium 13 px. Secondary value text: Inter Medium 12 px. |
 | K9 | LOD thresholds (chosen) | Text hidden below 6.5 px font size. Pin numbers and junction dots hidden below 2.5 px. Symbol drawn as one filled quad when its box is under 8 px. Visible-label cap (T0.6): at most 700 labels per frame; past that, labels hide smallest first. |
-| K10 | Grid density (chosen) | Show every 2^k-th grid point with k keeping on-screen pitch in [20, 40) px. Dots about to drop fade over the top quarter of that range. |
+| K10 | Grid density (chosen) | Show every 2^k-th grid point with k keeping on-screen pitch in [20, 40) px. Dots about to drop fade over the top quarter of that range: while the pitch is in [35, 40) the next finer level's extra dots are drawn with alpha rising from 0 at 35 px to full at 40 px. Above 200% zoom k is negative (binary subdivisions of the grid, k = −1 being the K2 pin lattice); k runs from −5 at 3200% to 5 at 5%, every level a whole number of nm (2,540,000 = 2^5 × 79,375). (T1.4) |
 | K11 | Cache buckets (chosen) | Font size quantised to 0.5 px. Symbol sprite sizes on a ladder of ratio 2^(1/4), matching K4. |
 | K12 | Spatial index cell (chosen) | 20,320,000 nm (8 grid steps) |
 | K13 | Timing | View animations 150 ms, ease-out, interruptible. Background-job debounce 150 ms (chosen). |
@@ -466,6 +466,15 @@ impl Camera {
 pub enum Tool { Select, Wire, Place(SymbolId), Label }
 pub struct CanvasStatus { pub cursor: Pt, pub grid: i32, pub zoom: f32 }
 pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged }
+
+pub struct SheetView { /* camera: Camera, theme: &'static Theme */ }  // implements Element (G8)
+impl SheetView {
+    pub fn new(camera: Camera, theme: &'static Theme) -> Self;
+    pub fn paint_quads(&self, bounds: Bounds<Pixels>, scale_factor: f32, sink: impl FnMut(PaintQuad));
+}
+pub fn grid_level(scale: f64) -> GridLevel;              // K10: level, step_nm, pitch, fade
+// snap_px: to_device, round_device, snap_logical, stroke_device_px, device_to_logical,
+//          device_rect, centered_square — whole device pixels GPUI's snap leaves unchanged (D4)
 
 pub struct SheetCanvas { /* private */ }
 impl SheetCanvas {
