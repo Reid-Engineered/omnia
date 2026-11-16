@@ -94,6 +94,11 @@ jobs:
       - name: Run Clippy with warnings denied
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # The opt-in bench features (GPUI bench-support and Windows readback
+      # with resvg) are off in the workspace build; lint them explicitly.
+      - name: Run Clippy on omnia-bench with scene-counts and readback
+        run: cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings
+
       # Headless limitation: this runs on a hosted runner with no
       # interactive desktop, where GPUI refuses to open windows. Only
       # window-free tests run here; any future test that opens a window or
