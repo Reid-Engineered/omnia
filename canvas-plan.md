@@ -40,10 +40,11 @@ Target: Windows first (GPUI's DirectX 11 renderer), then macOS and Linux.
 
 Repository facts:
 
-- Design sources are at the repository root on `origin/main`: `workspace-graphite.png`,
-  `workspace-gray.png`, `omnia.figcraft`, `build-omnia.mjs` (the script that drew the mockup,
-  and the source of the numbers in section 3), `vendor/electronic-symbols/`,
-  `vendor/tabler-icons/`.
+- Design sources are under `design/` on `origin/main`: `design/mockups/workspace-graphite.png`,
+  `design/mockups/workspace-gray.png`, `design/omnia.figcraft`, `design/build-omnia.mjs` (the
+  script that drew the mockup, and the source of the numbers in section 3). Symbols and icons
+  are in `vendor/electronic-symbols/` and `vendor/tabler-icons/`. Bare names such as
+  `omnia.figcraft` and `build-omnia.mjs` elsewhere in this plan mean these `design/` files.
 - `omnia.figcraft` is a zip. `document.json` inside it holds the variable collection `Theme`
   with modes `Graphite` and `Gray`.
 

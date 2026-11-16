@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import opentype from "opentype.js";
 import { transformD } from "./symbols.mjs";
 
-const FONT = opentype.loadSync(fileURLToPath(new URL("./vendor/asimovian/fonts/ttf/Asimovian-Regular.ttf", import.meta.url)));
+const FONT = opentype.loadSync(fileURLToPath(new URL("../vendor/asimovian/fonts/ttf/Asimovian-Regular.ttf", import.meta.url)));
 const DARK = "#0B0B0C", PANEL = "#161617", PAPER = "#EFEDE6", INK = "#111112", WHITE = "#F2F2F2", MUTED = "#A1A1A6";
 const UPEM = FONT.unitsPerEm, STEM = 116; // vertical stem of I, in font units
 const lissajous = (r) => { let d = ""; for (let i = 0; i <= 900; i++) { const t = (i / 900) * 2 * Math.PI; const x = Math.sin(3 * t + Math.PI / 2), y = Math.sin(4 * t); const X = x * Math.sqrt(1 - y * y / 2), Y = y * Math.sqrt(1 - x * x / 2); d += `${i ? "L" : "M"}${(75 + r * X).toFixed(2)} ${(75 + r * Y).toFixed(2)}`; } return d; };

@@ -3,8 +3,8 @@
 You are planning the schematic canvas for **Omnia**, a desktop schematic capture and simulation app written in Rust with **GPUI** (Zed's UI framework), targeting Windows first (DirectX 11 renderer), then macOS and Linux. Your job is to produce an implementation plan, not code. The plan must get a canvas that feels excellent early, and must keep it fast as features land.
 
 ## Read first
-- `mockups/omnia/workspace-graphite.png` and `workspace-gray.png`: the target look. Canvas behaviour should match these exactly: paper-coloured sheet, dot grid, black wires, solder-dot junctions, part labels, net labels and floating instrument windows.
-- `mockups/omnia/omnia.figcraft`: the source file with the design tokens (Graphite and Gray themes). Tokens are the only source of colour; no hex values in canvas code.
+- `design/mockups/workspace-graphite.png` and `workspace-gray.png`: the target look. Canvas behaviour should match these exactly: paper-coloured sheet, dot grid, black wires, solder-dot junctions, part labels, net labels and floating instrument windows.
+- `design/omnia.figcraft`: the source file with the design tokens (Graphite and Gray themes). Tokens are the only source of colour; no hex values in canvas code.
 - `mockups/omnia/vendor/electronic-symbols/` (Chris Pikul, MIT): the part symbols, drawn in a 150-unit box with pins on the box edge. `vendor/tabler-icons/` (MIT): UI icons. Fonts: Inter for UI, Source Code Pro for values and designators.
 - The GPUI source at the exact git revision you pin. Check every GPUI API you rely on against that source (`canvas`, `PathBuilder`, `paint_path`, `paint_quad`, `svg`, text shaping, input events, `request_animation_frame`). Do not plan from memory of GPUI's API; it changes often and has little documentation.
 

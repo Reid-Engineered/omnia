@@ -18,7 +18,7 @@ use serde_json::Value;
 /// The `Theme` collection modes, in output order, with the static each one becomes.
 const MODES: [(&str, &str); 2] = [("Graphite", "GRAPHITE"), ("Gray", "GRAY")];
 
-pub const FIGCRAFT: &str = "omnia.figcraft";
+pub const FIGCRAFT: &str = "design/omnia.figcraft";
 pub const OVERLAY: &str = "crates/omnia-theme/canvas-tokens.toml";
 pub const GENERATED: &str = "crates/omnia-theme/src/generated.rs";
 
