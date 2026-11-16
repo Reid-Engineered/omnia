@@ -21,6 +21,7 @@ usage: bench <command> [options]
           [--size 1280x800] [--json FILE]
   spike   s1..s6|s8 [--count N] [--mode fixed|sweep|square|rounded|sprite|direct|direct-sweep|cached|repaint|quality|monitors|displays]\n          [--frames 600] [--warmup 60] [--size 3072x1728] [--json FILE]\n  start   [--sheet empty|placeholder] [--runs 10] [--size 960x640] [--json FILE]
   idle    [--seconds 10] [--settle-ms 1000] [--size 960x640] [--json FILE]
+  hit     [--sheet 10k|1k|100|dense|text] [--samples 20000] [--seed 42] [--json FILE]
   compare BASE.json NEW.json [--max-regression 10] [--metrics PREFIX[,PREFIX..]]
           [--json FILE]
   spike   s7 [--seconds 60] [--out FILE] | s7 --summarise FILE
@@ -98,6 +99,7 @@ fn main() -> ExitCode {
         "start" => cmd_start(args),
         "idle" => cmd_idle(args),
         "compare" => cmd_compare(args),
+        "hit" => cmd_hit(args),
         "start-child" => cmd_start_child(args),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");
@@ -186,6 +188,16 @@ fn cmd_idle(args: impl Iterator<Item = String>) -> Result<(), Failure> {
         settle: Duration::from_millis(settle_ms),
     };
     let report = harness::idle(config).map_err(Failure::Run)?;
+    finish(&report, args.get("json"))
+}
+
+fn cmd_hit(args: impl Iterator<Item = String>) -> Result<(), Failure> {
+    let args = usage(Args::parse(args, &["sheet", "samples", "seed", "json"]))?;
+    usage(args.no_positionals())?;
+    let sheet = args.get("sheet").unwrap_or("10k");
+    let samples = positive("samples", usage(args.number("samples", 20_000))?)?;
+    let seed = usage(args.number("seed", 42u64))?;
+    let report = usage(omnia_bench::hit::run(sheet, samples, seed))?;
     finish(&report, args.get("json"))
 }
 

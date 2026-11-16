@@ -123,6 +123,38 @@ impl Doc {
         self.labels.get(id.0)
     }
 
+    /// World-space pin positions; missing or removed IDs return None.
+    pub fn pins(&self, id: PartId) -> Option<&[Pt]> {
+        self.parts.get(id.0).map(|stored| stored.pins.as_slice())
+    }
+
+    /// Live parts in stable ID order, skipping removed slots.
+    pub fn parts(&self) -> impl Iterator<Item = (PartId, &Part)> {
+        self.parts
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| slot.as_ref().map(|s| (PartId(i as u32), &s.part)))
+    }
+
+    /// Live wires in stable ID order, skipping removed slots.
+    pub fn wires(&self) -> impl Iterator<Item = (WireId, &Wire)> {
+        self.wires
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| slot.as_ref().map(|w| (WireId(i as u32), w)))
+    }
+
+    /// Live labels in stable ID order, skipping removed slots.
+    pub fn labels(&self) -> impl Iterator<Item = (LabelId, &Label)> {
+        self.labels
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, slot)| slot.as_ref().map(|l| (LabelId(i as u32), l)))
+    }
+
     /// Replaces `out` with points inside `area` having at least three ends/pins.
     /// Ordering is unspecified. Dots are always derived from the incidence map.
     pub fn junctions(&self, area: Rect, out: &mut Vec<Pt>) {
