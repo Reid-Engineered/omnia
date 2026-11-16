@@ -1635,6 +1635,471 @@ pub(crate) mod tests {
         }
     }
 
+    // ---- Durable INV10 regressions (PR27 follow-up) ----
+    //
+    // The oracle below is written from the test's own live-item model: it builds
+    // point adjacency, floods geometric components, then floods component/label
+    // bipartite groups. It never calls `Connectivity::rebuild*` and never reads
+    // internal slots, component ids, or ordering, so a cached-slot, frontier, or
+    // transfer bug cannot be mirrored by construction. `assert_invariants` is
+    // the pre-existing reciprocal-index checker and is called in addition.
+
+    fn grid_pt(i: usize) -> Pt {
+        pt((i % 16) as i32, (i / 16) as i32)
+    }
+
+    fn assert_against_independent_model(
+        c: &Connectivity,
+        wires: &BTreeMap<u32, Wire>,
+        labels: &BTreeMap<u32, Label>,
+        parts: &BTreeMap<u32, Vec<Pt>>,
+        probe_wire_ids: &[u32],
+    ) {
+        assert_invariants(c);
+        let key = |p: Pt| (p.x, p.y);
+        let mut occupied: BTreeSet<(i32, i32)> = BTreeSet::new();
+        for wire in wires.values() {
+            occupied.insert(key(wire.a));
+            occupied.insert(key(wire.b));
+        }
+        for label in labels.values() {
+            occupied.insert(key(label.at));
+        }
+        for pins in parts.values() {
+            for &at in pins {
+                occupied.insert(key(at));
+            }
+        }
+        // Geometric flood from scratch over point adjacency.
+        let mut adj: BTreeMap<(i32, i32), BTreeSet<(i32, i32)>> =
+            occupied.iter().map(|&p| (p, BTreeSet::new())).collect();
+        for wire in wires.values() {
+            adj.get_mut(&key(wire.a)).unwrap().insert(key(wire.b));
+            adj.get_mut(&key(wire.b)).unwrap().insert(key(wire.a));
+        }
+        let mut geom: BTreeMap<(i32, i32), usize> = BTreeMap::new();
+        let mut ncomp = 0usize;
+        for &start in &occupied {
+            if geom.contains_key(&start) {
+                continue;
+            }
+            let mut queue = VecDeque::from([start]);
+            geom.insert(start, ncomp);
+            while let Some(p) = queue.pop_front() {
+                for &n in &adj[&p] {
+                    if let std::collections::btree_map::Entry::Vacant(e) = geom.entry(n) {
+                        e.insert(ncomp);
+                        queue.push_back(n);
+                    }
+                }
+            }
+            ncomp += 1;
+        }
+        // Logical flood over (component, label-text) bipartite adjacency.
+        let mut comp_texts: Vec<BTreeSet<String>> = vec![BTreeSet::new(); ncomp];
+        let mut text_comps: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+        for label in labels.values() {
+            let ci = geom[&key(label.at)];
+            let text = label.text.to_string();
+            comp_texts[ci].insert(text.clone());
+            text_comps.entry(text).or_default().insert(ci);
+        }
+        let mut logical_of_comp: Vec<Option<usize>> = vec![None; ncomp];
+        let mut nnet = 0usize;
+        for start in 0..ncomp {
+            if logical_of_comp[start].is_some() {
+                continue;
+            }
+            let mut queue = VecDeque::from([start]);
+            logical_of_comp[start] = Some(nnet);
+            let mut seen_texts: BTreeSet<String> = BTreeSet::new();
+            while let Some(ci) = queue.pop_front() {
+                for text in &comp_texts[ci] {
+                    if seen_texts.insert(text.clone()) {
+                        for &other in &text_comps[text] {
+                            if logical_of_comp[other].is_none() {
+                                logical_of_comp[other] = Some(nnet);
+                                queue.push_back(other);
+                            }
+                        }
+                    }
+                }
+            }
+            nnet += 1;
+        }
+        assert_eq!(c.net_count(), nnet, "independent net_count mismatch");
+        // NetId mapping must be a bijection from independent logical groups.
+        let mut group_net: BTreeMap<usize, NetId> = BTreeMap::new();
+        let mut net_group: BTreeMap<NetId, usize> = BTreeMap::new();
+        for &p in &occupied {
+            let group = logical_of_comp[geom[&p]].unwrap();
+            let net = c
+                .net_at(pt(p.0, p.1))
+                .expect("occupied point has no net_at");
+            assert_eq!(*group_net.entry(group).or_insert(net), net);
+            assert_eq!(*net_group.entry(net).or_insert(group), group);
+        }
+        for &p in &[(999, 999), (-999, 999), (999, -999)] {
+            if !occupied.contains(&p) {
+                assert_eq!(c.net_at(pt(p.0, p.1)), None);
+            }
+        }
+        // Expected members per logical group, computed once per group.
+        let mut group_wires: BTreeMap<usize, BTreeSet<u32>> = BTreeMap::new();
+        for (&id, wire) in wires {
+            let group = logical_of_comp[geom[&key(wire.a)]].unwrap();
+            group_wires.entry(group).or_default().insert(id);
+        }
+        let mut group_labels: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
+        for label in labels.values() {
+            let group = logical_of_comp[geom[&key(label.at)]].unwrap();
+            group_labels
+                .entry(group)
+                .or_default()
+                .insert(label.text.to_string());
+        }
+        for (&group, &net) in &group_net {
+            let mut out = Vec::new();
+            c.net_wires(net, &mut out);
+            let actual: BTreeSet<u32> = out.iter().map(|id| id.0).collect();
+            assert_eq!(out.len(), actual.len(), "duplicate wires in net_wires");
+            assert_eq!(actual, group_wires.get(&group).cloned().unwrap_or_default());
+            let mut texts = Vec::new();
+            c.net_labels(net, &mut texts);
+            let actual_texts: BTreeSet<String> = texts.iter().map(|t| t.to_string()).collect();
+            assert_eq!(texts.len(), actual_texts.len(), "duplicate net labels");
+            assert_eq!(
+                actual_texts,
+                group_labels.get(&group).cloned().unwrap_or_default()
+            );
+        }
+        for &id in probe_wire_ids {
+            match wires.get(&id) {
+                Some(wire) => {
+                    let group = logical_of_comp[geom[&key(wire.a)]].unwrap();
+                    assert_eq!(c.net_of(WireId(id)), Some(group_net[&group]));
+                    assert_eq!(c.net_of(WireId(id)), c.net_at(wire.a));
+                    assert_eq!(c.net_of(WireId(id)), c.net_at(wire.b));
+                }
+                None => assert_eq!(c.net_of(WireId(id)), None),
+            }
+        }
+    }
+
+    fn m_add_wire(c: &mut Connectivity, wires: &mut BTreeMap<u32, Wire>, id: u32, wire: Wire) {
+        c.add_wire(WireId(id), wire);
+        wires.insert(id, wire);
+    }
+    fn m_remove_wire(c: &mut Connectivity, wires: &mut BTreeMap<u32, Wire>, id: u32) {
+        assert_eq!(c.remove_wire(WireId(id)), wires.remove(&id));
+    }
+    fn m_add_label(c: &mut Connectivity, labels: &mut BTreeMap<u32, Label>, id: u32, label: Label) {
+        c.add_label(LabelId(id), &label);
+        labels.insert(id, label);
+    }
+    fn m_remove_label(c: &mut Connectivity, labels: &mut BTreeMap<u32, Label>, id: u32) {
+        assert_eq!(c.remove_label(LabelId(id)), labels.remove(&id));
+    }
+    fn m_add_part(
+        c: &mut Connectivity,
+        parts: &mut BTreeMap<u32, Vec<Pt>>,
+        id: u32,
+        pins: Vec<Pt>,
+    ) {
+        c.add_part(PartId(id), &pins);
+        parts.insert(id, pins);
+    }
+    fn m_remove_part(c: &mut Connectivity, parts: &mut BTreeMap<u32, Vec<Pt>>, id: u32) {
+        assert_eq!(c.remove_part(PartId(id)), parts.remove(&id));
+    }
+
+    struct SeededRng(u64);
+    impl SeededRng {
+        fn next_u64(&mut self) -> u64 {
+            // xorshift64*: deterministic, no new dependency.
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next_u64() % n as u64) as usize
+        }
+    }
+
+    #[test]
+    fn inv10_seeded_large_ids_against_independent_oracle() {
+        // 256 wire ids (16x the committed proptest's id space), 64 label ids,
+        // 32 part ids, 600 steps/config. Three configs keep debug runtime in
+        // seconds while covering shared-text merging and unique-text geometry:
+        // unique texts cannot hide a geometric split behind a logical union.
+        let probe: Vec<u32> = (0..256).collect();
+        for (seed, unique_labels) in [
+            (0x9E37_79B9_7F4A_7C15u64, true),
+            (0xD1B5_4A32_D192_ED03u64, false),
+            (0x2545_F491_4F6C_DD1Du64, false),
+        ] {
+            let mut rng = SeededRng(seed);
+            let mut c = Connectivity::new();
+            let mut wires: BTreeMap<u32, Wire> = BTreeMap::new();
+            let mut labels: BTreeMap<u32, Label> = BTreeMap::new();
+            let mut parts: BTreeMap<u32, Vec<Pt>> = BTreeMap::new();
+            for step in 0..600usize {
+                match rng.below(16) {
+                    0..=6 => {
+                        let a = rng.below(256);
+                        let b = if rng.below(2) == 0 {
+                            (a / 16) * 16 + (a % 16 + 1 + rng.below(15)) % 16
+                        } else {
+                            (a % 16) + 16 * ((a / 16 + 1 + rng.below(15)) % 16)
+                        };
+                        let id = rng.below(256) as u32;
+                        m_add_wire(
+                            &mut c,
+                            &mut wires,
+                            id,
+                            Wire {
+                                a: grid_pt(a),
+                                b: grid_pt(b),
+                            },
+                        );
+                    }
+                    7..=8 => {
+                        let id = rng.below(256) as u32;
+                        m_remove_wire(&mut c, &mut wires, id);
+                    }
+                    9..=10 => {
+                        let id = rng.below(64) as u32;
+                        let text = if unique_labels {
+                            format!("U{id}")
+                        } else {
+                            format!("N{}", rng.below(12))
+                        };
+                        m_add_label(
+                            &mut c,
+                            &mut labels,
+                            id,
+                            Label {
+                                at: grid_pt(rng.below(256)),
+                                text: text.into(),
+                            },
+                        );
+                    }
+                    11 => {
+                        let id = rng.below(64) as u32;
+                        m_remove_label(&mut c, &mut labels, id);
+                    }
+                    12 => {
+                        let id = rng.below(32) as u32;
+                        let first = grid_pt(rng.below(256));
+                        let second = grid_pt(rng.below(256));
+                        // Duplicate a pin in place: coincident pins share a point.
+                        let pins = vec![first, second, first];
+                        m_add_part(&mut c, &mut parts, id, pins);
+                    }
+                    13 => {
+                        let id = rng.below(32) as u32;
+                        m_remove_part(&mut c, &mut parts, id);
+                    }
+                    14 => {
+                        if step % 79 == 0 {
+                            c.clear();
+                            wires.clear();
+                            labels.clear();
+                            parts.clear();
+                        } else {
+                            // Rebuild-as-restore baseline, then keep editing
+                            // incrementally; the oracle stays independent.
+                            c = Connectivity::rebuild_with_parts(
+                                wires.iter().map(|(&i, &w)| (WireId(i), w)),
+                                labels.iter().map(|(&i, l)| (LabelId(i), l)),
+                                parts.iter().map(|(&i, p)| (PartId(i), p)),
+                            );
+                        }
+                    }
+                    _ => {
+                        let id = rng.below(256) as u32;
+                        m_remove_wire(&mut c, &mut wires, id);
+                    }
+                }
+                assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+            }
+        }
+    }
+
+    #[test]
+    fn split_both_frontiers_restore_parallel_and_cycle() {
+        let probe: Vec<u32> = (0..220).collect();
+        let mut c = Connectivity::new();
+        let (mut wires, mut labels, mut parts) =
+            (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        for i in 0..64u32 {
+            m_add_wire(&mut c, &mut wires, i, w(i as i32, 0, i as i32 + 1, 0));
+        }
+        // Pin-only ends and distinct end labels survive every bridge removal.
+        m_add_part(&mut c, &mut parts, 0, vec![pt(0, 0), pt(64, 0), pt(0, 0)]);
+        m_add_label(&mut c, &mut labels, 0, lbl(0, 0, "LEFT"));
+        m_add_label(&mut c, &mut labels, 1, lbl(64, 0, "RIGHT"));
+        assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        // Middle, near-left (small A piece) and near-right (small B piece)
+        // bridges, each removed and restored reversed, repeatedly.
+        for bridge in [32u32, 1, 62, 32, 1, 62] {
+            let wire = wires[&bridge];
+            m_remove_wire(&mut c, &mut wires, bridge);
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+            assert!(c.net_at(pt(0, 0)).is_some(), "pin-only end must stay live");
+            assert!(c.net_at(pt(64, 0)).is_some());
+            m_add_wire(
+                &mut c,
+                &mut wires,
+                bridge,
+                Wire {
+                    a: wire.b,
+                    b: wire.a,
+                },
+            );
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        }
+        // Parallel edges over segment 10..11: connectivity survives until the
+        // last parallel edge is removed, then restores.
+        m_add_wire(&mut c, &mut wires, 100, w(10, 0, 11, 0));
+        m_add_wire(&mut c, &mut wires, 101, w(11, 0, 10, 0));
+        for id in [10u32, 100, 101] {
+            m_remove_wire(&mut c, &mut wires, id);
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        }
+        for id in [10u32, 100, 101] {
+            m_add_wire(&mut c, &mut wires, id, w(10, 0, 11, 0));
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        }
+        // Cycle: removing one rectangle edge must not split; removing the
+        // opposite edge must; restoring both must rejoin.
+        for (id, wire) in [
+            (200u32, w(100, 0, 110, 0)),
+            (201, w(110, 0, 110, 10)),
+            (202, w(110, 10, 100, 10)),
+            (203, w(100, 10, 100, 0)),
+        ] {
+            m_add_wire(&mut c, &mut wires, id, wire);
+        }
+        assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        m_remove_wire(&mut c, &mut wires, 201);
+        assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        assert_eq!(c.net_of(WireId(200)), c.net_of(WireId(202)));
+        m_remove_wire(&mut c, &mut wires, 203);
+        assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        assert_ne!(c.net_of(WireId(200)), c.net_of(WireId(202)));
+    }
+
+    #[test]
+    fn high_degree_slot_reuse_and_live_replacement() {
+        let probe: Vec<u32> = (0..260).collect();
+        let mut c = Connectivity::new();
+        let (mut wires, mut labels, mut parts) =
+            (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        // Two hubs with 40 spokes each: point adjacency far beyond the inline
+        // SmallVec capacities, joined by a single bridge.
+        for i in 0..40u32 {
+            m_add_wire(&mut c, &mut wires, i, w(0, 0, i as i32 + 1, 0));
+            m_add_wire(&mut c, &mut wires, 100 + i, w(200, 0, 200, i as i32 + 1));
+        }
+        m_add_wire(&mut c, &mut wires, 200, w(0, 0, 200, 0));
+        m_add_label(&mut c, &mut labels, 0, lbl(0, 0, "HUB-A"));
+        m_add_part(&mut c, &mut parts, 0, vec![pt(0, 0), pt(200, 0), pt(0, 0)]);
+        assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        for _ in 0..3 {
+            m_remove_wire(&mut c, &mut wires, 200);
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+            m_add_wire(&mut c, &mut wires, 200, w(200, 0, 0, 0));
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        }
+        // Live replacement of the same wire/label/part ids at new geometry.
+        for round in 0..4i32 {
+            m_add_wire(&mut c, &mut wires, 200, w(round, 50, round + 10, 50));
+            m_add_label(&mut c, &mut labels, 0, lbl(round, 50, "MOVED"));
+            m_add_part(&mut c, &mut parts, 0, vec![pt(round, 50)]);
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        }
+        // Free every point of a chain, then build elsewhere: internal slots
+        // are recycled and reciprocal indices are checked by the oracle.
+        for round in 0..5i32 {
+            for i in 0..12u32 {
+                m_add_wire(
+                    &mut c,
+                    &mut wires,
+                    210 + i,
+                    w(300 + i as i32, round * 20, 301 + i as i32, round * 20),
+                );
+            }
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+            for i in 0..12u32 {
+                m_remove_wire(&mut c, &mut wires, 210 + i);
+            }
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        }
+    }
+
+    #[test]
+    fn unique_labels_do_not_hide_geometric_splits_at_large_ids() {
+        let probe: Vec<u32> = (0..256).collect();
+        let mut c = Connectivity::new();
+        let (mut wires, mut labels, parts) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        m_add_wire(&mut c, &mut wires, 200, w(0, 0, 10, 0));
+        m_add_wire(&mut c, &mut wires, 201, w(100, 0, 110, 0));
+        m_add_label(&mut c, &mut labels, 60, lbl(0, 0, "ONLY-A"));
+        m_add_label(&mut c, &mut labels, 61, lbl(100, 0, "ONLY-B"));
+        assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        assert_ne!(c.net_of(WireId(200)), c.net_of(WireId(201)));
+        // Same text merges logically; replacing it back splits again.
+        m_add_label(&mut c, &mut labels, 61, lbl(100, 0, "ONLY-A"));
+        assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        assert_eq!(c.net_of(WireId(200)), c.net_of(WireId(201)));
+        m_add_label(&mut c, &mut labels, 61, lbl(100, 0, "ONLY-B"));
+        assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        assert_ne!(c.net_of(WireId(200)), c.net_of(WireId(201)));
+    }
+
+    #[test]
+    fn stamp_wrap_across_repeated_splits_and_cycle_meeting() {
+        let probe: Vec<u32> = (0..64).collect();
+        let mut c = Connectivity::new();
+        let (mut wires, labels, parts) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        for i in 0..24u32 {
+            m_add_wire(&mut c, &mut wires, i, w(i as i32, 0, i as i32 + 1, 0));
+        }
+        // Two stamps are reserved per split search; start just below wrap so
+        // successive searches cross u32::MAX between and within searches.
+        c.visit_gen = u32::MAX - 3;
+        for bridge in [12u32, 6, 18, 3, 21, 12] {
+            if wires.contains_key(&bridge) {
+                m_remove_wire(&mut c, &mut wires, bridge);
+            } else {
+                m_add_wire(
+                    &mut c,
+                    &mut wires,
+                    bridge,
+                    w(bridge as i32, 0, bridge as i32 + 1, 0),
+                );
+            }
+            assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        }
+        // A cycle meeting (no split) also consumes stamps across the wrap.
+        for (id, wire) in [
+            (40u32, w(100, 0, 110, 0)),
+            (41, w(110, 0, 110, 10)),
+            (42, w(110, 10, 100, 10)),
+            (43, w(100, 10, 100, 0)),
+        ] {
+            m_add_wire(&mut c, &mut wires, id, wire);
+        }
+        c.visit_gen = u32::MAX - 1;
+        m_remove_wire(&mut c, &mut wires, 41);
+        assert_against_independent_model(&c, &wires, &labels, &parts, &probe);
+        assert_eq!(c.net_of(WireId(40)), c.net_of(WireId(42)));
+    }
+
     #[test]
     #[should_panic(expected = "invalid wire")]
     fn rejects_zero_length_wire() {
