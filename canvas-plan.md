@@ -410,7 +410,11 @@ pub struct Hit { pub item: ItemId, pub at: Pt }
 
 pub struct Doc { /* private */ }
 impl Doc {
-    pub fn new(symbols: Arc<SymbolLibrary>) -> Self;
+    pub fn new() -> Self;
+    // T2.4: validated bulk construction; local pins come from the caller's symbol library.
+    pub fn from_items(parts: impl IntoIterator<Item = (Part, Vec<Pt>)>,
+                      wires: impl IntoIterator<Item = Wire>,
+                      labels: impl IntoIterator<Item = Label>) -> Result<Self, StoreError>;
     pub fn revision(&self) -> u64;
     pub fn apply(&mut self, cmd: Command) -> Result<Change, CommandError>;
     pub fn undo(&mut self) -> Option<Change>;
@@ -427,7 +431,10 @@ impl Doc {
     pub fn copy(&self, items: &[ItemId]) -> Clip;
     pub fn snapshot(&self) -> DocSnapshot;
     pub fn save(&self, w: impl io::Write) -> io::Result<()>;
-    pub fn load(r: impl io::Read, symbols: Arc<SymbolLibrary>) -> io::Result<Self>;
+    pub fn load(r: impl io::Read) -> io::Result<Self>;
+    // Version 1 RON embeds local pins (omnia-symbols depends on omnia-doc).
+    // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points.
+    // Equality compares authoritative slots, pins and revision, excluding derived incidence.
 }
 pub const INDEX_CELL_NM: i32;                              // K12
 pub struct SpatialIndex { /* private: K12 cells, per-item bounds and generation stamp */ }
@@ -525,6 +532,11 @@ pub struct CountingAlloc;                                  // #[global_allocator
 pub fn count_allocs<R>(f: impl FnOnce() -> R) -> (R, u64);
 pub enum StressSheet { Parts100, Parts1k, Parts10k, DenseWiring, TextHeavy }
 pub fn generate(sheet: StressSheet, seed: u64) -> Doc;
+// generate module: SplitMix64 seeds; counts (parts, wire segments): 100=(100,200),
+// 1k=(1_000,2_000), 10k=(10_000,20_000), dense=(1_000,12_000), text=(1_000,2_000).
+// Text has six characters per designator/value, 12,000 total; no extra labels.
+// All built-in symbols/orientations, K2 pin-lattice placements; unit-lattice wire segments
+// extend from pins in rays (no end on a segment interior, INV2).
 ```
 
 Bench command line. Every subcommand exits by itself and takes `--json <file>`.
