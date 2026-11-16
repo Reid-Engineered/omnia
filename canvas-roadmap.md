@@ -849,3 +849,20 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        error are preserved; no completed sample was removed.
                        fmt, workspace Clippy/tests, deny and scene-counts/readback
                        Clippy passed on Linux. No check was weakened.
+
+2026-11-15 T0.8 review fixes — measure-ref.sh restores the eDP-1 scale it found at
+                       start (header now says the campaign changes it temporarily),
+                       takes the S1 duration as S1_SECONDS instead of a parent
+                       runs.jsonl, and asserts HD 620/1080p only at campaign sizes.
+                       validate.py, summarize.py and measure-ref.sh reject runs with
+                       warnings or missing frames; recorded data passes and tables,
+                       validation.txt and thresholds.json are unchanged. S5 sweeps
+                       shape all 22 buckets on the first warm-up frame. Reports
+                       carry paint_samples/paint_sampling, warn on missed paints and
+                       mark S6 cached as sparse by design. Spike reports name the
+                       mode; s6 --mode fixed is an error. The fonts test checks TTF
+                       patching on Linux and prints an explicit render_to_image skip.
+                       CI lints omnia-bench with scene-counts,readback. resvg 0.46 and
+                       the 29 Wayland transitive crates are in plan section 10.
+                       fmt, workspace Clippy/tests, bench feature Clippy and deny pass
+                       on Linux. No measurement rerun; no check was weakened.
