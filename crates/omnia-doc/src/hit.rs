@@ -1,40 +1,14 @@
 //! Indexed nearest-item picking in world nanometres (K14: caller converts 4 px).
 //!
-//! Symbol-local bounds are supplied by the caller to avoid a dependency cycle with
-//! `omnia-symbols`. Keep the index and bounds lookup synchronized with the document.
+//! Doc stores caller-supplied local geometry and maintains the interaction index.
 
-use crate::{Doc, GeomError, ItemId, Part, Pt, Rect, SHEET_LIMIT_NM, SpatialIndex, SymbolId};
+use crate::{Doc, GeomError, ItemId, Part, Pt, Rect, SHEET_LIMIT_NM};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
     pub item: ItemId,
     /// Closest point on the part rectangle, wire segment, or label anchor.
     pub at: Pt,
-}
-
-/// Builds a read-only interaction index. Part entries include pins as well as body
-/// bounds so snapping finds pins outside the art. Hit testing still uses only the body.
-/// Transformed art bounds are clamped to K1; valid parts may straddle sheet edges.
-/// Rebuild after edits until Doc owns and incrementally maintains this index (D3).
-pub fn build_hit_index(
-    doc: &Doc,
-    bounds: impl Fn(SymbolId) -> Rect,
-) -> Result<SpatialIndex, GeomError> {
-    let mut index = SpatialIndex::new();
-    for (id, part) in doc.parts() {
-        let mut area = part_bounds(part, bounds(part.symbol))?;
-        for &pin in doc.pins(id).unwrap() {
-            area = area.union(Rect::new(pin, pin)?);
-        }
-        index.insert(ItemId::Part(id), area)?;
-    }
-    for (id, wire) in doc.wires() {
-        index.insert(ItemId::Wire(id), Rect::from_points(wire.a, wire.b)?)?;
-    }
-    for (id, label) in doc.labels() {
-        index.insert(ItemId::Label(id), Rect::new(label.at, label.at)?)?;
-    }
-    Ok(index)
 }
 
 pub(crate) fn part_bounds(part: &Part, local: Rect) -> Result<Rect, GeomError> {
@@ -52,24 +26,14 @@ pub(crate) fn part_bounds(part: &Part, local: Rect) -> Result<Rect, GeomError> {
 /// Nearest item in the inclusive Euclidean tolerance. Ties use part, wire, label,
 /// then ascending ID. Labels use their anchor until text layout supplies geometry.
 /// `scratch` is replaced and reusable; no allocation when its capacity suffices.
-pub fn hit_test(
-    doc: &Doc,
-    index: &SpatialIndex,
-    at: Pt,
-    tolerance: i32,
-    bounds: impl Fn(SymbolId) -> Rect,
-    scratch: &mut Vec<ItemId>,
-) -> Option<Hit> {
+pub fn hit_test(doc: &Doc, at: Pt, tolerance: i32, scratch: &mut Vec<ItemId>) -> Option<Hit> {
     assert!(at.is_in_bounds() && tolerance >= 0);
-    index.query(search_area(at, tolerance), scratch);
+    doc.query(search_area(at, tolerance), scratch);
     scratch
         .iter()
         .filter_map(|&item| {
             let nearest = match item {
-                ItemId::Part(id) => {
-                    let part = doc.part(id)?;
-                    closest(at, part_bounds(part, bounds(part.symbol)).ok()?)
-                }
+                ItemId::Part(id) => closest(at, doc.part_body(id)?),
                 ItemId::Wire(id) => {
                     let wire = doc.wire(id)?;
                     closest(at, Rect::from_points(wire.a, wire.b).ok()?)
@@ -121,7 +85,7 @@ pub(crate) fn search_area(at: Pt, radius: i32) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Label, Orient, PartId, Wire};
+    use crate::{Label, Orient, PartId, SymbolId, Wire};
     use proptest::prelude::*;
 
     fn bounds(_: SymbolId) -> Rect {
@@ -150,7 +114,7 @@ mod tests {
                 let orient = Orient::ALL[o as usize];
                 let at = Pt { x, y };
                 let part = Part { symbol: SymbolId(0), at, orient, designator: "R".into(), value: "".into() };
-                let id = doc.insert_part(part, &[Pt { x: 700, y: 0 }, Pt::ZERO]).unwrap();
+                let id = doc.insert_part(part, &[Pt { x: 700, y: 0 }, Pt::ZERO], bounds(SymbolId(0))).unwrap();
                 // Independent transform of all four corners (not part_bounds).
                 let corners: Vec<_> = [-101, 307].into_iter().flat_map(|cx| [-203, 409].into_iter().map(move |cy| {
                     let cx = if o >= 4 { -cx } else { cx };
@@ -166,7 +130,6 @@ mod tests {
                 let id = doc.insert_label(Label { at, text: "net".into() }).unwrap();
                 oracle.push((ItemId::Label(id), Rect::new(at, at).unwrap()));
             }
-            let index = build_hit_index(&doc, bounds).unwrap();
             let mut scratch = Vec::new();
             let chosen = items[pick % items.len()];
             // Probe just beyond the rightmost item. Nothing else can be closer,
@@ -187,14 +150,14 @@ mod tests {
                     let d = dx * dx + dy * dy;
                     (d <= i128::from(tolerance).pow(2)).then_some((d, item_key(item), Hit { item, at: q }))
                 }).min_by_key(|&(d, key, _)| (d, key)).map(|(_, _, h)| h);
-                prop_assert_eq!(hit_test(&doc, &index, at, tolerance, bounds, &mut scratch), expected);
-                let first = crate::snap(&doc, &index, at, grid, tolerance, &mut scratch);
+                prop_assert_eq!(hit_test(&doc, at, tolerance, &mut scratch), expected);
+                let first = crate::snap(&doc, at, grid, tolerance, &mut scratch);
                 prop_assert!(first.at().is_in_bounds());
-                prop_assert_eq!(crate::snap(&doc, &index, first.at(), grid, tolerance, &mut scratch), first);
+                prop_assert_eq!(crate::snap(&doc, first.at(), grid, tolerance, &mut scratch), first);
             }
             // Pin outside the symbol rectangle must still be indexed for snapping.
             let pin = doc.pins(PartId(0)).unwrap()[0];
-            prop_assert!(matches!(crate::snap(&doc, &index, pin, grid, 0, &mut scratch), crate::Snap::Pin { .. }), "exact pin must snap to pin");
+            prop_assert!(matches!(crate::snap(&doc, pin, grid, 0, &mut scratch), crate::Snap::Pin { .. }), "exact pin must snap to pin");
         }
     }
 
@@ -218,6 +181,7 @@ mod tests {
                                 value: "".into(),
                             },
                             vec![Pt::ZERO],
+                            bounds(SymbolId(0)),
                         )],
                         [],
                         [Label {
@@ -249,12 +213,26 @@ mod tests {
                             y: corners.iter().map(|p| p.y).max().unwrap(),
                         },
                     };
-                    let index = build_hit_index(&doc, bounds).unwrap();
-                    assert_eq!(index.len(), 2);
-                    assert_eq!(index.bounds(ItemId::Part(PartId(0))), Some(expected));
+                    let mut found = Vec::new();
+                    doc.query(
+                        Rect::new(
+                            Pt {
+                                x: -SHEET_LIMIT_NM,
+                                y: -SHEET_LIMIT_NM,
+                            },
+                            Pt {
+                                x: SHEET_LIMIT_NM,
+                                y: SHEET_LIMIT_NM,
+                            },
+                        )
+                        .unwrap(),
+                        &mut found,
+                    );
+                    assert_eq!(found.len(), 2);
+                    assert_eq!(doc.part_body(PartId(0)), Some(expected));
                     for point in [at, expected.center()] {
                         assert_eq!(
-                            hit_test(&doc, &index, point, 0, bounds, &mut scratch),
+                            hit_test(&doc, point, 0, &mut scratch),
                             Some(Hit {
                                 item: ItemId::Part(PartId(0)),
                                 at: point
@@ -265,7 +243,7 @@ mod tests {
                         x: x - x.signum() * 3,
                         y: y - y.signum() * 4,
                     };
-                    let snapped = crate::snap(&doc, &index, near_pin, 10, 5, &mut scratch);
+                    let snapped = crate::snap(&doc, near_pin, 10, 5, &mut scratch);
                     assert_eq!(
                         snapped,
                         crate::Snap::Pin {
@@ -275,13 +253,11 @@ mod tests {
                         }
                     );
                     assert_eq!(
-                        crate::snap(&doc, &index, snapped.at(), 10, 5, &mut scratch),
+                        crate::snap(&doc, snapped.at(), 10, 5, &mut scratch),
                         snapped
                     );
                     assert_eq!(
-                        hit_test(&doc, &index, Pt::ZERO, 0, bounds, &mut scratch)
-                            .unwrap()
-                            .item,
+                        hit_test(&doc, Pt::ZERO, 0, &mut scratch).unwrap().item,
                         ItemId::Label(crate::LabelId(0))
                     );
                 }
@@ -301,6 +277,7 @@ mod tests {
                     value: "".into(),
                 },
                 vec![Pt { x: 100, y: 100 }],
+                Rect::new(Pt::ZERO, Pt { x: 10, y: 10 }).unwrap(),
             )],
             [Wire {
                 a: Pt::ZERO,
@@ -318,38 +295,28 @@ mod tests {
             ],
         )
         .unwrap();
-        let bounds = |_| Rect::new(Pt::ZERO, Pt { x: 10, y: 10 }).unwrap();
-        let index = build_hit_index(&doc, bounds).unwrap();
         let mut scratch = Vec::new();
         assert_eq!(
-            hit_test(&doc, &index, Pt::ZERO, 0, bounds, &mut scratch)
-                .unwrap()
-                .item,
+            hit_test(&doc, Pt::ZERO, 0, &mut scratch).unwrap().item,
             ItemId::Part(PartId(0))
         );
         assert_eq!(
-            hit_test(&doc, &index, Pt { x: 5, y: 5 }, 0, bounds, &mut scratch)
+            hit_test(&doc, Pt { x: 5, y: 5 }, 0, &mut scratch)
                 .unwrap()
                 .at,
             Pt { x: 5, y: 5 }
         );
         let corner = Pt { x: 13, y: 14 };
         assert_eq!(
-            hit_test(&doc, &index, corner, 5, bounds, &mut scratch),
+            hit_test(&doc, corner, 5, &mut scratch),
             Some(Hit {
                 item: ItemId::Part(PartId(0)),
                 at: Pt { x: 10, y: 10 }
             })
         );
-        assert_eq!(
-            hit_test(&doc, &index, corner, 4, bounds, &mut scratch),
-            None
-        );
+        assert_eq!(hit_test(&doc, corner, 4, &mut scratch), None);
         // Indexed pin envelopes must not enlarge the part's pickable body.
-        assert_eq!(
-            hit_test(&doc, &index, Pt { x: 100, y: 100 }, 0, bounds, &mut scratch),
-            None
-        );
+        assert_eq!(hit_test(&doc, Pt { x: 100, y: 100 }, 0, &mut scratch), None);
     }
 
     #[test]
@@ -372,20 +339,16 @@ mod tests {
                 text: "live".into(),
             })
             .unwrap();
-        let index = build_hit_index(&doc, bounds).unwrap();
         assert_eq!(doc.labels().map(|(id, _)| id).collect::<Vec<_>>(), [live]);
         assert_eq!(doc.pins(PartId(0)), None);
         let mut scratch = Vec::new();
         assert_eq!(
-            hit_test(&doc, &index, at, i32::MAX, bounds, &mut scratch),
+            hit_test(&doc, at, i32::MAX, &mut scratch),
             Some(Hit {
                 item: ItemId::Label(live),
                 at
             })
         );
-        assert_eq!(
-            hit_test(&doc, &index, Pt::ZERO, 0, bounds, &mut scratch),
-            None
-        );
+        assert_eq!(hit_test(&doc, Pt::ZERO, 0, &mut scratch), None);
     }
 }

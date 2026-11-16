@@ -6,7 +6,7 @@ mod io;
 use std::{fmt, sync::Arc};
 
 use crate::{
-    Orient, Pt, Rect,
+    Connectivity, NetId, Orient, Pt, Rect, SpatialIndex,
     arena::Arena,
     points::{End, Points},
 };
@@ -72,12 +72,14 @@ pub struct Label {
 pub enum StoreError {
     OutOfBounds,
     InvalidWire,
+    InvalidId,
 }
 
 impl fmt::Display for StoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::OutOfBounds => "item or pin lies outside K1 sheet limits",
+            Self::InvalidId => "restore requires an allocated empty slot",
             Self::InvalidWire => "wire must be axis-aligned with distinct ends",
         })
     }
@@ -89,6 +91,7 @@ impl std::error::Error for StoreError {}
 struct StoredPart {
     part: Part,
     pins: Vec<Pt>,
+    local_bounds: Rect,
 }
 
 #[derive(Debug, Default)]
@@ -97,14 +100,34 @@ pub struct Doc {
     wires: Arena<Wire>,
     labels: Arena<Label>,
     points: Points,
+    index: SpatialIndex,
+    connectivity: Connectivity,
     revision: u64,
 }
 
 impl Doc {
-    /// Creates an empty store. Symbol-library integration belongs to T2.3;
-    /// internal part insertion currently receives the symbol's local pin positions.
+    /// Creates an empty store. Callers supply symbol-local pin positions and art bounds.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Replaces out; allocates nothing when its capacity holds the result.
+    pub fn query(&self, area: Rect, out: &mut Vec<ItemId>) {
+        self.index.query(area, out);
+    }
+    pub fn part_body(&self, id: PartId) -> Option<Rect> {
+        let stored = self.parts.get(id.0)?;
+        crate::hit::part_bounds(&stored.part, stored.local_bounds).ok()
+    }
+    /// Net handles remain valid only until the next edit.
+    pub fn net_of(&self, id: WireId) -> Option<NetId> {
+        self.connectivity.net_of(id)
+    }
+    pub fn net_at(&self, at: Pt) -> Option<NetId> {
+        self.connectivity.net_at(at)
+    }
+    pub fn net_wires(&self, net: NetId, out: &mut Vec<WireId>) {
+        self.connectivity.net_wires(net, out);
     }
 
     pub fn revision(&self) -> u64 {
@@ -165,6 +188,7 @@ impl Doc {
         &mut self,
         part: Part,
         local_pins: &[Pt],
+        local_bounds: Rect,
     ) -> Result<PartId, StoreError> {
         check_point(part.at)?;
         let pins = local_pins
@@ -176,7 +200,62 @@ impl Doc {
                     .map_err(|_| StoreError::OutOfBounds)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let id = PartId(self.parts.insert(StoredPart { part, pins }));
+        let body =
+            crate::hit::part_bounds(&part, local_bounds).map_err(|_| StoreError::OutOfBounds)?;
+        let area = pins
+            .iter()
+            .fold(body, |area, &pin| area.union(Rect { min: pin, max: pin }));
+        let id = PartId(self.parts.insert(StoredPart {
+            part,
+            pins,
+            local_bounds,
+        }));
+        self.index.insert(ItemId::Part(id), area).unwrap();
+        self.connectivity
+            .add_part(id, &self.parts.get(id.0).unwrap().pins);
+        for (pin, &at) in self.parts.get(id.0).unwrap().pins.iter().enumerate() {
+            self.points.insert(at, End::Pin { part: id, pin });
+        }
+        self.bump_revision();
+        Ok(id)
+    }
+
+    #[cfg_attr(not(test), expect(dead_code, reason = "T5.1 restoration entry point"))]
+    pub(crate) fn restore_part(
+        &mut self,
+        id: PartId,
+        part: Part,
+        local_pins: &[Pt],
+        local_bounds: Rect,
+    ) -> Result<PartId, StoreError> {
+        check_point(part.at)?;
+        let pins = local_pins
+            .iter()
+            .map(|&pin| {
+                check_point(pin)?;
+                part.at
+                    .checked_add(part.orient.apply(pin))
+                    .map_err(|_| StoreError::OutOfBounds)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let body =
+            crate::hit::part_bounds(&part, local_bounds).map_err(|_| StoreError::OutOfBounds)?;
+        let area = pins
+            .iter()
+            .fold(body, |area, &pin| area.union(Rect { min: pin, max: pin }));
+        self.parts
+            .restore(
+                id.0,
+                StoredPart {
+                    part,
+                    pins,
+                    local_bounds,
+                },
+            )
+            .map_err(|_| StoreError::InvalidId)?;
+        self.index.insert(ItemId::Part(id), area).unwrap();
+        self.connectivity
+            .add_part(id, &self.parts.get(id.0).unwrap().pins);
         for (pin, &at) in self.parts.get(id.0).unwrap().pins.iter().enumerate() {
             self.points.insert(at, End::Pin { part: id, pin });
         }
@@ -193,6 +272,8 @@ impl Doc {
     )]
     pub(crate) fn remove_part(&mut self, id: PartId) -> Option<Part> {
         let stored = self.parts.remove(id.0)?;
+        self.index.remove(ItemId::Part(id));
+        self.connectivity.remove_part(id);
         for (pin, at) in stored.pins.into_iter().enumerate() {
             self.points.remove(at, End::Pin { part: id, pin });
         }
@@ -207,6 +288,30 @@ impl Doc {
             return Err(StoreError::InvalidWire);
         }
         let id = WireId(self.wires.insert(wire));
+        self.index
+            .insert(ItemId::Wire(id), Rect::from_points(wire.a, wire.b).unwrap())
+            .unwrap();
+        self.connectivity.add_wire(id, wire);
+        self.points.insert(wire.a, End::Wire(id));
+        self.points.insert(wire.b, End::Wire(id));
+        self.bump_revision();
+        Ok(id)
+    }
+
+    #[cfg_attr(not(test), expect(dead_code, reason = "T5.1 restoration entry point"))]
+    pub(crate) fn restore_wire(&mut self, id: WireId, wire: Wire) -> Result<WireId, StoreError> {
+        check_point(wire.a)?;
+        check_point(wire.b)?;
+        if wire.a == wire.b || (wire.a.x != wire.b.x && wire.a.y != wire.b.y) {
+            return Err(StoreError::InvalidWire);
+        }
+        self.wires
+            .restore(id.0, wire)
+            .map_err(|_| StoreError::InvalidId)?;
+        self.index
+            .insert(ItemId::Wire(id), Rect::from_points(wire.a, wire.b).unwrap())
+            .unwrap();
+        self.connectivity.add_wire(id, wire);
         self.points.insert(wire.a, End::Wire(id));
         self.points.insert(wire.b, End::Wire(id));
         self.bump_revision();
@@ -222,6 +327,8 @@ impl Doc {
     )]
     pub(crate) fn remove_wire(&mut self, id: WireId) -> Option<Wire> {
         let wire = self.wires.remove(id.0)?;
+        self.index.remove(ItemId::Wire(id));
+        self.connectivity.remove_wire(id);
         self.points.remove(wire.a, End::Wire(id));
         self.points.remove(wire.b, End::Wire(id));
         self.bump_revision();
@@ -231,6 +338,42 @@ impl Doc {
     pub(crate) fn insert_label(&mut self, label: Label) -> Result<LabelId, StoreError> {
         check_point(label.at)?;
         let id = LabelId(self.labels.insert(label));
+        let label = self.labels.get(id.0).unwrap();
+        self.index
+            .insert(
+                ItemId::Label(id),
+                Rect {
+                    min: label.at,
+                    max: label.at,
+                },
+            )
+            .unwrap();
+        self.connectivity.add_label(id, label);
+        self.bump_revision();
+        Ok(id)
+    }
+
+    #[cfg_attr(not(test), expect(dead_code, reason = "T5.1 restoration entry point"))]
+    pub(crate) fn restore_label(
+        &mut self,
+        id: LabelId,
+        label: Label,
+    ) -> Result<LabelId, StoreError> {
+        check_point(label.at)?;
+        self.labels
+            .restore(id.0, label)
+            .map_err(|_| StoreError::InvalidId)?;
+        let label = self.labels.get(id.0).unwrap();
+        self.index
+            .insert(
+                ItemId::Label(id),
+                Rect {
+                    min: label.at,
+                    max: label.at,
+                },
+            )
+            .unwrap();
+        self.connectivity.add_label(id, label);
         self.bump_revision();
         Ok(id)
     }
@@ -244,6 +387,8 @@ impl Doc {
     )]
     pub(crate) fn remove_label(&mut self, id: LabelId) -> Option<Label> {
         let label = self.labels.remove(id.0)?;
+        self.index.remove(ItemId::Label(id));
+        self.connectivity.remove_label(id);
         self.bump_revision();
         Some(label)
     }
@@ -325,7 +470,8 @@ mod tests {
                     },
                     Orient::IDENTITY
                 ),
-                &[Pt { x: 1, y: 0 }]
+                &[Pt { x: 1, y: 0 }],
+                Rect::new(Pt::ZERO, Pt::ZERO).unwrap()
             ),
             Err(StoreError::OutOfBounds)
         );
@@ -334,7 +480,11 @@ mod tests {
         assert_eq!(doc.remove_label(LabelId(0)), None);
         assert_eq!(doc.revision(), 0);
         let p = doc
-            .insert_part(part(Pt::ZERO, Orient::IDENTITY), &[])
+            .insert_part(
+                part(Pt::ZERO, Orient::IDENTITY),
+                &[],
+                Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
+            )
             .unwrap();
         let l = doc
             .insert_label(Label {
@@ -388,7 +538,11 @@ mod tests {
         doc.junctions(sheet(), &mut out);
         assert!(out.is_empty());
         let p = doc
-            .insert_part(part(Pt::ZERO, Orient::IDENTITY), &[Pt::ZERO])
+            .insert_part(
+                part(Pt::ZERO, Orient::IDENTITY),
+                &[Pt::ZERO],
+                Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
+            )
             .unwrap();
         doc.junctions(sheet(), &mut out);
         assert_eq!(out, vec![Pt::ZERO]);
@@ -399,6 +553,112 @@ mod tests {
         doc.remove_wire(b).unwrap();
         doc.junctions(sheet(), &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn rejected_restores_preserve_all_state() {
+        let mut doc = Doc::new();
+        let bounds = Rect::new(Pt::ZERO, Pt::ZERO).unwrap();
+        let p = part(Pt::ZERO, Orient::IDENTITY);
+        let w = Wire {
+            a: Pt::ZERO,
+            b: Pt { x: 1, y: 0 },
+        };
+        let l = Label {
+            at: Pt::ZERO,
+            text: "GND".into(),
+        };
+        let pid = doc.insert_part(p.clone(), &[Pt::ZERO], bounds).unwrap();
+        let wid = doc.insert_wire(w).unwrap();
+        let lid = doc.insert_label(l.clone()).unwrap();
+        let mut before = Vec::new();
+        doc.save(&mut before).unwrap();
+        for raw in [0, 100] {
+            assert_eq!(
+                doc.restore_part(PartId(raw), p.clone(), &[Pt::ZERO], bounds),
+                Err(StoreError::InvalidId)
+            );
+            assert_eq!(doc.restore_wire(WireId(raw), w), Err(StoreError::InvalidId));
+            assert_eq!(
+                doc.restore_label(LabelId(raw), l.clone()),
+                Err(StoreError::InvalidId)
+            );
+        }
+        assert_eq!(
+            doc.insert_wire(Wire {
+                a: Pt::ZERO,
+                b: Pt::ZERO
+            }),
+            Err(StoreError::InvalidWire)
+        );
+        let mut after = Vec::new();
+        doc.save(&mut after).unwrap();
+        assert_eq!(before, after);
+        doc.remove_part(pid);
+        doc.restore_part(pid, p, &[Pt::ZERO], bounds).unwrap();
+        doc.remove_wire(wid);
+        doc.restore_wire(wid, w).unwrap();
+        doc.remove_label(lid);
+        doc.restore_label(lid, l).unwrap();
+        crate::connectivity::tests::assert_invariants(&doc.connectivity);
+    }
+
+    #[test]
+    fn abutting_pins_and_label_only_components() {
+        let b = Rect::new(Pt::ZERO, Pt::ZERO).unwrap();
+        let mut doc = Doc::new();
+        let a = doc
+            .insert_part(part(Pt::ZERO, Orient::IDENTITY), &[Pt::ZERO], b)
+            .unwrap();
+        let c = doc
+            .insert_part(part(Pt::ZERO, Orient::IDENTITY), &[Pt::ZERO], b)
+            .unwrap();
+        assert_eq!(doc.connectivity.net_count(), 1);
+        doc.remove_part(a);
+        assert!(doc.net_at(Pt::ZERO).is_some());
+        doc.remove_part(c);
+        assert!(doc.net_at(Pt::ZERO).is_none());
+        for x in [10, 20] {
+            doc.insert_label(Label {
+                at: Pt { x, y: 0 },
+                text: "GND".into(),
+            })
+            .unwrap();
+        }
+        assert_eq!(
+            doc.net_at(Pt { x: 10, y: 0 }),
+            doc.net_at(Pt { x: 20, y: 0 })
+        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+        #[test]
+        fn integrated_edits_restore_and_rebuild(edits in prop::collection::vec((0u8..9,0usize..32,-4i32..5,-4i32..5,any::<bool>()),1..200)) {
+            let mut doc=Doc::new();
+            let mut removed_parts=Vec::new(); let mut removed_wires=Vec::new(); let mut removed_labels=Vec::new();
+            let bounds=Rect::from_points(Pt{x:-2,y:-2},Pt{x:2,y:2}).unwrap();
+            for (op,pick,x,y,h) in edits {
+                let at=Pt{x,y};
+                match op {
+                    0 => { doc.insert_part(part(at,Orient::IDENTITY),&[Pt::ZERO,Pt{x:1,y:0}],bounds).unwrap(); }
+                    1 => { doc.insert_wire(Wire{a:at,b:if h {Pt{x:x+1,y}} else {Pt{x,y:y+1}}}).unwrap(); }
+                    2 => { doc.insert_label(Label{at,text:if h {"GND"} else {"VCC"}.into()}).unwrap(); }
+                    3 => { let ids:Vec<_>=doc.parts().map(|(id,_)|id).collect(); if !ids.is_empty() { let id=ids[pick%ids.len()]; let st=doc.parts.get(id.0).unwrap(); let pins=st.pins.iter().map(|&p|st.part.orient.inverse().apply(p-st.part.at)).collect::<Vec<_>>(); let b=st.local_bounds; let p=doc.remove_part(id).unwrap(); removed_parts.push((id,p,pins,b)); } }
+                    4 => { let ids:Vec<_>=doc.wires().map(|(id,_)|id).collect(); if !ids.is_empty() {let id=ids[pick%ids.len()]; removed_wires.push((id,doc.remove_wire(id).unwrap()));} }
+                    5 => { let ids:Vec<_>=doc.labels().map(|(id,_)|id).collect(); if !ids.is_empty() {let id=ids[pick%ids.len()]; removed_labels.push((id,doc.remove_label(id).unwrap()));} }
+                    6 => {if !removed_parts.is_empty() {let (id,p,pins,b)=removed_parts.swap_remove(pick%removed_parts.len()); doc.restore_part(id,p,&pins,b).unwrap();} }
+                    7 => {if !removed_wires.is_empty() {let (id,w)=removed_wires.swap_remove(pick%removed_wires.len()); doc.restore_wire(id,w).unwrap();} }
+                    _ => {if !removed_labels.is_empty() {let (id,l)=removed_labels.swap_remove(pick%removed_labels.len()); doc.restore_label(id,l).unwrap();} }
+                }
+                let oracle=Connectivity::rebuild_with_parts(doc.wires().map(|(id,&w)|(id,w)),doc.labels(),doc.parts().map(|(id,_)|(id,doc.pins(id).unwrap())));
+                crate::connectivity::tests::assert_partitions(&doc.connectivity,&oracle);
+                let area=Rect::from_points(at,Pt{x:x+2,y:y+2}).unwrap(); let mut found=Vec::new(); doc.query(area,&mut found);
+                let mut expected:Vec<_>=doc.parts().filter_map(|(id,_)| {let mut b=doc.part_body(id).unwrap();for &p in doc.pins(id).unwrap(){b=b.union(Rect{min:p,max:p});} b.intersects(area).then_some(ItemId::Part(id))}).chain(doc.wires().filter_map(|(id,w)|Rect::from_points(w.a,w.b).unwrap().intersects(area).then_some(ItemId::Wire(id)))).chain(doc.labels().filter_map(|(id,l)|area.contains(l.at).then_some(ItemId::Label(id)))).collect();
+                found.sort_by_key(|&id|crate::hit::item_key(id)); expected.sort_by_key(|&id|crate::hit::item_key(id)); prop_assert_eq!(found,expected);
+                let mut bytes=Vec::new(); doc.save(&mut bytes).unwrap(); let loaded=Doc::load(bytes.as_slice()).unwrap(); prop_assert_eq!(&loaded,&doc); crate::connectivity::tests::assert_partitions(&loaded.connectivity,&oracle);
+            }
+        }
     }
 
     proptest! {
@@ -442,7 +702,7 @@ mod tests {
                         1 => {
                             let o = Orient::ALL[orient as usize];
                             let pins = [Pt::ZERO, Pt { x: 1, y: 0 }, Pt::ZERO];
-                            let id = doc.insert_part(part(at, o), &pins).unwrap();
+                            let id = doc.insert_part(part(at, o), &pins, Rect::new(Pt::ZERO, Pt::ZERO).unwrap()).unwrap();
                             // Independent reference transform, including coincident pins.
                             let (dx, dy) = match o.quarter_turns() { 0 => (1, 0), 1 => (0, 1), 2 => (-1, 0), _ => (0, -1) };
                             let sign = if o.is_flipped() { -1 } else { 1 };

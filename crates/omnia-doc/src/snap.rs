@@ -1,7 +1,7 @@
 //! Priority snapping in world nanometres (K14: caller converts 10 px).
 
 use crate::hit::{closest, search_area};
-use crate::{Doc, ItemId, PartId, Pt, Rect, SHEET_LIMIT_NM, SpatialIndex, WireId, snap_to};
+use crate::{Doc, ItemId, PartId, Pt, Rect, SHEET_LIMIT_NM, WireId, snap_to};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Snap {
@@ -27,21 +27,14 @@ impl Snap {
 /// INV9 even for off-grid geometry: rounding/projection can enter another target's
 /// radius. Consequently the final point can be farther than `radius` from input.
 /// Grid points are clipped to the outermost in-sheet grid line (K1).
-/// `index` must include world pins (see build_hit_index), and match `doc`.
-pub fn snap(
-    doc: &Doc,
-    index: &SpatialIndex,
-    at: Pt,
-    grid: i32,
-    radius: i32,
-    scratch: &mut Vec<ItemId>,
-) -> Snap {
+/// Uses the index maintained by Doc, including world pins.
+pub fn snap(doc: &Doc, at: Pt, grid: i32, radius: i32, scratch: &mut Vec<ItemId>) -> Snap {
     assert!(at.is_in_bounds() && grid > 0 && radius >= 0);
     let mut current = at;
     // Each move after the first strictly improves the priority tier. A zero-distance
     // target wins within its tier, so four tiers need at most five evaluations.
     for _ in 0..5 {
-        let result = once(doc, index, current, grid, radius, scratch);
+        let result = once(doc, current, grid, radius, scratch);
         if result.at() == current {
             return result;
         }
@@ -50,15 +43,8 @@ pub fn snap(
     unreachable!("snap priority must converge")
 }
 
-fn once(
-    doc: &Doc,
-    index: &SpatialIndex,
-    at: Pt,
-    grid: i32,
-    radius: i32,
-    scratch: &mut Vec<ItemId>,
-) -> Snap {
-    index.query(search_area(at, radius), scratch);
+fn once(doc: &Doc, at: Pt, grid: i32, radius: i32, scratch: &mut Vec<ItemId>) -> Snap {
+    doc.query(search_area(at, radius), scratch);
     let mut best = None;
     let mut consider = |tier: u8, id: u32, sub: usize, target: Snap| {
         let p = target.at();
@@ -104,7 +90,7 @@ fn once(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Orient, Part, SymbolId, build_hit_index};
+    use crate::{Orient, Part, SymbolId};
     use proptest::prelude::*;
 
     proptest! {
@@ -117,14 +103,13 @@ mod tests {
         ) {
             let doc = Doc::from_items([(
                 Part { symbol: SymbolId(0), at: Pt::ZERO, orient: Orient::IDENTITY, designator: "R".into(), value: "".into() },
-                pins.into_iter().map(|(x, y)| Pt { x, y }).collect()
+                pins.into_iter().map(|(x, y)| Pt { x, y }).collect(), Rect::new(Pt::ZERO, Pt::ZERO).unwrap()
             )], wires.into_iter().map(|(x, y, length, vertical)| crate::Wire {
                 a: Pt { x, y }, b: if vertical { Pt { x, y: y + length } } else { Pt { x: x + length, y } }
             }), []).unwrap();
-            let index = build_hit_index(&doc, |_| Rect::new(Pt::ZERO, Pt::ZERO).unwrap()).unwrap();
             let mut scratch = Vec::new();
-            let first = snap(&doc, &index, Pt { x, y }, grid, radius, &mut scratch);
-            prop_assert_eq!(snap(&doc, &index, first.at(), grid, radius, &mut scratch), first);
+            let first = snap(&doc, Pt { x, y }, grid, radius, &mut scratch);
+            prop_assert_eq!(snap(&doc, first.at(), grid, radius, &mut scratch), first);
         }
     }
 
@@ -140,6 +125,7 @@ mod tests {
                     value: "".into(),
                 },
                 vec![Pt::ZERO],
+                Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
             )],
             [crate::Wire {
                 a: Pt { x: 10, y: 0 },
@@ -148,31 +134,27 @@ mod tests {
             [],
         )
         .unwrap();
-        let index = build_hit_index(&doc, |_| Rect::new(Pt::ZERO, Pt::ZERO).unwrap()).unwrap();
         let mut scratch = Vec::new();
         // Pin wins over a zero-distance wire endpoint.
         assert!(matches!(
-            snap(&doc, &index, Pt { x: 10, y: 0 }, 5, 10, &mut scratch),
+            snap(&doc, Pt { x: 10, y: 0 }, 5, 10, &mut scratch),
             Snap::Pin { .. }
         ));
         assert!(matches!(
-            snap(&doc, &index, Pt { x: 100, y: 1 }, 5, 2, &mut scratch),
+            snap(&doc, Pt { x: 100, y: 1 }, 5, 2, &mut scratch),
             Snap::WireEnd { .. }
         ));
         assert!(matches!(
-            snap(&doc, &index, Pt { x: 60, y: 1 }, 5, 2, &mut scratch),
+            snap(&doc, Pt { x: 60, y: 1 }, 5, 2, &mut scratch),
             Snap::WireBody { .. }
         ));
         assert_eq!(
-            snap(&doc, &index, Pt { x: 0, y: 100 }, 7, 2, &mut scratch),
+            snap(&doc, Pt { x: 0, y: 100 }, 7, 2, &mut scratch),
             Snap::Grid(Pt { x: 0, y: 98 })
         );
         // Input -> grid(0,0) -> end(10,0) -> pin(20,0).
-        let result = snap(&doc, &index, Pt { x: 0, y: -15 }, 100, 10, &mut scratch);
+        let result = snap(&doc, Pt { x: 0, y: -15 }, 100, 10, &mut scratch);
         assert!(matches!(result, Snap::Pin { .. }));
-        assert_eq!(
-            snap(&doc, &index, result.at(), 100, 10, &mut scratch),
-            result
-        );
+        assert_eq!(snap(&doc, result.at(), 100, 10, &mut scratch), result);
     }
 }

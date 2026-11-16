@@ -16,5 +16,5 @@ pub use geom::{GRID_NM, GeomError, Orient, PIN_LATTICE_NM, Pt, Rect, SHEET_LIMIT
 
 pub mod hit;
 pub mod snap;
-pub use hit::{Hit, build_hit_index, hit_test};
+pub use hit::{Hit, hit_test};
 pub use snap::{Snap, snap};

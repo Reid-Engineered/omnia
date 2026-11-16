@@ -1,0 +1,75 @@
+     Running benches\connectivity.rs (target\release\deps\connectivity-f5c020e34a9b72ad.exe)
+observations real_10k_leaf_add: n=1000 p99_ms=0.000100 max_ms=0.000600 over_1ms=0
+observations real_10k_leaf_remove: n=1000 p99_ms=0.000100 max_ms=0.001700 over_1ms=0
+Benchmarking real_10k_leaf_add
+Benchmarking real_10k_leaf_add: Warming up for 1.0000 s
+Benchmarking real_10k_leaf_add: Collecting 20 samples in estimated 2.0000 s (25M iterations)
+Benchmarking real_10k_leaf_add: Analyzing
+real_10k_leaf_add       time:   [35.274 ns 35.504 ns 35.719 ns]
+                        change: [−16.285% −10.718% −4.9700%] (p = 0.00 < 0.05)
+                        Performance has improved.
+
+Benchmarking real_10k_leaf_remove
+Benchmarking real_10k_leaf_remove: Warming up for 1.0000 s
+Benchmarking real_10k_leaf_remove: Collecting 20 samples in estimated 2.0000 s (21M iterations)
+Benchmarking real_10k_leaf_remove: Analyzing
+real_10k_leaf_remove    time:   [47.955 ns 48.878 ns 49.739 ns]
+                        change: [−42.338% −34.883% −26.954%] (p = 0.00 < 0.05)
+                        Performance has improved.
+
+Benchmarking rebuild_real_10k
+Benchmarking rebuild_real_10k: Warming up for 1.0000 s
+Benchmarking rebuild_real_10k: Collecting 20 samples in estimated 3.7128 s (420 iterations)
+Benchmarking rebuild_real_10k: Analyzing
+rebuild_real_10k        time:   [8.8351 ms 8.9764 ms 9.1337 ms]
+                        change: [−77.733% −76.393% −75.059%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) low mild
+
+observations label_5k_gnd_vcc_bridge_add: n=1000 p99_ms=0.004700 max_ms=0.022600 over_1ms=0
+Benchmarking label_5k_gnd_vcc_bridge_add
+Benchmarking label_5k_gnd_vcc_bridge_add: Warming up for 1.0000 s
+observations label_5k_gnd_vcc_bridge_remove: n=1000 p99_ms=0.116800 max_ms=0.155500 over_1ms=0
+Benchmarking label_5k_gnd_vcc_bridge_add: Collecting 20 samples in estimated 2.0147 s (20k iterations)
+Benchmarking label_5k_gnd_vcc_bridge_add: Analyzing
+label_5k_gnd_vcc_bridge_add
+                        time:   [3.5472 µs 3.7220 µs 3.8954 µs]
+                        change: [−50.823% −43.598% −35.981%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high mild
+Benchmarking label_5k_gnd_vcc_bridge_remove
+Benchmarking label_5k_gnd_vcc_bridge_remove: Warming up for 1.0000 s
+
+Benchmarking label_5k_gnd_vcc_bridge_remove: Collecting 20 samples in estimated 2.0176 s (20k iterations)
+Benchmarking label_5k_gnd_vcc_bridge_remove: Analyzing
+label_5k_gnd_vcc_bridge_remove
+                        time:   [96.758 µs 99.536 µs 103.08 µs]
+                        change: [−46.982% −39.957% −31.335%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 3 outliers among 20 measurements (15.00%)
+  1 (5.00%) low mild
+  1 (5.00%) high mild
+  1 (5.00%) high severe
+
+observations chain_20k_middle_add: n=1000 p99_ms=0.130000 max_ms=0.387600 over_1ms=0
+observations chain_20k_middle_remove: n=1000 p99_ms=1.082600 max_ms=1.478400 over_1ms=25
+Benchmarking chain_20k_middle_add
+Benchmarking chain_20k_middle_add: Warming up for 1.0000 s
+Benchmarking chain_20k_middle_add: Collecting 20 samples in estimated 2.0789 s (2520 iterations)
+Benchmarking chain_20k_middle_add: Analyzing
+chain_20k_middle_add    time:   [57.012 µs 58.573 µs 60.623 µs]
+                        change: [+6.9335% +16.891% +29.521%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 20 measurements (10.00%)
+  2 (10.00%) high mild
+
+Benchmarking chain_20k_middle_remove
+Benchmarking chain_20k_middle_remove: Warming up for 1.0000 s
+Benchmarking chain_20k_middle_remove: Collecting 20 samples in estimated 2.1248 s (2310 iterations)
+Benchmarking chain_20k_middle_remove: Analyzing
+chain_20k_middle_remove time:   [774.41 µs 805.36 µs 851.75 µs]
+                        change: [+13.215% +17.865% +22.369%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+

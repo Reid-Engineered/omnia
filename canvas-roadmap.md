@@ -90,16 +90,17 @@ T0.0 -> T0.1 -+-> T0.2 (assets)
               +-> T1.1 (doc) --+-> T2.1 -> T2.2      |
               +-> T1.2 (assets)|                     |
               +-> T1.3 --------+-> T1.4 -> T1.5 -> T1.6
-T0.6 + T1.6 + T2.1 + T2.2 + T2.3 + T2.4 -> T2.5 -> T2.6 -> T2.7
+T0.6 + T1.6 + T2.1 + T2.2 + T2.3 + T2.4 + T2.8 -> T2.5 -> T2.6 -> T2.7
 T2.7 -> T3.1 -+-> T3.3 [H2] -> T3.4
 T2.5 -> T3.2 -+
 T2.2 -> T4.1, T4.2 (doc)    T3.4 + T4.2 -> T4.3 -> T4.4, T4.5 -> T4.6
+T2.2 + T2.4 + T4.1 + T4.2 -> T2.8 (doc) -> T2.5
 T4.1 -> T5.1 (doc)          T4.6 + T5.1 -> T5.2 -> T5.3 -> T5.4
 T5.1 -> T6.1 (doc)          T5.4 + T6.1 -> T6.2 -> T6.4      T6.3 blocked (Q6)
 T6.4 -> T7.1, T7.2, T7.3, T7.4 -> T7.5 [H4]
 ```
 
-The `doc` lane (T1.1, T2.1, T2.2, T4.1, T4.2, T5.1, T6.1) has no GPUI in it and can run ahead
+The `doc` lane (T1.1, T2.1, T2.2, T2.8, T4.1, T4.2, T5.1, T6.1) has no GPUI in it and can run ahead
 of the `canvas` lane.
 
 ## Human checkpoints
@@ -298,7 +299,7 @@ of the `canvas` lane.
   `write_svg` at the original stroke matches the vendor SVG when both are rasterised with
   resvg (difference under 1% of pixels); pin positions match `pinAt` in `symbols.mjs`.
 
-### T2.4 Stress sheets, save and load · doing
+### T2.4 Stress sheets, save and load · done
 - Lane: bench (generator), doc (save and load) · Depends: T2.1, T2.3
 - Owns: `crates/omnia-bench/src/generate.rs`, `crates/omnia-doc/src/io.rs`
 - Do: seeded generators for the five `StressSheet`s; `10k` has exactly 10,000 parts and
@@ -306,8 +307,25 @@ of the `canvas` lane.
 - Done when: the same seed gives the same sheet; `load(save(doc)) == doc`; `10k` generates
   in under 2 s.
 
+### T2.8 Doc owns index and connectivity · needs-human
+- Lane: doc · Depends: T2.2, T2.4, T4.1, T4.2 · Read: D2, D3, K12, INV1, INV3, INV9, INV10,
+  plan section 9
+- Owns: `crates/omnia-doc/`, necessary generator/hit callers and CPU benchmark harnesses
+  in `crates/omnia-bench/`, plan/roadmap and `docs/measurements/T2.8.md`
+- Do: `Doc` owns a `SpatialIndex` and a `Connectivity`, kept in sync inside every
+  crate-private insert, remove and restore (parts, wires, labels) and rebuilt in `from_items` and
+  `load`. `Doc::query(area, out)` for T2.5. Part bounds come from symbol-local art bounds
+  supplied at insert (`omnia-symbols` depends on `omnia-doc`). Pins join the point map of
+  connectivity (D2), so abutting pins share a net. `hit_test` and `snap` use the owned index.
+  Move the T2.2 and T4.1 benches onto T2.4's `10k` generator and add label-heavy and
+  20k-wire worst cases.
+- Done when: `load(save(doc)) == doc`; the INV10 property test (pins, id reuse through
+  remove and restore, adds over live ids, label-only components) and an internal consistency
+  check pass after every step; `Doc::query` allocates nothing with capacity; benches record
+  whether one add and one remove stay under 1 ms on `10k` and in the worst cases.
+
 ### T2.5 Sheet rendering · todo
-- Lane: canvas · Depends: T0.6, T1.6, T2.2, T2.3, T2.4 · Read: D4, D5, K5, K6, K9, K11, G3 to G5, INV7
+- Lane: canvas · Depends: T0.6, T1.6, T2.2, T2.3, T2.4, T2.8 · Read: D4, D5, K5, K6, K9, K11, G3 to G5, INV7
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `sheet/wires.rs`, `sheet/symbols.rs`, `sheet/lod.rs`
 - Do: cull with `Doc::query`; wires as device-pixel-snapped quads; symbols as `paint_svg`
   sprites with prebuilt keys per (symbol, size bucket) and orientation in the matrix;
@@ -1236,3 +1254,29 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        its full-sheet ranges and independent geometry/distance oracle.
                        Corrected dense benchmark probe wording and documented clamping
                        in plan section 9. Standard checks rerun; no checks weakened.
+
+2026-11-16 T2.8 needs-human - Doc now owns SpatialIndex and Connectivity, updated on
+                       every validated insert/remove/restore and from_items/load. Local art
+                       bounds and pins avoid a doc-to-symbols cycle; edge-clamped bodies and
+                       pin envelopes preserve T4.2 behavior. Doc::query is allocation-free
+                       with capacity; hit/snap and bench hit use the owned index. NetId is
+                       valid until the next edit. RON v2 embeds bounds (v1 rejected); equality
+                       retains authoritative slots/geometry/revision. Plan signatures updated.
+                       INV10 now checks full geometric/logical partitions and internal indices,
+                       incidence, counts and free slots, including pins, equal-text label-only
+                       components, connectivity ID replacement and legal Doc restore. 38 doc
+                       tests and both allocation tests pass. Standard fmt/clippy all-targets
+                       -D warnings/workspace tests/deny and diff checks pass; deny only has
+                       existing dependency warnings. Overlapping test runs hit Windows exe
+                       locks; the full serial rerun passed. No checks weakened.
+                       CPU benches moved to omnia-bench with real T2.4 10k generation; added
+                       5k-component GND/VCC short/split and 20k-wire middle split. Windows
+                       i7-14650HX / RTX 5060 Laptop + UHD, Silent scheme, non-reference:
+                       large split mean 805 us, but p99 1.083 ms, max 1.478 ms and 25/1000
+                       observations >=1 ms. Not done: reference confirmation and optimization
+                       if reproduced remain. Hardware/protocol/raw evidence and other results
+                       in docs/measurements/T2.8.md. No T2.5 rendering or gate bypass.
+                       T2.4 heading corrected to done: merged PR #19, existing acceptance
+                       log/measurements and current generator/round-trip tests justify it.
+                       Q4 applies; no new dependencies/licence exceptions. Other worktrees
+                       and unrelated untracked parent documents were left unchanged.

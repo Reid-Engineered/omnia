@@ -224,7 +224,8 @@ returns a `Change` that the views use to decide what to repaint.
 - Schematic items are near one size and grid-aligned, so a uniform grid beats an R-tree:
   no rebalancing, and viewport culling walks cells in order.
 - A query deduplicates with a per-item generation stamp, so it allocates nothing.
-- Serves culling, hit testing, rubber band and snapping.
+- Serves culling, hit testing, rubber band and snapping. Doc owns it (T2.8); each part stores
+  local art bounds and world pins supplied by the caller, without a symbols dependency.
 - A move command removes and reinserts the moved items. During a drag the index is untouched
   because the document is untouched.
 
@@ -420,8 +421,8 @@ pub struct Hit { pub item: ItemId, pub at: Pt }
 pub struct Doc { /* private */ }
 impl Doc {
     pub fn new() -> Self;
-    // T2.4: validated bulk construction; local pins come from the caller's symbol library.
-    pub fn from_items(parts: impl IntoIterator<Item = (Part, Vec<Pt>)>,
+    // T2.8: validated bulk construction; local pins and art bounds come from the caller's symbol library.
+    pub fn from_items(parts: impl IntoIterator<Item = (Part, Vec<Pt>, Rect)>,
                       wires: impl IntoIterator<Item = Wire>,
                       labels: impl IntoIterator<Item = Label>) -> Result<Self, StoreError>;
     pub fn revision(&self) -> u64;
@@ -433,28 +434,27 @@ impl Doc {
     pub fn label(&self, id: LabelId) -> Option<&Label>;
     pub fn query(&self, area: Rect, out: &mut Vec<ItemId>);
     pub fn junctions(&self, area: Rect, out: &mut Vec<Pt>);
-    // T4.2: until Doc owns the index, use the free functions below.
+    pub fn part_body(&self, id: PartId) -> Option<Rect>; // clamped world body
     pub fn pins(&self, id: PartId) -> Option<&[Pt]>; // world coordinates
     pub fn parts(&self) -> impl Iterator<Item = (PartId, &Part)>;
     pub fn wires(&self) -> impl Iterator<Item = (WireId, &Wire)>;
     pub fn labels(&self) -> impl Iterator<Item = (LabelId, &Label)>;
-    pub fn net_of(&self, wire: WireId) -> NetId;
+    pub fn net_of(&self, wire: WireId) -> Option<NetId>;
+    pub fn net_at(&self, at: Pt) -> Option<NetId>;
     pub fn net_wires(&self, net: NetId, out: &mut Vec<WireId>);
     pub fn copy(&self, items: &[ItemId]) -> Clip;
     pub fn snapshot(&self) -> DocSnapshot;
     pub fn save(&self, w: impl io::Write) -> io::Result<()>;
     pub fn load(r: impl io::Read) -> io::Result<Self>;
-    // Version 1 RON embeds local pins (omnia-symbols depends on omnia-doc).
-    // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points.
-    // Equality compares authoritative slots, pins and revision, excluding derived incidence.
+    // Version 2 RON embeds local bounds and pins (omnia-symbols depends on omnia-doc).
+    // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points, index and connectivity.
+    // Equality compares authoritative slots, local bounds, pins and revision, excluding derived state.
 }
 // T4.2 interaction functions (re-exported by omnia-doc).
-// `bounds` is symbol-local geometry, e.g. |id| library.get(id).bounds.
-pub fn build_hit_index(doc: &Doc, bounds: impl Fn(SymbolId) -> Rect)
-    -> Result<SpatialIndex, GeomError>;
-pub fn hit_test(doc: &Doc, index: &SpatialIndex, at: Pt, tolerance: i32,
-                bounds: impl Fn(SymbolId) -> Rect, scratch: &mut Vec<ItemId>) -> Option<Hit>;
-pub fn snap(doc: &Doc, index: &SpatialIndex, at: Pt, grid: i32, radius: i32,
+// T2.8: free functions use Doc's owned index and stored body geometry.
+pub fn hit_test(doc: &Doc, at: Pt, tolerance: i32,
+                scratch: &mut Vec<ItemId>) -> Option<Hit>;
+pub fn snap(doc: &Doc, at: Pt, grid: i32, radius: i32,
             scratch: &mut Vec<ItemId>) -> Snap;
 impl Snap { pub fn at(self) -> Pt; }
 // Live iterators skip holes and preserve ID order. Pins use usize, matching storage.
@@ -467,8 +467,10 @@ impl Snap { pub fn at(self) -> Pt; }
 // priority, distance, ID, pin index, endpoint coordinates. Reusable scratch buffers.
 // Snap settles through higher-priority targets after rounding/projection (INV9),
 // so the final point can exceed the initial radius. Grid clips to in-sheet grid lines.
-// Until Doc owns the index, rebuild after edits. When integrated, maintain body+pin
-// bounds incrementally and turn these into Doc wrappers using the owned index.
+// Doc updates body+pin bounds and connectivity on every validated insert/remove/restore.
+// Restore accepts only reserved empty slots; new inserts never reuse arena IDs (D2).
+// NetId is valid until the next edit; resolve again from a wire or point after edits.
+// RON v2 requires local_bounds; v1 is rejected rather than guessing symbol geometry.
 pub const INDEX_CELL_NM: i32;                              // K12
 pub struct SpatialIndex { /* private: K12 cells, per-item bounds and generation stamp */ }
 impl SpatialIndex {                                        // D3 (T2.2); Send, not Sync
@@ -490,6 +492,12 @@ impl Connectivity {                                        // D2, INV10 (T4.1)
     pub fn rebuild<W, L, LB>(wires: W, labels: L) -> Self
         where W: IntoIterator<Item = (WireId, Wire)>,
               L: IntoIterator<Item = (LabelId, LB)>, LB: std::borrow::Borrow<Label>;
+    pub fn rebuild_with_parts<W, L, LB, P, PB>(wires: W, labels: L, parts: P) -> Self
+        where W: IntoIterator<Item = (WireId, Wire)>,
+              L: IntoIterator<Item = (LabelId, LB)>, LB: std::borrow::Borrow<Label>,
+              P: IntoIterator<Item = (PartId, PB)>, PB: AsRef<[Pt]>;
+    pub fn add_part(&mut self, id: PartId, world_pins: &[Pt]);
+    pub fn remove_part(&mut self, id: PartId) -> Option<Vec<Pt>>;
     pub fn add_wire(&mut self, id: WireId, wire: Wire);
     pub fn remove_wire(&mut self, id: WireId) -> Option<Wire>;
     pub fn add_label(&mut self, id: LabelId, label: &Label);

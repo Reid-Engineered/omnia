@@ -1,0 +1,80 @@
+     Running benches\connectivity.rs (target\release\deps\connectivity-f5c020e34a9b72ad.exe)
+Benchmarking real_10k_leaf_add
+Benchmarking real_10k_leaf_add: Warming up for 1.0000 s
+Benchmarking real_10k_leaf_add: Collecting 20 samples in estimated 2.0000 s (25M iterations)
+Benchmarking real_10k_leaf_add: Analyzing
+real_10k_leaf_add       time:   [39.659 ns 43.782 ns 47.002 ns]
+
+Benchmarking real_10k_leaf_remove
+Benchmarking real_10k_leaf_remove: Warming up for 1.0000 s
+Benchmarking real_10k_leaf_remove: Collecting 20 samples in estimated 2.0000 s (11M iterations)
+Benchmarking real_10k_leaf_remove: Analyzing
+real_10k_leaf_remove    time:   [77.836 ns 92.257 ns 104.33 ns]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+
+Benchmarking rebuild_real_10k
+Benchmarking rebuild_real_10k: Warming up for 1.0000 s
+Benchmarking rebuild_real_10k: Collecting 20 samples in estimated 2.4430 s (100 iterations)
+Benchmarking rebuild_real_10k: Analyzing
+rebuild_real_10k        time:   [35.982 ms 37.967 ms 40.163 ms]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+
+Benchmarking label_5k_gnd_vcc_bridge_add
+Benchmarking label_5k_gnd_vcc_bridge_add: Warming up for 1.0000 s
+Benchmarking label_5k_gnd_vcc_bridge_add: Collecting 20 samples in estimated 2.0305 s (5040 iterations)
+Benchmarking label_5k_gnd_vcc_bridge_add: Analyzing
+label_5k_gnd_vcc_bridge_add
+                        time:   [5.0520 µs 5.4223 µs 5.9378 µs]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+
+Benchmarking label_5k_gnd_vcc_bridge_remove
+Benchmarking label_5k_gnd_vcc_bridge_remove: Warming up for 1.0000 s
+Benchmarking label_5k_gnd_vcc_bridge_remove: Collecting 20 samples in estimated 2.0116 s (7770 iterations)
+Benchmarking label_5k_gnd_vcc_bridge_remove: Analyzing
+label_5k_gnd_vcc_bridge_remove
+                        time:   [127.73 µs 137.42 µs 151.35 µs]
+
+Benchmarking chain_20k_middle_add
+Benchmarking chain_20k_middle_add: Warming up for 1.0000 s
+Benchmarking chain_20k_middle_add: Collecting 20 samples in estimated 2.0388 s (2520 iterations)
+Benchmarking chain_20k_middle_add: Analyzing
+chain_20k_middle_add    time:   [56.118 µs 57.378 µs 58.789 µs]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+
+Benchmarking chain_20k_middle_remove
+Benchmarking chain_20k_middle_remove: Warming up for 1.0000 s
+Benchmarking chain_20k_middle_remove: Collecting 20 samples in estimated 2.1112 s (2730 iterations)
+Benchmarking chain_20k_middle_remove: Analyzing
+chain_20k_middle_remove time:   [704.82 µs 719.88 µs 736.56 µs]
+Found 1 outliers among 20 measurements (5.00%)
+  1 (5.00%) high mild
+
+     Running benches\index.rs (target\release\deps\index-101d32e0f68b536b.exe)
+Benchmarking doc_query_4k_real_10k
+Benchmarking doc_query_4k_real_10k: Warming up for 1.0000 s
+Benchmarking doc_query_4k_real_10k: Collecting 20 samples in estimated 2.0000 s (559k iterations)
+Benchmarking doc_query_4k_real_10k: Analyzing
+doc_query_4k_real_10k   time:   [4.1433 µs 4.2435 µs 4.3722 µs]
+
+Benchmarking doc_query_whole_real_10k
+Benchmarking doc_query_whole_real_10k: Warming up for 1.0000 s
+Benchmarking doc_query_whole_real_10k: Collecting 20 samples in estimated 2.0259 s (14k iterations)
+Benchmarking doc_query_whole_real_10k: Analyzing
+doc_query_whole_real_10k
+                        time:   [152.61 µs 156.89 µs 161.03 µs]
+
+Benchmarking generate_real_10k
+Benchmarking generate_real_10k: Warming up for 1.0000 s
+
+Warning: Unable to complete 20 samples in 2.0s. You may wish to increase target time to 3.7s, enable flat sampling, or reduce sample count to 10.
+Benchmarking generate_real_10k: Collecting 20 samples in estimated 3.6783 s (210 iterations)
+Benchmarking generate_real_10k: Analyzing
+generate_real_10k       time:   [17.447 ms 18.389 ms 19.610 ms]
+Found 3 outliers among 20 measurements (15.00%)
+  2 (10.00%) high mild
+  1 (5.00%) high severe
+
