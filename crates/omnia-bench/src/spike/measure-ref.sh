@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Linux reference protocol (canvas-plan.md 2.1). No build or system-setting changes.
+# Linux reference protocol (canvas-plan.md 2.1). No build changes. Only `campaign` changes a
+# system setting: it temporarily sets the eDP-1 panel scale to 125% for the 125% S1 leg and
+# restores the scale that was in effect when it started (on success, failure or signal).
 # Usage: measure-ref.sh [s1|s3|s4|s5|s6|s8|rest|all|campaign] [results] [size] [repeats]
+# A standalone `rest` run uses the three-hour fallback below only when S1_SECONDS (the S1 leg's
+# duration in seconds) is set; `campaign` sets it from the S1 leg it has just run.
 set -euo pipefail
 scene=${1:-s1}
 results=${2:-docs/measurements/T0.8}
@@ -9,12 +13,18 @@ repeats=${4:-10}
 bench=${BENCH:-./target/release/omnia-bench}
 export OMNIA_BENCH_FULLSCREEN=1
 if [[ $scene == campaign ]]; then
+    original_scale=$(kscreen-doctor --json | python3 -c '
+import json, sys
+print(next(o["scale"] for o in json.load(sys.stdin)["outputs"] if o["name"] == "eDP-1"))')
+    [[ $original_scale =~ ^[0-9]+(\.[0-9]+)?$ ]] ||
+        { echo "Unexpected eDP-1 scale: $original_scale" >&2; exit 1; }
     # The EXIT trap covers failed runs and signals as well as the successful path.
-    trap 'kscreen-doctor output.eDP-1.scale.1' EXIT
+    trap 'kscreen-doctor "output.eDP-1.scale.$original_scale"' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    s1_start=$SECONDS
     "$0" s1 "$results" 1920x1080 "$repeats"
-    "$0" rest "$results/rest" 1920x1080 "$repeats"
+    S1_SECONDS=$((SECONDS - s1_start)) "$0" rest "$results/rest" 1920x1080 "$repeats"
     "$0" s8 "$results/s8" 1920x1080 "$repeats"
     kscreen-doctor output.eDP-1.scale.1.25
     "$0" s1 "$results/s125" 1536x864 "$repeats"
@@ -75,22 +85,26 @@ for ((r=1; r<=repeats; r++)); do
 import json, sys
 report = json.load(open(sys.argv[1]))
 env = report.get('environment') or report['idle']['environment']
-assert '620' in str(env['gpu']) and 'llvmpipe' not in str(env['gpu']).lower(), env
 expected = [int(x) for x in sys.argv[2].split('x')]
 assert env['viewport_logical'] == expected, env
 assert env['fullscreen'] is True, env
-assert env['viewport_device'] == [1920, 1080], env
-assert env['scale_factor'] == (1.0 if expected == [1920, 1080] else 1.25), env
+if report['kind'] in ('run', 'spike'):
+    # A degraded run is not good data.
+    assert report['warnings'] == [], report['warnings']
+    assert report['frames']['drawn'] == report['config']['frames'], report['frames']
+if expected in ([1920, 1080], [1536, 864]):
+    # Campaign sizes run on the Orion reference panel (Q4).
+    assert '620' in str(env['gpu']) and 'llvmpipe' not in str(env['gpu']).lower(), env
+    assert env['viewport_device'] == [1920, 1080], env
+    assert env['scale_factor'] == (1.0 if expected == [1920, 1080] else 1.25), env
 PY_CHECK
     done
-    if [[ $scene == rest && $r == 1 ]]; then
+    if [[ $scene == rest && $r == 1 && -n ${S1_SECONDS:-} ]]; then
         # User-authorized fallback: keep one rest pass if the projected campaign exceeds 3 h.
-        if python3 - "$results" "$repeats" "$SECONDS" <<'PY_BUDGET'
-import datetime, json, pathlib, sys
+        if python3 - "$results" "$repeats" "$SECONDS" "$S1_SECONDS" <<'PY_BUDGET'
+import pathlib, sys
 folder, repeats, elapsed = pathlib.Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-rows = [json.loads(line) for line in (folder.parent / 'runs.jsonl').read_text().splitlines()]
-s1_seconds = (datetime.datetime.fromisoformat(rows[-1]['time']) -
-              datetime.datetime.fromisoformat(rows[0]['time'])).total_seconds()
+s1_seconds = int(sys.argv[4])
 projected = 2*s1_seconds + repeats*elapsed + 300  # both S1 scales + S8 allowance
 if projected <= 10800:
     raise SystemExit(1)
