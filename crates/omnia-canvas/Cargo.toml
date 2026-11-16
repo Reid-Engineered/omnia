@@ -8,6 +8,18 @@ publish.workspace = true
 [dependencies]
 gpui.workspace = true
 omnia-doc = { path = "../omnia-doc" }
+omnia-theme = { path = "../omnia-theme" }
 
 [dev-dependencies]
 proptest = "1"
+# Window::render_to_image and Window::set_scale_factor (G12) for the sheet render test.
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# gpui_platform defaults to headless-only on Linux unless a display backend is selected.
+gpui_platform = { workspace = true, features = ["wayland"] }
+
+[[test]]
+name = "sheet_render"
+harness = false

@@ -3516,6 +3516,9 @@ version = "0.1.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "omnia-canvas",
+ "omnia-doc",
+ "omnia-theme",
 ]
 
 [[package]]
@@ -3534,7 +3537,9 @@ name = "omnia-canvas"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "gpui_platform",
  "omnia-doc",
+ "omnia-theme",
  "proptest",
 ]
 
