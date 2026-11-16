@@ -15,6 +15,7 @@ pub mod spike;
 pub mod start;
 pub mod stats;
 pub mod sys;
+mod trace;
 
 pub use alloc::{CountingAlloc, count_allocs};
 
