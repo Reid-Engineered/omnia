@@ -3,7 +3,7 @@
 Schematic capture and simulation, in the spirit of Multisim, rebuilt for today. The app is being written in Rust with GPUI.
 This repository holds the Rust workspace (`crates/`: app shell, canvas, document model, symbols, theme and benchmarks) alongside the design work: FigCraft mockups, brand assets and the generators that build them.
 
-![Workspace · Graphite](workspace-graphite.png)
+![Workspace · Graphite](design/mockups/workspace-graphite.png)
 
 ## Contents
 
@@ -11,22 +11,28 @@ See the [project roadmap](ROADMAP.md) for the overall path from the technical fo
 
 | Path | What it is |
 | --- | --- |
-| `omnia.figcraft` | FigCraft document: Workspace, Home and First boot screens in the Graphite and Gray themes, the Mark component, and the logo and wordmark boards |
-| `*.png` | Exports of each screen and board |
+| `crates/`, `xtask/` | The Rust workspace and its build tasks (`cargo xtask tokens`, `cargo xtask symbols`) |
+| `ROADMAP.md` | Product roadmap |
+| `canvas-plan.md`, `canvas-roadmap.md` | Canvas technical plan and task list |
+| `canvas-plan-prompt.md` | Original planning brief for the infinite-canvas workspace |
+| `docs/` | Measurements, spike results and reference notes |
+| `design/omnia.figcraft` | FigCraft document: Workspace, Home and First boot screens in the Graphite and Gray themes, the Mark component, and the logo and wordmark boards. Also the source of the theme tokens |
+| `design/mockups/` | Screen exports (Workspace, Home, First boot in both themes) |
+| `design/boards/` | Logo and wordmark board exports |
+| `design/build-omnia.mjs` | Generates the screens (the FigCraft command script) |
+| `design/build-logo-*.mjs`, `design/build-wordmark*.mjs`, `design/build-brand-svg.mjs` | Generate the logo boards, the wordmark boards and the brand SVGs |
+| `design/symbols.mjs` | Loads the vendored schematic symbols and icons and places them as vector paths |
 | `brand/` | The Omnia mark, the globe-O wordmark (Asimovian) and app icons as SVG |
-| `build-omnia.mjs` | Generates the screens (the FigCraft command script) |
-| `build-logo-*.mjs`, `build-wordmark*.mjs`, `build-brand-svg.mjs` | Generate the logo boards, the wordmark boards and the brand SVGs |
-| `symbols.mjs` | Loads the vendored schematic symbols and icons and places them as vector paths |
-| `canvas-plan-prompt.md` | Planning brief for the infinite-canvas workspace (performance budgets and design requirements) |
-| `vendor/` | Third-party symbols, icons and font; see `THIRD_PARTY.md` |
+| `vendor/` | Third-party symbols, icons and fonts; see `THIRD_PARTY.md` |
 
-## Rebuilding
+## Rebuilding the design files
 
 ```sh
+cd design
 npm install
 node build-omnia.mjs          # writes capture4.json
 figcraft-cli run --in <base>.figcraft --out omnia.figcraft capture4.json   # base = a file with the Theme tokens and the Mark component
-node build-brand-svg.mjs      # rewrites brand/*.svg
+node build-brand-svg.mjs      # rewrites ../brand/*.svg
 ```
 
 ## Design

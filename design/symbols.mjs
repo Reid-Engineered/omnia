@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const DIR = fileURLToPath(new URL("./vendor/electronic-symbols/SVG/", import.meta.url));
+const DIR = fileURLToPath(new URL("../vendor/electronic-symbols/SVG/", import.meta.url));
 const cache = new Map();
 
 // ---- SVG element extraction: [{ d, filled }] ----
@@ -123,7 +123,7 @@ export function transformD(d, box) {
 }
 
 // Tabler icon (MIT) → path data placed at x,y with the given pixel size (icons are drawn on a 24 grid)
-const TABLER = fileURLToPath(new URL("./vendor/tabler-icons/outline/", import.meta.url));
+const TABLER = fileURLToPath(new URL("../vendor/tabler-icons/outline/", import.meta.url));
 export function tablerD(name, x, y, size) {
   return load(null, TABLER + name + ".svg").map(({ d }) => transformD(d, { x, y, size: (size * 150) / 24 })).join(" ");
 }
