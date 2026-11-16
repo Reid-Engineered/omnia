@@ -55,7 +55,7 @@ fn run_app(
         .unwrap_or_else(|| Err(format!("bench {what}: the app quit without a result")))
 }
 
-/// The window content for `sheet`. The empty sheet is the T0.1 view, built the same way.
+/// The window content for `sheet`. The `t01` sheet is the T0.1 view, built the same way.
 fn content(
     sheet: Sheet,
     scene: &Option<Rc<RefCell<dyn BenchScene>>>,
@@ -332,7 +332,16 @@ impl RunView {
         let on_time = sum(|r| r.frames_on_time);
         let late = sum(|r| r.frames_late);
         let unmeasured = sum(|r| r.frames_unmeasured);
-        let missed = sum(|r| r.missed_refreshes);
+        // GPUI's own count: refreshes a frame's *work* overran. Not the B3 metric.
+        let work_missed = sum(|r| r.missed_refreshes);
+        // B3/B4 (owner decision 2026-11-16, T1.6): a present interval longer than 1.5 refresh
+        // intervals is a missed refresh; B4 allows none longer than 2.5.
+        let refresh_nanos = window
+            .refresh_interval(cx)
+            .map(|interval| interval.as_nanos() as u64);
+        let over = |threshold| {
+            refresh_nanos.map(|r| stats::count_over_refreshes(&present_interval, r, threshold))
+        };
 
         let mut ours_allocs: Vec<f64> = self.allocs.iter().map(|a| a.ours_allocs as f64).collect();
         let mut total_allocs: Vec<f64> =
@@ -384,7 +393,18 @@ impl RunView {
             json!({ "ours": alloc_json(&mut ours_bytes), "total": alloc_json(&mut total_bytes) }),
         );
         metrics.insert("late_frames".into(), json!(late));
-        metrics.insert("missed_refreshes".into(), json!(missed));
+        metrics.insert("missed_refreshes".into(), json!(over(1.5)));
+        metrics.insert(
+            "present_intervals_over_2_5_refreshes".into(),
+            json!(over(2.5)),
+        );
+        metrics.insert(
+            "max_present_interval_ms".into(),
+            json!(
+                (!present_interval.is_empty()).then(|| round(present_interval.max() as f64 / 1e6))
+            ),
+        );
+        metrics.insert("work_missed_refreshes".into(), json!(work_missed));
         memory_metrics(&mut metrics);
 
         #[cfg(feature = "scene-counts")]
@@ -409,6 +429,9 @@ impl RunView {
         }
         if paint_sampling == "every-frame" && paint_samples != self.config.frames as usize {
             warnings.push(format!("sampled paint on {paint_samples} frames"));
+        }
+        if refresh_nanos.is_none() {
+            warnings.push("refresh interval unknown: missed refreshes not counted".into());
         }
         if !window.is_window_active() {
             warnings.push("window was not active: present intervals are not recorded".into());
@@ -495,6 +518,7 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct IdleConfig {
+    pub sheet: Sheet,
     pub size: (f32, f32),
     pub seconds: f64,
     /// Time allowed for start-up frames before the idle window is measured.
@@ -512,19 +536,23 @@ struct RenderEvent {
 
 type RenderLog = Rc<RefCell<Vec<RenderEvent>>>;
 
-/// The T0.1 window: the same view and window options as `omnia-app` without `--frames`.
-struct T01View {
+/// The idle window: `sheet` at rest, with the same window options as `omnia-app` without
+/// `--frames`.
+struct IdleView {
+    sheet: Sheet,
+    scene: Option<Rc<RefCell<dyn BenchScene>>>,
+    paint_time: Rc<Cell<Option<Duration>>>,
     renders: RenderLog,
 }
 
-impl Render for T01View {
+impl Render for IdleView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         self.renders.borrow_mut().push(RenderEvent {
             at: Instant::now(),
             active: window.is_window_active(),
             hovered: window.is_window_hovered(),
         });
-        div().size_full().bg(rgb(PAPER))
+        content(self.sheet, &self.scene, Camera::default(), &self.paint_time)
     }
 }
 
@@ -540,7 +568,10 @@ pub fn idle(config: IdleConfig) -> Result<Value, String> {
                 move |_window, cx| {
                     #[cfg(not(target_os = "linux"))]
                     _window.resize(size(px(config.size.0), px(config.size.1)));
-                    cx.new(|_| T01View {
+                    cx.new(|_| IdleView {
+                        sheet: config.sheet,
+                        scene: config.sheet.scene(),
+                        paint_time: Rc::new(Cell::new(None)),
                         renders: view_renders,
                     })
                 },
@@ -612,6 +643,7 @@ async fn measure_idle(
         "schema": SCHEMA,
         "kind": "idle",
         "config": {
+            "sheet": config.sheet.name(),
             "seconds": config.seconds,
             "settle_ms": config.settle.as_millis() as u64,
             "window_logical": [config.size.0, config.size.1],

@@ -48,7 +48,7 @@ for ($r = 1; $r -le $Repeats; $r++) {
         $before = Get-PowerState
         Write-Output "[$r/$Repeats] $key"
         if ($s -eq "baseline") {
-            & $Bench run --sheet empty --frames 600 --size $Size --json $json > "$json.log" 2>&1
+            & $Bench run --sheet t01 --frames 600 --size $Size --json $json > "$json.log" 2>&1
         } else {
             & $Bench spike $s --count $n --mode $m --frames 600 --size $Size --json $json > "$json.log" 2>&1
         }

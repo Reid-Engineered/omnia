@@ -3531,8 +3531,10 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "hdrhistogram",
+ "omnia-canvas",
  "omnia-doc",
  "omnia-symbols",
+ "omnia-theme",
  "resvg",
  "serde_json",
 ]

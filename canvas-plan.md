@@ -81,8 +81,8 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
 | --- | --- | --- |
 | B1 | Cold start to an interactive empty sheet < 400 ms | `bench start` |
 | B2 | Opening the 1,000-part sheet adds < 300 ms | `bench start --sheet 1k` |
-| B3 | Pan and zoom, 1,000 parts: 60 fps. p99 frame time < 16.7 ms, and median present interval ≤ one refresh | `bench run --sheet 1k --script pan` and `--script zoom` |
-| B4 | Pan and zoom, 10,000 parts and 20,000 wires: 30 fps. p99 frame time < 33.3 ms, and median present interval ≤ two refreshes | `bench run --sheet 10k --script pan` and `--script zoom` |
+| B3 | Pan and zoom, 1,000 parts: 60 fps. p99 frame time < 16.7 ms, and zero missed refreshes: no present interval longer than 1.5 refresh intervals | `bench run --sheet 1k --script pan` and `--script zoom`: `frame_ms.p99`, `missed_refreshes` |
+| B4 | Pan and zoom, 10,000 parts and 20,000 wires: 30 fps. p99 frame time < 33.3 ms, and no present interval longer than 2.5 refresh intervals (it never misses its 30 fps slot) | `bench run --sheet 10k --script pan` and `--script zoom`: `frame_ms.p99`, `present_intervals_over_2_5_refreshes` |
 | B5 | No long stalls: no frame over 33.3 ms in a B3 run, none over 50 ms in a B4 run | `max_frame_ms` in the same report |
 | B6 | A dragged part or wire is drawn in the next frame | `bench run --script drag-part` and `drag-wire`: dirty-to-present p99 ≤ one refresh interval |
 | B7 | Hit test under the cursor < 0.2 ms at 10,000 parts | `bench hit --sheet 10k` |
@@ -97,6 +97,15 @@ below 60, with p99 < 8 ms and < 16 ms). Reason: the reference machine's panel re
 and its HD 620 is GPU-bound on very large sheets. Frame time is GPUI's `work` histogram;
 present interval is the spacing of completed presents (G13). Both are CPU-side timestamps,
 not compositor scan-out times.
+
+The present-interval halves of B3 and B4 were changed by the owner on 2026-11-16 at T1.6.
+They read "median present interval ≤ one refresh" (B3) and "≤ two refreshes" (B4). Reason:
+on Orion the median of these CPU-side timestamps sits 14 to 31 µs above one 60 Hz refresh
+(16.664 ms) through jitter alone, so the old wording could never pass on a 60 Hz panel,
+while missed refreshes measure the intent directly. A present interval longer than 1.5
+refresh intervals counts as a missed refresh; `bench run` reports `missed_refreshes`,
+`present_intervals_over_2_5_refreshes` and `max_present_interval_ms`. GPUI's own count of
+refreshes that a frame's work overran is reported apart, as `work_missed_refreshes`.
 
 ## 3. Constants
 

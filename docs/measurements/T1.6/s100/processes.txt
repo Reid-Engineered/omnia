@@ -1,0 +1,210 @@
+    PID USER     COMMAND         COMMAND
+      1 root     systemd         /usr/lib/systemd/systemd --switched-root --system --deserialize=56
+      2 root     kthreadd        [kthreadd]
+      3 root     pool_workqueue_ [pool_workqueue_release]
+      4 root     kworker/R-rcu_g [kworker/R-rcu_gp]
+      5 root     kworker/R-sync_ [kworker/R-sync_wq]
+      6 root     kworker/R-kvfre [kworker/R-kvfree_rcu_reclaim]
+      7 root     kworker/R-slub_ [kworker/R-slub_flushwq]
+      8 root     kworker/R-netns [kworker/R-netns]
+     10 root     kworker/0:0H-kb [kworker/0:0H-kblockd]
+     13 root     kworker/R-mm_pe [kworker/R-mm_percpu_wq]
+     15 root     ksoftirqd/0     [ksoftirqd/0]
+     16 root     rcu_preempt     [rcu_preempt]
+     17 root     rcub/0          [rcub/0]
+     18 root     rcu_exp_par_gp_ [rcu_exp_par_gp_kthread_worker/0]
+     19 root     rcu_exp_gp_kthr [rcu_exp_gp_kthread_worker]
+     20 root     migration/0     [migration/0]
+     21 root     kprobe-optimize [kprobe-optimizer]
+     22 root     idle_inject/0   [idle_inject/0]
+     23 root     cpuhp/0         [cpuhp/0]
+     24 root     cpuhp/1         [cpuhp/1]
+     25 root     idle_inject/1   [idle_inject/1]
+     26 root     migration/1     [migration/1]
+     27 root     ksoftirqd/1     [ksoftirqd/1]
+     29 root     kworker/1:0H-i9 [kworker/1:0H-i915_cleanup]
+     30 root     cpuhp/2         [cpuhp/2]
+     31 root     idle_inject/2   [idle_inject/2]
+     32 root     migration/2     [migration/2]
+     33 root     ksoftirqd/2     [ksoftirqd/2]
+     35 root     kworker/2:0H-kb [kworker/2:0H-kblockd]
+     36 root     cpuhp/3         [cpuhp/3]
+     37 root     idle_inject/3   [idle_inject/3]
+     38 root     migration/3     [migration/3]
+     39 root     ksoftirqd/3     [ksoftirqd/3]
+     41 root     kworker/3:0H-kb [kworker/3:0H-kblockd]
+     42 root     kdevtmpfs       [kdevtmpfs]
+     43 root     kworker/R-inet_ [kworker/R-inet_frag_wq]
+     44 root     rcu_tasks_kthre [rcu_tasks_kthread]
+     45 root     rcu_tasks_rude_ [rcu_tasks_rude_kthread]
+     46 root     kauditd         [kauditd]
+     47 root     khungtaskd      [khungtaskd]
+     48 root     oom_reaper      [oom_reaper]
+     51 root     kworker/R-write [kworker/R-writeback]
+     52 root     kcompactd0      [kcompactd0]
+     53 root     ksmd            [ksmd]
+     54 root     khugepaged      [khugepaged]
+     55 root     kworker/R-kbloc [kworker/R-kblockd]
+     56 root     kworker/R-blkcg [kworker/R-blkcg_punt_bio]
+     57 root     kworker/R-kinte [kworker/R-kintegrityd]
+     58 root     irq/9-acpi      [irq/9-acpi]
+     59 root     kworker/R-tpm_d [kworker/R-tpm_dev_wq]
+     60 root     kworker/R-ata_s [kworker/R-ata_sff]
+     61 root     kworker/R-edac- [kworker/R-edac-poller]
+     62 root     kworker/R-devfr [kworker/R-devfreq_wq]
+     63 root     watchdogd       [watchdogd]
+     64 root     kworker/R-quota [kworker/R-quota_events_unbound]
+     67 root     ksgxd           [ksgxd]
+     68 root     kswapd0         [kswapd0]
+     69 root     kworker/R-kthro [kworker/R-kthrotld]
+     70 root     kworker/R-acpi_ [kworker/R-acpi_thermal_pm]
+     73 root     kworker/2:2-cgr [kworker/2:2-cgroup_free]
+     74 root     hwrng           [hwrng]
+     75 root     scsi_eh_0       [scsi_eh_0]
+     76 root     kworker/R-scsi_ [kworker/R-scsi_tmf_0]
+     77 root     scsi_eh_1       [scsi_eh_1]
+     78 root     kworker/R-scsi_ [kworker/R-scsi_tmf_1]
+     79 root     scsi_eh_2       [scsi_eh_2]
+     80 root     kworker/R-scsi_ [kworker/R-scsi_tmf_2]
+     81 root     kworker/u16:5-i [kworker/u16:5-ipv6_addrconf]
+     83 root     kworker/R-mld   [kworker/R-mld]
+     84 root     kworker/R-ipv6_ [kworker/R-ipv6_addrconf]
+     85 root     kworker/R-kstrp [kworker/R-kstrp]
+     89 root     kworker/R-zswap [kworker/R-zswap-shrink]
+     90 root     kworker/u17:0-r [kworker/u17:0-rb_allocator]
+     92 root     kworker/2:1H-i9 [kworker/2:1H-i915_cleanup]
+    145 root     kworker/0:1H-kb [kworker/0:1H-kblockd]
+    146 root     scsi_eh_3       [scsi_eh_3]
+    147 root     kworker/R-scsi_ [kworker/R-scsi_tmf_3]
+    148 root     usb-storage     [usb-storage]
+    149 root     kworker/R-uas   [kworker/R-uas]
+    154 root     kworker/1:1H-kb [kworker/1:1H-kblockd]
+    158 root     kworker/R-ktpac [kworker/R-ktpacpid]
+    172 root     kworker/R-ttm   [kworker/R-ttm]
+    173 root     jbd2/sda3-8     [jbd2/sda3-8]
+    174 root     kworker/R-ext4- [kworker/R-ext4-rsv-conversion]
+    176 root     kworker/3:1H-kb [kworker/3:1H-kblockd]
+    177 root     card1-crtc0     [card1-crtc0]
+    178 root     card1-crtc1     [card1-crtc1]
+    179 root     card1-crtc2     [card1-crtc2]
+    231 root     systemd-journal /usr/lib/systemd/systemd-journald
+    256 root     systemd-userdbd /usr/lib/systemd/systemd-userdbd
+    261 root     psimon          [psimon]
+    269 root     systemd-udevd   /usr/lib/systemd/systemd-udevd
+    271 root     psimon          [psimon]
+    324 root     irq/130-mei_me  [irq/130-mei_me]
+    340 root     kworker/R-cfg80 [kworker/R-cfg80211]
+    348 root     irq/132-iwlwifi [irq/132-iwlwifi]
+    352 root     kworker/R-USBC0 [kworker/R-USBC000:00-con1]
+    386 dbus     dbus-broker-lau /usr/bin/dbus-broker-launch --scope system --audit
+    387 dbus     dbus-broker     dbus-broker --log 10 --controller 9 --machine-id 86e3f24ad20745b595d24a9d23427f29 --max-bytes 536870912 --max-fds 4096 --max-matches 131072 --audit
+    388 root     NetworkManager  /usr/bin/NetworkManager --no-daemon
+    389 root     python3         python3 /usr/lib/python-validity/dbus-service
+    390 root     systemd-logind  /usr/lib/systemd/systemd-logind
+    431 root     tailscaled      /usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641
+    432 root     wpa_supplicant  /usr/bin/wpa_supplicant -u -s -O /run/wpa_supplicant
+    448 root     plasmalogin     /usr/bin/plasmalogin
+    454 root     psimon          [psimon]
+    567 root     open-fprintd    /usr/bin/python3 /usr/lib/open-fprintd/open-fprintd
+    587 polkitd  polkitd         /usr/lib/polkit-1/polkitd --no-debug --log-level=notice
+    626 root     upowerd         /usr/lib/upowerd
+    741 root     plasmalogin-hel /usr/lib/plasmalogin-helper --socket /tmp/plasmalogin-auth-7f007399-0871-4101-880f-23df77efed51 --id 1 --start /usr/lib/plasma-dbus-run-session-if-needed /usr/bin/startplasma-wayland --user marcus
+    751 marcus   systemd         /usr/lib/systemd/systemd --user
+    753 marcus   (sd-pam)        (sd-pam)
+    764 marcus   ksecretd        /usr/bin/ksecretd --pam-login 10 11
+    765 marcus   startplasma-way /usr/bin/startplasma-wayland
+    810 marcus   dbus-broker-lau /usr/bin/dbus-broker-launch --scope user
+    811 marcus   dbus-broker     dbus-broker --log 11 --controller 10 --machine-id 86e3f24ad20745b595d24a9d23427f29 --max-bytes 100000000000000 --max-fds 25000000000000 --max-matches 5000000000
+    820 marcus   kwin_wayland_wr /usr/bin/kwin_wayland_wrapper --xwayland
+    825 marcus   kwin_wayland    /usr/bin/kwin_wayland --wayland-fd 7 --socket wayland-0 --xwayland-fd 8 --xwayland-fd 9 --xwayland-display :0 --xwayland-xauthority /run/user/1000/xauth_LEoxOa --xwayland
+    828 marcus   baloo_file      /usr/lib/kf6/baloo_file
+    835 root     udisksd         /usr/lib/udisks2/udisksd
+    867 marcus   pipewire        /usr/bin/pipewire
+    868 marcus   wireplumber     /usr/bin/wireplumber
+    888 marcus   Xwayland        /usr/bin/Xwayland :0 -auth /run/user/1000/xauth_LEoxOa -listenfd 8 -listenfd 9 -displayfd 85 -wm 87 -rootless
+    904 marcus   at-spi-bus-laun /usr/lib/at-spi-bus-launcher
+    915 marcus   dbus-broker-lau /usr/bin/dbus-broker-launch --config-file=/usr/share/defaults/at-spi2/accessibility.conf --scope user
+    919 marcus   dbus-broker     dbus-broker --log 10 --controller 9 --machine-id 86e3f24ad20745b595d24a9d23427f29 --max-bytes 100000000000000 --max-fds 6400000 --max-matches 5000000000
+    938 marcus   ksmserver       /usr/bin/ksmserver
+    940 marcus   kded6           /usr/bin/kded6
+    951 marcus   plasmashell     /usr/bin/plasmashell --no-respawn
+    952 marcus   at-spi2-registr /usr/lib/at-spi2-registryd --use-gnome-session
+    960 marcus   pipewire-pulse  /usr/bin/pipewire-pulse
+   1000 marcus   kactivitymanage /usr/lib/kactivitymanagerd
+   1007 marcus   gmenudbusmenupr /usr/bin/gmenudbusmenuproxy
+   1009 marcus   kaccess         /usr/bin/kaccess
+   1011 marcus   polkit-kde-auth /usr/lib/polkit-kde-authentication-agent-1
+   1012 marcus   org_kde_powerde /usr/lib/org_kde_powerdevil
+   1015 marcus   xembedsniproxy  /usr/bin/xembedsniproxy
+   1023 marcus   dconf-service   /usr/lib/dconf-service
+   1086 marcus   xsettingsd      /usr/bin/xsettingsd
+   1137 marcus   kclockd         /usr/bin/kclockd
+   1139 marcus   kdeconnectd     /usr/bin/kdeconnectd
+   1148 marcus   kunifiedpush-di /usr/bin/kunifiedpush-distributor
+   1152 marcus   spotlight-runne /home/marcus/.local/bin/spotlight-runner --daemon
+   1154 marcus   xdg-desktop-por /usr/lib/xdg-desktop-portal
+   1161 marcus   DiscoverNotifie /usr/lib/DiscoverNotifier --check-delay 20
+   1163 marcus   kalendarac      /usr/bin/kalendarac
+   1192 marcus   kmix            /usr/bin/kmix --keepvisibility
+   1200 marcus   xdg-permission- /usr/lib/xdg-permission-store
+   1211 marcus   xdg-document-po /usr/lib/xdg-document-portal
+   1221 root     fusermount3     fusermount3 -o rw,nosuid,nodev,fsname=portal,auto_unmount,subtype=portal -- /run/user/1000/doc
+   1226 marcus   xdg-desktop-por /usr/lib/xdg-desktop-portal-gtk
+   1262 marcus   xdg-desktop-por /usr/lib/xdg-desktop-portal-kde
+   1331 marcus   akonadi_control /usr/bin/akonadi_control
+   1349 marcus   akonadiserver   /usr/bin/akonadiserver
+   1369 marcus   akonadi_archive /usr/bin/akonadi_archivemail_agent --identifier akonadi_archivemail_agent
+   1371 marcus   akonadi_birthda /usr/bin/akonadi_birthdays_resource --identifier akonadi_birthdays_resource
+   1372 marcus   akonadi_contact /usr/bin/akonadi_contacts_resource --identifier akonadi_contacts_resource_0
+   1373 marcus   akonadi_followu /usr/bin/akonadi_followupreminder_agent --identifier akonadi_followupreminder_agent
+   1374 marcus   akonadi_ical_re /usr/bin/akonadi_ical_resource --identifier akonadi_ical_resource_0
+   1375 marcus   akonadi_indexin /usr/bin/akonadi_indexing_agent --identifier akonadi_indexing_agent
+   1376 marcus   akonadi_maildir /usr/bin/akonadi_maildir_resource --identifier akonadi_maildir_resource_0
+   1377 marcus   akonadi_maildis /usr/bin/akonadi_maildispatcher_agent --identifier akonadi_maildispatcher_agent
+   1378 marcus   akonadi_mailfil /usr/bin/akonadi_mailfilter_agent --identifier akonadi_mailfilter_agent
+   1379 marcus   akonadi_mailmer /usr/bin/akonadi_mailmerge_agent --identifier akonadi_mailmerge_agent
+   1380 marcus   akonadi_migrati /usr/bin/akonadi_migration_agent --identifier akonadi_migration_agent
+   1381 marcus   akonadi_newmail /usr/bin/akonadi_newmailnotifier_agent --identifier akonadi_newmailnotifier_agent
+   1383 marcus   akonadi_sendlat /usr/bin/akonadi_sendlater_agent --identifier akonadi_sendlater_agent
+   1384 marcus   akonadi_unified /usr/bin/akonadi_unifiedmailbox_agent --identifier akonadi_unifiedmailbox_agent
+   2711 root     kworker/3:0-mm_ [kworker/3:0-mm_percpu_wq]
+   3237 root     kworker/2:1-mm_ [kworker/2:1-mm_percpu_wq]
+   3714 root     kworker/1:1-eve [kworker/1:1-events]
+   3884 root     kworker/u17:1-i [kworker/u17:1-i915_flip]
+   3952 root     kworker/u16:0-e [kworker/u16:0-events_unbound]
+   3959 root     kworker/0:2-cgr [kworker/0:2-cgroup_release]
+   4213 root     kworker/u16:1-f [kworker/u16:1-flush-8:0]
+   4220 root     kworker/1:0-eve [kworker/1:0-events]
+   4222 root     kworker/0:0-eve [kworker/0:0-events]
+   4288 marcus   krunner         /usr/bin/krunner --daemon
+   4354 marcus   t3code          /tmp/.mount_T3-CodPNNLkE/t3code
+   4362 marcus   T3-Code-0.1.9-x /home/marcus/Applications/T3-Code-0.1.9-x86_64.AppImage
+   4370 marcus   t3code          /tmp/.mount_T3-CodPNNLkE/t3code --type=zygote --no-zygote-sandbox
+   4371 marcus   t3code          /tmp/.mount_T3-CodPNNLkE/t3code --type=zygote
+   4373 marcus   t3code          /tmp/.mount_T3-CodPNNLkE/t3code --type=zygote
+   4407 marcus   t3code          /tmp/.mount_T3-CodPNNLkE/t3code --type=gpu-process --ozone-platform=wayland --render-node-override=/dev/dri/renderD128 --enable-crash-reporter=4a7a40c6-c677-4a6d-820d-571959ce292d,no_channel --user-data-dir=/home/marcus/.config/t3code-v2 --gpu-preferences=YAAAAAAAAAAgAQAEAAAAAAAAAAAAAGAASAAAAAAAAAABAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAMAAAAAQAAAAAAAAAAAAAACAAAAAAAAAAIAAAAAAAAAA== --shared-files --field-trial-handle=3,i,8286591554568150185,9283934511926170709,262144 --enable-features=PdfUseShowSaveFilePicker --disable-features=DropInputEventsWhilePaintHolding,LocalNetworkAccessChecks,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation --variations-seed-version --pseudonymization-salt-handle=7,i,8967175505053616469,13021955090641640617,4 --trace-process-track-uuid=3190708988185955192
+   4413 marcus   t3code          /tmp/.mount_T3-CodPNNLkE/t3code --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=none --render-node-override=/dev/dri/renderD128 --enable-crash-reporter=4a7a40c6-c677-4a6d-820d-571959ce292d,no_channel --user-data-dir=/home/marcus/.config/t3code-v2 --standard-schemes=t3code,t3code-dev,t3code --secure-schemes=t3code --cors-schemes=t3code --fetch-schemes=t3code --streaming-schemes=t3code,t3code-dev,t3code --code-cache-schemes=t3code --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8286591554568150185,9283934511926170709,262144 --enable-features=PdfUseShowSaveFilePicker --disable-features=DropInputEventsWhilePaintHolding,LocalNetworkAccessChecks,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation --variations-seed-version --pseudonymization-salt-handle=7,i,8967175505053616469,13021955090641640617,4 --trace-process-track-uuid=3190708989122997041
+   4458 marcus   t3code          /tmp/.mount_T3-CodPNNLkE/t3code --type=renderer --enable-crash-reporter=4a7a40c6-c677-4a6d-820d-571959ce292d,no_channel --user-data-dir=/home/marcus/.config/t3code-v2 --standard-schemes=t3code,t3code-dev,t3code --secure-schemes=t3code --cors-schemes=t3code --fetch-schemes=t3code --streaming-schemes=t3code,t3code-dev,t3code --code-cache-schemes=t3code --app-path=/tmp/.mount_T3-CodPNNLkE/resources/app.asar --enable-sandbox --ozone-platform=wayland --lang=en-US --num-raster-threads=2 --enable-main-frame-before-activation --renderer-client-id=4 --launch-time-ticks=6904388200 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8286591554568150185,9283934511926170709,262144 --enable-features=PdfUseShowSaveFilePicker --disable-features=DropInputEventsWhilePaintHolding,LocalNetworkAccessChecks,ScreenAIOCREnabled,SpareRendererForSitePerProcess,TraceSiteInstanceGetProcessCreation --variations-seed-version --pseudonymization-salt-handle=7,i,8967175505053616469,13021955090641640617,4 --trace-process-track-uuid=3190708990060038890
+   4487 marcus   t3code          /tmp/.mount_T3-CodPNNLkE/t3code --require /tmp/.mount_T3-CodPNNLkE/resources/app.asar/apps/desktop/dist-electron/compileCache.cjs /tmp/.mount_T3-CodPNNLkE/resources/app.asar/apps/server/dist/bin.mjs --bootstrap-fd 3
+   4641 marcus   kwalletd6       /usr/bin/kwalletd6
+   4656 marcus   t3-resource-mon /tmp/.mount_T3-CodPNNLkE/resources/resource-monitor/t3-resource-monitor
+   4751 marcus   cloudflared     /home/marcus/.t3/tools/cloudflared/2026.10.4/linux-x64/cloudflared tunnel --no-autoupdate --loglevel info --output default --metrics 127.0.0.1:0 run
+   4858 root     kworker/u16:3-e [kworker/u16:3-events_unbound]
+   5119 root     kworker/0:1     [kworker/0:1]
+   5120 root     kworker/3:1-cgr [kworker/3:1-cgroup_free]
+   5205 root     systemd-userwor systemd-userwork: waiting...
+   5206 root     systemd-userwor systemd-userwork: waiting...
+   5274 root     systemd-userwor systemd-userwork: waiting...
+   5389 marcus   kioworker       /usr/lib/kf6/kioworker /usr/lib/qt6/plugins/kf6/kio/tags.so tags  local:/run/user/1000/krunnerrSdLLO.2.kioworker.socket
+   5392 marcus   kioworker       /usr/lib/kf6/kioworker /usr/lib/qt6/plugins/kf6/kio/tags.so tags  local:/run/user/1000/spotlight-runnerkDwRdN.2.kioworker.socket
+   5393 marcus   kioworker       /usr/lib/kf6/kioworker /usr/lib/qt6/plugins/kf6/kio/tags.so tags  local:/run/user/1000/plasmashellaujonl.3.kioworker.socket
+   5874 marcus   bwrap           bwrap --unshare-all --die-with-parent --chdir / --ro-bind /usr /usr --dev /dev --ro-bind-try /etc/ld.so.cache /etc/ld.so.cache --ro-bind-try /nix/store /nix/store --tmpfs /tmp-home --tmpfs /tmp-run --clearenv --setenv HOME /tmp-home --setenv XDG_RUNTIME_DIR /tmp-run --setenv XDG_RUNTIME_DIR /run/user/1000 --symlink /usr/lib /lib64 --symlink /usr/lib /lib --ro-bind-try /etc/fonts/conf.d /etc/fonts/conf.d --ro-bind-try /etc/fonts/fonts.conf /etc/fonts/fonts.conf --ro-bind-try /home/marcus/.cache/fontconfig /home/marcus/.cache/fontconfig --ro-bind-try /var/cache/fontconfig /var/cache/fontconfig --bind-try /home/marcus/.cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg /home/marcus/.cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg --setenv XDG_CACHE_HOME /home/marcus/.cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg --seccomp 150 /usr/lib/glycin-loaders/2+/glycin-svg --dbus-fd 146
+   5875 marcus   bwrap           bwrap --unshare-all --die-with-parent --chdir / --ro-bind /usr /usr --dev /dev --ro-bind-try /etc/ld.so.cache /etc/ld.so.cache --ro-bind-try /nix/store /nix/store --tmpfs /tmp-home --tmpfs /tmp-run --clearenv --setenv HOME /tmp-home --setenv XDG_RUNTIME_DIR /tmp-run --setenv XDG_RUNTIME_DIR /run/user/1000 --symlink /usr/lib /lib64 --symlink /usr/lib /lib --ro-bind-try /etc/fonts/conf.d /etc/fonts/conf.d --ro-bind-try /etc/fonts/fonts.conf /etc/fonts/fonts.conf --ro-bind-try /home/marcus/.cache/fontconfig /home/marcus/.cache/fontconfig --ro-bind-try /var/cache/fontconfig /var/cache/fontconfig --bind-try /home/marcus/.cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg /home/marcus/.cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg --setenv XDG_CACHE_HOME /home/marcus/.cache/glycin/usr/lib/glycin-loaders/2+/glycin-svg --seccomp 150 /usr/lib/glycin-loaders/2+/glycin-svg --dbus-fd 146
+   5876 marcus   glycin-svg      /usr/lib/glycin-loaders/2+/glycin-svg --dbus-fd 146
+   5895 root     kworker/u17:2   [kworker/u17:2]
+   5896 root     kworker/1:2-eve [kworker/1:2-events]
+   5904 marcus   tailscaled      /usr/bin/tailscaled be-child ssh --login-shell=/bin/bash --uid=1000 --gid=1000 --groups=1000,998 --local-user=marcus --home-dir=/home/marcus --remote-user=marcusereid7@gmail.com --remote-ip=100.118.138.98 --has-tty=false --tty-name= --force-v1-behavior --cmd=cd ~/omnia && rm -f /tmp/t16/smoke.json && export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && kscreen-doctor --dpms on >/dev/null 2>&1; kde-inhibit --power --screenSaver /tmp/t16/gate.sh /tmp/t16/results 10 > /tmp/t16/campaign.log 2>&1; echo campaign exit $?; tail -3 /tmp/t16/campaign.log; kscreen-doctor -o | sed "s/\x1b\[[0-9;]*m//g" | grep -E "Scale|Geometry"
+   5911 marcus   bash            /bin/bash -c cd ~/omnia && rm -f /tmp/t16/smoke.json && export XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus && kscreen-doctor --dpms on >/dev/null 2>&1; kde-inhibit --power --screenSaver /tmp/t16/gate.sh /tmp/t16/results 10 > /tmp/t16/campaign.log 2>&1; echo campaign exit $?; tail -3 /tmp/t16/campaign.log; kscreen-doctor -o | sed "s/\x1b\[[0-9;]*m//g" | grep -E "Scale|Geometry"
+   5917 marcus   kde-inhibit     kde-inhibit --power --screenSaver /tmp/t16/gate.sh /tmp/t16/results 10
+   5919 marcus   bash            bash /tmp/t16/gate.sh /tmp/t16/results 10
+   5932 marcus   ps              ps -eo pid,user,comm,args --sort=pid

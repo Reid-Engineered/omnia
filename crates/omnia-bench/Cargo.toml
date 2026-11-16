@@ -21,6 +21,9 @@ gpui_platform.workspace = true
 # Same major version and features as GPUI's, so FrameDurationSnapshot's histograms are this type.
 hdrhistogram = { version = "7", default-features = false }
 serde_json = "1"
+# The real sheet element for `--sheet empty` (T1.6).
+omnia-canvas = { path = "../omnia-canvas" }
+omnia-theme = { path = "../omnia-theme" }
 
 # resvg 0.46 (Apache-2.0 OR MIT), opt-in readback/reference only; never default.
 resvg = { version = "0.46", optional = true }
