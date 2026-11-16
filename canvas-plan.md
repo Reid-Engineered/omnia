@@ -187,9 +187,12 @@ returns a `Change` that the views use to decide what to repaint.
 
 - Exact for metric and mil grids (1 mil = 25,400 nm). The ±1 m limit (K1) means the sum of
   two coordinates fits in `i32`; products use `i64`.
-- Camera is `{ center: Pt, scale: f64 }`, scale in logical px per nm (K3).
+- Camera keeps an integer `center: Pt` reference, an f64 screen translation (including
+  fractional-nm gesture movement), and scale in logical px per nm (K3).
 - World to screen: subtract the camera centre in integers, multiply in `f64`, then narrow to
-  `f32`. The `f32` therefore only holds on-screen magnitudes.
+  `f32` only at the paint boundary (`world_to_pixels`). The reversible mapping uses
+  `Point<f64>` logical pixels: f32 screen coordinates cannot preserve individual nm
+  at K3 even within a normal viewport. The `f32` only holds on-screen magnitudes.
 - Screen to world: compute in `f64`, round to the nearest nm, then snap in integers.
 
 ### D2 Document: arenas with stable ids, commands in, changes out. DECIDED
@@ -447,13 +450,18 @@ pub static GRAPHITE: Theme;
 pub static GRAY: Theme;
 
 // ---- omnia-canvas ----
-pub struct Camera { /* center: Pt, scale: f64, viewport: Bounds<Pixels> */ }
+pub struct Camera { /* center: Pt, zoom: f64, translation: Point<f64>, viewport: Bounds<Pixels> */ }
 impl Camera {
-    pub fn world_to_screen(&self, p: Pt) -> Point<Pixels>;
-    pub fn screen_to_world(&self, p: Point<Pixels>) -> Pt;
+    pub fn new(center: Pt, zoom: f64, viewport: Bounds<Pixels>) -> Self;
+    pub fn world_to_screen(&self, p: Pt) -> Point<f64>;
+    pub fn world_to_pixels(&self, p: Pt) -> Point<Pixels>; // final, lossy paint conversion
+    pub fn screen_to_world(&self, p: Point<f64>) -> Pt;   // nearest nm, clipped to K1
     pub fn visible(&self) -> Rect;
-    pub fn pan_by(&mut self, delta: Point<Pixels>);
-    pub fn zoom_about(&mut self, anchor: Point<Pixels>, factor: f64);
+    pub fn pan_by(&mut self, delta: Point<f64>);
+    pub fn zoom_about(&mut self, anchor: Point<f64>, factor: f64);
+    pub fn zoom(&self) -> f64;
+    pub fn scale(&self) -> f64;
+    pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
 pub enum Tool { Select, Wire, Place(SymbolId), Label }
 pub struct CanvasStatus { pub cursor: Pt, pub grid: i32, pub zoom: f32 }
@@ -516,6 +524,8 @@ Build-time steps:
 | `profiling`, `tracy-client` (feature `tracy`) | Spans, on the same timeline as GPUI's | MIT or Apache-2.0 |
 | `hdrhistogram` | Bench percentiles | MIT or Apache-2.0 |
 | `serde_json` | Bench JSON reports | MIT or Apache-2.0 |
+| `resvg` 0.46 (`omnia-bench` feature `readback` only, never default; GPUI already depends on it) | S3/S8 readback reference renders | Apache-2.0 OR MIT |
+| GPUI's Linux `wayland` feature, enabled by `omnia-bench` and `omnia-app` on Linux (transitive, listed below) | Wayland window backend | MIT, MIT OR Apache-2.0, or MIT OR Apache-2.0 OR Zlib |
 | `usvg`, `zip`, `serde_json`, `toml` (xtask only) | Codegen | Apache-2.0 or MIT; `zip` MIT |
 | `proptest`, `criterion`, `image` (dev only) | Property tests, micro-benchmarks, golden comparison | MIT or Apache-2.0 |
 | electronic-symbols, Tabler Icons | Symbols, icons | MIT |
@@ -528,6 +538,16 @@ through GPUI). Five "unmaintained" advisories reached through GPUI (rustybuzz, t
 zbus_names, zvariant, zvariant_derive) are ignored by id in `deny.toml` and re-checked at each
 GPUI upgrade. A dependency not in this table needs its licence recorded in the roadmap log
 before it is added.
+
+Crates the Linux `wayland` feature added to `Cargo.lock` (T0.8; licences from `cargo metadata`,
+all inside the `deny.toml` allow-list). MIT: calloop-wayland-source 0.4.1, filedescriptor
+0.8.3, is-docker 0.2.0, is-wsl 0.4.0, open 5.4.5, phf, phf_generator, phf_macros and phf_shared
+0.13.1, wayland-backend 0.3.17, wayland-client 0.31.15, wayland-cursor 0.31.14,
+wayland-protocols 0.32.13, wayland-protocols-plasma 0.3.12, wayland-protocols-wlr 0.3.12,
+wayland-scanner 0.31.11, xcursor 0.3.11, xkbcommon 0.8.0, zbus-lockstep and
+zbus-lockstep-macros 0.5.2, zbus_xml 5.2.1. MIT OR Apache-2.0: accesskit_atspi_common 0.19.1,
+accesskit_unix 0.22.1, atspi 0.29.0, atspi-common and atspi-proxies 0.13.0, downcast-rs 1.2.1,
+scoped-tls 1.0.1. MIT OR Apache-2.0 OR Zlib: xkeysym 0.2.1.
 
 GPUI pin, in `[workspace.dependencies]` only:
 

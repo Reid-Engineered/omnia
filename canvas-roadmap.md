@@ -153,7 +153,7 @@ of the `canvas` lane.
   doctored file; ten repeated `bench run` results and their spread are in
   `docs/measurements/T0.3.md`.
 
-### T0.4 Spike scenes S1 to S6 and S8 · todo
+### T0.4 Spike scenes S1 to S6 and S8 · done
 - Lane: bench · Depends: T0.3 · Read: plan section 8, G1 to G8, G12, G14, G15
 - Owns: `crates/omnia-bench/src/spike/`
 - Do: implement `bench spike s1` to `s6` and `s8` exactly as the S table describes, each
@@ -183,7 +183,7 @@ of the `canvas` lane.
   Plan A on the reference machine, set D4 to DECIDED. Otherwise set this task to
   `needs-human` and stop: no rendering task may start.
 
-### T0.8 Reference machine bring-up (Linux) · todo
+### T0.8 Reference machine bring-up (Linux) · done
 - Lane: bench · Depends: T0.4 · Read: plan sections 2.1, 4 and 8
 - Owns: `docs/measurements/T0.8.md`, `docs/measurements/T0.8/`, a POSIX copy of the spike
   measurement script, and the Linux side of `omnia-bench` features
@@ -205,7 +205,7 @@ of the `canvas` lane.
 
 ## Milestone 1: empty sheet
 
-### T1.1 Geometry · todo
+### T1.1 Geometry · done
 - Lane: doc · Depends: T0.1 · Read: D1, K1, K2
 - Owns: `crates/omnia-doc/src/geom.rs`
 - Do: `Pt`, `Rect`, `Orient` (the 8 orientations, composition, inverse), `snap_to`, and
@@ -214,7 +214,7 @@ of the `canvas` lane.
   `snap_to` is idempotent (INV9) and never moves a point more than half a step; no
   operation on in-range points overflows.
 
-### T1.2 Theme tokens · todo
+### T1.2 Theme tokens · done
 - Lane: assets · Depends: T0.1 · Read: plan section 9 (Tokens), Q2
 - Owns: `crates/omnia-theme/`, `xtask/src/tokens.rs`
 - Do: `cargo xtask tokens` reads the `Theme` collection from `omnia.figcraft` and the
@@ -225,7 +225,7 @@ of the `canvas` lane.
   tokens, in both themes; running the xtask twice gives no diff; the INV6 test passes and
   fails when a literal is planted.
 
-### T1.3 Camera · todo
+### T1.3 Camera · done
 - Lane: canvas · Depends: T1.1 · Read: D1, K3, K4, INV8
 - Owns: `crates/omnia-canvas/src/camera.rs`
 - Do: `Camera` as sketched in plan section 9, with zoom clamped to K4.
@@ -787,6 +787,32 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        skip DM update() via an early return, and events.rs:1380 drops drained
                        events when there is no input callback. Both are candidates for an
                        upstream issue at the next GPUI pin task.
+
+2026-11-14 T0.4 needs-human - Implemented S1-S6/S8; integrated landed S7 and PR #4 fixes.
+                       Read pinned GPUI 15d136bf before writing GPUI code; supplied G
+                       corrections apply. resvg 0.46.0: Apache-2.0 OR MIT, verified from
+                       Cargo.toml; optional readback, never default test-support.
+                       39 cases x three 600-frame runs at 3840x2160, 125%, 60 Hz;
+                       i7-14650HX, RTX 5060 Laptop + UHD; active Intel UHD, driver
+                       32.0.101.7088. window_min_size avoids desktop clamping. Q4:
+                       non-reference, no budget marked met. Raw results and spreads:
+                       docs/measurements/T0.4.md. Median p99: 25k quads 5.235 ms;
+                       70k 7.971 ms [7.488,18.301]; 15k sprites add 6.806 ms;
+                       inferred atlas 11.52 GB/1494 pages after two sweeps; paths
+                       4.849 us/path, 0 ours/30 total allocations; 12k glyphs add
+                       6.298 ms, zero warm paint allocations; 60k replay 75.0%.
+                       S8 GPU 4K readback works; cold median 139.318 ms, idle zero
+                       frames/0.781% CPU; visible DPI 125->100->125 recorded.
+                       G1's B10 consequence needs Q5 qualification: GPUI allocations
+                       count in total, not ours. SVG keys include both snapped
+                       dimensions despite width-only raster sizing; atlas retention
+                       and count-dependent payload are findings. Provisional numbers
+                       point to Plan C's 25k-quad row; T0.6 decides.
+                       Live 150% and no-GPU render_to_image: not measured on this
+                       machine; to do on the reference machine (Q4). No settings
+                       changed; orchestrator requested wrap-up without more movement.
+                       Standard fmt/Clippy/tests/deny and feature Clippy/release passed;
+                       S7 summariser dispatch smoke passed. No check was weakened.
 2026-11-15 Q4 answered  — owner named the Orion laptop as the reference machine: Lenovo
                        ThinkPad T470 (i5-7300U, Intel HD 620), Arch Linux on Wayland, Vulkan,
                        native 1920x1080 at 60 Hz, measured at 100% and 125%. Plan section 2.1
@@ -797,6 +823,101 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        the bench up on Orion and re-runs the spikes there; T0.6 now depends on
                        it. An S1 re-run on the ASUS under the same protocol (T0.4-ref) showed
                        T-quad passing there; it is Windows evidence, not a reference result.
+2026-11-15 T0.8 done — Orion ThinkPad T470, i5-7300U/HD 620, Arch/KDE Wayland,
+                       Mesa ANV 26.2.3; pinned GPUI uses wgpu, not blade. Enabled
+                       Linux Wayland in app/bench, gated unsupported image tests
+                       and Windows readback, added Linux process counters and a
+                       Bash reference runner. GPUI revision unchanged. G10/G12
+                       differ; G11 same; G13 common CPU stats; G16 headless lacks
+                       frame callbacks. Source lines: docs/measurements/T0.8.md.
+                       370 successful runs, ten rotating repetitions per case,
+                       740 power snapshots; AC, powersave, native 1080p/60 Hz.
+                       S1 at 100% and 125%; requested fixed S3/S4/S5/S6 and S8
+                       at 100%. 100% restored and verified. No fallback used.
+                       25k/70k draw p99 medians: 13.455/19.661 ms at 100%,
+                       13.312/19.628 ms at 125%; both T-quad limits fail.
+                       Sprite adds 15.988 ms; 12k glyphs add 16.299 ms fixed /
+                       10.765 ms direct; paths 10.771–34.000 us/path; replay
+                       49.043% of repaint. Exact 19k dirty-to-present p99
+                       13.210 ms passes GPUI's CPU submission metric only.
+                       S8 startup median 194.340 ms, idle zero frames, CPU
+                       median 0% [0,0.1]; Linux render_to_image unsupported.
+                       Numerical condition matches the Plan C row; T0.6 and
+                       owner decide. No rendering decision or threshold changed.
+                       Sleeping-panel watchdog failures and a script transition
+                       error are preserved; no completed sample was removed.
+                       fmt, workspace Clippy/tests, deny and scene-counts/readback
+                       Clippy passed on Linux. No check was weakened.
+
+2026-11-15 T1.1 done    — implemented crates/omnia-doc/src/geom.rs (wired and re-exported in
+                       crates/omnia-doc/src/lib.rs) with K1/K2 constants (SHEET_LIMIT_NM,
+                       GRID_NM, PIN_LATTICE_NM), GeomError, Pt, Rect, Orient (8 D4
+                       orientations matching symbols.mjs: X-mirror then quarter-turn CW in
+                       Y-down, with then/inverse/apply/checked_apply_around), and snap_to
+                       (round-half-away-from-zero in i64 for D4 equivariance and INV9).
+                       Checked constructors reject coordinates outside ±1,000,000,000 nm
+                       and inverted rects. Added proptest as dev-dependency in omnia-doc
+                       (already in Cargo.lock and plan section 10, MIT/Apache-2.0). Unit
+                       tests cover checked constructors, all 8 orientations on a point, and
+                       snap_to edge cases; proptest covers D4 group axioms, INV9 idempotence
+                       and half-step bound, and overflow-freedom on in-range points/rects.
+                       Checks passed: cargo fmt --all --check; cargo clippy --workspace
+                       --all-targets -- -D warnings; cargo test --workspace (37 passed: 6
+                       omnia-doc, 27+2 omnia-bench, 1 omnia-app fonts, 1 xtask INV12);
+                       cargo deny check (advisories ok, bans ok, licenses ok, sources ok).
+2026-11-15 T1.3 done    — implemented and exported Camera in omnia-canvas with K3 scale,
+                       K4 zoom clamping, anchored zoom, fractional-pixel pan, viewport
+                       resizing and conservative visible bounds clipped to K1. Mapping
+                       subtracts the integer reference in i64 before conversion (INV8).
+                       Uses Point<f64> logical pixels for reversible mapping and a separate
+                       world_to_pixels paint conversion: GPUI Pixels stores f32 and cannot
+                       retain individual nm at K3. Updated D1 and the section 9 sketch
+                       under rule 12; no tolerance or check was weakened. Read GPUI geometry
+                       at pinned 15d136b before use. Dependencies are all in plan section 10;
+                       Cargo.lock only records the canvas dependency edges. Eight camera
+                       tests include proptest across the sheet and zoom range, anchor
+                       invariance within 1 nm and exact pixel pan; edge cases cover adjacent
+                       nm at sheet limits, 5%/3200%, fractional pan, 1,000 zoom cycles,
+                       visible bounds and resize. All standard checks passed: cargo fmt
+                       --all --check; cargo clippy --workspace --all-targets -- -D warnings;
+                       cargo test --workspace (45 passed); cargo deny check (advisories,
+                       bans, licenses and sources ok; existing dependency warnings).
+2026-11-15 T1.2 done — `cargo xtask tokens` reads the `Theme` collection of omnia.figcraft
+                       (repo root; modes Graphite and Gray) and the new overlay
+                       crates/omnia-theme/canvas-tokens.toml (the Q2 default values, unchanged),
+                       and writes crates/omnia-theme/src/generated.rs: 35 colour tokens per
+                       theme, 22 from the file (its one number variable, space/rail-shell, is
+                       not a colour and is left out) and 13 from the overlay. Overlay values are
+                       hex or a token name resolved per theme, so stage/snap follows accent/mint
+                       in each; a token the file also has is taken from the file. Output is
+                       sorted and rustfmt-clean; a second run gives no diff, and an xtask test
+                       fails if generated.rs is stale. INV6 test is omnia-theme/tests/inv6.rs; a
+                       scratch run with "#2F6FEB" planted in omnia-canvas/src/lib.rs, and with
+                       gpui::rgb(..) in a nested file, failed it as expected. Dependencies: zip
+                       9 (MIT; zip 8.6 fails cargo deny on RUSTSEC-2026-0367/0368/0369/0429),
+                       serde_json, toml, all from plan section 10 and xtask only. zip adds
+                       typed-path (MIT or Apache-2.0), nix (MIT) and constant_time_eq (CC0-1.0,
+                       MIT-0 or Apache-2.0), all inside the deny allow-list. Outside the owned
+                       files: xtask/src/main.rs gains the `tokens` dispatch and
+                       .cargo/config.toml adds the `cargo xtask` alias; both are needed for the
+                       command to exist. crates/omnia-theme/.gitattributes keeps generated.rs LF
+                       on Windows checkouts.
+2026-11-15 T0.8 review fixes — measure-ref.sh restores the eDP-1 scale it found at
+                       start (header now says the campaign changes it temporarily),
+                       takes the S1 duration as S1_SECONDS instead of a parent
+                       runs.jsonl, and asserts HD 620/1080p only at campaign sizes.
+                       validate.py, summarize.py and measure-ref.sh reject runs with
+                       warnings or missing frames; recorded data passes and tables,
+                       validation.txt and thresholds.json are unchanged. S5 sweeps
+                       shape all 22 buckets on the first warm-up frame. Reports
+                       carry paint_samples/paint_sampling, warn on missed paints and
+                       mark S6 cached as sparse by design. Spike reports name the
+                       mode; s6 --mode fixed is an error. The fonts test checks TTF
+                       patching on Linux and prints an explicit render_to_image skip.
+                       CI lints omnia-bench with scene-counts,readback. resvg 0.46 and
+                       the 29 Wayland transitive crates are in plan section 10.
+                       fmt, workspace Clippy/tests, bench feature Clippy and deny pass
+                       on Linux. No measurement rerun; no check was weakened.
 2026-11-15 T0.6 done    — H1: owner relaxed B3 to 60 fps (p99 < 16.7 ms) and B4 to 30 fps
                        (p99 < 33.3 ms), both also judged on median present interval; B5 to no
                        frame over 33.3 ms (1k) / 50 ms (10k). Thresholds retuned to the plan's
@@ -806,3 +927,6 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        simplification (merge wires, drop grid, LOD boxes), direct glyph
                        emission and a visible-label cap. D4 DECIDED. Plan B stays the fallback
                        if B4 misses at T2.7. Details in docs/spike-results.md.
+                       T0.4 set to done: its open items are settled by Q4 and T0.8 (the
+                       reference runs at 100% and 125%, not 150%; render_to_image is
+                       unsupported on Linux, so goldens run on Windows).

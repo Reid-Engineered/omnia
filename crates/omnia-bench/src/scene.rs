@@ -30,6 +30,7 @@ pub enum Sheet {
     Empty,
     /// Paper, a dot grid and orthogonal wire quads that follow the camera.
     Placeholder,
+    Spike(crate::spike::Config),
 }
 
 impl Sheet {
@@ -50,6 +51,7 @@ impl Sheet {
         match self {
             Self::Empty => "empty",
             Self::Placeholder => "placeholder",
+            Self::Spike(_) => "spike",
         }
     }
 
@@ -57,6 +59,7 @@ impl Sheet {
     pub fn scene(self) -> Option<Rc<RefCell<dyn BenchScene>>> {
         match self {
             Self::Empty => None,
+            Self::Spike(config) => Some(Rc::new(RefCell::new(crate::spike::Scene::new(config)))),
             Self::Placeholder => Some(Rc::new(RefCell::new(Placeholder::new(0x0A11_CE5E)))),
         }
     }
@@ -64,6 +67,11 @@ impl Sheet {
 
 /// A scene the harness can drive. T0.4's spike scenes implement this.
 pub trait BenchScene: 'static {
+    fn after_frame(&mut self, _window: &Window) {}
+    fn details(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
     /// Paints one frame filling `bounds`. Runs inside [`ours`] within one `paint_layer`;
     /// wrap calls into GPUI in [`not_ours`] so GPUI's allocations count only in "total" (Q5).
     fn paint(&mut self, bounds: Bounds<Pixels>, camera: Camera, window: &mut Window, cx: &mut App);

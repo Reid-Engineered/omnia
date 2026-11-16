@@ -6,7 +6,7 @@
 //! creation, loading, GPUI and DirectX start-up and the first frame.
 
 use crate::compare::SCHEMA;
-use crate::harness::{READY_LINE, T01_WINDOW};
+use crate::harness::READY_LINE;
 use crate::scene::Sheet;
 use crate::stats::round;
 use serde_json::{Value, json};
@@ -19,6 +19,7 @@ const CHILD_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug)]
 pub struct StartConfig {
+    pub size: (f32, f32),
     pub sheet: Sheet,
     pub runs: u32,
 }
@@ -29,7 +30,13 @@ pub fn start(config: StartConfig) -> Result<Value, String> {
     for run in 0..config.runs {
         let begin = Instant::now();
         let mut child = Command::new(&exe)
-            .args(["start-child", "--sheet", config.sheet.name()])
+            .args([
+                "start-child",
+                "--sheet",
+                config.sheet.name(),
+                "--size",
+                &format!("{}x{}", config.size.0, config.size.1),
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -67,7 +74,7 @@ pub fn start(config: StartConfig) -> Result<Value, String> {
         "config": {
             "sheet": config.sheet.name(),
             "runs": config.runs,
-            "window_logical": [T01_WINDOW.0, T01_WINDOW.1],
+            "window_logical": [config.size.0, config.size.1],
         },
         "environment": {
             "os": std::env::consts::OS,

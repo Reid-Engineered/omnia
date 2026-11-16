@@ -1,0 +1,72 @@
+[
+  {
+    "label": "T-quad 25,000 (100%)",
+    "measured": 13.45535,
+    "limit": 3,
+    "units": "ms",
+    "outcome": "FAIL"
+  },
+  {
+    "label": "T-quad 70,000 (100%)",
+    "measured": 19.660800000000002,
+    "limit": 9,
+    "units": "ms",
+    "outcome": "FAIL"
+  },
+  {
+    "label": "T-quad 25,000 (125%)",
+    "measured": 13.312000000000001,
+    "limit": 3,
+    "units": "ms",
+    "outcome": "FAIL"
+  },
+  {
+    "label": "T-quad 70,000 (125%)",
+    "measured": 19.628,
+    "limit": 9,
+    "units": "ms",
+    "outcome": "FAIL"
+  },
+  {
+    "label": "T-sprite throughput, 15k",
+    "measured": 15.987750000000002,
+    "limit": 2,
+    "units": "ms",
+    "outcome": "FAIL"
+  },
+  {
+    "label": "T-text, 12k glyphs (fixed)",
+    "measured": 16.29905,
+    "limit": 2,
+    "units": "ms",
+    "outcome": "FAIL"
+  },
+  {
+    "label": "T-text, 12k glyphs (direct)",
+    "measured": 10.7654,
+    "limit": 2,
+    "units": "ms",
+    "outcome": "FAIL"
+  },
+  {
+    "label": "T-path, worst tested per-path median (100 paths)",
+    "measured": 34.0,
+    "limit": 3,
+    "units": "\u00b5s/path",
+    "outcome": "FAIL"
+  },
+  {
+    "label": "T-replay, 60k",
+    "measured": 49.04348122235899,
+    "limit": 40,
+    "units": "%",
+    "outcome": "FAIL"
+  },
+  {
+    "label": "T-present, exactly 19k quads including paper",
+    "measured": 13.2096,
+    "limit": 16.66444474070124,
+    "units": "ms",
+    "outcome": "PASS"
+  }
+]

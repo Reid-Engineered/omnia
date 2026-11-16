@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "config": {
+    "scene": "s8",
+    "count": 0,
+    "mode": 0,
+    "reference_machine": false
+  },
+  "kind": "spike-readback",
+  "spike": {
+    "scene": "s8",
+    "count": 0,
+    "mode": 0,
+    "reference_machine": false
+  },
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) UHD Graphics",
+      "driver_name": "Intel Corporation",
+      "driver_info": "32.0.101.7088"
+    },
+    "os": "windows",
+    "arch": "x86_64",
+    "logical_cpus": 24,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      3072.0,
+      1728.0
+    ],
+    "viewport_device": [
+      3840.0,
+      2160.0
+    ],
+    "refresh_hz": 60.0
+  },
+  "image": "target/spike-s8.png",
+  "metrics": {
+    "first_draw_ms": 131.46089999999998,
+    "private_mb": 160.55078125,
+    "image_width": 3840,
+    "image_height": 2160
+  },
+  "limitations": [
+    "no-GPU readback requires a separate host; live monitor changes are recorded by s8 --mode monitors"
+  ],
+  "start": {
+    "schema": 1,
+    "kind": "start",
+    "config": {
+      "sheet": "empty",
+      "runs": 10,
+      "window_logical": [
+        3072.0,
+        1728.0
+      ]
+    },
+    "environment": {
+      "os": "windows",
+      "arch": "x86_64",
+      "logical_cpus": 24
+    },
+    "samples_ms": [
+      148.7244,
+      138.1019,
+      138.4633,
+      141.8394,
+      140.167,
+      137.1097,
+      138.968,
+      139.6676,
+      154.9695,
+      138.8315
+    ],
+    "metrics": {
+      "start_ms": {
+        "median": 139.3178,
+        "max": 154.9695
+      }
+    }
+  },
+  "idle": {
+    "schema": 1,
+    "kind": "idle",
+    "config": {
+      "seconds": 10.0,
+      "settle_ms": 1000,
+      "window_logical": [
+        3072.0,
+        1728.0
+      ]
+    },
+    "environment": {
+      "gpu": {
+        "is_software_emulated": false,
+        "device_name": "Intel(R) UHD Graphics",
+        "driver_name": "Intel Corporation",
+        "driver_info": "32.0.101.7088"
+      },
+      "os": "windows",
+      "arch": "x86_64",
+      "logical_cpus": 24,
+      "scale_factor": 1.25,
+      "viewport_logical": [
+        3072.0,
+        1728.0
+      ],
+      "viewport_device": [
+        3840.0,
+        2160.0
+      ],
+      "refresh_hz": 60.0
+    },
+    "startup": {
+      "frames": 2,
+      "renders": 2
+    },
+    "measured_s": 10.0029,
+    "measured_renders": [],
+    "metrics": {
+      "frames": 0,
+      "renders": 0,
+      "cpu_percent": 0.781,
+      "memory_mb": 95.7813,
+      "working_set_mb": 97.8828,
+      "heap_peak_mb": 6.896
+    }
+  }
+}

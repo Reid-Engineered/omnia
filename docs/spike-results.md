@@ -10,7 +10,7 @@ Reference machine (Q4, plan section 2.1): Orion, Lenovo ThinkPad T470, Intel Cor
 (2 cores / 4 threads), Intel HD Graphics 620 through Mesa ANV Vulkan 26.2.3 (GPUI's wgpu
 renderer), Arch Linux, KDE Plasma on Wayland, native 1920x1080 at 60 Hz, 100% scaling (S1 also
 at 125%), on AC. Ten interleaved repetitions per case, 600 measured frames each.
-Raw data and method: `docs/measurements/T0.8.md` (branch `task/T0.8-linux-bringup`).
+Raw data and method: `docs/measurements/T0.8.md`.
 
 ## Budget change (owner decision)
 

@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "config": {
+    "scene": "s3",
+    "count": 240,
+    "mode": 4,
+    "reference_machine": false
+  },
+  "kind": "spike-readback",
+  "spike": {
+    "scene": "s3",
+    "count": 240,
+    "mode": 4,
+    "reference_machine": false
+  },
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) UHD Graphics",
+      "driver_name": "Intel Corporation",
+      "driver_info": "32.0.101.7088"
+    },
+    "os": "windows",
+    "arch": "x86_64",
+    "logical_cpus": 24,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1024.0,
+      960.0
+    ],
+    "viewport_device": [
+      1280.0,
+      1200.0
+    ],
+    "refresh_hz": 60.0
+  },
+  "image": "target/spike-s3.png",
+  "metrics": {
+    "first_draw_ms": 140.922,
+    "private_mb": 82.32421875,
+    "image_width": 1280,
+    "image_height": 1200,
+    "changed_pixels_gt_2": 38251,
+    "ink_pixels": 89357,
+    "changed_fraction_of_ink": 0.4280694293675929,
+    "absolute_channel_error": 474420
+  },
+  "limitations": [
+    "no-GPU readback requires a separate host; live monitor changes are recorded by s8 --mode monitors"
+  ],
+  "orientation_columns": [
+    "ink_union",
+    "changed_gt_2",
+    "gpui_antialiased",
+    "reference_antialiased"
+  ],
+  "by_orientation": [
+    [
+      11170,
+      4774,
+      5125,
+      4094
+    ],
+    [
+      11169,
+      4773,
+      5125,
+      4094
+    ],
+    [
+      11169,
+      4793,
+      5125,
+      4087
+    ],
+    [
+      11171,
+      4786,
+      5125,
+      4092
+    ],
+    [
+      11170,
+      4766,
+      5125,
+      4089
+    ],
+    [
+      11168,
+      4772,
+      5125,
+      4088
+    ],
+    [
+      11169,
+      4805,
+      5125,
+      4092
+    ],
+    [
+      11171,
+      4782,
+      5125,
+      4094
+    ]
+  ]
+}

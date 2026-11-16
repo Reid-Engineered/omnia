@@ -1,0 +1,125 @@
+{
+  "schema": 1,
+  "kind": "run",
+  "config": {
+    "sheet": "empty",
+    "script": "pan",
+    "frames": 120,
+    "warmup": 60,
+    "window_logical": [
+      1920.0,
+      1080.0
+    ],
+    "scene_counts": true
+  },
+  "scene_details": null,
+  "spike": null,
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) HD Graphics 620 (KBL GT2)",
+      "driver_name": "Intel open-source Mesa driver",
+      "driver_info": "Mesa 26.2.3-arch1.1"
+    },
+    "os": "linux",
+    "arch": "x86_64",
+    "logical_cpus": 4,
+    "scale_factor": 1.0,
+    "viewport_logical": [
+      1920.0,
+      1080.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 60.008
+  },
+  "frames": {
+    "drawn": 120,
+    "on_time": 120,
+    "late": 0,
+    "unmeasured": 0,
+    "wall_s": 3.7637
+  },
+  "warnings": [],
+  "metrics": {
+    "frame_ms": {
+      "mean": 0.0758,
+      "p50": 0.0627,
+      "p95": 0.092,
+      "p99": 0.1292,
+      "max": 1.2995
+    },
+    "draw_ms": {
+      "mean": 0.0659,
+      "p50": 0.0528,
+      "p95": 0.0796,
+      "p99": 0.1198,
+      "max": 1.2872
+    },
+    "dirty_to_present_ms": {
+      "mean": 1.8856,
+      "p50": 2.0961,
+      "p95": 2.8856,
+      "p99": 4.0202,
+      "max": 4.5384
+    },
+    "present_interval_ms": {
+      "mean": 16.7041,
+      "p50": 16.638,
+      "p95": 18.4975,
+      "p99": 19.7427,
+      "max": 19.841
+    },
+    "allocs_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 213.5333,
+        "p50": 214.0,
+        "p95": 214.0,
+        "p99": 214.0,
+        "max": 215.0
+      }
+    },
+    "alloc_bytes_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 25292.0,
+        "p50": 25264.0,
+        "p95": 25264.0,
+        "p99": 27312.0,
+        "max": 29312.0
+      }
+    },
+    "late_frames": 0,
+    "missed_refreshes": 0,
+    "memory_mb": 57.3594,
+    "working_set_mb": 101.7266,
+    "heap_peak_mb": 10.965,
+    "primitives": {
+      "shadows": 0,
+      "quads": 1,
+      "paths": 0,
+      "underlines": 0,
+      "monochrome_sprites": 0,
+      "subpixel_sprites": 0,
+      "polychrome_sprites": 0,
+      "surfaces": 0,
+      "batches": 1,
+      "paint_operations": 1
+    }
+  }
+}

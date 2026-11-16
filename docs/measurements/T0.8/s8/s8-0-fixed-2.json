@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "kind": "spike-platform-support",
+  "spike": {
+    "scene": "s8",
+    "count": 0,
+    "mode": 0,
+    "reference_machine": false
+  },
+  "readback": {
+    "supported": false,
+    "reason": "Pinned GPUI Linux PlatformWindow does not implement render_to_image"
+  },
+  "start": {
+    "schema": 1,
+    "kind": "start",
+    "config": {
+      "sheet": "empty",
+      "runs": 10,
+      "window_logical": [
+        1920.0,
+        1080.0
+      ]
+    },
+    "environment": {
+      "os": "linux",
+      "arch": "x86_64",
+      "logical_cpus": 4
+    },
+    "samples_ms": [
+      192.8614,
+      234.6652,
+      209.45,
+      203.9965,
+      219.5591,
+      208.476,
+      209.1782,
+      212.9104,
+      205.0826,
+      217.1711
+    ],
+    "metrics": {
+      "start_ms": {
+        "median": 209.3141,
+        "max": 234.6652
+      }
+    }
+  },
+  "idle": {
+    "schema": 1,
+    "kind": "idle",
+    "config": {
+      "seconds": 10.0,
+      "settle_ms": 1000,
+      "window_logical": [
+        1920.0,
+        1080.0
+      ]
+    },
+    "environment": {
+      "gpu": {
+        "is_software_emulated": false,
+        "device_name": "Intel(R) HD Graphics 620 (KBL GT2)",
+        "driver_name": "Intel open-source Mesa driver",
+        "driver_info": "Mesa 26.2.3-arch1.1"
+      },
+      "fullscreen": true,
+      "os": "linux",
+      "arch": "x86_64",
+      "logical_cpus": 4,
+      "scale_factor": 1.0,
+      "viewport_logical": [
+        1920.0,
+        1080.0
+      ],
+      "viewport_device": [
+        1920.0,
+        1080.0
+      ],
+      "refresh_hz": 60.008
+    },
+    "startup": {
+      "frames": 5,
+      "renders": 5
+    },
+    "measured_s": 10.0005,
+    "measured_renders": [],
+    "metrics": {
+      "frames": 0,
+      "renders": 0,
+      "cpu_percent": 0.0,
+      "memory_mb": 45.4492,
+      "working_set_mb": 92.2539,
+      "heap_peak_mb": 9.9134
+    }
+  }
+}
