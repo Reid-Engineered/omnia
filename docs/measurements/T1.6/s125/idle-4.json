@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "kind": "idle",
+  "config": {
+    "sheet": "empty",
+    "seconds": 10.0,
+    "settle_ms": 1000,
+    "window_logical": [
+      1536.0,
+      864.0
+    ]
+  },
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) HD Graphics 620 (KBL GT2)",
+      "driver_name": "Intel open-source Mesa driver",
+      "driver_info": "Mesa 26.2.3-arch1.1"
+    },
+    "fullscreen": true,
+    "os": "linux",
+    "arch": "x86_64",
+    "logical_cpus": 4,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 60.008
+  },
+  "startup": {
+    "frames": 5,
+    "renders": 5
+  },
+  "measured_s": 10.0005,
+  "measured_renders": [],
+  "metrics": {
+    "frames": 0,
+    "renders": 0,
+    "cpu_percent": 0.0,
+    "memory_mb": 47.4336,
+    "working_set_mb": 95.7031,
+    "heap_peak_mb": 11.8627
+  }
+}

@@ -253,7 +253,7 @@ of the `canvas` lane.
 - Done when: simulated-input tests show the world point under the cursor fixed across a
   zoom, and a status update notifies neither `SheetView` nor the window root.
 
-### T1.6 Gate: milestone 1 · doing
+### T1.6 Gate: milestone 1 · needs-human
 - Lane: bench · Depends: T1.5
 - Do: run and record:
 
@@ -1066,3 +1066,22 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        T2.3, T1.2, T0.4). The window tests (fonts, sheet_render) are separate
                        harness = false binaries that cargo runs one after another, so they
                        do not open windows in parallel with each other.
+2026-11-16 T1.6 needs-human — Milestone-1 gate on Orion (HD 620, Mesa ANV 26.2.3, not
+                       llvmpipe; full-screen 1920x1080 at 60.008 Hz, at 100% and 125%; AC;
+                       governor powersave; no power profile available), commit 20d9f9e,
+                       10 interleaved repetitions per case. Medians of run values:
+                       B1 start 198.1 / 192.2 ms (< 400): PASS. B3 frame p99 pan 3.734 /
+                       2.554 ms, zoom 3.637 / 2.355 ms (< 16.7): PASS. B8 idle 0 frames in
+                       every run: PASS. B10 allocs_per_frame.ours 0 in all 40 runs: PASS.
+                       Plan B3's second clause, median present interval <= one refresh
+                       (16.664 ms), is 16.679 to 16.695 ms: 14 to 31 us over, FAIL if read
+                       strictly. 0 late frames and 0 missed refreshes, 60.0 fps wall time;
+                       CPU-side timestamp jitter (G13). Not rounded away (rule 3); the owner
+                       decides the reading. Protocol gap: T3 Code desktop app and other user
+                       apps were running (not closed over SSH); the bench window was active
+                       in every run. Bench changes (lane bench): `--sheet empty` now paints
+                       omnia-canvas SheetView via paint_quads (T0.1 window kept as
+                       `--sheet t01`, spike scripts' baseline updated); new `--script zoom`
+                       (K4 sweep, geometric, about centre, 600-frame cycle); `idle --sheet`.
+                       New deps of omnia-bench are workspace crates only. Numbers, rerun
+                       steps and the two human actions: docs/measurements/T1.6.md.
