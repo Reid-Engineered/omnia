@@ -57,7 +57,8 @@ impl Config {
             4 => &["fixed"],
             8 => &["fixed", "monitors", "displays"],
             5 => &["fixed", "sweep", "direct", "direct-sweep"],
-            6 => &["fixed", "repaint", "cached"],
+            // S6 compares a cached sheet with a repainted one; it has no fixed mode.
+            6 => &["repaint", "cached"],
             _ => unreachable!(),
         };
         if !allowed.contains(&mode) {
@@ -78,8 +79,28 @@ impl Config {
         };
         Ok(Self { scene, count, mode })
     }
+    /// The mode's command-line name. Codes are shared between scenes (0 is `fixed`, `square`
+    /// or `repaint`), so reports name the mode rather than its code.
+    pub fn mode_name(self) -> &'static str {
+        match (self.scene, self.mode) {
+            (2, 0) => "square",
+            (6, 0) => "repaint",
+            (_, 0) => "fixed",
+            (2, 1) => "rounded",
+            (6, 1) => "cached",
+            (_, 1) => "sweep",
+            (2, 2) => "sprite",
+            (_, 2) => "direct",
+            (1, 3) => "quads-only",
+            (_, 3) => "direct-sweep",
+            (_, 4) => "quality",
+            (_, 5) => "monitors",
+            (_, 6) => "displays",
+            _ => "unknown",
+        }
+    }
     pub fn json(self) -> Value {
-        json!({"scene":format!("s{}",self.scene),"count":self.count,"mode":self.mode,"reference_machine":false})
+        json!({"scene":format!("s{}",self.scene),"count":self.count,"mode":self.mode_name(),"reference_machine":false})
     }
     /// Whether the mode sweeps the S3 raster or S5 text size buckets.
     fn sweeps(self) -> bool {
@@ -537,9 +558,32 @@ mod tests {
     #[test]
     fn rejects_irrelevant_modes_and_oversized_loads() {
         assert!(Config::parse("s1", 5000, "direct").is_err());
+        assert!(Config::parse("s6", 20000, "fixed").is_err());
         assert!(Config::parse("s8", 100, "fixed").is_err());
         assert!(Config::parse("s3", 100001, "fixed").is_err());
         assert_eq!(Config::parse("s5", 0, "sweep").unwrap().count, 2000);
+    }
+    #[test]
+    fn reports_name_the_mode() {
+        for (scene, modes) in [
+            ("s1", &["fixed", "quads-only"][..]),
+            ("s2", &["square", "rounded", "sprite"]),
+            ("s3", &["fixed", "sweep", "quality"]),
+            ("s4", &["fixed"]),
+            ("s5", &["fixed", "sweep", "direct", "direct-sweep"]),
+            ("s6", &["repaint", "cached"]),
+            ("s8", &["fixed", "monitors", "displays"]),
+        ] {
+            for mode in modes {
+                let config = Config::parse(scene, 0, mode).unwrap();
+                assert_eq!(config.json()["mode"], *mode, "{scene} {mode}");
+            }
+        }
+        // `fixed` is S2's default and paints squares.
+        assert_eq!(
+            Config::parse("s2", 0, "fixed").unwrap().mode_name(),
+            "square"
+        );
     }
     #[test]
     fn s5_shapes_every_painted_bucket_before_the_first_measured_frame() {

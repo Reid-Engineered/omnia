@@ -60,7 +60,7 @@ for key,r in sorted(reports.items()):
 out+=["","## Atlas sweeps","","| Probe/run | First sweep pages / MB | Second sweep pages / MB | Cold first-use max paint ms |",
 "|---|---:|---:|---:|"]
 for key,r in sorted(reports.items()):
-    if (r.get("spike") or {}).get("scene") not in ("s3","s5") or (r.get("spike") or {}).get("mode") not in (1,3): continue
+    if (r.get("spike") or {}).get("scene") not in ("s3","s5") or (r.get("spike") or {}).get("mode") not in (1,3,"sweep","direct-sweep"): continue  # codes before T0.8 review
     scene=r["spike"]["scene"]
     log=r["scene_details"]["atlas"]
     period=312 if scene=="s3" else 220
