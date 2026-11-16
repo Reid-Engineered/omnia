@@ -18,9 +18,24 @@ macro_rules! id {
 id!(PartId, u32);
 id!(WireId, u32);
 id!(LabelId, u32);
-/// Document-side symbol key; symbol definitions are supplied by T2.3.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Key of a symbol definition. The definitions live in `omnia-symbols`, which re-exports this
+/// type; it is defined here because `omnia-symbols` depends on `omnia-doc` for geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SymbolId(pub u16);
+
+impl SymbolId {
+    /// Returns the zero-based index of this symbol in the library.
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// Returns the raw numeric identifier.
+    #[inline]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ItemId {

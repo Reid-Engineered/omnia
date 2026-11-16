@@ -1,0 +1,2 @@
+# generated.rs is written with LF by `cargo xtask symbols`; keep it LF on checkout too.
+src/generated.rs text eol=lf

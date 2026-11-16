@@ -287,7 +287,7 @@ of the `canvas` lane.
   rectangles; `query` allocates nothing when `out` has capacity; a criterion bench records
   the time to query a 4K viewport on the 10,000-part sheet.
 
-### T2.3 Symbol compiler · todo
+### T2.3 Symbol compiler · done
 - Lane: assets · Depends: T0.1, T1.1 · Read: plan section 9 (Symbols), K2, K7
 - Owns: `crates/omnia-symbols/`, `xtask/src/symbols.rs`
 - Do: `cargo xtask symbols` turns the SVGs named in `pins.toml` into `SymbolDef`s. Write
@@ -951,3 +951,29 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        --all-targets -- -D warnings; cargo test --workspace (12 omnia-doc tests,
                        including property tests, and xtask INV12); cargo deny check (existing
                        dependency warnings only; advisories/bans/licenses/sources all pass).
+2026-11-16 T2.3 done    — `cargo xtask symbols` (xtask/src/symbols.rs, wired in xtask/src/main.rs)
+                       parses crates/omnia-symbols/pins.toml and vendor/electronic-symbols/SVG/
+                       with usvg 0.46, verifies every pin lands on the 1.27 mm (PIN_LATTICE_NM)
+                       lattice and inside K1 bounds, snaps open stroked lead ends within 1.0
+                       box unit of declared pins while preserving axis-aligned lead stubs, and
+                       writes deterministic rustfmt-clean statics to
+                       crates/omnia-symbols/src/generated.rs (crates/omnia-symbols/.gitattributes
+                       keeps LF on Windows). pins.toml defines the six mockup symbols at K7
+                       placed sizes: Resistor-IEEE-Standard, Resistor-IEEE-Potentiometer,
+                       Capacitor-IEEE-NonPolarized and Diode-COM-Standard at 80 px, IC-COM-OpAmp
+                       at 180 px (pins 3/2/1/8/4 matching symbols.mjs), and Ground-COM-General at
+                       48 px with anchor = [75.0, 0.0] so its pin stays at Pt::ZERO on the K2
+                       lattice under any Orient. crates/omnia-symbols/src/lib.rs defines
+                       SymbolId, Pin, LineCap, LineJoin, ArtPath, SymbolArt::write_svg,
+                       SymbolDef and SymbolLibrary. Dependencies: omnia-doc in omnia-symbols and
+                       xtask, usvg 0.46 in xtask, resvg 0.46 in omnia-symbols dev-dependencies;
+                       usvg/resvg are already in plan section 10 and Cargo.lock (zero new
+                       crates added; INV12 holds). Integration tests (omnia-symbols/tests/symbols.rs)
+                       verify library lookup, K2 lattice and symbols.mjs pinAt correspondence
+                       across all 8 orientations, and resvg pixel diff < 1% against vendor SVGs
+                       at 150 px and placed 100% sizes plus widened stroke renders; xtask tests
+                       verify idempotent generated.rs, off-lattice rejection, and compilation of
+                       all 116 vendored SVGs. Standard checks passed on Windows 11 x64 dev
+                       machine: cargo fmt --all --check; cargo clippy --workspace --all-targets
+                       -- -D warnings; cargo test --workspace (65 passed); cargo deny check
+                       (advisories, bans, licenses, sources ok); cargo xtask symbols (up to date).
