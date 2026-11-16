@@ -1,0 +1,84 @@
+ Downloading crates ...
+  Downloaded constant_time_eq v0.6.1
+  Downloaded typed-path v0.13.0
+  Downloaded zip v9.6.0
+    Checking bitflags v2.13.2
+    Checking zlib-rs v0.6.8
+   Compiling typeid v1.0.3
+    Checking zeroize v1.9.1
+    Checking rustix v1.1.6
+    Checking rustybuzz v0.20.1
+    Checking ron v0.12.3
+    Checking flate2 v1.1.11
+    Checking omnia-doc v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-doc)
+    Checking png v0.17.16
+    Checking usvg v0.46.0
+    Checking spirv v0.4.0+sdk-1.4.341.0
+    Checking tiny-skia v0.11.4
+    Checking wgpu-types v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+    Checking naga v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+    Checking resvg v0.46.0
+    Checking tiff v0.11.3
+    Checking polling v3.11.0
+    Checking async-io v2.6.0
+    Checking async-signal v0.2.14
+    Checking async-process v2.5.0
+    Checking tempfile v3.27.0
+    Checking wayland-backend v0.3.17
+    Checking rusty-fork v0.3.1
+    Checking proptest v1.12.0
+    Checking zbus v5.19.0
+    Checking wayland-client v0.31.15
+    Checking wayland-protocols v0.32.13
+    Checking png v0.18.1
+    Checking image v0.25.10
+    Checking wgpu-naga-bridge v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+    Checking wgpu-hal v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+    Checking cipher v0.4.4
+    Checking atspi-common v0.13.0
+    Checking gpui v0.2.2 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+    Checking zruntime v0.2.3
+    Checking harfrust v0.5.2
+    Checking wgpu-core-deps-linux-android-bsd v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+    Checking wgpu-core v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+    Checking atspi-proxies v0.13.0
+    Checking cosmic-text v0.19.0
+    Checking zed-font-kit v0.14.1-zed (https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269#94b0f281)
+    Checking atspi v0.29.0
+    Checking zbus v6.3.0
+    Checking accesskit_atspi_common v0.19.1
+    Checking ashpd v0.13.13
+    Checking num-bigint-dig v0.9.1
+    Checking wgpu v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+    Checking aes v0.8.4
+    Checking cbc v0.1.2
+    Checking async-net v2.0.0
+    Checking calloop v0.14.5
+    Checking omnia-theme v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-theme)
+    Checking wayland-cursor v0.31.14
+    Checking oo7 v0.6.0 (https://github.com/zed-industries/oo7?rev=731c1215edb6905876c6137ab300428c7b8d7c13#731c1215)
+    Checking calloop-wayland-source v0.4.1
+    Checking smol v2.0.2
+    Checking accesskit_unix v0.22.1
+    Checking notify-rust v4.19.0
+    Checking wayland-protocols-plasma v0.3.12
+    Checking wayland-protocols-wlr v0.3.12
+   Compiling rustversion v1.0.23
+    Checking omnia-symbols v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-symbols)
+    Checking criterion v0.8.2
+   Compiling constant_time_eq v0.6.1
+    Checking toml_parser v1.1.5+spec-1.1.0
+    Checking serde_spanned v1.1.3
+    Checking toml_datetime v1.1.3+spec-1.1.0
+    Checking typed-path v0.13.0
+    Checking toml_writer v1.2.0+spec-1.1.0
+    Checking toml v1.2.1+spec-1.1.0
+    Checking gpui_wgpu v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+    Checking omnia-canvas v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-canvas)
+    Checking zip v9.6.0
+    Checking gpui_linux v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+    Checking xtask v0.1.0 (/home/marcus/t16-present-debug-20261116/source/xtask)
+    Checking gpui_platform v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+    Checking omnia-app v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-app)
+    Checking omnia-bench v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-bench)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 42.97s

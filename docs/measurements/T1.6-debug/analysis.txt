@@ -1,0 +1,14 @@
+pan-1-trace0-warm60.json misses 0 max_ms 18.5958
+pan-2-trace1-warm60.json misses 0 max_ms 20.48
+  frame 76 measured_index 16 interval_ms 20.47501 phases_ms {'since_previous_present_to_draw': 12.883541, 'draw': 4.744094, 'draw_end_to_present_start': 0.075026, 'platform_present': 2.772349} signal_to_draw_ms 0.033076
+pan-3-trace1-warm60.json misses 0 max_ms 22.2822
+  frame 364 measured_index 304 interval_ms 22.274878 phases_ms {'since_previous_present_to_draw': 12.002674, 'draw': 1.946073, 'draw_end_to_present_start': 0.011191, 'platform_present': 8.31494} signal_to_draw_ms 0.033868
+pan-4-trace1-warm60.json misses 0 max_ms 21.3484
+  frame 363 measured_index 303 interval_ms 21.340787 phases_ms {'since_previous_present_to_draw': 12.727567, 'draw': 1.863177, 'draw_end_to_present_start': 0.010652, 'platform_present': 6.739391} signal_to_draw_ms 0.028959
+pan-5-trace1-warm60.json misses 0 max_ms 21.9382
+  frame 364 measured_index 304 interval_ms 21.928014 phases_ms {'since_previous_present_to_draw': 12.934645, 'draw': 1.875, 'draw_end_to_present_start': 0.009965, 'platform_present': 7.108404} signal_to_draw_ms 0.030694
+pan-6-trace1-warm600.json misses 0 max_ms 22.9376
+  frame 964 measured_index 364 interval_ms 22.9361 phases_ms {'since_previous_present_to_draw': 14.427403, 'draw': 1.836787, 'draw_end_to_present_start': 0.009951, 'platform_present': 6.661959} signal_to_draw_ms 0.036305
+pan-7-trace1-warm600.json misses 0 max_ms 21.9054
+  frame 665 measured_index 65 interval_ms 21.901791 phases_ms {'since_previous_present_to_draw': 12.885729, 'draw': 1.770291, 'draw_end_to_present_start': 0.009987, 'platform_present': 7.235784} signal_to_draw_ms 0.054601
+pan-8-trace0-warm60.json misses 0 max_ms 20.7421

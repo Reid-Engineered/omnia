@@ -1,0 +1,6 @@
+   Compiling omnia-doc v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-doc)
+   Compiling omnia-theme v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-theme)
+   Compiling omnia-canvas v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-canvas)
+   Compiling omnia-symbols v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-symbols)
+   Compiling omnia-bench v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-bench)
+    Finished `release` profile [optimized] target(s) in 16.49s
