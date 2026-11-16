@@ -298,7 +298,7 @@ of the `canvas` lane.
   `write_svg` at the original stroke matches the vendor SVG when both are rasterised with
   resvg (difference under 1% of pixels); pin positions match `pinAt` in `symbols.mjs`.
 
-### T2.4 Stress sheets, save and load · todo
+### T2.4 Stress sheets, save and load · doing
 - Lane: bench (generator), doc (save and load) · Depends: T2.1, T2.3
 - Owns: `crates/omnia-bench/src/generate.rs`, `crates/omnia-doc/src/io.rs`
 - Do: seeded generators for the five `StressSheet`s; `10k` has exactly 10,000 parts and
@@ -1098,3 +1098,36 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        measurements file, all named by this task's Done-when line. During the
                        run C: hit 0 bytes free once (cause not checked); it cleared
                        without action from this task.
+
+2026-11-16 T2.4 doing — Seeded five StressSheets in omnia-bench/src/generate.rs (SplitMix64);
+                       10k exactly 10,000 parts / 20,000 wires; dense 1,000 / 12,000;
+                       text 1,000 / 2,000 with 12,000 designator/value characters. All use
+                       built-in symbol pins, eight orientations and K2-lattice placement.
+                       Wires are unit lattice segments, avoiding ends on interiors (INV2).
+                       io.rs adds version-1 RON save/load, preserving reserved slots, revision
+                       and local pin geometry; load uses validated inserts to rebuild incidence.
+                       Doc equality compares authoritative state. Public Doc::from_items is a
+                       validated bulk constructor; raw insert methods remain crate-private.
+                       Minimal supporting changes explicitly approved by owner: arena.rs slots
+                       made crate-visible for stable-ID save/load; doc.rs declares io as a child
+                       module for private store access and removes obsolete dead_code expects
+                       from the three now-used insert methods. No other doc internals changed.
+                       Plan section 9 updated: new/load signatures reflect GPUI-independent
+                       self-contained pin geometry (avoids a symbols/doc dependency cycle),
+                       from_items signature, workload counts and equality semantics. Module and
+                       Cargo entries plus lockfile updated. serde and ron are in section 10;
+                       ron 0.12.3 introduces transitive typeid 1.0.3 (MIT OR Apache-2.0, verified
+                       in its registry Cargo.toml); no new licence exception or weakened check.
+                       Tests: all five sheets at 0/42/u64::MAX, same/different seeds, exact
+                       counts, save/load equality, K1/K2/INV1, brute-force INV3; IO tests cover
+                       holes of all item kinds, future IDs, Unicode, revisions, corrupt inputs
+                       and write failure. Optimized 10k: median 12.928 ms, range 11.495–14.613 ms,
+                       i7-14650HX / RTX 5060 Laptop / Windows, 10 seeds. Non-reference (Q4);
+                       details in docs/measurements/T2.4.md; no reference budget gated. C: had
+                       95.8 GiB free before full build. Synced latest origin/main including
+                       T2.2 PR #18; kept its roadmap log. T2.2 benches/index.rs can switch from
+                       its synthetic 10k to this generator later; left untouched (doc bench
+                       depending on the GPUI bench crate needs a separate dependency decision).
+                       Standard checks pass on final main-synced source: cargo fmt --all --check,
+                       cargo clippy --workspace --all-targets -- -D warnings, cargo test
+                       --workspace, cargo deny check (existing dependency warnings only).

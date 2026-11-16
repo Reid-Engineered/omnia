@@ -1,5 +1,8 @@
 //! Document storage. Mutation stays inside the crate for the T5.1 command layer.
 
+#[path = "io.rs"]
+mod io;
+
 use std::{fmt, sync::Arc};
 
 use crate::{
@@ -126,13 +129,6 @@ impl Doc {
         self.points.junctions(area, out);
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "crate-private editing entry point for T5.1 commands"
-        )
-    )]
     pub(crate) fn insert_part(
         &mut self,
         part: Part,
@@ -172,13 +168,6 @@ impl Doc {
         Some(stored.part)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "crate-private editing entry point for T5.1 commands"
-        )
-    )]
     pub(crate) fn insert_wire(&mut self, wire: Wire) -> Result<WireId, StoreError> {
         check_point(wire.a)?;
         check_point(wire.b)?;
@@ -207,13 +196,6 @@ impl Doc {
         Some(wire)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "crate-private editing entry point for T5.1 commands"
-        )
-    )]
     pub(crate) fn insert_label(&mut self, label: Label) -> Result<LabelId, StoreError> {
         check_point(label.at)?;
         let id = LabelId(self.labels.insert(label));

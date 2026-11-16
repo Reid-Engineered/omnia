@@ -2,7 +2,7 @@
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Arena<T> {
-    slots: Vec<Option<T>>,
+    pub(crate) slots: Vec<Option<T>>,
 }
 
 impl<T> Default for Arena<T> {
