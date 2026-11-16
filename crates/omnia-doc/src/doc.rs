@@ -190,6 +190,7 @@ impl Doc {
         local_pins: &[Pt],
         local_bounds: Rect,
     ) -> Result<PartId, StoreError> {
+        Rect::new(local_bounds.min, local_bounds.max).map_err(|_| StoreError::OutOfBounds)?;
         check_point(part.at)?;
         let pins = local_pins
             .iter()
@@ -228,6 +229,7 @@ impl Doc {
         local_pins: &[Pt],
         local_bounds: Rect,
     ) -> Result<PartId, StoreError> {
+        Rect::new(local_bounds.min, local_bounds.max).map_err(|_| StoreError::OutOfBounds)?;
         check_point(part.at)?;
         let pins = local_pins
             .iter()
@@ -553,6 +555,58 @@ mod tests {
         doc.remove_wire(b).unwrap();
         doc.junctions(sheet(), &mut out);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn invalid_local_bounds_rejected_without_mutation() {
+        let p = part(Pt::ZERO, Orient::IDENTITY);
+        let bounds = Rect::new(Pt::ZERO, Pt { x: 10, y: 10 }).unwrap();
+        let mut doc = Doc::new();
+        let id = doc.insert_part(p.clone(), &[Pt::ZERO], bounds).unwrap();
+        doc.remove_part(id).unwrap();
+        let mut before = Vec::new();
+        doc.save(&mut before).unwrap();
+        for bad in [
+            Rect {
+                min: Pt { x: 10, y: 0 },
+                max: Pt::ZERO,
+            },
+            Rect {
+                min: Pt { x: 0, y: 10 },
+                max: Pt::ZERO,
+            },
+            Rect {
+                min: Pt::ZERO,
+                max: Pt {
+                    x: SHEET_LIMIT_NM + 1,
+                    y: 0,
+                },
+            },
+        ] {
+            assert_eq!(
+                doc.insert_part(p.clone(), &[Pt::ZERO], bad),
+                Err(StoreError::OutOfBounds)
+            );
+            assert_eq!(
+                doc.restore_part(id, p.clone(), &[Pt::ZERO], bad),
+                Err(StoreError::OutOfBounds)
+            );
+            assert_eq!(
+                Doc::from_items([(p.clone(), vec![Pt::ZERO], bad)], [], []).unwrap_err(),
+                StoreError::OutOfBounds
+            );
+            let mut after = Vec::new();
+            doc.save(&mut after).unwrap();
+            assert_eq!(before, after);
+            let mut hits = Vec::new();
+            doc.query(sheet(), &mut hits);
+            assert!(hits.is_empty());
+            crate::connectivity::tests::assert_invariants(&doc.connectivity);
+        }
+        doc.restore_part(id, p, &[Pt::ZERO], bounds).unwrap();
+        let mut saved = Vec::new();
+        doc.save(&mut saved).unwrap();
+        assert_eq!(doc, Doc::load(saved.as_slice()).unwrap());
     }
 
     #[test]
