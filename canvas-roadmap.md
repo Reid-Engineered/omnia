@@ -307,7 +307,7 @@ of the `canvas` lane.
 - Done when: the same seed gives the same sheet; `load(save(doc)) == doc`; `10k` generates
   in under 2 s.
 
-### T2.8 Doc owns index and connectivity · needs-human
+### T2.8 Doc owns index and connectivity · blocked (20k split exceeds 1 ms on Orion; full protocol confirmation pending)
 - Lane: doc · Depends: T2.2, T2.4, T4.1, T4.2 · Read: D2, D3, K12, INV1, INV3, INV9, INV10,
   plan section 9
 - Owns: `crates/omnia-doc/`, necessary generator/hit callers and CPU benchmark harnesses
@@ -1310,3 +1310,23 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        insert/restore mutates Doc. Regression covers both inverted axes,
                        failed construction, preserved serialized/index state and valid
                        restore/save/load. 39 doc tests plus two allocation tests pass.
+
+2026-11-16 T2.8 blocked — Orion CPU validation of merged main 13b4809 (PR #24 bounds
+                       fix + PR #25 trace), isolated source/build, original 1248b7e
+                       checkout/gate binary hashes preserved. Q4 i5-7300U, AC,
+                       powersave, no power profile service; ten rotating passes/case,
+                       1000 observations/operation/run, bounded CPU-only invocations.
+                       Section 2.1 gates median run p99, not Criterion mean or max.
+                       20k split remove median p99 3.025587 ms, range 2.858351–3.173120,
+                       all 10000 removals >=1 ms. Real 10k leaf and 5k GND/VCC bridge
+                       below target by that statistic; actual 10k index query recorded.
+                       Full protocol not certified: Konsole remains; no foreground
+                       rendered window/two-scale viewport verification in CPU-only run.
+                       Geometric split/reflood isolated; profile and optimize that path
+                       before fresh acceptance, no broad rewrite or budget relaxation.
+                       docs/measurements/T2.8-reference.md and raw archive contain
+                       provenance, all observations, process/power snapshots and limits.
+                       Standard fmt/clippy/workspace tests/deny and runner fmt/clippy
+                       pass; diff check passes. No T1.6 outcome/threshold changes.
+                       No apps killed or system settings changed; runs exited, Orion
+                       safe to use. No rendering work, merge or CI watch.
