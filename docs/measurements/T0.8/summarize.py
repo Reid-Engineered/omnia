@@ -11,6 +11,10 @@ for path in root.rglob('*.json'):
     if not path.name.startswith(('baseline-', 's1-', 's3-', 's4-', 's5-', 's6-', 's8-')):
         continue
     report = json.loads(path.read_text())
+    if report['kind'] in ['run', 'spike']:
+        # A degraded run is not good data.
+        assert report['warnings'] == [], (path, report['warnings'])
+        assert report['frames']['drawn'] == report['config']['frames'], (path, report['frames'])
     if path.name.startswith('s8-0-fixed-'):
         s8_reports.append(report)
     if 'draw_ms' in report.get('metrics', {}):
