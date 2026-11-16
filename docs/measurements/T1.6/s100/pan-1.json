@@ -41,46 +41,46 @@
     "on_time": 600,
     "late": 0,
     "unmeasured": 0,
-    "wall_s": 11.0822
+    "wall_s": 11.1098
   },
   "warnings": [],
   "metrics": {
     "frame_ms": {
-      "mean": 2.5991,
-      "p50": 2.6726,
-      "p95": 2.9901,
-      "p99": 3.9752,
-      "max": 5.5337
+      "mean": 2.6781,
+      "p50": 2.7628,
+      "p95": 2.8631,
+      "p99": 3.1457,
+      "max": 6.2792
     },
     "draw_ms": {
-      "mean": 2.5778,
-      "p50": 2.6501,
-      "p95": 2.9676,
-      "p99": 3.9526,
-      "max": 5.5091
+      "mean": 2.6578,
+      "p50": 2.7443,
+      "p95": 2.8447,
+      "p99": 3.1273,
+      "max": 5.7057
     },
     "dirty_to_present_ms": {
-      "mean": 4.2584,
+      "mean": 4.3399,
       "p50": 4.4073,
-      "p95": 4.78,
-      "p99": 5.9105,
-      "max": 7.6841
+      "p95": 4.7514,
+      "p99": 4.9029,
+      "max": 8.0773
     },
     "present_interval_ms": {
-      "mean": 16.6966,
-      "p50": 16.6789,
-      "p95": 17.793,
-      "p99": 18.6122,
-      "max": 20.2015
+      "mean": 16.6896,
+      "p50": 16.6871,
+      "p95": 17.3507,
+      "p99": 18.1862,
+      "max": 19.9557
     },
     "paint_samples": 600,
     "paint_sampling": "every-frame",
     "paint_ms": {
-      "mean": 2.3878,
-      "p50": 2.4492,
-      "p95": 2.7652,
-      "p99": 3.5902,
-      "max": 5.258
+      "mean": 2.4678,
+      "p50": 2.5447,
+      "p95": 2.6445,
+      "p99": 2.9151,
+      "max": 5.4995
     },
     "allocs_per_frame": {
       "ours": {
@@ -91,11 +91,11 @@
         "max": 0.0
       },
       "total": {
-        "mean": 212.915,
+        "mean": 212.9367,
         "p50": 213.0,
         "p95": 213.0,
         "p99": 213.0,
-        "max": 215.0
+        "max": 216.0
       }
     },
     "alloc_bytes_per_frame": {
@@ -107,17 +107,20 @@
         "max": 0.0
       },
       "total": {
-        "mean": 25380.6133,
+        "mean": 25381.6533,
         "p50": 24624.0,
         "p95": 24624.0,
         "p99": 24624.0,
-        "max": 450608.0
+        "max": 458800.0
       }
     },
     "late_frames": 0,
     "missed_refreshes": 0,
-    "memory_mb": 50.25,
-    "working_set_mb": 98.4883,
-    "heap_peak_mb": 16.1659
+    "present_intervals_over_2_5_refreshes": 0,
+    "max_present_interval_ms": 19.9557,
+    "work_missed_refreshes": 0,
+    "memory_mb": 50.3281,
+    "working_set_mb": 98.4141,
+    "heap_peak_mb": 16.2049
   }
 }

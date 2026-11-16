@@ -41,46 +41,46 @@
     "on_time": 600,
     "late": 0,
     "unmeasured": 0,
-    "wall_s": 11.0891
+    "wall_s": 11.1459
   },
   "warnings": [],
   "metrics": {
     "frame_ms": {
-      "mean": 1.7104,
-      "p50": 1.7469,
-      "p95": 1.8903,
-      "p99": 2.5928,
-      "max": 3.6884
+      "mean": 1.7442,
+      "p50": 1.79,
+      "p95": 1.9016,
+      "p99": 2.007,
+      "max": 3.7622
     },
     "draw_ms": {
-      "mean": 1.691,
-      "p50": 1.7285,
-      "p95": 1.8719,
-      "p99": 2.5641,
-      "max": 3.6618
+      "mean": 1.7236,
+      "p50": 1.7684,
+      "p95": 1.8811,
+      "p99": 1.9866,
+      "max": 3.7376
     },
     "dirty_to_present_ms": {
-      "mean": 3.2237,
-      "p50": 3.3075,
-      "p95": 3.586,
-      "p99": 4.35,
-      "max": 5.5583
+      "mean": 3.2679,
+      "p50": 3.3812,
+      "p95": 3.5,
+      "p99": 3.6352,
+      "max": 5.3699
     },
     "present_interval_ms": {
-      "mean": 16.6847,
-      "p50": 16.6789,
-      "p95": 17.5636,
-      "p99": 18.0224,
-      "max": 18.7269
+      "mean": 16.7054,
+      "p50": 16.6707,
+      "p95": 17.58,
+      "p99": 17.8586,
+      "max": 18.5631
     },
     "paint_samples": 600,
     "paint_sampling": "every-frame",
     "paint_ms": {
-      "mean": 1.5479,
-      "p50": 1.5842,
-      "p95": 1.7082,
-      "p99": 2.3714,
-      "max": 3.4528
+      "mean": 1.5794,
+      "p50": 1.6141,
+      "p95": 1.7261,
+      "p99": 1.8207,
+      "max": 3.5653
     },
     "allocs_per_frame": {
       "ours": {
@@ -91,11 +91,11 @@
         "max": 0.0
       },
       "total": {
-        "mean": 211.9867,
+        "mean": 211.9283,
         "p50": 213.0,
         "p95": 213.0,
         "p99": 213.0,
-        "max": 214.0
+        "max": 216.0
       }
     },
     "alloc_bytes_per_frame": {
@@ -107,17 +107,20 @@
         "max": 0.0
       },
       "total": {
-        "mean": 24549.44,
+        "mean": 25529.44,
         "p50": 24624.0,
         "p95": 24624.0,
         "p99": 24624.0,
-        "max": 40240.0
+        "max": 614448.0
       }
     },
     "late_frames": 0,
     "missed_refreshes": 0,
-    "memory_mb": 49.1055,
-    "working_set_mb": 97.2891,
-    "heap_peak_mb": 13.619
+    "present_intervals_over_2_5_refreshes": 0,
+    "max_present_interval_ms": 18.5631,
+    "work_missed_refreshes": 0,
+    "memory_mb": 49.168,
+    "working_set_mb": 97.2344,
+    "heap_peak_mb": 13.5956
   }
 }

@@ -36,14 +36,14 @@
     "frames": 5,
     "renders": 5
   },
-  "measured_s": 10.0005,
+  "measured_s": 10.0006,
   "measured_renders": [],
   "metrics": {
     "frames": 0,
     "renders": 0,
     "cpu_percent": 0.0,
-    "memory_mb": 47.5391,
-    "working_set_mb": 95.8242,
-    "heap_peak_mb": 11.6595
+    "memory_mb": 47.4922,
+    "working_set_mb": 95.7109,
+    "heap_peak_mb": 11.6439
   }
 }

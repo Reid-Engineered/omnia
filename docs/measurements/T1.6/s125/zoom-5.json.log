@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "kind": "run",
+  "config": {
+    "sheet": "empty",
+    "script": "zoom",
+    "frames": 600,
+    "warmup": 60,
+    "window_logical": [
+      1536.0,
+      864.0
+    ],
+    "scene_counts": false
+  },
+  "scene_details": null,
+  "spike": null,
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) HD Graphics 620 (KBL GT2)",
+      "driver_name": "Intel open-source Mesa driver",
+      "driver_info": "Mesa 26.2.3-arch1.1"
+    },
+    "fullscreen": true,
+    "os": "linux",
+    "arch": "x86_64",
+    "logical_cpus": 4,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 60.008
+  },
+  "frames": {
+    "drawn": 600,
+    "on_time": 600,
+    "late": 0,
+    "unmeasured": 0,
+    "wall_s": 11.1419
+  },
+  "warnings": [],
+  "metrics": {
+    "frame_ms": {
+      "mean": 1.221,
+      "p50": 1.1264,
+      "p95": 2.0859,
+      "p99": 2.263,
+      "max": 2.7628
+    },
+    "draw_ms": {
+      "mean": 1.2016,
+      "p50": 1.109,
+      "p95": 2.0675,
+      "p99": 2.2446,
+      "max": 2.7443
+    },
+    "dirty_to_present_ms": {
+      "mean": 2.653,
+      "p50": 2.56,
+      "p95": 3.5942,
+      "p99": 3.9281,
+      "max": 4.2598
+    },
+    "present_interval_ms": {
+      "mean": 16.7048,
+      "p50": 16.6871,
+      "p95": 17.5964,
+      "p99": 18.3337,
+      "max": 19.2676
+    },
+    "paint_samples": 600,
+    "paint_sampling": "every-frame",
+    "paint_ms": {
+      "mean": 1.0838,
+      "p50": 0.9948,
+      "p95": 1.9,
+      "p99": 2.1103,
+      "max": 2.5811
+    },
+    "allocs_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 206.995,
+        "p50": 207.0,
+        "p95": 207.0,
+        "p99": 213.0,
+        "max": 213.0
+      }
+    },
+    "alloc_bytes_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 23921.04,
+        "p50": 23856.0,
+        "p95": 23856.0,
+        "p99": 24624.0,
+        "max": 40240.0
+      }
+    },
+    "late_frames": 0,
+    "missed_refreshes": 0,
+    "present_intervals_over_2_5_refreshes": 0,
+    "max_present_interval_ms": 19.2676,
+    "work_missed_refreshes": 0,
+    "memory_mb": 49.6172,
+    "working_set_mb": 97.7617,
+    "heap_peak_mb": 15.955
+  }
+}
+bench: wrote /tmp/t16-rerun/s125/zoom-5.json
