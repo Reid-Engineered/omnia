@@ -5,7 +5,7 @@ import { symbolPaths, pinAt, transformD, tablerD } from "./symbols.mjs";
 import { fileURLToPath } from "node:url";
 import opentype from "opentype.js";
 // Wordmark: Asimovian (OFL) with the globe as the O, style C (fine mesh, no ring)
-const WM_FONT = opentype.loadSync(fileURLToPath(new URL("./vendor/asimovian/fonts/ttf/Asimovian-Regular.ttf", import.meta.url)));
+const WM_FONT = opentype.loadSync(fileURLToPath(new URL("../vendor/asimovian/fonts/ttf/Asimovian-Regular.ttf", import.meta.url)));
 function wordmarkPaths(x, baseline, size) {
   const k = size / WM_FONT.unitsPerEm, bb = WM_FONT.charToGlyph("O").getBoundingBox();
   const top = baseline - bb.y2 * k, bot = baseline - bb.y1 * k, D = (bot - top) * 1.04, sw = 116 * k * 0.5, sb = 50 * k;

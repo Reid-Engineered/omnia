@@ -1,4 +1,7 @@
 node_modules/
 capture*.json
+design/logo*.json
+design/globe-o.json
+design/wordmark.json
 *.log
 /target/

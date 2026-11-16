@@ -2,8 +2,8 @@ import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import opentype from "opentype.js";
 import { transformD } from "./symbols.mjs";
-const OUT = fileURLToPath(new URL("./brand/", import.meta.url));
-const FONT = opentype.loadSync(fileURLToPath(new URL("./vendor/asimovian/fonts/ttf/Asimovian-Regular.ttf", import.meta.url)));
+const OUT = fileURLToPath(new URL("../brand/", import.meta.url));
+const FONT = opentype.loadSync(fileURLToPath(new URL("../vendor/asimovian/fonts/ttf/Asimovian-Regular.ttf", import.meta.url)));
 let MARK = ""; for (let i = 0; i <= 900; i++) { const t = (i / 900) * 2 * Math.PI; const x = Math.sin(3 * t + Math.PI / 2), y = Math.sin(4 * t); const X = x * Math.sqrt(1 - y * y / 2), Y = y * Math.sqrt(1 - x * x / 2); MARK += `${i ? "L" : "M"}${(75 + 56 * X).toFixed(2)} ${(75 + 56 * Y).toFixed(2)}`; }
 MARK += "Z";
 const svg = (vb, body, title) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" role="img" aria-label="${title}">\n<title>${title}</title>\n${body}\n</svg>\n`;
