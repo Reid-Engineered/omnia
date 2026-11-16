@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[dependencies]
+# Plan section 10 (MIT OR Apache-2.0); already in Cargo.lock.
+rustc-hash = "2"
+smallvec = "1"
+
 [dev-dependencies]
 proptest = "1"
 # Plan section 10 (dev only, MIT OR Apache-2.0); already in Cargo.lock through GPUI.
@@ -12,4 +17,8 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 
 [[bench]]
 name = "index"
+harness = false
+
+[[bench]]
+name = "connectivity"
 harness = false
