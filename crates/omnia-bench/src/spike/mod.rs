@@ -81,6 +81,32 @@ impl Config {
     pub fn json(self) -> Value {
         json!({"scene":format!("s{}",self.scene),"count":self.count,"mode":self.mode,"reference_machine":false})
     }
+    /// Whether the mode sweeps the S3 raster or S5 text size buckets.
+    fn sweeps(self) -> bool {
+        self.mode == 1 || self.mode == 3
+    }
+}
+
+/// S5 text size buckets: 6.5..=17 logical pixels in 0.5-pixel steps.
+const TEXT_BUCKETS: usize = 22;
+
+/// The S5 text bucket painted on scene frame `frame`. Sweeps advance every ten frames.
+fn text_bucket(config: Config, frame: usize) -> usize {
+    if config.sweeps() {
+        (frame / 10) % TEXT_BUCKETS
+    } else {
+        TEXT_BUCKETS - 1
+    }
+}
+
+/// Every S5 text bucket the run can paint. They are all shaped on the first scene frame,
+/// which is always a warm-up frame, so no measured frame includes first-use shaping.
+fn text_buckets(config: Config) -> std::ops::Range<usize> {
+    if config.sweeps() {
+        0..TEXT_BUCKETS
+    } else {
+        TEXT_BUCKETS - 1..TEXT_BUCKETS
+    }
 }
 #[cfg(all(feature = "readback", windows))]
 mod readback;
@@ -203,7 +229,7 @@ impl Scene {
         Self {
             config,
             symbols,
-            lines: (0..22).map(|_| Vec::new()).collect(),
+            lines: (0..TEXT_BUCKETS).map(|_| Vec::new()).collect(),
             frame: 0,
             trace: Vec::with_capacity(4096),
             scale_trace: Vec::with_capacity(4096),
@@ -295,15 +321,14 @@ impl BenchScene for Scene {
         let h = f32::from(bounds.size.height);
         let ink: Hsla = rgb(0x1d1d1f).into();
         not_ours(|| window.paint_quad(fill(bounds, rgb(PAPER))));
-        let bucket = if config.mode == 1 || config.mode == 3 {
-            (self.frame / 10) % 22
-        } else {
-            21
-        };
+        let bucket = text_bucket(config, self.frame);
         if config.scene == 5 {
-            self.prepare_text(bucket, window);
+            // A no-op after the first frame: the bucket's lines are already shaped.
+            for prepare in text_buckets(config) {
+                self.prepare_text(prepare, window);
+            }
         }
-        let symbol_size = if config.mode == 1 && config.scene == 3 {
+        let symbol_size = if config.sweeps() && config.scene == 3 {
             if (self.frame / 8).is_multiple_of(39) {
                 4.
             } else {
@@ -515,5 +540,26 @@ mod tests {
         assert!(Config::parse("s8", 100, "fixed").is_err());
         assert!(Config::parse("s3", 100001, "fixed").is_err());
         assert_eq!(Config::parse("s5", 0, "sweep").unwrap().count, 2000);
+    }
+    #[test]
+    fn s5_shapes_every_painted_bucket_before_the_first_measured_frame() {
+        for mode in ["fixed", "direct", "sweep", "direct-sweep"] {
+            let config = Config::parse("s5", 0, mode).unwrap();
+            let shaped = text_buckets(config);
+            // Every scene frame, warm-up or measured, paints a bucket shaped on frame 0.
+            for frame in 0..10_000 {
+                assert!(
+                    shaped.contains(&text_bucket(config, frame)),
+                    "{mode} {frame}"
+                );
+            }
+            if config.sweeps() {
+                assert_eq!(shaped, 0..TEXT_BUCKETS, "{mode}");
+            } else {
+                // Fixed and direct shape and paint only the 17-pixel bucket, as before.
+                assert_eq!(shaped, TEXT_BUCKETS - 1..TEXT_BUCKETS, "{mode}");
+                assert_eq!(text_bucket(config, 0), 21);
+            }
+        }
     }
 }
