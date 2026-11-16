@@ -1,8 +1,11 @@
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 use gpui::{
     App, Bounds, Context, FontWeight, SharedString, Window, WindowBounds, WindowHandle,
     WindowOptions, div, point, prelude::*, px, rgb, size,
 };
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 use omnia_app::{STAGE_INK, STAGE_PAPER, Workspace, load_fonts, load_fonts_with};
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 use std::{
     borrow::Cow,
     collections::HashSet,
@@ -10,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 struct FontProbe {
     family: SharedString,
     weight: FontWeight,
@@ -17,6 +21,7 @@ struct FontProbe {
     text: &'static str,
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 impl Render for FontProbe {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -31,14 +36,17 @@ impl Render for FontProbe {
     }
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn read_u16_be(bytes: &[u8], offset: usize) -> u16 {
     u16::from_be_bytes(bytes[offset..offset + 2].try_into().unwrap())
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn read_u32_be(bytes: &[u8], offset: usize) -> u32 {
     u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn decode_utf16_be(bytes: &[u8]) -> String {
     assert_eq!(bytes.len() % 2, 0, "UTF-16BE string must have even length");
     let units: Vec<u16> = bytes
@@ -50,6 +58,7 @@ fn decode_utf16_be(bytes: &[u8]) -> String {
     String::from_utf16(&units).expect("valid UTF-16BE name record")
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn encode_utf16_be(text: &str) -> Vec<u8> {
     let mut out = Vec::with_capacity(text.len() * 2);
     for unit in text.encode_utf16() {
@@ -58,6 +67,7 @@ fn encode_utf16_be(text: &str) -> Vec<u8> {
     out
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn sfnt_checksum(padded_bytes: &[u8]) -> u32 {
     assert_eq!(padded_bytes.len() % 4, 0);
     padded_bytes
@@ -69,6 +79,7 @@ fn sfnt_checksum(padded_bytes: &[u8]) -> u32 {
         })
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 #[derive(Clone, Copy)]
 enum BundledFamily {
     Inter,
@@ -77,6 +88,7 @@ enum BundledFamily {
 
 /// Rewrites the SFNT `name` table family records in a bundled TTF so the test registers
 /// a distinct family name that cannot match any system-installed font.
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn patch_ttf_family(ttf: &[u8], inter_alias: &str, scp_alias: &str) -> Vec<u8> {
     assert!(ttf.len() >= 12, "invalid SFNT header");
     let num_tables = read_u16_be(ttf, 4) as usize;
@@ -229,6 +241,7 @@ fn patch_ttf_family(ttf: &[u8], inter_alias: &str, scp_alias: &str) -> Vec<u8> {
     out
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn count_non_paper_pixels(raw: &[u8], width: u32, height: u32, paper_rgba: [u8; 4]) -> usize {
     let mut count = 0;
     for y in 0..height {
@@ -243,6 +256,7 @@ fn count_non_paper_pixels(raw: &[u8], width: u32, height: u32, paper_rgba: [u8; 
     count
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn count_ink_row_bands(raw: &[u8], width: u32, height: u32, paper_rgba: [u8; 4]) -> usize {
     let mut bands = 0;
     let mut in_band = false;
@@ -264,6 +278,7 @@ fn count_ink_row_bands(raw: &[u8], width: u32, height: u32, paper_rgba: [u8; 4])
     bands
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn main() {
     // GPUI on Windows cannot open windows without an interactive desktop, which hosted CI
     // runners lack. CI sets OMNIA_HEADLESS_CI=1 to skip this test there; it runs everywhere
@@ -527,4 +542,10 @@ fn main() {
         panic!("{err}");
     }
     println!("test bundled_fonts_register_and_render_distinctly ... ok");
+}
+
+// Linux/FreeBSD PlatformWindow inherits the unsupported readback default at this pin.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn main() {
+    eprintln!("fonts image test unsupported: pinned GPUI Linux has no window image readback");
 }

@@ -80,6 +80,13 @@ fn window_options(size_logical: (f32, f32), cx: &App, unthrottled: bool) -> Wind
         window_min_size: Some(size(px(size_logical.0), px(size_logical.1))),
         ..Default::default()
     };
+    // Linux reference runs use the panel's exact logical size, without desktop decorations.
+    // WindowBounds::Fullscreen is verified at the pinned GPUI platform.rs:2802.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("OMNIA_BENCH_FULLSCREEN").is_some() {
+        options.window_bounds = Some(WindowBounds::Fullscreen(bounds));
+        options.window_min_size = None;
+    }
     if unthrottled {
         // GPUI caps inactive and low-power windows at about 30 fps by default; an unattended
         // run must not depend on which window has focus or on the power plan.
@@ -96,6 +103,7 @@ pub(crate) fn environment(window: &Window, cx: &App) -> Value {
     let (w, h) = (f32::from(viewport.width), f32::from(viewport.height));
     json!({
         "gpu": window.gpu_specs(),
+        "fullscreen": window.is_fullscreen(),
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "logical_cpus": std::thread::available_parallelism().map_or(0, |n| n.get()),
@@ -446,8 +454,9 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
         }
         let options = window_options(config.size, cx, true);
         let frames = config.frames as usize;
-        cx.open_window(options, move |window, cx| {
-            window.resize(size(px(config.size.0), px(config.size.1)));
+        cx.open_window(options, move |_window, cx| {
+            #[cfg(not(target_os = "linux"))]
+            _window.resize(size(px(config.size.0), px(config.size.1)));
             cx.new(|_| RunView {
                 config,
                 cached: None,
@@ -512,12 +521,16 @@ pub fn idle(config: IdleConfig) -> Result<Value, String> {
         let renders: RenderLog = Rc::new(RefCell::new(Vec::with_capacity(1024)));
         let view_renders = renders.clone();
         let handle = cx
-            .open_window(window_options(config.size, cx, false), move |window, cx| {
-                window.resize(size(px(config.size.0), px(config.size.1)));
-                cx.new(|_| T01View {
-                    renders: view_renders,
-                })
-            })
+            .open_window(
+                window_options(config.size, cx, false),
+                move |_window, cx| {
+                    #[cfg(not(target_os = "linux"))]
+                    _window.resize(size(px(config.size.0), px(config.size.1)));
+                    cx.new(|_| T01View {
+                        renders: view_renders,
+                    })
+                },
+            )
             .map_err(|e| format!("open window: {e}"))?;
         cx.activate(true);
         let window = handle.into();
@@ -633,15 +646,19 @@ pub fn start_child(sheet: Sheet, window_size: (f32, f32)) -> Result<(), String> 
     let outcome: Outcome = Rc::new(RefCell::new(None));
     let slot = outcome.clone();
     gpui_platform::application().run(move |cx: &mut App| {
-        let opened = cx.open_window(window_options(window_size, cx, false), move |window, cx| {
-            window.resize(size(px(window_size.0), px(window_size.1)));
-            cx.new(|_| StartView {
-                sheet,
-                scene: sheet.scene(),
-                paint_time: Rc::new(Cell::new(None)),
-                reported: false,
-            })
-        });
+        let opened = cx.open_window(
+            window_options(window_size, cx, false),
+            move |_window, cx| {
+                #[cfg(not(target_os = "linux"))]
+                _window.resize(size(px(window_size.0), px(window_size.1)));
+                cx.new(|_| StartView {
+                    sheet,
+                    scene: sheet.scene(),
+                    paint_time: Rc::new(Cell::new(None)),
+                    reported: false,
+                })
+            },
+        );
         match opened {
             Ok(_) => cx.activate(true),
             Err(error) => {

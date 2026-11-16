@@ -82,7 +82,7 @@ impl Config {
         json!({"scene":format!("s{}",self.scene),"count":self.count,"mode":self.mode,"reference_machine":false})
     }
 }
-#[cfg(feature = "readback")]
+#[cfg(all(feature = "readback", windows))]
 mod readback;
 
 pub fn run_scene(
@@ -91,14 +91,44 @@ pub fn run_scene(
     warmup: u32,
     size: (f32, f32),
 ) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    if config.scene == 8 && config.mode == 0 {
+        let mut report = json!({
+            "schema": crate::compare::SCHEMA,
+            "kind": "spike-platform-support",
+            "spike": config.json(),
+            "readback": {"supported": false,
+                "reason": "Pinned GPUI Linux PlatformWindow does not implement render_to_image"}
+        });
+        for (name, args) in [
+            ("start", vec!["start", "--runs", "10"]),
+            ("idle", vec!["idle", "--seconds", "10"]),
+        ] {
+            let output =
+                std::process::Command::new(std::env::current_exe().map_err(|e| e.to_string())?)
+                    .args(args)
+                    .args(["--size", &format!("{}x{}", size.0, size.1)])
+                    .output()
+                    .map_err(|e| e.to_string())?;
+            if !output.status.success() {
+                return Err(format!(
+                    "S8 {name}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            report[name] = serde_json::from_slice(&output.stdout)
+                .map_err(|e| format!("S8 {name} JSON: {e}"))?;
+        }
+        return Ok(report);
+    }
     if config.scene == 8 && config.mode == 6 {
-        #[cfg(feature = "readback")]
+        #[cfg(all(feature = "readback", windows))]
         return readback::displays();
-        #[cfg(not(feature = "readback"))]
-        return Err("display readback requires --features readback".into());
+        #[cfg(not(all(feature = "readback", windows)))]
+        return Err("display readback requires Windows and --features readback".into());
     }
     if (config.scene == 8 && config.mode == 0) || (config.scene == 3 && config.mode == 4) {
-        #[cfg(feature = "readback")]
+        #[cfg(all(feature = "readback", windows))]
         {
             let mut report = readback::run(config, size)?;
             if config.scene == 8 {
@@ -125,8 +155,8 @@ pub fn run_scene(
             }
             return Ok(report);
         }
-        #[cfg(not(feature = "readback"))]
-        return Err("capture requires --features readback".into());
+        #[cfg(not(all(feature = "readback", windows)))]
+        return Err("capture requires Windows and --features readback".into());
     }
     let mut report = harness::run(RunConfig {
         sheet: Sheet::Spike(config),
@@ -230,7 +260,8 @@ impl BenchScene for Scene {
                 .map(|s| s.tile)
                 .chain(scene.subpixel_sprites.iter().map(|s| s.tile))
             {
-                // DirectX creates max(1024, requested tile size) pages. In these probes
+                // DirectX and wgpu create max(1024, requested tile size) pages (pinned
+                // gpui_wgpu/src/wgpu_atlas.rs:188-201). In these probes
                 // only SVGs/glyphs allocate monochrome entries and none are removed.
                 self.pages
                     .entry((tile.texture_id.kind as u8, tile.texture_id.index))
@@ -248,7 +279,7 @@ impl BenchScene for Scene {
         let _ = window;
     }
     fn details(&self) -> Value {
-        json!({"atlas_pages":self.pages.len(),"atlas":self.atlas_log,"atlas_readout":"page sizes inferred from first tile and pinned DirectX allocation rule; requires scene-counts", "paint_calls":self.frame,"paint_trace_columns":["frame","size_logical","ms","ours_allocs","total_allocs"],"paint_trace":self.trace,"scale_trace":self.scale_trace})
+        json!({"atlas_pages":self.pages.len(),"atlas":self.atlas_log,"atlas_readout":"page sizes inferred from first tile and pinned DirectX/wgpu allocation rule; requires scene-counts", "paint_calls":self.frame,"paint_trace_columns":["frame","size_logical","ms","ours_allocs","total_allocs"],"paint_trace":self.trace,"scale_trace":self.scale_trace})
     }
 
     fn paint(&mut self, bounds: Bounds<Pixels>, camera: Camera, window: &mut Window, cx: &mut App) {
