@@ -1,9 +1,12 @@
+pub mod status_bar;
+
 use gpui::{
-    App, Bounds, Context, FontWeight, Window, WindowBounds, WindowHandle, WindowOptions, div,
-    prelude::*, px, rgb, size,
+    App, Bounds, Context, Entity, FontWeight, StyleRefinement, Window, WindowBounds, WindowHandle,
+    WindowOptions, div, prelude::*, px, rgb, size,
 };
-use omnia_canvas::{Camera, SheetView};
+use omnia_canvas::{Camera, SheetCanvas};
 use omnia_doc::Pt;
+use status_bar::{STATUS_BAR_HEIGHT, StatusBar};
 use std::{borrow::Cow, num::NonZeroU64};
 
 // Temporary until T1.2 generates omnia-theme tokens. Theme/stage/paper and stage/ink in omnia.figcraft / Q2.
@@ -40,7 +43,13 @@ pub fn load_fonts_with(
 
 pub struct Workspace {
     frames_remaining: Option<NonZeroU64>,
-    sheet: Option<Camera>,
+    sheet: Option<Sheet>,
+}
+
+/// The sheet canvas and the status bar it feeds, each a separately cached view (D7).
+struct Sheet {
+    canvas: Entity<SheetCanvas>,
+    status_bar: Entity<StatusBar>,
 }
 
 impl Workspace {
@@ -52,11 +61,23 @@ impl Workspace {
         }
     }
 
-    /// Adds the sheet (T1.4: paper and grid) below the text, with a fixed camera at 100%
-    /// centred on the sheet origin. Pan and zoom arrive with T1.5.
-    pub fn with_sheet(mut self) -> Self {
-        self.sheet = Some(Camera::new(Pt::ZERO, 1.0, Bounds::default()));
+    /// Adds the sheet below the text, starting at 100% centred on the sheet origin, with
+    /// pan and zoom (T1.5) and the status bar under it.
+    pub fn with_sheet(mut self, cx: &mut Context<Self>) -> Self {
+        let theme = &omnia_theme::GRAPHITE;
+        let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+        let canvas = cx.new(|cx| SheetCanvas::new(camera, theme, cx));
+        let status_bar = cx.new(|cx| StatusBar::new(&canvas, theme, cx));
+        self.sheet = Some(Sheet { canvas, status_bar });
         self
+    }
+
+    pub fn canvas(&self) -> Option<&Entity<SheetCanvas>> {
+        self.sheet.as_ref().map(|sheet| &sheet.canvas)
+    }
+
+    pub fn status_bar(&self) -> Option<&Entity<StatusBar>> {
+        self.sheet.as_ref().map(|sheet| &sheet.status_bar)
     }
 }
 
@@ -98,12 +119,22 @@ impl Render for Workspace {
             .flex()
             .flex_col()
             .child(header)
-            .when_some(self.sheet.clone(), |root, camera| {
+            .when_some(self.sheet.as_ref(), |root, sheet| {
                 root.child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(SheetView::new(camera, &omnia_theme::GRAPHITE)),
+                    div().flex_1().min_h_0().child(
+                        sheet
+                            .canvas
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
+                )
+                .child(
+                    sheet.status_bar.clone().cached(
+                        StyleRefinement::default()
+                            .w_full()
+                            .h(px(STATUS_BAR_HEIGHT))
+                            .flex_none(),
+                    ),
                 )
             })
     }
@@ -126,7 +157,7 @@ pub fn open_workspace(
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             ..Default::default()
         },
-        |_, cx| cx.new(|_| Workspace::new(frames).with_sheet()),
+        |_, cx| cx.new(|cx| Workspace::new(frames).with_sheet(cx)),
     )?;
     cx.activate(true);
     Ok(window)

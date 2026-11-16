@@ -244,7 +244,7 @@ of the `canvas` lane.
   factors 1.0, 1.25 and 1.5; on-screen pitch stays in [20, 40) px across the zoom range;
   the paint makes zero allocations after the first frame.
 
-### T1.5 Pan, zoom and status bar · todo
+### T1.5 Pan, zoom and status bar · done
 - Lane: canvas · Depends: T1.4 · Read: G9, G10, K4, T0.5 results
 - Owns: `crates/omnia-canvas/src/input.rs`, `crates/omnia-app/src/status_bar.rs`
 - Do: wheel zoom anchored on the cursor; touchpad pixel-scroll pan; pinch zoom about the
@@ -1018,3 +1018,51 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        test --workspace three times in a row, deny). Host: Windows 11 x64,
                        i7-14650HX, RTX 5060 Laptop + Intel UHD, 1920x1200 at 125%, 60 Hz;
                        nothing timed, no budget gated. Next: T1.5 replaces the fixed camera.
+2026-11-16 T1.5 done    — crates/omnia-canvas/src/input.rs: Navigator, a pure state machine over
+                       Camera (read at pin 15d136b: interactive.rs ScrollEvent/PinchEvent/
+                       TouchPhase, gpui_windows events.rs wheel path, div.rs listeners,
+                       window.rs hitboxes and capture, test_context.rs). Lines zoom about
+                       the cursor, 3 lines = one notch of 2^(1/4) (Windows' default wheel
+                       setting, which GPUI multiplies in; T0.5 saw ±3 and -6), fractional
+                       and merged notches by the matching power; Pixels pan by exactly the
+                       delta; pinch zooms by 1 + delta about its position; middle-drag and
+                       Space + left-drag pan; a Cancelled touch gesture restores the camera
+                       it started with. Shift+wheel (horizontal Lines) is ignored. SheetCanvas
+                       (same file) owns camera + Navigator, renders SheetView inside a small
+                       Element that adds the one sheet hitbox and window-level mouse
+                       listeners, notifies only when the camera changed, and emits
+                       CanvasEvent::Status (cursor mm, drawn K10 grid step, zoom) only when
+                       the status changed. GPUI finding: hitbox ids are never reused, so a
+                       pan step that repaints the sheet must re-capture the pointer on the
+                       new hitbox or the drag stops at the sheet edge; the element does this
+                       in paint (a test dragging off the window failed without it).
+                       crates/omnia-app/src/status_bar.rs: StatusBar view (bg/panel, rule,
+                       text/secondary, Source Code Pro 11.5 px, 40 px, per the mockup), fed
+                       only by CanvasEvent::Status. Workspace::with_sheet(cx) embeds canvas
+                       and status bar as two .cached() views. Plan updated (rule 12):
+                       CanvasStatus.cursor is Option<Pt> (None until the pointer has been
+                       over the sheet); K4 says what a notch is; section 9 sketches Navigator
+                       and the interim SheetCanvas::new(camera, theme, cx) until T2.5 wires
+                       the Doc. Tests: 9 Navigator unit tests (anchor fixed within 1 nm at
+                       5%..3200% for wheel and pinch, exact pixel pan, clamps report no
+                       change, cancel, drags); omnia-app/tests/navigation.rs, 6 tests on
+                       GPUI's test platform (TestAppContext, no OS window): wheel and pinch
+                       keep the world point under the cursor; cursor moves notify only the
+                       status bar (SheetCanvas and the root: 0 notifies, SheetCanvas 0
+                       re-renders; a planted notify made it fail); touchpad, middle-drag off
+                       the window, and Space-drag pan. Not done, for later tasks: no grab
+                       cursor while panning. Outside owned files: lib.rs `pub mod input`,
+                       omnia-app lib.rs wiring, omnia-app dev-dep gpui test-support (no new
+                       crate). Workspace's header still shows T0.2's placeholder line and
+                       rgb(STAGE_*) colours for the fonts test; left as is. Standard checks
+                       pass on the Windows dev machine (i7-14650HX, RTX 5060 Laptop, 1920x1200
+                       at 125%, 60 Hz; nothing timed, no budget gated, Q4): fmt, clippy -D
+                       warnings, test --workspace three times in a row (all exit 0), deny.
+                       `cargo run -p omnia-app -- --frames 60` exits 0 by itself. The earlier
+                       unexplained `cargo test` exit 101 did not reproduce in 3 runs. Lead:
+                       during this task drive C: hit 0 bytes free and the build failed with
+                       os error 112 and LNK1318; cargo exits 101 on such failures. Freed
+                       ~29 GB by deleting the target/ dirs of merged, idle worktrees (T1.4,
+                       T2.3, T1.2, T0.4). The window tests (fonts, sheet_render) are separate
+                       harness = false binaries that cargo runs one after another, so they
+                       do not open windows in parallel with each other.
