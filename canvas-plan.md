@@ -429,6 +429,15 @@ impl Doc {
     pub fn save(&self, w: impl io::Write) -> io::Result<()>;
     pub fn load(r: impl io::Read, symbols: Arc<SymbolLibrary>) -> io::Result<Self>;
 }
+pub const INDEX_CELL_NM: i32;                              // K12
+pub struct SpatialIndex { /* private: K12 cells, per-item bounds and generation stamp */ }
+impl SpatialIndex {                                        // D3 (T2.2); Send, not Sync
+    pub fn new() -> Self;
+    pub fn insert(&mut self, item: ItemId, bounds: Rect) -> Result<Option<Rect>, GeomError>;
+    pub fn remove(&mut self, item: ItemId) -> Option<Rect>;
+    pub fn bounds(&self, item: ItemId) -> Option<Rect>;
+    pub fn query(&self, area: Rect, out: &mut Vec<ItemId>); // replaces out; no alloc if room
+}
 
 // ---- omnia-symbols ----
 pub struct SymbolId(u16);
