@@ -359,6 +359,16 @@ impl RunView {
             "present_interval_ms",
             Summary::from_nanos(&present_interval),
         );
+        // Our paint is timed only on frames that paint the scene. S6 cached replays the sheet
+        // without painting it, so its paint samples are sparse by design.
+        let paint_samples = self.paint_ms.len();
+        let paint_sampling = match (self.config.sheet, &self.scene) {
+            (Sheet::Spike(c), _) if c.scene == 6 && c.mode == 1 => "sparse-cached",
+            (_, Some(_)) => "every-frame",
+            (_, None) => "none",
+        };
+        metrics.insert("paint_samples".into(), json!(paint_samples));
+        metrics.insert("paint_sampling".into(), json!(paint_sampling));
         insert_summary(
             &mut metrics,
             "paint_ms",
@@ -395,6 +405,9 @@ impl RunView {
         }
         if self.allocs.len() != self.config.frames as usize {
             warnings.push(format!("sampled {} frames", self.allocs.len()));
+        }
+        if paint_sampling == "every-frame" && paint_samples != self.config.frames as usize {
+            warnings.push(format!("sampled paint on {paint_samples} frames"));
         }
         if !window.is_window_active() {
             warnings.push("window was not active: present intervals are not recorded".into());
