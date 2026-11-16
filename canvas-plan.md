@@ -68,8 +68,7 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
 - **Viewport.** The native panel, 1920x1080 at 60 Hz: a full-screen window at 100% scaling
   (1920x1080 logical) and at 125% (1536x864 logical). No window larger than the panel. The
   owner chose native 1080p over the brief's 4K; thresholds and budgets are otherwise unchanged.
-- **120 fps (B4).** The panel refreshes at 60 Hz, so B4's 120 fps target is judged on frame
-  time only (p99 under 8.3 ms), and presentation is judged against 60 Hz.
+- **Refresh.** The panel refreshes at 60 Hz; B3 and B4 are judged against it (60 and 30 fps).
 - **Power and noise.** On AC, the bench window in the foreground, other apps closed. Each
   result records the power source, CPU governor and power profile.
 - **Repetitions.** Ten repetitions per case, interleaved (case order rotates each pass). The
@@ -82,9 +81,9 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
 | --- | --- | --- |
 | B1 | Cold start to an interactive empty sheet < 400 ms | `bench start` |
 | B2 | Opening the 1,000-part sheet adds < 300 ms | `bench start --sheet 1k` |
-| B3 | Pan and zoom, 1,000 parts: p99 frame time < 8 ms | `bench run --sheet 1k --script pan` and `--script zoom` |
-| B4 | Pan and zoom, 10,000 parts and 20,000 wires: p99 < 16 ms | `bench run --sheet 10k --script pan` and `--script zoom` |
-| B5 | Never below 60 fps: no frame over 16.7 ms in a B3 run | `max_frame_ms` in the same report |
+| B3 | Pan and zoom, 1,000 parts: 60 fps. p99 frame time < 16.7 ms, and median present interval ≤ one refresh | `bench run --sheet 1k --script pan` and `--script zoom` |
+| B4 | Pan and zoom, 10,000 parts and 20,000 wires: 30 fps. p99 frame time < 33.3 ms, and median present interval ≤ two refreshes | `bench run --sheet 10k --script pan` and `--script zoom` |
+| B5 | No long stalls: no frame over 33.3 ms in a B3 run, none over 50 ms in a B4 run | `max_frame_ms` in the same report |
 | B6 | A dragged part or wire is drawn in the next frame | `bench run --script drag-part` and `drag-wire`: dirty-to-present p99 ≤ one refresh interval |
 | B7 | Hit test under the cursor < 0.2 ms at 10,000 parts | `bench hit --sheet 10k` |
 | B8 | Idle: 0% CPU and no redraws | `bench idle --seconds 10`: 0 frames drawn |
@@ -92,6 +91,12 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
 | B10 | No heap allocation in the paint path once warm | `allocs_per_frame.ours == 0` in every run (scope: Q5) |
 
 A number from any other machine is recorded and labelled, and never marks a budget as met.
+
+B3 to B5 were relaxed by the owner on 2026-11-15 at H1 (the brief asked for 120 fps, never
+below 60, with p99 < 8 ms and < 16 ms). Reason: the reference machine's panel refreshes at 60 Hz,
+and its HD 620 is GPU-bound on very large sheets. Frame time is GPUI's `work` histogram;
+present interval is the spacing of completed presents (G13). Both are CPU-side timestamps,
+not compositor scan-out times.
 
 ## 3. Constants
 
@@ -107,7 +112,7 @@ All from `build-omnia.mjs` unless marked "chosen". Screen sizes are logical pixe
 | K6 | Junction dot; grid dot | 8 px diameter (1,016,000 nm); 1.2 px, constant on screen, at least 1 device pixel |
 | K7 | Symbol art box | 150 units square. Placed size: resistor, capacitor, diode 80 px (4 grid steps); op-amp 180 px (9); ground 48 px (2.4, anchored by its pin). |
 | K8 | Text | Designator and value: Inter SemiBold 17 px (Q3). Net label and pin number: Inter Medium 13 px. Secondary value text: Inter Medium 12 px. |
-| K9 | LOD thresholds (chosen) | Text hidden below 6.5 px font size. Pin numbers and junction dots hidden below 2.5 px. Symbol drawn as one filled quad when its box is under 8 px. |
+| K9 | LOD thresholds (chosen) | Text hidden below 6.5 px font size. Pin numbers and junction dots hidden below 2.5 px. Symbol drawn as one filled quad when its box is under 8 px. Visible-label cap (T0.6): at most 700 labels per frame; past that, labels hide smallest first. |
 | K10 | Grid density (chosen) | Show every 2^k-th grid point with k keeping on-screen pitch in [20, 40) px. Dots about to drop fade over the top quarter of that range. |
 | K11 | Cache buckets (chosen) | Font size quantised to 0.5 px. Symbol sprite sizes on a ladder of ratio 2^(1/4), matching K4. |
 | K12 | Spatial index cell (chosen) | 20,320,000 nm (8 grid steps) |
@@ -211,7 +216,7 @@ returns a `Change` that the views use to decide what to repaint.
 - A move command removes and reinserts the moved items. During a drag the index is untouched
   because the document is untouched.
 
-### D4 Rendering: plain quads and atlas sprites. HYPOTHESIS (Plan A, section 8)
+### D4 Rendering: plain quads and atlas sprites. DECIDED 2026-11-15 (Plan A, section 8)
 
 - Wires and LOD boxes: plain quads (G3).
 - Symbols: monochrome atlas sprites through `paint_svg` (G4). SVG bytes are generated per
@@ -224,6 +229,11 @@ returns a `Change` that the views use to decide what to repaint.
   `max(1, round(world_width × scale × scale_factor))`, origin rounded so the width never
   varies by a pixel; pass GPUI logical values its own snap leaves unchanged.
 - Sheet layers, bottom to top: paper and grid; wires and LOD boxes; symbols and dots; text.
+- Far zoom (from T0.6, because the reference GPU is the limit on the 10,000-part sheet): merge
+  collinear wire segments into one quad, drop the dot grid when its pitch is under K10's
+  threshold, and draw symbols as LOD boxes. Labels use direct glyph emission, not one
+  `ShapedLine::paint` per label (S5: half the cost), with the visible-label cap in K9.
+- Fallback if B4 still misses after far zoom: Plan B (section 8). Ask the owner first.
 
 ### D5 Level of detail. DECIDED (thresholds K9, K10)
 
@@ -307,26 +317,29 @@ Frame loads after LOD, whole sheet in view: about 19k primitives at 1,000 parts 
 dots, 4k wire quads, 1k symbols, 1k junctions); about 30k for the text-heavy case (12k
 glyphs); about 63k quads at 10,000 parts and 20,000 wires.
 
-Thresholds, p99 on the reference machine. `Window::draw` gets 5 ms of B3's 8 ms and 10 ms of
-B4's 16 ms.
+Thresholds, p99 on the reference machine. Retuned 2026-11-15 with B3 and B4 (the originals
+were 25k quads ≤ 3 ms, 70k ≤ 9 ms, 15k sprites add ≤ 2 ms, 12k glyphs add ≤ 2 ms, from
+`Window::draw` getting 5 ms of 8 and 10 of 16). `Window::draw` now gets 12 ms of B3's 16.7 ms
+and 25 ms of B4's 33.3 ms, and the loads are the frame loads above instead of padded ones.
 
 | ID | Pass |
 | --- | --- |
-| T-quad | 25k quads draw in ≤ 3 ms, and 70k in ≤ 9 ms |
-| T-sprite | 15k sprites add ≤ 2 ms; no visible softness at 90° or mirrored; atlas ≤ 64 MB after the second sweep |
-| T-text | 12k glyphs add ≤ 2 ms; zero allocations per painted label once warm |
+| T-quad | 19k quads draw in ≤ 12 ms, and 65k (with grid) in ≤ 25 ms |
+| T-sprite | 1k sprites add ≤ 2 ms; no visible softness at 90° or mirrored; atlas ≤ 64 MB after the second sweep |
+| T-text | 12k glyphs add ≤ 4 ms; zero allocations per painted label once warm |
 | T-path | Rebuild and paint ≤ 3 µs per path, zero allocations |
 | T-replay | Replaying 60k cached primitives costs ≤ 40% of repainting them |
 | T-present | Dirty-to-present ≤ one refresh interval under the 19k load |
+| T-gpu | Median present interval ≤ one refresh under the 19k load and ≤ two under the 65k load |
 
 | Outcome | Choice |
 | --- | --- |
 | T-quad and T-sprite pass | **Plan A** (D4). Expected. |
 | T-sprite fails only on rotated or mirrored quality | Plan A with one atlas entry per orientation and a unit matrix |
 | T-sprite fails on throughput, T-path passes | Immediate paths for symbols. Unlikely given G1. |
-| T-quad passes at 25k, fails at 70k | Plan A plus a simpler far zoom: merge collinear wire segments and drop the grid below a zoom threshold. Re-measure. |
+| T-quad passes at 19k, fails at 65k, or T-gpu fails at 65k | Plan A plus a simpler far zoom: merge collinear wire segments and drop the grid below a zoom threshold. Re-measure. |
 | Sprites and paths both fail, quads pass | **Plan B**: rasterise sheet content into 512 px tiles on a background thread, show them with `paint_image`, draw live only what is being dragged. About two more weeks. Stop and ask before starting. |
-| T-quad fails at 25k | **Plan C**: patch `gpui_windows` to composite an external Direct3D 11 texture and write our own instanced sheet renderer (G11). Stop and ask (Q7). |
+| T-quad fails at 19k | **Plan C**: patch GPUI's renderer to composite an external Direct3D 11 texture and write our own instanced sheet renderer (G11). Stop and ask (Q7). |
 | T-text fails | Raise the text threshold in K9 until the visible label count fits; record the count that fits |
 | T-replay fails | Hover frames repaint the sheet. Fine if they still meet B3 and B4; otherwise Plan B. |
 

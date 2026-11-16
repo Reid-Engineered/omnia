@@ -173,7 +173,7 @@ of the `canvas` lane.
   device, events per frame, the phase sequence of a pinch, and dirty-to-present p99 during
   the drag.
 
-### T0.6 Spike results and rendering decision · todo → H1
+### T0.6 Spike results and rendering decision · done → H1
 - Lane: bench · Depends: T0.4, T0.5, T0.8 · Read: plan section 8 (thresholds and outcome tables)
 - Owns: `docs/spike-results.md`
 - Do: tabulate each `T-` threshold against the measured value, state pass or fail, and name
@@ -260,7 +260,7 @@ of the `canvas` lane.
   | Budget | Command | Pass |
   | --- | --- | --- |
   | B1 | `bench start` | < 400 ms |
-  | B3 | `bench run --sheet empty --script pan` and `zoom` | p99 < 8 ms |
+  | B3 | `bench run --sheet empty --script pan` and `zoom` | p99 < 16.7 ms |
   | B8 | `bench idle --seconds 10` | 0 frames |
   | B10 | same `run` reports | `allocs_per_frame.ours == 0` |
 
@@ -311,8 +311,8 @@ of the `canvas` lane.
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `sheet/wires.rs`, `sheet/symbols.rs`, `sheet/lod.rs`
 - Do: cull with `Doc::query`; wires as device-pixel-snapped quads; symbols as `paint_svg`
   sprites with prebuilt keys per (symbol, size bucket) and orientation in the matrix;
-  junction dots; the LOD ladder; reusable scratch buffers. Use the outcome variant chosen
-  in T0.6 if it was not plain Plan A.
+  junction dots; the LOD ladder; reusable scratch buffers. Far zoom per D4 (T0.6): merge
+  collinear wire segments, drop the grid below K10, symbols as LOD boxes.
 - Done when: a `render_to_image` test at 1.0, 1.25 and 1.5 shows every wire a whole number
   of device pixels wide with constant width along its length; the INV7 test passes (no
   `paint_path` or `canvas(` in `sheet*`; zero allocations per frame once warm on `1k`).
@@ -334,8 +334,8 @@ of the `canvas` lane.
   | Budget | Command | Pass |
   | --- | --- | --- |
   | B2 | `bench start --sheet 1k` minus `bench start` | < 300 ms |
-  | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 8 ms, max ≤ 16.7 ms |
-  | B4 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 16 ms |
+  | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, median present interval ≤ one refresh, max ≤ 33.3 ms |
+  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, median present interval ≤ two refreshes, max ≤ 50 ms |
   | B9 | `memory_mb` in the `10k` run | < 300 |
   | B10 | all reports | `allocs_per_frame.ours == 0` |
 
@@ -377,7 +377,7 @@ of the `canvas` lane.
 
 ### T3.4 Gate: milestone 3 · todo
 - Lane: bench · Depends: T3.3
-- Do: `bench run --sheet text --script pan` and `zoom`: p99 < 8 ms (B3). Re-run the whole
+- Do: `bench run --sheet text --script pan` and `zoom`: p99 < 16.7 ms (B3). Re-run the whole
   T2.7 table with text on. Run the golden tests.
 - Done when: all pass on the reference machine; otherwise record and set `needs-human`.
 
@@ -797,3 +797,12 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        the bench up on Orion and re-runs the spikes there; T0.6 now depends on
                        it. An S1 re-run on the ASUS under the same protocol (T0.4-ref) showed
                        T-quad passing there; it is Windows evidence, not a reference result.
+2026-11-15 T0.6 done    — H1: owner relaxed B3 to 60 fps (p99 < 16.7 ms) and B4 to 30 fps
+                       (p99 < 33.3 ms), both also judged on median present interval; B5 to no
+                       frame over 33.3 ms (1k) / 50 ms (10k). Thresholds retuned to the plan's
+                       frame loads. On Orion (T0.8): 19k quads draw 10.6 ms, present every
+                       16.7 ms; 65k with grid draw 23.2 ms, present every 32.7 ms; 70k quads
+                       alone present every 67 ms (GPU-bound). Outcome: Plan A with far-zoom
+                       simplification (merge wires, drop grid, LOD boxes), direct glyph
+                       emission and a visible-label cap. D4 DECIDED. Plan B stays the fallback
+                       if B4 misses at T2.7. Details in docs/spike-results.md.
