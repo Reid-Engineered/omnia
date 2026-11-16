@@ -107,7 +107,7 @@ All from `build-omnia.mjs` unless marked "chosen". Screen sizes are logical pixe
 | K1 | World unit | 1 nm, stored as `i32`. Sheet limit ±1,000,000,000 nm on each axis. |
 | K2 | Grid; pin lattice | 2,540,000 nm; 1,270,000 nm |
 | K3 | 100% zoom | 20 px per grid step: `scale = 20.0 / 2_540_000.0` px per nm |
-| K4 | Zoom range; wheel step | 5% to 3200%; one notch multiplies by 2^(1/4) (chosen) |
+| K4 | Zoom range; wheel step | 5% to 3200%; one notch multiplies by 2^(1/4) (chosen). A notch is 3 `ScrollDelta::Lines`, Windows' default wheel setting, which GPUI multiplies in (T0.5, T1.5); merged or fractional notches zoom by the matching power. |
 | K5 | Wire stroke; symbol stroke | 1.8 px (228,600 nm); 2 px (254,000 nm). Floor: 1 device pixel (Q1). |
 | K6 | Junction dot; grid dot | 8 px diameter (1,016,000 nm); 1.2 px, constant on screen, at least 1 device pixel |
 | K7 | Symbol art box | 150 units square. Placed size: resistor, capacitor, diode 80 px (4 grid steps); op-amp 180 px (9); ground 48 px (2.4, anchored by its pin). |
@@ -473,7 +473,8 @@ impl Camera {
     pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
 pub enum Tool { Select, Wire, Place(SymbolId), Label }
-pub struct CanvasStatus { pub cursor: Pt, pub grid: i32, pub zoom: f32 }
+pub struct CanvasStatus { pub cursor: Option<Pt>, pub grid: i32, pub zoom: f32 } // None: pointer not yet
+                                                     // over the sheet; grid: drawn K10 step (T1.5)
 pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged }
 
 pub struct SheetView { /* camera: Camera, theme: &'static Theme */ }  // implements Element (G8)
@@ -485,10 +486,14 @@ pub fn grid_level(scale: f64) -> GridLevel;              // K10: level, step_nm,
 // snap_px: to_device, round_device, snap_logical, stroke_device_px, device_to_logical,
 //          device_rect, centered_square — whole device pixels GPUI's snap leaves unchanged (D4)
 
-pub struct SheetCanvas { /* private */ }
+pub struct Navigator { /* private */ }                    // T1.5 pan/zoom state machine (input.rs)
+pub struct SheetCanvas { /* private */ }                  // T1.5: camera, Navigator, SheetView
 impl SheetCanvas {
     pub fn new(doc: Entity<Doc>, theme: &'static Theme,
                window: &mut Window, cx: &mut Context<Self>) -> Self;
+    // Until the document is wired in (T2.5) it is `new(camera: Camera, theme, cx)`.
+    pub fn camera(&self) -> &Camera;
+    pub fn status(&self) -> CanvasStatus;
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
