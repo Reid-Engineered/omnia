@@ -225,7 +225,7 @@ of the `canvas` lane.
   tokens, in both themes; running the xtask twice gives no diff; the INV6 test passes and
   fails when a literal is planted.
 
-### T1.3 Camera · todo
+### T1.3 Camera · done
 - Lane: canvas · Depends: T1.1 · Read: D1, K3, K4, INV8
 - Owns: `crates/omnia-canvas/src/camera.rs`
 - Do: `Camera` as sketched in plan section 9, with zoom clamped to K4.
@@ -866,7 +866,23 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        --all-targets -- -D warnings; cargo test --workspace (37 passed: 6
                        omnia-doc, 27+2 omnia-bench, 1 omnia-app fonts, 1 xtask INV12);
                        cargo deny check (advisories ok, bans ok, licenses ok, sources ok).
-
+2026-11-15 T1.3 done    — implemented and exported Camera in omnia-canvas with K3 scale,
+                       K4 zoom clamping, anchored zoom, fractional-pixel pan, viewport
+                       resizing and conservative visible bounds clipped to K1. Mapping
+                       subtracts the integer reference in i64 before conversion (INV8).
+                       Uses Point<f64> logical pixels for reversible mapping and a separate
+                       world_to_pixels paint conversion: GPUI Pixels stores f32 and cannot
+                       retain individual nm at K3. Updated D1 and the section 9 sketch
+                       under rule 12; no tolerance or check was weakened. Read GPUI geometry
+                       at pinned 15d136b before use. Dependencies are all in plan section 10;
+                       Cargo.lock only records the canvas dependency edges. Eight camera
+                       tests include proptest across the sheet and zoom range, anchor
+                       invariance within 1 nm and exact pixel pan; edge cases cover adjacent
+                       nm at sheet limits, 5%/3200%, fractional pan, 1,000 zoom cycles,
+                       visible bounds and resize. All standard checks passed: cargo fmt
+                       --all --check; cargo clippy --workspace --all-targets -- -D warnings;
+                       cargo test --workspace (45 passed); cargo deny check (advisories,
+                       bans, licenses and sources ok; existing dependency warnings).
 2026-11-15 T0.8 review fixes — measure-ref.sh restores the eDP-1 scale it found at
                        start (header now says the campaign changes it temporarily),
                        takes the S1 duration as S1_SECONDS instead of a parent

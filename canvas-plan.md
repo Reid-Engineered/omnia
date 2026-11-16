@@ -182,9 +182,12 @@ returns a `Change` that the views use to decide what to repaint.
 
 - Exact for metric and mil grids (1 mil = 25,400 nm). The ±1 m limit (K1) means the sum of
   two coordinates fits in `i32`; products use `i64`.
-- Camera is `{ center: Pt, scale: f64 }`, scale in logical px per nm (K3).
+- Camera keeps an integer `center: Pt` reference, an f64 screen translation (including
+  fractional-nm gesture movement), and scale in logical px per nm (K3).
 - World to screen: subtract the camera centre in integers, multiply in `f64`, then narrow to
-  `f32`. The `f32` therefore only holds on-screen magnitudes.
+  `f32` only at the paint boundary (`world_to_pixels`). The reversible mapping uses
+  `Point<f64>` logical pixels: f32 screen coordinates cannot preserve individual nm
+  at K3 even within a normal viewport. The `f32` only holds on-screen magnitudes.
 - Screen to world: compute in `f64`, round to the nearest nm, then snap in integers.
 
 ### D2 Document: arenas with stable ids, commands in, changes out. DECIDED
@@ -434,13 +437,18 @@ pub static GRAPHITE: Theme;
 pub static GRAY: Theme;
 
 // ---- omnia-canvas ----
-pub struct Camera { /* center: Pt, scale: f64, viewport: Bounds<Pixels> */ }
+pub struct Camera { /* center: Pt, zoom: f64, translation: Point<f64>, viewport: Bounds<Pixels> */ }
 impl Camera {
-    pub fn world_to_screen(&self, p: Pt) -> Point<Pixels>;
-    pub fn screen_to_world(&self, p: Point<Pixels>) -> Pt;
+    pub fn new(center: Pt, zoom: f64, viewport: Bounds<Pixels>) -> Self;
+    pub fn world_to_screen(&self, p: Pt) -> Point<f64>;
+    pub fn world_to_pixels(&self, p: Pt) -> Point<Pixels>; // final, lossy paint conversion
+    pub fn screen_to_world(&self, p: Point<f64>) -> Pt;   // nearest nm, clipped to K1
     pub fn visible(&self) -> Rect;
-    pub fn pan_by(&mut self, delta: Point<Pixels>);
-    pub fn zoom_about(&mut self, anchor: Point<Pixels>, factor: f64);
+    pub fn pan_by(&mut self, delta: Point<f64>);
+    pub fn zoom_about(&mut self, anchor: Point<f64>, factor: f64);
+    pub fn zoom(&self) -> f64;
+    pub fn scale(&self) -> f64;
+    pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
 pub enum Tool { Select, Wire, Place(SymbolId), Label }
 pub struct CanvasStatus { pub cursor: Pt, pub grid: i32, pub zoom: f32 }
