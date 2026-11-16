@@ -1352,7 +1352,7 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        RON v2 save/load preserves revision and all slots verbatim. PlacePart
                        takes caller-supplied local_pins and local_bounds (no doc->symbols
                        cycle). Plan section 9 updated for Command signatures and equality.
-                       Tests (47 omnia-doc unit/proptest + 3 index_alloc integration):
+                       Tests (52 omnia-doc unit/proptest + 3 index_alloc integration, including merged PR #28):
                        compound 100-item Move success and failure rollback (including OOB
                        preserving redo stack), duplicate/missing IDs, delete/restore IDs for
                        parts/wires/labels, off-origin Reorient pivots across all 8 Orients
