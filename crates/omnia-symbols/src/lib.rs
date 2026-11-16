@@ -6,23 +6,8 @@ use omnia_doc::{Pt, Rect};
 
 mod generated;
 
-/// Identifier of a symbol definition inside [`SymbolLibrary`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SymbolId(u16);
-
-impl SymbolId {
-    /// Returns the zero-based index of this symbol in the library.
-    #[inline]
-    pub const fn index(self) -> usize {
-        self.0 as usize
-    }
-
-    /// Returns the raw numeric identifier.
-    #[inline]
-    pub const fn raw(self) -> u16 {
-        self.0
-    }
-}
+/// Identifier of a symbol definition inside [`SymbolLibrary`] (defined in `omnia-doc`).
+pub use omnia_doc::SymbolId;
 
 /// A connection pin on a [`SymbolDef`], in symbol-local nanometre coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

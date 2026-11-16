@@ -269,7 +269,7 @@ of the `canvas` lane.
 
 ## Milestone 2: read-only stress sheets
 
-### T2.1 Document store · todo
+### T2.1 Document store · done
 - Lane: doc · Depends: T1.1 · Read: D2, INV1, INV3
 - Owns: `crates/omnia-doc/src/arena.rs`, `doc.rs`, `points.rs`
 - Do: `Arena<T>` with `insert`, `remove`, `restore`, `get` and stable ids; `Part`, `Wire`,
@@ -930,6 +930,27 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        T0.4 set to done: its open items are settled by Q4 and T0.8 (the
                        reference runs at 100% and 125%, not 150%; render_to_image is
                        unsupported on Linux, so goldens run on Windows).
+2026-11-16 T2.1 done    — added append-only Arena<T> slots with stable u32 ids and checked
+                       restoration; typed part/wire/label ids and records; crate-private
+                       insert/remove operations, revision counter and an end/pin point map.
+                       Junctions are derived on query (INV3); insert rejects degenerate or
+                       diagonal wires (INV1) and out-of-K1 items/pins before changing state.
+                       Property tests cover remove/restore identity, no id reuse, INV1 and
+                       INV3 against brute-force counts after generated insert/remove edits;
+                       focused tests cover crossings, body contacts, coincident pins,
+                       rejected edits and revisions. All eight orientations are exercised.
+                       Staged API detail: omnia-symbols is still a stub (T2.3), so SymbolId
+                       lives in doc.rs and Doc::new() takes no library yet; internal part
+                       insertion takes local pin positions and caches transformed world pins
+                       for removal. Library-backed construction remains for symbol integration.
+                       Commands/Change and undo/redo remain T5.1, as T2.1's Do line specifies;
+                       Arena::restore supplies the stable-id primitive they need.
+                       No dependencies added. No existing check changed. Scoped dead-code
+                       expectations cover the six internal editing entry points until T5.1.
+                       Windows checks passed: cargo fmt --all --check; cargo clippy --workspace
+                       --all-targets -- -D warnings; cargo test --workspace (12 omnia-doc tests,
+                       including property tests, and xtask INV12); cargo deny check (existing
+                       dependency warnings only; advisories/bans/licenses/sources all pass).
 2026-11-16 T2.3 done    — `cargo xtask symbols` (xtask/src/symbols.rs, wired in xtask/src/main.rs)
                        parses crates/omnia-symbols/pins.toml and vendor/electronic-symbols/SVG/
                        with usvg 0.46, verifies every pin lands on the 1.27 mm (PIN_LATTICE_NM)
