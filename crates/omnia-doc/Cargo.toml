@@ -8,6 +8,9 @@ publish.workspace = true
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 ron = "0.12"
+# Plan section 10 (MIT OR Apache-2.0); already in Cargo.lock.
+rustc-hash = "2"
+smallvec = "1"
 
 [dev-dependencies]
 proptest = "1"
@@ -16,4 +19,8 @@ criterion = { version = "0.8", default-features = false, features = ["cargo_benc
 
 [[bench]]
 name = "index"
+harness = false
+
+[[bench]]
+name = "connectivity"
 harness = false

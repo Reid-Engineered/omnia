@@ -383,7 +383,7 @@ of the `canvas` lane.
 
 ## Milestone 4: selection and nets
 
-### T4.1 Connectivity · todo
+### T4.1 Connectivity · done
 - Lane: doc · Depends: T2.2 · Read: D2, INV10
 - Owns: `crates/omnia-doc/src/connectivity.rs`
 - Do: components over the point map, grown by union on add and repaired by re-flooding the
@@ -1131,3 +1131,37 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        Standard checks pass on final main-synced source: cargo fmt --all --check,
                        cargo clippy --workspace --all-targets -- -D warnings, cargo test
                        --workspace, cargo deny check (existing dependency warnings only).
+2026-11-16 T4.1 done — crates/omnia-doc/src/connectivity.rs: Connectivity and NetId (D2,
+                       INV10), re-exported from lib.rs; plan section 9 updated. Two-level
+                       incremental model: geometric components over the FxHashMap<Pt, PointSlot>
+                       point map (SmallVec wire/label lists, union-by-size on add_wire, O(1) leaf
+                       fast path on remove_wire and stamp-based BFS re-flood of only the touched
+                       component otherwise) and logical NetIds over (Comp, LabelText) (O(1) fast
+                       path for single-label nets, bipartite re-flood only when a multi-label
+                       shorted net splits). Connectivity::rebuild performs an independent
+                       from-scratch BFS over wires and labels for load and as the INV10 oracle.
+                       Added rustc-hash = "2" and smallvec = "1" to omnia-doc (both already in
+                       plan section 10 and Cargo.lock, MIT OR Apache-2.0; zero new crates).
+                       Not wired into Doc (doc.rs/arena.rs left untouched for T2.4): whoever
+                       wires Connectivity (and SpatialIndex) into Doc (T5.1) should add
+                       Arena::iter(&self) -> impl Iterator<Item = (u32, &T)>, hold
+                       connectivity: Connectivity in Doc, call add_wire/remove_wire in
+                       insert_wire/remove_wire, add_label/remove_label in insert_label/
+                       remove_label (and remove+add or replace on SetText), expose
+                       Doc::net_of / net_at / net_wires, and rebuild via Connectivity::rebuild(
+                       self.wires.iter().map(|(id, &w)| (WireId(id), w)),
+                       self.labels.iter().map(|(id, l)| (LabelId(id), l))) after Doc::load.
+                       Tests: 6 unit tests (crossings, loops/splits, label join/split, shorted
+                       multi-labels, labels before wires, visit_gen wraparound, zero-alloc
+                       net_wires with capacity) + INV10 proptest (256 cases, up to 200 random
+                       wire/label adds and removes) matching rebuild at every step.
+                       Bench benches/connectivity.rs (criterion 0.8): T2.4's generator is not on
+                       origin/main yet, so it builds a seeded synthetic 10,000-part / 20,000-wire
+                       sheet with chained nets, 2% long buses, and GND/VCC/CLK labels (switch to
+                       T2.4's 10k generator once landed). On ASUS TUF F16 (i7-14650HX, Windows 11,
+                       on battery, Silent scheme; not the Q4 reference machine, no budget gated;
+                       docs/measurements/T4.1.md): leaf add 93.9 ns, leaf remove 54.2 ns, bridge
+                       add 284 ns, bridge split 1.04 us, 200-wire chain bridge 676 ns, 200-wire
+                       split 7.09 us (all >130x under 1 ms); full 10k rebuild 8.44 ms.
+                       Standard checks passed: cargo fmt --all --check; cargo clippy --workspace
+                       --all-targets -- -D warnings; cargo test --workspace; cargo deny check.
