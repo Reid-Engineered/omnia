@@ -13,6 +13,8 @@ scene-counts = ["gpui/bench-support"]
 readback = ["gpui/test-support", "gpui_platform/test-support", "dep:resvg"]
 
 [dependencies]
+omnia-doc = { path = "../omnia-doc" }
+omnia-symbols = { path = "../omnia-symbols" }
 # profiler: Window::frame_duration_snapshot (G13).
 gpui = { workspace = true, features = ["profiler"] }
 gpui_platform.workspace = true
@@ -21,7 +23,6 @@ hdrhistogram = { version = "7", default-features = false }
 serde_json = "1"
 # The real sheet element for `--sheet empty` (T1.6).
 omnia-canvas = { path = "../omnia-canvas" }
-omnia-doc = { path = "../omnia-doc" }
 omnia-theme = { path = "../omnia-theme" }
 
 # resvg 0.46 (Apache-2.0 OR MIT), opt-in readback/reference only; never default.

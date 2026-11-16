@@ -260,7 +260,7 @@ of the `canvas` lane.
   | Budget | Command | Pass |
   | --- | --- | --- |
   | B1 | `bench start` | < 400 ms |
-  | B3 | `bench run --sheet empty --script pan` and `zoom` | p99 < 16.7 ms |
+  | B3 | `bench run --sheet empty --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes) |
   | B8 | `bench idle --seconds 10` | 0 frames |
   | B10 | same `run` reports | `allocs_per_frame.ours == 0` |
 
@@ -278,7 +278,7 @@ of the `canvas` lane.
 - Done when: tests pass for: `restore` after `remove` returns the same id; INV1 is enforced
   at insert; INV3 holds on generated sheets against a brute-force count.
 
-### T2.2 Spatial index · todo
+### T2.2 Spatial index · done
 - Lane: doc · Depends: T2.1 · Read: D3, K12
 - Owns: `crates/omnia-doc/src/index.rs`
 - Do: the uniform grid with insert, remove and `query(area, out)`; long wires registered in
@@ -298,7 +298,7 @@ of the `canvas` lane.
   `write_svg` at the original stroke matches the vendor SVG when both are rasterised with
   resvg (difference under 1% of pixels); pin positions match `pinAt` in `symbols.mjs`.
 
-### T2.4 Stress sheets, save and load · todo
+### T2.4 Stress sheets, save and load · doing
 - Lane: bench (generator), doc (save and load) · Depends: T2.1, T2.3
 - Owns: `crates/omnia-bench/src/generate.rs`, `crates/omnia-doc/src/io.rs`
 - Do: seeded generators for the five `StressSheet`s; `10k` has exactly 10,000 parts and
@@ -334,8 +334,8 @@ of the `canvas` lane.
   | Budget | Command | Pass |
   | --- | --- | --- |
   | B2 | `bench start --sheet 1k` minus `bench start` | < 300 ms |
-  | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, median present interval ≤ one refresh, max ≤ 33.3 ms |
-  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, median present interval ≤ two refreshes, max ≤ 50 ms |
+  | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes), max ≤ 33.3 ms |
+  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes, max ≤ 50 ms |
   | B9 | `memory_mb` in the `10k` run | < 300 |
   | B10 | all reports | `allocs_per_frame.ours == 0` |
 
@@ -383,7 +383,7 @@ of the `canvas` lane.
 
 ## Milestone 4: selection and nets
 
-### T4.1 Connectivity · todo
+### T4.1 Connectivity · done
 - Lane: doc · Depends: T2.2 · Read: D2, INV10
 - Owns: `crates/omnia-doc/src/connectivity.rs`
 - Do: components over the point map, grown by union on add and repaired by re-flooding the
@@ -1066,6 +1066,105 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        T2.3, T1.2, T0.4). The window tests (fonts, sheet_render) are separate
                        harness = false binaries that cargo runs one after another, so they
                        do not open windows in parallel with each other.
+2026-11-16 T2.2 done — crates/omnia-doc/src/index.rs: SpatialIndex, a uniform grid of K12
+                       cells (INDEX_CELL_NM = 20,320,000 nm; 99 x 99 cover K1). insert(item,
+                       bounds) registers an ItemId in every cell its bounds meet (a long wire
+                       in every cell it crosses) and moves an item already present; remove;
+                       bounds; query(area, out) replaces out with items whose bounds meet area
+                       (edges inclusive, as Rect::intersects), order unspecified, deduplicated
+                       by a per-item generation stamp (wrap at 2^32 resets all stamps). Per-kind
+                       tables are indexed by arena id, so no hash map. Stamps are Cells so query
+                       takes &self as Doc::query does: the index is Send, not Sync (D8: the UI
+                       thread owns Doc; jobs use a snapshot). Plan section 9 sketch updated.
+                       Not wired into Doc: doc.rs is T2.1's file. Whoever adds Doc::query
+                       (T2.5's culling needs it; likely T4.1/T5.1 in the doc lane) keeps a
+                       SpatialIndex in Doc and calls insert/remove next to the arenas, with
+                       part bounds from the symbol box and wire bounds from the segment plus
+                       half the K5 stroke. Tests: property test (256 cases, up to 200 random
+                       inserts/moves/removes/queries over the whole K1 sheet, rectangles from
+                       points to sheet-spanning, ids colliding) equals a brute-force scan, no
+                       duplicates, cell occupancy exact; a planted removal of the stamp check
+                       made it fail. tests/index_alloc.rs (test-local counting allocator, the
+                       sheet_alloc pattern): 0 allocations per query with capacity, control
+                       query without capacity allocates. Bench benches/index.rs (criterion 0.8,
+                       plan section 10, dev only, already locked through GPUI; default features
+                       off): T2.4's generator does not exist yet, so the bench builds a seeded
+                       synthetic sheet of exactly 10,000 parts and 20,000 wires (2% long buses).
+                       4K viewport at 100%: 3.3 to 4.8 µs (1,314 items); whole sheet 0.18 to
+                       0.27 ms (30,000 items). i7-14650HX, Windows 11, on battery, Silent
+                       scheme, machine shared with other builds; docs/measurements/T2.2.md. Not
+                       the reference machine; no budget gated. No Q ids needed. New files
+                       outside index.rs: tests/index_alloc.rs, benches/index.rs and the
+                       measurements file, all named by this task's Done-when line. During the
+                       run C: hit 0 bytes free once (cause not checked); it cleared
+                       without action from this task.
+
+2026-11-16 T2.4 doing — Seeded five StressSheets in omnia-bench/src/generate.rs (SplitMix64);
+                       10k exactly 10,000 parts / 20,000 wires; dense 1,000 / 12,000;
+                       text 1,000 / 2,000 with 12,000 designator/value characters. All use
+                       built-in symbol pins, eight orientations and K2-lattice placement.
+                       Wires are unit lattice segments, avoiding ends on interiors (INV2).
+                       io.rs adds version-1 RON save/load, preserving reserved slots, revision
+                       and local pin geometry; load uses validated inserts to rebuild incidence.
+                       Doc equality compares authoritative state. Public Doc::from_items is a
+                       validated bulk constructor; raw insert methods remain crate-private.
+                       Minimal supporting changes explicitly approved by owner: arena.rs slots
+                       made crate-visible for stable-ID save/load; doc.rs declares io as a child
+                       module for private store access and removes obsolete dead_code expects
+                       from the three now-used insert methods. No other doc internals changed.
+                       Plan section 9 updated: new/load signatures reflect GPUI-independent
+                       self-contained pin geometry (avoids a symbols/doc dependency cycle),
+                       from_items signature, workload counts and equality semantics. Module and
+                       Cargo entries plus lockfile updated. serde and ron are in section 10;
+                       ron 0.12.3 introduces transitive typeid 1.0.3 (MIT OR Apache-2.0, verified
+                       in its registry Cargo.toml); no new licence exception or weakened check.
+                       Tests: all five sheets at 0/42/u64::MAX, same/different seeds, exact
+                       counts, save/load equality, K1/K2/INV1, brute-force INV3; IO tests cover
+                       holes of all item kinds, future IDs, Unicode, revisions, corrupt inputs
+                       and write failure. Optimized 10k: median 12.928 ms, range 11.495–14.613 ms,
+                       i7-14650HX / RTX 5060 Laptop / Windows, 10 seeds. Non-reference (Q4);
+                       details in docs/measurements/T2.4.md; no reference budget gated. C: had
+                       95.8 GiB free before full build. Synced latest origin/main including
+                       T2.2 PR #18; kept its roadmap log. T2.2 benches/index.rs can switch from
+                       its synthetic 10k to this generator later; left untouched (doc bench
+                       depending on the GPUI bench crate needs a separate dependency decision).
+                       Standard checks pass on final main-synced source: cargo fmt --all --check,
+                       cargo clippy --workspace --all-targets -- -D warnings, cargo test
+                       --workspace, cargo deny check (existing dependency warnings only).
+2026-11-16 T4.1 done — crates/omnia-doc/src/connectivity.rs: Connectivity and NetId (D2,
+                       INV10), re-exported from lib.rs; plan section 9 updated. Two-level
+                       incremental model: geometric components over the FxHashMap<Pt, PointSlot>
+                       point map (SmallVec wire/label lists, union-by-size on add_wire, O(1) leaf
+                       fast path on remove_wire and stamp-based BFS re-flood of only the touched
+                       component otherwise) and logical NetIds over (Comp, LabelText) (O(1) fast
+                       path for single-label nets, bipartite re-flood only when a multi-label
+                       shorted net splits). Connectivity::rebuild performs an independent
+                       from-scratch BFS over wires and labels for load and as the INV10 oracle.
+                       Added rustc-hash = "2" and smallvec = "1" to omnia-doc (both already in
+                       plan section 10 and Cargo.lock, MIT OR Apache-2.0; zero new crates).
+                       Not wired into Doc (doc.rs/arena.rs left untouched for T2.4): whoever
+                       wires Connectivity (and SpatialIndex) into Doc (T5.1) should add
+                       Arena::iter(&self) -> impl Iterator<Item = (u32, &T)>, hold
+                       connectivity: Connectivity in Doc, call add_wire/remove_wire in
+                       insert_wire/remove_wire, add_label/remove_label in insert_label/
+                       remove_label (and remove+add or replace on SetText), expose
+                       Doc::net_of / net_at / net_wires, and rebuild via Connectivity::rebuild(
+                       self.wires.iter().map(|(id, &w)| (WireId(id), w)),
+                       self.labels.iter().map(|(id, l)| (LabelId(id), l))) after Doc::load.
+                       Tests: 6 unit tests (crossings, loops/splits, label join/split, shorted
+                       multi-labels, labels before wires, visit_gen wraparound, zero-alloc
+                       net_wires with capacity) + INV10 proptest (256 cases, up to 200 random
+                       wire/label adds and removes) matching rebuild at every step.
+                       Bench benches/connectivity.rs (criterion 0.8): T2.4's generator is not on
+                       origin/main yet, so it builds a seeded synthetic 10,000-part / 20,000-wire
+                       sheet with chained nets, 2% long buses, and GND/VCC/CLK labels (switch to
+                       T2.4's 10k generator once landed). On ASUS TUF F16 (i7-14650HX, Windows 11,
+                       on battery, Silent scheme; not the Q4 reference machine, no budget gated;
+                       docs/measurements/T4.1.md): leaf add 93.9 ns, leaf remove 54.2 ns, bridge
+                       add 284 ns, bridge split 1.04 us, 200-wire chain bridge 676 ns, 200-wire
+                       split 7.09 us (all >130x under 1 ms); full 10k rebuild 8.44 ms.
+                       Standard checks passed: cargo fmt --all --check; cargo clippy --workspace
+                       --all-targets -- -D warnings; cargo test --workspace; cargo deny check.
 2026-11-16 T1.6 needs-human — Milestone-1 gate on Orion (HD 620, Mesa ANV 26.2.3, not
                        llvmpipe; full-screen 1920x1080 at 60.008 Hz, at 100% and 125%; AC;
                        governor powersave; no power profile available), commit 20d9f9e,
@@ -1073,15 +1172,21 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        B1 start 198.1 / 192.2 ms (< 400): PASS. B3 frame p99 pan 3.734 /
                        2.554 ms, zoom 3.637 / 2.355 ms (< 16.7): PASS. B8 idle 0 frames in
                        every run: PASS. B10 allocs_per_frame.ours 0 in all 40 runs: PASS.
-                       Plan B3's second clause, median present interval <= one refresh
-                       (16.664 ms), is 16.679 to 16.695 ms: 14 to 31 us over, FAIL if read
-                       strictly. 0 late frames and 0 missed refreshes, 60.0 fps wall time;
-                       CPU-side timestamp jitter (G13). Not rounded away (rule 3); the owner
-                       decides the reading. Protocol gap: T3 Code desktop app and other user
-                       apps were running (not closed over SSH); the bench window was active
-                       in every run. Bench changes (lane bench): `--sheet empty` now paints
-                       omnia-canvas SheetView via paint_quads (T0.1 window kept as
-                       `--sheet t01`, spike scripts' baseline updated); new `--script zoom`
-                       (K4 sweep, geometric, about centre, 600-frame cycle); `idle --sheet`.
-                       New deps of omnia-bench are workspace crates only. Numbers, rerun
-                       steps and the two human actions: docs/measurements/T1.6.md.
+                       B3's second half, by owner decision 2026-11-16 (plan section 2 and
+                       the T1.6/T2.7 tables updated; B4 likewise: no present interval
+                       > 2.5 refreshes): zero missed refreshes, a present interval > 1.5
+                       refreshes being one. Judged per run from the reports' max interval:
+                       0 in 39 of 40 runs; 100% pan run 7 has one 30.87 ms interval (>= 1
+                       miss; frame work max 9.38 ms, 0 late frames). The old median wording
+                       read 14 to 31 us over 16.664 ms through timestamp jitter. Still
+                       needs-human: T3 Code desktop and other user apps were running (not
+                       closed over SSH; bench window active in every run). A person reruns
+                       gate.sh at the desk with them closed; that rerun decides B3.
+                       Bench changes (lane bench): `--sheet empty` paints omnia-canvas
+                       SheetView via paint_quads (T0.1 window kept as `--sheet t01`, spike
+                       scripts' baseline updated); `--script zoom` (K4 sweep, geometric,
+                       about centre, 600-frame cycle); `idle --sheet`; run reports now carry
+                       missed_refreshes (owner definition), present_intervals_over_2_5_
+                       refreshes and max_present_interval_ms, with GPUI's work-based count
+                       renamed work_missed_refreshes. omnia-bench gains workspace deps only.
+                       Numbers and rerun steps: docs/measurements/T1.6.md.

@@ -82,11 +82,25 @@ for tag, (scale, viewport) in SCALES.items():
               f"{med_range([x['allocs_per_frame']['total']['mean'] for x in m])} |")
         verdicts.append((f"B3 {script} {tag} frame p99", f"median of run p99s "
                          f"{statistics.median(p99):.3f} ms, limit < 16.7", statistics.median(p99) < 16.7))
-        # Strict, no tolerance: plan B3 says "median present interval <= one refresh".
-        pi = statistics.median(pi50)
-        verdicts.append((f"B3 {script} {tag} present interval", f"median of run p50s {pi:.3f} ms, "
-                         f"limit <= {refresh_ms:.3f} (1/{rs[0]['environment']['refresh_hz']} Hz); "
-                         f"over by {max(0.0, pi - refresh_ms) * 1000:.0f} us", pi <= refresh_ms))
+        # B3 second half (owner decision 2026-11-16): zero missed refreshes, where a present
+        # interval longer than 1.5 refresh intervals is one. Reports from bench builds after
+        # this decision carry the count (`work_missed_refreshes` marks them); older ones only
+        # have the run's max interval, which gives 0 exactly when max <= 1.5 refreshes and
+        # otherwise only ">= 1". Judged in every run, not on a median; see T1.6.md.
+        missed = []
+        for rep in rs:
+            x = rep["metrics"]
+            if "work_missed_refreshes" in x:
+                missed.append(str(x["missed_refreshes"]))
+            else:
+                over = x["present_interval_ms"]["max"] > 1.5 * refresh_ms
+                missed.append(">=1" if over else "0")
+        bad = [f"run {i}: {n}" for i, n in enumerate(missed, 1) if n != "0"]
+        maxes = [rep["metrics"]["present_interval_ms"]["max"] for rep in rs]
+        verdicts.append((f"B3 {script} {tag} missed refreshes",
+                         f"limit 0 per run (interval > {1.5 * refresh_ms:.3f} ms); "
+                         f"{10 - len(bad)}/10 runs 0" + (f"; {', '.join(bad)}" if bad else "")
+                         + f"; max interval {med_range(maxes)} ms", not bad))
         verdicts.append((f"B10 {script} {tag}", f"allocs_per_frame.ours max over 10 runs = {ours:g}", ours == 0))
     # B1
     starts = reports["start"]

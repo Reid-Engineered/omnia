@@ -332,7 +332,16 @@ impl RunView {
         let on_time = sum(|r| r.frames_on_time);
         let late = sum(|r| r.frames_late);
         let unmeasured = sum(|r| r.frames_unmeasured);
-        let missed = sum(|r| r.missed_refreshes);
+        // GPUI's own count: refreshes a frame's *work* overran. Not the B3 metric.
+        let work_missed = sum(|r| r.missed_refreshes);
+        // B3/B4 (owner decision 2026-11-16, T1.6): a present interval longer than 1.5 refresh
+        // intervals is a missed refresh; B4 allows none longer than 2.5.
+        let refresh_nanos = window
+            .refresh_interval(cx)
+            .map(|interval| interval.as_nanos() as u64);
+        let over = |threshold| {
+            refresh_nanos.map(|r| stats::count_over_refreshes(&present_interval, r, threshold))
+        };
 
         let mut ours_allocs: Vec<f64> = self.allocs.iter().map(|a| a.ours_allocs as f64).collect();
         let mut total_allocs: Vec<f64> =
@@ -384,7 +393,18 @@ impl RunView {
             json!({ "ours": alloc_json(&mut ours_bytes), "total": alloc_json(&mut total_bytes) }),
         );
         metrics.insert("late_frames".into(), json!(late));
-        metrics.insert("missed_refreshes".into(), json!(missed));
+        metrics.insert("missed_refreshes".into(), json!(over(1.5)));
+        metrics.insert(
+            "present_intervals_over_2_5_refreshes".into(),
+            json!(over(2.5)),
+        );
+        metrics.insert(
+            "max_present_interval_ms".into(),
+            json!(
+                (!present_interval.is_empty()).then(|| round(present_interval.max() as f64 / 1e6))
+            ),
+        );
+        metrics.insert("work_missed_refreshes".into(), json!(work_missed));
         memory_metrics(&mut metrics);
 
         #[cfg(feature = "scene-counts")]
@@ -409,6 +429,9 @@ impl RunView {
         }
         if paint_sampling == "every-frame" && paint_samples != self.config.frames as usize {
             warnings.push(format!("sampled paint on {paint_samples} frames"));
+        }
+        if refresh_nanos.is_none() {
+            warnings.push("refresh interval unknown: missed refreshes not counted".into());
         }
         if !window.is_window_active() {
             warnings.push("window was not active: present intervals are not recorded".into());

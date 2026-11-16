@@ -81,8 +81,8 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
 | --- | --- | --- |
 | B1 | Cold start to an interactive empty sheet < 400 ms | `bench start` |
 | B2 | Opening the 1,000-part sheet adds < 300 ms | `bench start --sheet 1k` |
-| B3 | Pan and zoom, 1,000 parts: 60 fps. p99 frame time < 16.7 ms, and median present interval ≤ one refresh | `bench run --sheet 1k --script pan` and `--script zoom` |
-| B4 | Pan and zoom, 10,000 parts and 20,000 wires: 30 fps. p99 frame time < 33.3 ms, and median present interval ≤ two refreshes | `bench run --sheet 10k --script pan` and `--script zoom` |
+| B3 | Pan and zoom, 1,000 parts: 60 fps. p99 frame time < 16.7 ms, and zero missed refreshes: no present interval longer than 1.5 refresh intervals | `bench run --sheet 1k --script pan` and `--script zoom`: `frame_ms.p99`, `missed_refreshes` |
+| B4 | Pan and zoom, 10,000 parts and 20,000 wires: 30 fps. p99 frame time < 33.3 ms, and no present interval longer than 2.5 refresh intervals (it never misses its 30 fps slot) | `bench run --sheet 10k --script pan` and `--script zoom`: `frame_ms.p99`, `present_intervals_over_2_5_refreshes` |
 | B5 | No long stalls: no frame over 33.3 ms in a B3 run, none over 50 ms in a B4 run | `max_frame_ms` in the same report |
 | B6 | A dragged part or wire is drawn in the next frame | `bench run --script drag-part` and `drag-wire`: dirty-to-present p99 ≤ one refresh interval |
 | B7 | Hit test under the cursor < 0.2 ms at 10,000 parts | `bench hit --sheet 10k` |
@@ -97,6 +97,15 @@ below 60, with p99 < 8 ms and < 16 ms). Reason: the reference machine's panel re
 and its HD 620 is GPU-bound on very large sheets. Frame time is GPUI's `work` histogram;
 present interval is the spacing of completed presents (G13). Both are CPU-side timestamps,
 not compositor scan-out times.
+
+The present-interval halves of B3 and B4 were changed by the owner on 2026-11-16 at T1.6.
+They read "median present interval ≤ one refresh" (B3) and "≤ two refreshes" (B4). Reason:
+on Orion the median of these CPU-side timestamps sits 14 to 31 µs above one 60 Hz refresh
+(16.664 ms) through jitter alone, so the old wording could never pass on a 60 Hz panel,
+while missed refreshes measure the intent directly. A present interval longer than 1.5
+refresh intervals counts as a missed refresh; `bench run` reports `missed_refreshes`,
+`present_intervals_over_2_5_refreshes` and `max_present_interval_ms`. GPUI's own count of
+refreshes that a frame's work overran is reported apart, as `work_missed_refreshes`.
 
 ## 3. Constants
 
@@ -410,7 +419,11 @@ pub struct Hit { pub item: ItemId, pub at: Pt }
 
 pub struct Doc { /* private */ }
 impl Doc {
-    pub fn new(symbols: Arc<SymbolLibrary>) -> Self;
+    pub fn new() -> Self;
+    // T2.4: validated bulk construction; local pins come from the caller's symbol library.
+    pub fn from_items(parts: impl IntoIterator<Item = (Part, Vec<Pt>)>,
+                      wires: impl IntoIterator<Item = Wire>,
+                      labels: impl IntoIterator<Item = Label>) -> Result<Self, StoreError>;
     pub fn revision(&self) -> u64;
     pub fn apply(&mut self, cmd: Command) -> Result<Change, CommandError>;
     pub fn undo(&mut self) -> Option<Change>;
@@ -427,7 +440,36 @@ impl Doc {
     pub fn copy(&self, items: &[ItemId]) -> Clip;
     pub fn snapshot(&self) -> DocSnapshot;
     pub fn save(&self, w: impl io::Write) -> io::Result<()>;
-    pub fn load(r: impl io::Read, symbols: Arc<SymbolLibrary>) -> io::Result<Self>;
+    pub fn load(r: impl io::Read) -> io::Result<Self>;
+    // Version 1 RON embeds local pins (omnia-symbols depends on omnia-doc).
+    // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points.
+    // Equality compares authoritative slots, pins and revision, excluding derived incidence.
+}
+pub const INDEX_CELL_NM: i32;                              // K12
+pub struct SpatialIndex { /* private: K12 cells, per-item bounds and generation stamp */ }
+impl SpatialIndex {                                        // D3 (T2.2); Send, not Sync
+    pub fn new() -> Self;
+    pub fn insert(&mut self, item: ItemId, bounds: Rect) -> Result<Option<Rect>, GeomError>;
+    pub fn remove(&mut self, item: ItemId) -> Option<Rect>;
+    pub fn bounds(&self, item: ItemId) -> Option<Rect>;
+    pub fn query(&self, area: Rect, out: &mut Vec<ItemId>); // replaces out; no alloc if room
+}
+pub struct Connectivity { /* private: point map, components, logical nets */ }
+impl Connectivity {                                        // D2, INV10 (T4.1)
+    pub fn new() -> Self;
+    pub fn clear(&mut self);
+    pub fn net_count(&self) -> usize;
+    pub fn net_of(&self, wire: WireId) -> Option<NetId>;
+    pub fn net_at(&self, at: Pt) -> Option<NetId>;
+    pub fn net_wires(&self, net: NetId, out: &mut Vec<WireId>); // replaces out; no alloc if room
+    pub fn net_labels(&self, net: NetId, out: &mut Vec<Arc<str>>);
+    pub fn rebuild<W, L, LB>(wires: W, labels: L) -> Self
+        where W: IntoIterator<Item = (WireId, Wire)>,
+              L: IntoIterator<Item = (LabelId, LB)>, LB: std::borrow::Borrow<Label>;
+    pub fn add_wire(&mut self, id: WireId, wire: Wire);
+    pub fn remove_wire(&mut self, id: WireId) -> Option<Wire>;
+    pub fn add_label(&mut self, id: LabelId, label: &Label);
+    pub fn remove_label(&mut self, id: LabelId) -> Option<Label>;
 }
 
 // ---- omnia-symbols ----
@@ -499,6 +541,11 @@ pub struct CountingAlloc;                                  // #[global_allocator
 pub fn count_allocs<R>(f: impl FnOnce() -> R) -> (R, u64);
 pub enum StressSheet { Parts100, Parts1k, Parts10k, DenseWiring, TextHeavy }
 pub fn generate(sheet: StressSheet, seed: u64) -> Doc;
+// generate module: SplitMix64 seeds; counts (parts, wire segments): 100=(100,200),
+// 1k=(1_000,2_000), 10k=(10_000,20_000), dense=(1_000,12_000), text=(1_000,2_000).
+// Text has six characters per designator/value, 12,000 total; no extra labels.
+// All built-in symbols/orientations, K2 pin-lattice placements; unit-lattice wire segments
+// extend from pins in rays (no end on a segment interior, INV2).
 ```
 
 Bench command line. Every subcommand exits by itself and takes `--json <file>`.

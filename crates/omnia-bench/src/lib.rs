@@ -8,6 +8,7 @@
 pub mod alloc;
 pub mod compare;
 pub mod driver;
+pub mod generate;
 pub mod harness;
 pub mod scene;
 pub mod spike;
