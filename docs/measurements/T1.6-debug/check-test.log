@@ -1,0 +1,342 @@
+   Compiling bitflags v2.13.2
+   Compiling zlib-rs v0.6.8
+   Compiling typeid v1.0.3
+   Compiling toml_writer v1.2.0+spec-1.1.0
+   Compiling zeroize v1.9.1
+   Compiling rustix v1.1.6
+   Compiling rustybuzz v0.20.1
+   Compiling ron v0.12.3
+   Compiling spirv v0.4.0+sdk-1.4.341.0
+   Compiling polling v3.11.0
+   Compiling flate2 v1.1.11
+   Compiling async-io v2.6.0
+   Compiling png v0.17.16
+   Compiling async-signal v0.2.14
+   Compiling async-process v2.5.0
+   Compiling usvg v0.46.0
+   Compiling wayland-backend v0.3.17
+   Compiling tempfile v3.27.0
+   Compiling tiny-skia v0.11.4
+   Compiling wayland-client v0.31.15
+   Compiling rusty-fork v0.3.1
+   Compiling zbus v5.19.0
+   Compiling serde_spanned v1.1.3
+   Compiling proptest v1.12.0
+   Compiling toml v1.2.1+spec-1.1.0
+   Compiling resvg v0.46.0
+   Compiling naga v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling omnia-doc v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-doc)
+   Compiling wgpu-types v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling embed-resource v3.0.12
+   Compiling tiff v0.11.3
+   Compiling atspi-common v0.13.0
+   Compiling gpui v0.2.2 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+   Compiling wayland-protocols v0.32.13
+   Compiling wgpu-naga-bridge v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling wgpu-hal v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling png v0.18.1
+   Compiling image v0.25.10
+   Compiling cipher v0.4.4
+   Compiling zruntime v0.2.3
+   Compiling atspi-proxies v0.13.0
+   Compiling wgpu-core-deps-linux-android-bsd v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling wgpu-core v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling harfrust v0.5.2
+   Compiling omnia-theme v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-theme)
+   Compiling cosmic-text v0.19.0
+   Compiling zed-font-kit v0.14.1-zed (https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269#94b0f281)
+   Compiling zbus v6.3.0
+   Compiling accesskit_atspi_common v0.19.1
+   Compiling wgpu v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling atspi v0.29.0
+   Compiling num-bigint-dig v0.9.1
+   Compiling aes v0.8.4
+   Compiling cbc v0.1.2
+   Compiling ashpd v0.13.13
+   Compiling async-net v2.0.0
+   Compiling calloop v0.14.5
+   Compiling wayland-cursor v0.31.14
+   Compiling oo7 v0.6.0 (https://github.com/zed-industries/oo7?rev=731c1215edb6905876c6137ab300428c7b8d7c13#731c1215)
+   Compiling gpui_wgpu v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+   Compiling calloop-wayland-source v0.4.1
+   Compiling smol v2.0.2
+   Compiling notify-rust v4.19.0
+   Compiling accesskit_unix v0.22.1
+   Compiling wayland-protocols-plasma v0.3.12
+   Compiling wayland-protocols-wlr v0.3.12
+   Compiling omnia-canvas v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-canvas)
+   Compiling gpui_linux v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+   Compiling omnia-symbols v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-symbols)
+   Compiling criterion v0.8.2
+   Compiling constant_time_eq v0.6.1
+   Compiling toml_parser v1.1.5+spec-1.1.0
+   Compiling gpui_platform v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+   Compiling omnia-app v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-app)
+   Compiling omnia-bench v0.1.0 (/home/marcus/t16-present-debug-20261116/source/crates/omnia-bench)
+   Compiling toml_datetime v1.1.3+spec-1.1.0
+   Compiling typed-path v0.13.0
+   Compiling zip v9.6.0
+   Compiling xtask v0.1.0 (/home/marcus/t16-present-debug-20261116/source/xtask)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 38s
+     Running unittests src/lib.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/omnia_app-cd98bfb24208b7fb)
+
+running 1 test
+test status_bar::tests::formats ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/omnia_app-febca7bd1ad00192)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/fonts.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/fonts-1b56be94b617610e)
+test bundled_font_patching_helpers ... ok
+test bundled_fonts_register_and_render_distinctly ... skipped: render_to_image unsupported on this platform
+     Running tests/navigation.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/navigation-91fd5ea7df5e26fe)
+
+running 6 tests
+test status_update_notifies_only_the_status_bar ... ok
+test middle_drag_pans_and_follows_the_pointer_off_the_sheet ... ok
+test space_drag_pans ... ok
+test pinch_zoom_keeps_the_world_point_under_the_pinch ... ok
+test touchpad_scroll_pans_by_the_delta ... ok
+test wheel_zoom_keeps_the_world_point_under_the_cursor ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running unittests src/lib.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/omnia_bench-ae814bbc0a77b0b6)
+
+running 37 tests
+test alloc::tests::heap_bytes_tracks_live_allocations ... ok
+test alloc::tests::scopes_separate_ours_from_total ... ok
+test compare::tests::identical_reports_pass ... ok
+test compare::tests::environment_difference_warns ... ok
+test compare::tests::every_metrics_prefix_must_match ... ok
+test compare::tests::improvements_pass ... ok
+test compare::tests::incomparable_reports_are_errors ... ok
+test compare::tests::missing_metric_fails ... ok
+test compare::tests::only_filters_metrics ... ok
+test driver::tests::pan_moves_one_device_pixel_per_frame ... ok
+test compare::tests::zero_base_regresses_on_any_increase ... ok
+test compare::tests::regression_over_limit_fails_and_at_limit_passes ... ok
+test driver::tests::parse_scripts ... ok
+test generate::tests::measure_10k ... ignored
+test compare::tests::json_lists_every_metric_and_the_verdict ... ok
+test harness::tests::baseline_is_scheduled_between_warmup_and_the_first_measured_frame ... ok
+test driver::tests::zoom_sweeps_k4_and_changes_every_frame ... ok
+test scene::tests::sheet_names ... ok
+test spike::s7::tests::a_pinch_without_started_is_still_a_gesture ... ok
+test scene::tests::placeholder_is_seeded_and_on_grid ... ok
+test spike::s7::tests::counts_a_pinch_followed_at_once_by_a_scroll ... ok
+test spike::s7::tests::entries_round_trip_through_json ... ok
+test spike::s7::tests::summarises_a_synthetic_log ... ok
+test hit::tests::report_uses_stress_sheet_and_comparison_schema ... ok
+test spike::s7::tests::summarises_an_empty_log ... ok
+test spike::tests::rejects_irrelevant_modes_and_oversized_loads ... ok
+test spike::tests::reports_name_the_mode ... ok
+test start::tests::median ... ok
+test spike::tests::orientation_preserves_pivot_and_reflects_only_last_four ... ok
+test stats::tests::delta_and_merge ... ok
+test stats::tests::nearest_rank_percentiles ... ok
+test spike::tests::s5_shapes_every_painted_bucket_before_the_first_measured_frame ... ok
+test stats::tests::present_intervals_over_refreshes ... ok
+test stats::tests::histogram_summary_in_milliseconds ... ok
+test trace::tests::preserves_long_intervals_and_present_call_separately ... ok
+test sys::tests::reads_process_counters ... ok
+test generate::tests::deterministic_counts_round_trip_and_invariants ... ok
+
+test result: ok. 36 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 6.54s
+
+     Running unittests src/main.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/omnia_bench-996b57c6230b8161)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/compare_cli.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/compare_cli-bde886449e3d0562)
+
+running 2 tests
+test metrics_prefix_matching_nothing_is_a_usage_error ... ok
+test json_is_written_on_pass_and_on_regression ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/omnia_canvas-c54c16ffb08f3ff1)
+
+running 26 tests
+test camera::tests::base_scale_and_exact_pixel_pan ... ok
+test camera::tests::limits_and_adjacent_nanometres_round_trip_at_all_zoom_extremes ... ok
+test camera::tests::fractional_pan_and_repeated_zoom_do_not_drift_at_sheet_corner ... ok
+test camera::tests::visible_rounds_outward_clips_and_tracks_resize ... ok
+test camera::tests::zoom_clamps_and_ignores_invalid_events ... ok
+test input::tests::a_lost_release_ends_the_drag ... ok
+test input::tests::cancelled_gestures_restore_the_camera ... ok
+test input::tests::left_drag_pans_only_while_space_is_held ... ok
+test input::tests::middle_drag_pans_by_the_pointer_movement ... ok
+test input::tests::one_notch_is_k4_and_round_trips ... ok
+test input::tests::pinch_zooms_about_the_pinch_position ... ok
+test input::tests::pixel_scroll_pans_by_exactly_the_delta ... ok
+test input::tests::status_reports_drawn_grid_and_zoom ... ok
+test input::tests::wheel_zoom_keeps_the_point_under_the_cursor ... ok
+test sheet::tests::fade_draws_the_finer_level_faded ... ok
+test sheet::tests::known_levels ... ok
+test sheet::tests::levels_nest_and_fade_is_continuous ... ok
+test sheet::tests::paints_paper_then_every_visible_dot ... ok
+test camera::tests::pan_moves_every_on_screen_point ... ok
+test camera::tests::round_trip_across_sheet_and_zoom_range ... ok
+test camera::tests::anchored_zoom_within_one_nm ... ok
+test snap_px::tests::rounding_is_translation_invariant ... ok
+test snap_px::tests::stroke_never_below_one_device_pixel ... ok
+test sheet::tests::pitch_stays_in_range_across_k4 ... ok
+test snap_px::tests::centered_square_keeps_its_size_and_nearest_centre ... ok
+test snap_px::tests::gpui_keeps_our_device_rects ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/sheet_alloc.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/sheet_alloc-3876ae75163ef2c0)
+
+running 2 tests
+test counter_sees_allocations ... ok
+test paint_makes_no_allocation_after_the_first_frame ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+     Running tests/sheet_render.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/sheet_render-d9d41ab7048b9ca3)
+test sheet_dots_cover_whole_device_pixels ... skipped: render_to_image unsupported on this platform
+     Running unittests src/lib.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/omnia_doc-645b81c52c292c11)
+
+running 34 tests
+test arena::tests::restore_rejects_live_and_unallocated_ids ... ok
+test connectivity::tests::crossing_wires_do_not_connect_and_cycle_remove_stays_connected ... ok
+test connectivity::tests::label_before_wire_and_split_leaving_labels_at_both_ends ... ok
+test connectivity::tests::missing_ids_duplicate_ids_and_parallel_wires ... ok
+test connectivity::tests::net_labels_join_and_split_nets_including_shorted_multi_labels ... ok
+test connectivity::tests::net_wires_allocates_nothing_with_capacity ... ok
+test connectivity::tests::visit_gen_wraparound_works ... ok
+test doc::io::tests::empty_round_trip_and_writer_failure ... ok
+test doc::io::tests::bulk_constructor_and_load_reject_invalid_parts ... ok
+test doc::io::tests::rejects_corrupt_geometry_and_versions ... ok
+test doc::tests::bodies_do_not_count_and_removed_ends_leave_no_dot ... ok
+test doc::io::tests::round_trip_preserves_holes_revision_pins_and_future_ids ... ok
+test doc::tests::inv1_checked_at_insert ... ok
+test doc::tests::revisions_and_rejected_mutations ... ok
+test geom::tests::checked_constructors_reject_outside_k1 ... ok
+test geom::tests::each_orientation_applied_to_a_point ... ok
+test geom::tests::no_overflow_on_in_range_points ... ok
+test geom::tests::orient_forms_a_group ... ok
+test geom::tests::snap_to_inv9_and_half_step_bound ... ok
+test geom::tests::snap_to_known_values_and_ties ... ok
+test arena::tests::remove_restore_preserves_identity ... ok
+test hit::tests::inclusive_circle_body_distance_and_deterministic_ties ... ok
+test hit::tests::art_crossing_sheet_edges_remains_indexable_pickable_and_snappable ... ok
+test hit::tests::removed_slots_and_sheet_edges ... ok
+test index::tests::generation_wrap_resets_stamps ... ok
+test index::tests::grid_covers_the_sheet ... ok
+test index::tests::insert_moves_and_rejects_bad_bounds ... ok
+test index::tests::long_wire_registered_in_every_cell_it_crosses ... ok
+test doc::tests::inv3_matches_brute_force_after_each_edit ... ok
+test snap::tests::inv9_dense_off_grid_geometry ... ok
+test snap::tests::priorities_and_settling_off_grid_targets ... ok
+test hit::tests::indexed_matches_independent_brute_force_and_snap_inv9 ... ok
+test index::tests::query_matches_brute_force ... ok
+test connectivity::tests::inv10_incremental_equals_rebuild_over_random_sequences ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.90s
+
+     Running tests/index_alloc.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/index_alloc-67a8c590f4890c50)
+
+running 1 test
+test query_allocates_nothing_with_capacity ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/lib.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/omnia_symbols-e5b6a70958ba0d89)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/symbols.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/symbols-022a6f31a135bab1)
+
+running 3 tests
+test builtin_library_has_all_six_mockup_symbols ... ok
+test pins_land_on_k2_lattice_and_match_symbols_mjs ... ok
+test write_svg_at_original_stroke_matches_vendor_svg_under_resvg ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running unittests src/lib.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/omnia_theme-63c647ba2e2b2900)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/inv6.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/inv6-f83b393610ac9ebe)
+
+running 4 tests
+test detector_handles_non_ascii_text ... ok
+test detector_ignores_lookalikes ... ok
+test detector_finds_planted_literals ... ok
+test inv6_omnia_canvas_has_no_colour_literal ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/tokens.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/tokens-5e7e3cb2c6a2827d)
+
+running 2 tests
+test overlay_values_follow_q2 ... ok
+test both_themes_have_every_token ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/home/marcus/t16-present-debug-20261116/target/debug/deps/xtask-901fc07b0a66cdef)
+
+running 7 tests
+test symbols::tests::fails_when_a_pin_is_off_the_lattice ... ok
+test symbols::tests::generated_rs_is_up_to_date ... ok
+test symbols::tests::every_vendored_svg_compiles ... ok
+test tokens::tests::overlay_references_resolve_per_mode_and_figcraft_wins ... ok
+test tests::inv12_document_and_symbols_are_gpui_independent ... ok
+test tokens::tests::every_figcraft_colour_and_overlay_token_is_generated ... ok
+test tokens::tests::generated_rs_is_up_to_date ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.68s
+
+   Doc-tests omnia_app
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests omnia_bench
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests omnia_canvas
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests omnia_doc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests omnia_symbols
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests omnia_theme
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

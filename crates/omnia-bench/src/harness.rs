@@ -203,6 +203,7 @@ struct RunView {
     paint_time: Rc<Cell<Option<Duration>>>,
     started: Instant,
     outcome: Outcome,
+    trace: Option<crate::trace::FrameTrace>,
 }
 
 impl Render for RunView {
@@ -437,10 +438,16 @@ impl RunView {
             warnings.push("window was not active: present intervals are not recorded".into());
         }
 
+        let diagnostic_trace = self.trace.as_mut().map(|trace| trace.collect());
+        let mut config = self.config.to_json();
+        if diagnostic_trace.is_some() {
+            // compare requires matching config: traced costs must not be compared to gates.
+            config["diagnostic_trace"] = json!(true);
+        }
         Ok(json!({
             "schema": SCHEMA,
             "kind": "run",
-            "config": self.config.to_json(),
+            "config": config,
             "scene_details": self.scene.as_ref().map(|s|s.borrow().details()),
             "spike": match self.config.sheet { Sheet::Spike(c) => Some(c.json()), _ => None },
             "environment": environment(window, cx),
@@ -453,6 +460,7 @@ impl RunView {
             },
             "warnings": warnings,
             "metrics": metrics,
+            "diagnostic_trace": diagnostic_trace,
         }))
     }
 }
@@ -476,12 +484,14 @@ pub(crate) fn primitive_counts(window: &Window) -> Value {
 }
 
 pub fn run(config: RunConfig) -> Result<Value, String> {
+    let tracing = std::env::var_os("OMNIA_BENCH_TRACE").is_some();
+    let enabled_trace = tracing && gpui::set_trace_enabled(true);
     // Generous: 600 frames take 10 s at 60 Hz.
     watchdog(
         "run",
         Duration::from_secs(60) + Duration::from_millis(100) * (config.frames + config.warmup),
     );
-    run_app("run", move |cx, outcome| {
+    let result = run_app("run", move |cx, outcome| {
         if matches!(config.sheet, Sheet::Spike(c) if c.scene==5) {
             cx.text_system()
                 .add_fonts(vec![std::borrow::Cow::Borrowed(
@@ -506,12 +516,17 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
                 paint_time: Rc::new(Cell::new(None)),
                 started: Instant::now(),
                 outcome,
+                trace: tracing.then(crate::trace::FrameTrace::new),
             })
         })
         .map_err(|e| format!("open window: {e}"))?;
         cx.activate(true);
         Ok(())
-    })
+    });
+    if enabled_trace {
+        gpui::set_trace_enabled(false);
+    }
+    result
 }
 
 // ---- idle ---------------------------------------------------------------------------------
