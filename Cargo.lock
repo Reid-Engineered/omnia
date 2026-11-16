@@ -3513,6 +3513,9 @@ version = "0.1.0"
 [[package]]
 name = "omnia-doc"
 version = "0.1.0"
+dependencies = [
+ "proptest",
+]
 
 [[package]]
 name = "omnia-symbols"
