@@ -210,7 +210,7 @@ returns a `Change` that the views use to decide what to repaint.
   are never reused in a session, and `restore(id, value)` puts a removed item back under its
   old id. Undo and redo need this; a generational slot map would hand back a new key.
 - A wire is one axis-aligned segment. A routed wire is several segments.
-- Every edit is a `Command`. `apply` returns a `Change` and pushes the inverse on the undo stack.
+- Every edit is a `Command`. `apply` returns a `Change` and pushes the inverse on the undo stack for effective edits. Validated no-ops return `dirty: None` and preserve revision, undo and redo.
 - Connectivity, geometric level: a hash map from point to the wire ends and pins at that
   point. The map resolves stable internal point slots; wire endpoints and component membership
   cache those slots for traversal. These slots may be reused after their last incidence is removed
@@ -419,7 +419,7 @@ pub enum Command {
     Paste { clip: Clip, at: Pt },
     Batch(Vec<Command>),
 }
-pub struct Change { pub revision: u64, pub dirty: Rect,
+pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
                 WireBody { wire: WireId, at: Pt }, Grid(Pt) }
@@ -433,6 +433,7 @@ impl Doc {
                       wires: impl IntoIterator<Item = Wire>,
                       labels: impl IntoIterator<Item = Label>) -> Result<Self, StoreError>;
     pub fn revision(&self) -> u64; // advances monotonically (+1) on every committed apply, undo, or redo (D8)
+    // Validated no-ops return dirty=None with unchanged revision/history/redo.
     pub fn apply(&mut self, cmd: Command) -> Result<Change, CommandError>;
     pub fn undo(&mut self) -> Option<Change>;
     pub fn redo(&mut self) -> Option<Change>;

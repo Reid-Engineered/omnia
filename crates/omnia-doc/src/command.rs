@@ -89,7 +89,9 @@ impl From<GeomError> for CommandError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     pub revision: u64,
-    pub dirty: Rect,
+    /// No region for a validated no-op; callers must not repaint in that case.
+    pub dirty: Option<Rect>,
+    /// Added and removed IDs are unordered sets, independent of command input order.
     pub added: Vec<ItemId>,
     pub removed: Vec<ItemId>,
     pub nets_changed: bool,
@@ -130,7 +132,7 @@ impl ChangeAcc {
     pub(crate) fn into_change(self, revision: u64) -> Change {
         Change {
             revision,
-            dirty: undo::item_bounds_or_zero(self.dirty),
+            dirty: self.dirty,
             added: self.added,
             removed: self.removed,
             nets_changed: self.nets_changed,
@@ -141,8 +143,10 @@ impl ChangeAcc {
 pub(crate) fn apply_command(doc: &mut Doc, cmd: Command) -> Result<Change, CommandError> {
     let mut acc = ChangeAcc::default();
     let undo_op = apply_inner(doc, cmd, &mut acc)?;
-    doc.history.push_undo(undo_op);
-    doc.bump_revision();
+    if acc.dirty.is_some() {
+        doc.history.push_undo(undo_op);
+        doc.bump_revision();
+    }
     Ok(acc.into_change(doc.revision()))
 }
 
@@ -250,7 +254,11 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
             })
         }
         Command::SetText { item, field, text } => {
-            let (old_text, bounds, nets_changed) = doc.set_text_raw(item, field, text)?;
+            let (old_text, bounds, nets_changed) =
+                doc.set_text_raw(item, field, Arc::clone(&text))?;
+            if old_text == text {
+                return Ok(UndoOp::Batch(Vec::new()));
+            }
             acc.record_dirty(bounds);
             if nets_changed {
                 acc.nets_changed = true;
@@ -282,6 +290,8 @@ fn apply_batch(
                 for op in undo_ops.into_iter().rev() {
                     undo::apply_undo_op(doc, op, &mut scratch);
                 }
+                // Rolled-back allocations were never issued by a committed command.
+                // Preserve all previously issued IDs while restoring exact pre-batch state.
                 doc.parts.slots.truncate(parts_len);
                 doc.wires.slots.truncate(wires_len);
                 doc.labels.slots.truncate(labels_len);
@@ -410,11 +420,6 @@ fn validate_reorient(
 
 pub(crate) fn apply_move_raw(doc: &mut Doc, items: &[ItemId], delta: Pt, acc: &mut ChangeAcc) {
     if delta == Pt::ZERO {
-        for &item in items {
-            if let Some(bounds) = doc.index.bounds(item) {
-                acc.record_dirty(bounds);
-            }
-        }
         return;
     }
 
@@ -518,11 +523,6 @@ pub(crate) fn apply_reorient_raw(
     acc: &mut ChangeAcc,
 ) {
     if by == Orient::IDENTITY {
-        for &item in items {
-            if let Some(bounds) = doc.index.bounds(item) {
-                acc.record_dirty(bounds);
-            }
-        }
         return;
     }
 
@@ -720,6 +720,75 @@ mod tests {
     }
 
     #[test]
+    fn no_op_commands_preserve_history_revision_and_redo() {
+        let label = Label {
+            at: Pt { x: 100, y: 0 },
+            text: "GND".into(),
+        };
+        let mut doc = Doc::new();
+        doc.apply(Command::AddLabel(label.clone())).unwrap();
+        doc.apply(Command::AddLabel(Label {
+            at: Pt::ZERO,
+            text: "VCC".into(),
+        }))
+        .unwrap();
+        doc.undo().unwrap(); // Keep a live label and an available redo operation.
+        let before = doc.save_to_vec_for_test();
+        let revision = doc.revision();
+        let item = ItemId::Label(crate::LabelId(0));
+        for cmd in [
+            Command::Batch(vec![]),
+            Command::AddWires(vec![]),
+            Command::Delete(vec![]),
+            Command::Move {
+                items: vec![],
+                delta: Pt { x: 1, y: 0 },
+            },
+            Command::Reorient {
+                items: vec![],
+                pivot: Pt::ZERO,
+                by: Orient::ROT_90,
+            },
+            Command::Move {
+                items: vec![item],
+                delta: Pt::ZERO,
+            },
+            Command::Reorient {
+                items: vec![item],
+                pivot: Pt::ZERO,
+                by: Orient::IDENTITY,
+            },
+            Command::SetText {
+                item,
+                field: TextField::Label,
+                text: label.text,
+            },
+            Command::Batch(vec![Command::Batch(vec![]), Command::Delete(vec![])]),
+        ] {
+            let change = doc.apply(cmd).unwrap();
+            assert_eq!(change.revision, revision);
+            assert_eq!(change.dirty, None);
+            assert!(change.added.is_empty() && change.removed.is_empty());
+            assert!(!change.nets_changed);
+            assert_eq!(doc.save_to_vec_for_test(), before);
+            assert_doc_consistent(&doc);
+        }
+        assert!(doc.redo().is_some(), "no-op must not consume redo history");
+        assert_eq!(doc.labels().count(), 2);
+        doc.undo().unwrap();
+        doc.undo().unwrap();
+        assert!(doc.undo().is_none(), "no-op must not add undo entries");
+        // A semantically inert command still validates its target and field.
+        assert!(matches!(
+            doc.apply(Command::Move {
+                items: vec![item],
+                delta: Pt::ZERO
+            }),
+            Err(CommandError::MissingItem(_))
+        ));
+    }
+
+    #[test]
     fn move_100_items_success_and_failure_rollback() {
         let mut doc = Doc::new();
         let local_bounds = rect(-10, -20, 10, 20);
@@ -844,15 +913,15 @@ mod tests {
         assert_eq!(ch.revision, pre_move_rev + 1);
         assert!(ch.nets_changed);
         // Dirty rect covers old & new extents of all moved items including edge label at SHEET_LIMIT_NM - 5.
-        assert!(ch.dirty.contains(Pt {
+        assert!(ch.dirty.unwrap().contains(Pt {
             x: SHEET_LIMIT_NM - 5,
             y: 0
         }));
-        assert!(ch.dirty.contains(Pt {
+        assert!(ch.dirty.unwrap().contains(Pt {
             x: SHEET_LIMIT_NM - 55,
             y: 25
         }));
-        assert!(ch.dirty.contains(Pt { x: -10, y: -20 }));
+        assert!(ch.dirty.unwrap().contains(Pt { x: -10, y: -20 }));
         assert_doc_consistent(&doc);
 
         let moved_snap = doc.save_to_vec_for_test();
@@ -933,7 +1002,7 @@ mod tests {
             })
             .unwrap();
         assert!(c.nets_changed);
-        assert_eq!(c.dirty, rect(500, 0, 500, 0));
+        assert_eq!(c.dirty, Some(rect(500, 0, 500, 0)));
         assert_eq!(
             doc.net_at(Pt { x: 200, y: 0 }),
             doc.net_at(Pt { x: 500, y: 0 })
@@ -993,6 +1062,7 @@ mod tests {
             let pre_wire = *doc.wire(w0).unwrap();
             let pre_label = doc.label(l0).unwrap().at;
             let pre_bounds = rect(80, -10, 200, 10);
+            let before_orient = doc.save_to_vec_for_test();
             let ch = doc
                 .apply(Command::Reorient {
                     items: group.clone(),
@@ -1000,6 +1070,12 @@ mod tests {
                     by,
                 })
                 .unwrap();
+            if by == Orient::IDENTITY {
+                assert_eq!(ch.dirty, None);
+                assert_eq!(doc.save_to_vec_for_test(), before_orient);
+                assert_doc_consistent(&doc);
+                continue; // Identity adds no undo step.
+            }
             let expected_pins: Vec<Pt> = pre_pins
                 .iter()
                 .map(|&p| by.checked_apply_around(p, pivot).unwrap())
@@ -1018,9 +1094,9 @@ mod tests {
                 doc.label(l0).unwrap().at,
                 by.checked_apply_around(pre_label, pivot).unwrap()
             );
-            assert!(ch.dirty.contains_rect(pre_bounds));
-            assert!(ch.dirty.contains(new_wire.a));
-            assert!(ch.dirty.contains(new_wire.b));
+            assert!(ch.dirty.unwrap().contains_rect(pre_bounds));
+            assert!(ch.dirty.unwrap().contains(new_wire.a));
+            assert!(ch.dirty.unwrap().contains(new_wire.b));
             assert_doc_consistent(&doc);
 
             doc.undo().unwrap();
@@ -1109,14 +1185,14 @@ mod tests {
                 local_bounds: bounds,
             })
             .unwrap();
-        assert_eq!(p0.dirty, rect(-120, -50, 120, 50));
+        assert_eq!(p0.dirty, Some(rect(-120, -50, 120, 50)));
         let mv = doc
             .apply(Command::Move {
                 items: p0.added.clone(),
                 delta: Pt { x: GRID_NM, y: 0 },
             })
             .unwrap();
-        assert_eq!(mv.dirty, rect(-120, -50, GRID_NM + 120, 50));
+        assert_eq!(mv.dirty, Some(rect(-120, -50, GRID_NM + 120, 50)));
     }
 
     #[test]
@@ -1469,6 +1545,15 @@ mod tests {
                         let before_doc = Doc::load(before_bytes.as_slice()).unwrap();
                         let pre_rev = doc.revision();
                         match doc.apply(cmd) {
+                            Ok(change) if change.dirty.is_none() => {
+                                prop_assert_eq!(change.revision, pre_rev);
+                                prop_assert_eq!(doc.revision(), pre_rev);
+                                prop_assert_eq!(doc.save_to_vec_for_test(), before_bytes);
+                                prop_assert_eq!(&doc, &before_doc);
+                                prop_assert!(change.added.is_empty() && change.removed.is_empty());
+                                prop_assert!(!change.nets_changed);
+                                assert_doc_consistent(&doc);
+                            }
                             Ok(change) => {
                                 prop_assert_eq!(change.revision, pre_rev + 1);
                                 prop_assert_eq!(doc.revision(), pre_rev + 1);

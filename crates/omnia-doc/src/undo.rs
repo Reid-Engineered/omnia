@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::{
-    Change, Doc, ItemId, Label, LabelId, Orient, PartId, Pt, Rect, Wire, WireId,
+    Change, Doc, ItemId, Label, LabelId, Orient, PartId, Pt, Wire, WireId,
     command::{self, ChangeAcc, TextField},
     doc::StoredPart,
 };
@@ -276,11 +276,4 @@ pub(crate) fn apply_undo_op(doc: &mut Doc, op: UndoOp, acc: &mut ChangeAcc) -> U
             UndoOp::Batch(next_ops)
         }
     }
-}
-
-pub(crate) fn item_bounds_or_zero(rect: Option<Rect>) -> Rect {
-    rect.unwrap_or(Rect {
-        min: Pt::ZERO,
-        max: Pt::ZERO,
-    })
 }
