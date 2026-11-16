@@ -176,13 +176,27 @@ fn trim_trailing_none<T>(slots: &[Option<T>]) -> &[Option<T>] {
     &slots[..end]
 }
 
-// Equality compares authoritative items and their exact IDs (INV4), ignoring trailing
-// undo-reserved holes (D2), monotonic revision (D8), history, and derived state.
-impl PartialEq for Doc {
-    fn eq(&self, other: &Self) -> bool {
+impl Doc {
+    /// Compares live content and exact live IDs, including interior holes and pin/art geometry.
+    ///
+    /// Unlike `PartialEq`, this ignores revision and trailing reserved slots. Undo restores
+    /// this content while advancing revision and retaining issued IDs for redo (INV4/D2/D8).
+    /// Equal content does not imply equal serialization or equal future ID allocation.
+    pub fn content_eq(&self, other: &Self) -> bool {
         trim_trailing_none(&self.parts.slots) == trim_trailing_none(&other.parts.slots)
             && trim_trailing_none(&self.wires.slots) == trim_trailing_none(&other.wires.slots)
             && trim_trailing_none(&self.labels.slots) == trim_trailing_none(&other.labels.slots)
+    }
+}
+
+// Persistent-state equality retains the pre-command contract: revision and all reserved
+// slots matter. History and derived caches are not serialized and are not compared.
+impl PartialEq for Doc {
+    fn eq(&self, other: &Self) -> bool {
+        self.revision == other.revision
+            && self.parts.slots == other.parts.slots
+            && self.wires.slots == other.wires.slots
+            && self.labels.slots == other.labels.slots
     }
 }
 impl Eq for Doc {}
@@ -190,6 +204,50 @@ impl Eq for Doc {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn content_equality_does_not_hide_revision_or_reserved_ids() {
+        let fresh = Doc::new();
+        let mut edited = Doc::new();
+        let label = Label {
+            at: Pt::ZERO,
+            text: "GND".into(),
+        };
+        edited
+            .apply(crate::Command::AddLabel(label.clone()))
+            .unwrap();
+        edited.undo().unwrap();
+        assert!(edited.content_eq(&fresh));
+        assert_ne!(edited, fresh);
+        let mut saved = Vec::new();
+        edited.save(&mut saved).unwrap();
+        let mut loaded = Doc::load(saved.as_slice()).unwrap();
+        assert_eq!(edited, loaded);
+        let mut same_revision = Doc::new();
+        same_revision.revision = edited.revision;
+        assert_ne!(
+            edited, same_revision,
+            "reserved slots remain part of equality"
+        );
+        let mut different_revision = Doc::load(saved.as_slice()).unwrap();
+        different_revision.revision += 1;
+        assert_ne!(
+            edited, different_revision,
+            "revision remains part of equality"
+        );
+        let mut fresh = fresh;
+        let fresh_id = fresh
+            .apply(crate::Command::AddLabel(label.clone()))
+            .unwrap()
+            .added;
+        let edited_id = loaded.apply(crate::Command::AddLabel(label)).unwrap().added;
+        assert_eq!(fresh_id, vec![ItemId::Label(LabelId(0))]);
+        assert_eq!(edited_id, vec![ItemId::Label(LabelId(1))]);
+        assert!(
+            !fresh.content_eq(&loaded),
+            "live IDs remain part of content comparison"
+        );
+    }
 
     #[test]
     fn round_trip_preserves_holes_revision_pins_and_future_ids() {

@@ -301,7 +301,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 | INV1 | A wire is axis-aligned and its ends differ. [T2.1] |
 | INV2 | The document never holds a wire end on another wire's interior; `apply` splits. Crossing interiors never connect. [T6.1] |
 | INV3 | A junction dot exists exactly where three or more ends or pins meet. Dots are never stored. [T2.1] |
-| INV4 | The document changes only through `Doc::apply`, `undo`, `redo`. `apply(c)` then `undo()` gives a document equal to the original, ids included; `undo` then `redo` likewise. [T5.1] |
+| INV4 | The document changes only through `Doc::apply`, `undo`, `redo`. `apply(c)` then `undo()` restores `content_eq` with the original, exact live ids included; `undo` then `redo` likewise. Revision advances monotonically and issued ids remain reserved (D2/D8); persistent-state equality remains stricter. [T5.1] |
 | INV5 | During a gesture the document revision does not change. A committed gesture is exactly one undo step. Esc leaves the revision unchanged. [T5.2] |
 | INV6 | `omnia-canvas` contains no colour literal; colours come from `omnia-theme`. [T1.2] |
 | INV7 | `SheetView`'s paint calls neither `paint_path` nor `canvas()` and makes no heap allocation once warm. [T2.5] |
@@ -455,8 +455,10 @@ impl Doc {
     pub fn load(r: impl io::Read) -> io::Result<Self>;
     // Version 2 RON embeds local bounds and pins (omnia-symbols depends on omnia-doc).
     // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points, index and connectivity.
-    // T5.1 (INV4 + D2 + D8): Equality compares authoritative slots (exact live IDs and interior gaps),
-    // local bounds and pins, excluding monotonic revision, trailing undo-reserved holes, history, and derived state.
+    pub fn content_eq(&self, other: &Self) -> bool; // live items, exact live IDs, interior gaps, bounds/pins
+    // PartialEq compares persistent state, including revision and every reserved slot (pre-T5.1 contract).
+    // content_eq ignores revision and trailing undo reservations for INV4 + D2 + D8.
+    // History and derived caches are excluded from both comparisons and serialization.
 }
 // T4.2 interaction functions (re-exported by omnia-doc).
 // T2.8: free functions use Doc's owned index and stored body geometry.

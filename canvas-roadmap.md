@@ -1344,14 +1344,15 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        IDs and keep SpatialIndex, Points, and Connectivity synchronized.
                        INV4 + D2 + D8 reconciliation: Doc::revision() advances monotonically
                        (+1) on every committed apply, undo, and redo (D8), and History stays
-                       private outside serialization; PartialEq for Doc compares
-                       authoritative live items/IDs, interior holes, local bounds, and pins
-                       while ignoring monotonic revision, trailing undo-reserved None slots
-                       left after undoing fresh inserts (D2), history, and derived state.
+                       private outside serialization. Review correction preserves PartialEq
+                       over persistent state including revision and every reserved slot;
+                       explicit Doc::content_eq compares live items/IDs, interior holes,
+                       local bounds and pins for INV4, excluding monotonic revision and
+                       trailing undo reservations (D2). History/caches are excluded from both.
                        RON v2 save/load preserves revision and all slots verbatim. PlacePart
                        takes caller-supplied local_pins and local_bounds (no doc->symbols
                        cycle). Plan section 9 updated for Command signatures and equality.
-                       Tests (46 omnia-doc unit/proptest + 3 index_alloc integration):
+                       Tests (47 omnia-doc unit/proptest + 3 index_alloc integration):
                        compound 100-item Move success and failure rollback (including OOB
                        preserving redo stack), duplicate/missing IDs, delete/restore IDs for
                        parts/wires/labels, off-origin Reorient pivots across all 8 Orients

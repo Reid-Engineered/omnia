@@ -861,11 +861,11 @@ mod tests {
         assert_eq!(doc.revision(), pre_move_rev + 2);
         assert_doc_consistent(&doc);
         let loaded_snap = Doc::load(snap_bytes.as_slice()).unwrap();
-        assert_eq!(doc, loaded_snap);
+        assert!(doc.content_eq(&loaded_snap));
 
         let redo_ch = doc.redo().unwrap();
         assert_eq!(redo_ch.dirty, ch.dirty);
-        assert_eq!(doc, Doc::load(moved_snap.as_slice()).unwrap());
+        assert!(doc.content_eq(&Doc::load(moved_snap.as_slice()).unwrap()));
         assert_doc_consistent(&doc);
     }
 
@@ -1323,11 +1323,11 @@ mod tests {
                             prop_assert!(doc.redo().is_some());
                             prop_assert_eq!(doc.revision(), pre_rev + 2);
                             let before_doc = Doc::load(snap_before.as_slice()).unwrap();
-                            prop_assert_eq!(&doc, &before_doc);
+                            prop_assert!(doc.content_eq(&before_doc));
                             assert_doc_consistent(&doc);
                             // Undo back so history state stays at the undone point.
                             prop_assert!(doc.undo().is_some());
-                            prop_assert_eq!(&doc, &Doc::load(snap_after_undo.as_slice()).unwrap());
+                            prop_assert!(doc.content_eq(&Doc::load(snap_after_undo.as_slice()).unwrap()));
                         } else {
                             prop_assert_eq!(doc.revision(), pre_rev);
                         }
@@ -1480,14 +1480,14 @@ mod tests {
                                 let undo_change = doc.undo();
                                 prop_assert!(undo_change.is_some());
                                 prop_assert_eq!(doc.revision(), pre_rev + 2);
-                                prop_assert_eq!(&doc, &before_doc);
+                                prop_assert!(doc.content_eq(&before_doc));
                                 assert_doc_consistent(&doc);
 
                                 // INV4: undo() then redo() gives a document equal to after apply(c), IDs included.
                                 let redo_change = doc.redo();
                                 prop_assert!(redo_change.is_some());
                                 prop_assert_eq!(doc.revision(), pre_rev + 3);
-                                prop_assert_eq!(&doc, &after_doc);
+                                prop_assert!(doc.content_eq(&after_doc));
                                 assert_doc_consistent(&doc);
                             }
                             Err(_) => {
