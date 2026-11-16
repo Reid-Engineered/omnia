@@ -1,0 +1,187 @@
+{
+  "schema": 1,
+  "kind": "spike",
+  "config": {
+    "sheet": "spike",
+    "script": "pan",
+    "frames": 600,
+    "warmup": 60,
+    "window_logical": [
+      1920.0,
+      1080.0
+    ],
+    "scene_counts": true,
+    "spike": {
+      "scene": "s6",
+      "count": 20000,
+      "mode": 1,
+      "reference_machine": false
+    }
+  },
+  "scene_details": {
+    "atlas_pages": 0,
+    "atlas": [],
+    "atlas_readout": "page sizes inferred from first tile and pinned DirectX/wgpu allocation rule; requires scene-counts",
+    "paint_calls": 5,
+    "paint_trace_columns": [
+      "frame",
+      "size_logical",
+      "ms",
+      "ours_allocs",
+      "total_allocs"
+    ],
+    "paint_trace": [
+      [
+        0,
+        24.0,
+        7.9736970000000005,
+        0,
+        177
+      ],
+      [
+        1,
+        24.0,
+        5.650472,
+        0,
+        13
+      ],
+      [
+        2,
+        24.0,
+        4.130021999999999,
+        0,
+        0
+      ],
+      [
+        3,
+        24.0,
+        6.614476,
+        0,
+        0
+      ],
+      [
+        4,
+        24.0,
+        3.100804,
+        0,
+        0
+      ]
+    ],
+    "scale_trace": []
+  },
+  "spike": {
+    "scene": "s6",
+    "count": 20000,
+    "mode": 1,
+    "reference_machine": false
+  },
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) HD Graphics 620 (KBL GT2)",
+      "driver_name": "Intel open-source Mesa driver",
+      "driver_info": "Mesa 26.2.3-arch1.1"
+    },
+    "fullscreen": true,
+    "os": "linux",
+    "arch": "x86_64",
+    "logical_cpus": 4,
+    "scale_factor": 1.0,
+    "viewport_logical": [
+      1920.0,
+      1080.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 60.008
+  },
+  "frames": {
+    "drawn": 600,
+    "on_time": 600,
+    "late": 0,
+    "unmeasured": 0,
+    "wall_s": 11.1845
+  },
+  "warnings": [],
+  "metrics": {
+    "frame_ms": {
+      "mean": 4.0176,
+      "p50": 4.0223,
+      "p95": 6.1358,
+      "p99": 7.0615,
+      "max": 9.8304
+    },
+    "draw_ms": {
+      "mean": 4.0033,
+      "p50": 4.01,
+      "p95": 6.1194,
+      "p99": 7.0369,
+      "max": 9.8058
+    },
+    "dirty_to_present_ms": {
+      "mean": 5.8722,
+      "p50": 5.886,
+      "p95": 8.6426,
+      "p99": 9.9779,
+      "max": 12.6484
+    },
+    "present_interval_ms": {
+      "mean": 16.7319,
+      "p50": 16.7035,
+      "p95": 17.9569,
+      "p99": 19.8246,
+      "max": 30.933
+    },
+    "allocs_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 223.8467,
+        "p50": 224.0,
+        "p95": 224.0,
+        "p99": 224.0,
+        "max": 225.0
+      }
+    },
+    "alloc_bytes_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 27779.52,
+        "p50": 27736.0,
+        "p95": 27736.0,
+        "p99": 27736.0,
+        "max": 44120.0
+      }
+    },
+    "late_frames": 0,
+    "missed_refreshes": 0,
+    "memory_mb": 62.207,
+    "working_set_mb": 106.2422,
+    "heap_peak_mb": 31.1402,
+    "primitives": {
+      "shadows": 0,
+      "quads": 20002,
+      "paths": 0,
+      "underlines": 0,
+      "monochrome_sprites": 0,
+      "subpixel_sprites": 0,
+      "polychrome_sprites": 0,
+      "surfaces": 0,
+      "batches": 1,
+      "paint_operations": 20004
+    }
+  }
+}

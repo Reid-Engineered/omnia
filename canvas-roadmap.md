@@ -183,7 +183,7 @@ of the `canvas` lane.
   Plan A on the reference machine, set D4 to DECIDED. Otherwise set this task to
   `needs-human` and stop: no rendering task may start.
 
-### T0.8 Reference machine bring-up (Linux) · todo
+### T0.8 Reference machine bring-up (Linux) · done
 - Lane: bench · Depends: T0.4 · Read: plan sections 2.1, 4 and 8
 - Owns: `docs/measurements/T0.8.md`, `docs/measurements/T0.8/`, a POSIX copy of the spike
   measurement script, and the Linux side of `omnia-bench` features
@@ -823,3 +823,29 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        the bench up on Orion and re-runs the spikes there; T0.6 now depends on
                        it. An S1 re-run on the ASUS under the same protocol (T0.4-ref) showed
                        T-quad passing there; it is Windows evidence, not a reference result.
+
+2026-11-15 T0.8 done — Orion ThinkPad T470, i5-7300U/HD 620, Arch/KDE Wayland,
+                       Mesa ANV 26.2.3; pinned GPUI uses wgpu, not blade. Enabled
+                       Linux Wayland in app/bench, gated unsupported image tests
+                       and Windows readback, added Linux process counters and a
+                       Bash reference runner. GPUI revision unchanged. G10/G12
+                       differ; G11 same; G13 common CPU stats; G16 headless lacks
+                       frame callbacks. Source lines: docs/measurements/T0.8.md.
+                       370 successful runs, ten rotating repetitions per case,
+                       740 power snapshots; AC, powersave, native 1080p/60 Hz.
+                       S1 at 100% and 125%; requested fixed S3/S4/S5/S6 and S8
+                       at 100%. 100% restored and verified. No fallback used.
+                       25k/70k draw p99 medians: 13.455/19.661 ms at 100%,
+                       13.312/19.628 ms at 125%; both T-quad limits fail.
+                       Sprite adds 15.988 ms; 12k glyphs add 16.299 ms fixed /
+                       10.765 ms direct; paths 10.771–34.000 us/path; replay
+                       49.043% of repaint. Exact 19k dirty-to-present p99
+                       13.210 ms passes GPUI's CPU submission metric only.
+                       S8 startup median 194.340 ms, idle zero frames, CPU
+                       median 0% [0,0.1]; Linux render_to_image unsupported.
+                       Numerical condition matches the Plan C row; T0.6 and
+                       owner decide. No rendering decision or threshold changed.
+                       Sleeping-panel watchdog failures and a script transition
+                       error are preserved; no completed sample was removed.
+                       fmt, workspace Clippy/tests, deny and scene-counts/readback
+                       Clippy passed on Linux. No check was weakened.

@@ -1,0 +1,14 @@
+WAYLAND_DEBUG=1 diagnostic; sleeping-panel run, not timing evidence.
+Mesa Vulkan WSI queue activity confirms native Vulkan presentation was used.
+[01:04:30.561142] {mesa vk display queue}  -> wl_display#1.get_registry(new id wl_registry#51)
+[01:04:30.561145] {mesa vk display queue}  -> wl_display#1.sync(new id wl_callback#50)
+[01:04:30.561330] {mesa vk display queue} wl_registry#51.global(1, "wl_compositor", 6)
+[01:04:30.561333] {mesa vk display queue} wl_registry#51.global(3, "zwp_tablet_manager_v2", 2)
+[01:04:30.561335] {mesa vk display queue} wl_registry#51.global(4, "zwp_keyboard_shortcuts_inhibit_manager_v1", 1)
+[01:04:30.561338] {mesa vk display queue} wl_registry#51.global(5, "xdg_session_manager_v1", 1)
+[01:04:30.561340] {mesa vk display queue} wl_registry#51.global(6, "zxdg_decoration_manager_v1", 2)
+[01:04:30.561343] {mesa vk display queue} wl_registry#51.global(7, "wp_viewporter", 1)
+[01:04:30.561345] {mesa vk display queue} wl_registry#51.global(8, "wp_security_context_manager_v1", 1)
+[01:04:30.561347] {mesa vk display queue} wl_registry#51.global(9, "wp_fractional_scale_manager_v1", 1)
+[01:04:30.561350] {mesa vk display queue} wl_registry#51.global(10, "wl_shm", 2)
+[01:04:30.561352] {mesa vk display queue} wl_registry#51.global(11, "wl_seat", 10)
