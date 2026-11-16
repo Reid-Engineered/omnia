@@ -1,0 +1,15 @@
+[package]
+name = "t28-reference"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+omnia-doc = { path = "../../../../crates/omnia-doc" }
+omnia-symbols = { path = "../../../../crates/omnia-symbols" }
+
+[[bin]]
+name = "t28-reference"
+path = "main.rs"

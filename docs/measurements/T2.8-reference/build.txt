@@ -1,0 +1,2 @@
+   Compiling t28-reference v0.1.0 (/home/marcus/t28-reference-13b4809/docs/measurements/T2.8-reference/runner)
+    Finished `release` profile [optimized] target(s) in 0.83s
