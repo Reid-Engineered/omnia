@@ -212,7 +212,11 @@ returns a `Change` that the views use to decide what to repaint.
 - A wire is one axis-aligned segment. A routed wire is several segments.
 - Every edit is a `Command`. `apply` returns a `Change` and pushes the inverse on the undo stack.
 - Connectivity, geometric level: a hash map from point to the wire ends and pins at that
-  point. Components grow by union on add. On remove, re-flood only the component touched.
+  point. The map resolves stable internal point slots; wire endpoints and component membership
+  cache those slots for traversal. These slots may be reused after their last incidence is removed
+  and are distinct from document IDs. Components grow by union on add. On remove, search from
+  both ends in the touched component; a meeting proves a cycle, otherwise transfer only the
+  first fully explored disconnected piece and repair the logical net.
 - Connectivity, logical level: components carrying the same net label share a `NetId`.
 - A connection exists only where an end or pin lies. A wire ending on another wire's body
   splits that wire on commit. A crossing with no end there is not a connection.

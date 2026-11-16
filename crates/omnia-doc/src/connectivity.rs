@@ -5,8 +5,8 @@
 //!    Only wires join two points; a pin or label only occupies one, so two abutting pins (or a
 //!    pin and a wire end) at the same point share a component. Adding a wire unions the
 //!    components at its endpoints (union-by-size); removing a wire takes an O(1) fast path when
-//!    an endpoint vanishes, and otherwise re-floods only the touched component via BFS using a
-//!    generation stamp on points. Adding or removing a pin never splits or joins components.
+//!    an endpoint vanishes, and otherwise searches from both ends using generation stamps. Only a disconnected
+//!    piece is transferred; cycle removals leave memberships intact. Adding or removing a pin never splits or joins components.
 //! 2. **Logical nets** (`NetId`) over `(Component, LabelText)`. Components carrying the same net
 //!    label text share a `NetId`. Label changes and component splits take O(1) fast paths in the
 //!    common single-label case and fall back to a bipartite re-flood of the touched net only when
@@ -41,6 +41,7 @@ struct WireEntry {
     wire: Wire,
     comp: CompId,
     comp_idx: u32,
+    ends: [usize; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -77,13 +78,76 @@ impl PointSlot {
     }
 }
 
+// Stable internal point slots keep graph traversal off the hash table. These are not
+// document IDs: a slot is recycled only after its last incidence has been removed.
+#[derive(Debug, Default)]
+struct PointStore {
+    index: FxHashMap<Pt, usize>,
+    slots: Vec<Option<(Pt, PointSlot)>>,
+    free: Vec<usize>,
+}
+impl PointStore {
+    fn clear(&mut self) {
+        self.index.clear();
+        self.slots.clear();
+        self.free.clear();
+    }
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.index.len()
+    }
+    fn keys(&self) -> impl Iterator<Item = &Pt> {
+        self.index.keys()
+    }
+    fn values_mut(&mut self) -> impl Iterator<Item = &mut PointSlot> {
+        self.slots
+            .iter_mut()
+            .filter_map(|s| s.as_mut().map(|(_, s)| s))
+    }
+    fn get(&self, at: &Pt) -> Option<&PointSlot> {
+        Some(&self.slots[*self.index.get(at)?].as_ref()?.1)
+    }
+    fn get_mut(&mut self, at: &Pt) -> Option<&mut PointSlot> {
+        Some(&mut self.slots[*self.index.get(at)?].as_mut()?.1)
+    }
+    fn insert(&mut self, at: Pt, slot: PointSlot) {
+        assert!(!self.index.contains_key(&at));
+        let id = if let Some(id) = self.free.pop() {
+            self.slots[id] = Some((at, slot));
+            id
+        } else {
+            let id = self.slots.len();
+            self.slots.push(Some((at, slot)));
+            id
+        };
+        self.index.insert(at, id);
+    }
+    fn get_or_insert_with(&mut self, at: Pt, make: impl FnOnce() -> PointSlot) -> &mut PointSlot {
+        if !self.index.contains_key(&at) {
+            self.insert(at, make());
+        }
+        self.get_mut(&at).unwrap()
+    }
+    fn remove(&mut self, at: &Pt) -> Option<PointSlot> {
+        let id = self.index.remove(at)?;
+        self.free.push(id);
+        Some(self.slots[id].take()?.1)
+    }
+}
+impl std::ops::Index<&Pt> for PointStore {
+    type Output = PointSlot;
+    fn index(&self, at: &Pt) -> &PointSlot {
+        self.get(at).unwrap()
+    }
+}
+
 type LabelCounts = SmallVec<[(Arc<str>, u32); 1]>;
 
 #[derive(Debug)]
 struct Comp {
     net: NetId,
     net_idx: u32,
-    points: Vec<Pt>,
+    points: Vec<usize>,
     wires: Vec<WireId>,
     label_counts: LabelCounts,
 }
@@ -105,7 +169,7 @@ pub struct Connectivity {
     labels: Vec<Option<LabelEntry>>,
     /// World pin positions per part, indexed by part id.
     parts: Vec<Option<Vec<Pt>>>,
-    points: FxHashMap<Pt, PointSlot>,
+    points: PointStore,
     comps: Vec<Option<Comp>>,
     free_comps: Vec<u32>,
     nets: Vec<Option<Net>>,
@@ -114,6 +178,7 @@ pub struct Connectivity {
     label_nets: FxHashMap<Arc<str>, NetId>,
     visit_gen: u32,
     bfs_queue: VecDeque<Pt>,
+    split_frontiers: [Vec<usize>; 2],
 }
 
 impl Connectivity {
@@ -136,6 +201,9 @@ impl Connectivity {
         self.label_nets.clear();
         self.visit_gen = 0;
         self.bfs_queue.clear();
+        for frontier in &mut self.split_frontiers {
+            frontier.clear();
+        }
     }
 
     /// Number of currently live nets (including label-only single-point nets with no wires yet).
@@ -229,20 +297,13 @@ impl Connectivity {
             );
             conn.wires[idx] = Some(WireEntry {
                 wire,
+                ends: [0; 2],
                 comp: CompId(0),
                 comp_idx: 0,
             });
-            conn.points
-                .entry(wire.a)
-                .or_insert_with(blank)
-                .wires
-                .push(id);
+            conn.points.get_or_insert_with(wire.a, blank).wires.push(id);
             if wire.b != wire.a {
-                conn.points
-                    .entry(wire.b)
-                    .or_insert_with(blank)
-                    .wires
-                    .push(id);
+                conn.points.get_or_insert_with(wire.b, blank).wires.push(id);
             }
         }
 
@@ -262,8 +323,7 @@ impl Connectivity {
                 text: Arc::clone(&label.text),
             });
             conn.points
-                .entry(label.at)
-                .or_insert_with(blank)
+                .get_or_insert_with(label.at, blank)
                 .labels
                 .push(id);
         }
@@ -283,11 +343,17 @@ impl Connectivity {
             for (pin, &at) in pins.iter().enumerate() {
                 let pin = u32::try_from(pin).expect("pin index overflow");
                 conn.points
-                    .entry(at)
-                    .or_insert_with(blank)
+                    .get_or_insert_with(at, blank)
                     .pins
                     .push((id, pin));
             }
+        }
+
+        for entry in conn.wires.iter_mut().flatten() {
+            entry.ends = [
+                conn.points.index[&entry.wire.a],
+                conn.points.index[&entry.wire.b],
+            ];
         }
 
         // Phase 1: from-scratch BFS over the point map to discover geometric components.
@@ -311,7 +377,7 @@ impl Connectivity {
 
             while let Some(p) = conn.bfs_queue.pop_front() {
                 let comp_pt_idx = u32::try_from(comp_pts.len()).expect("point count overflow");
-                comp_pts.push(p);
+                comp_pts.push(conn.points.index[&p]);
 
                 // Temporarily inspect the slot, update its comp/comp_idx, and enqueue neighbors.
                 let slot = conn.points.get_mut(&p).unwrap();
@@ -455,11 +521,7 @@ impl Connectivity {
                 let comp_id = self.alloc_comp(Comp {
                     net: NetId(0),
                     net_idx: 0,
-                    points: if wire.a == wire.b {
-                        vec![wire.a]
-                    } else {
-                        vec![wire.a, wire.b]
-                    },
+                    points: Vec::new(),
                     wires: vec![id],
                     label_counts: LabelCounts::new(),
                 });
@@ -485,8 +547,11 @@ impl Connectivity {
                         },
                     );
                 }
+                self.comps[comp_id.0 as usize].as_mut().unwrap().points =
+                    vec![self.points.index[&wire.a], self.points.index[&wire.b]];
                 self.wires[idx] = Some(WireEntry {
                     wire,
+                    ends: [self.points.index[&wire.a], self.points.index[&wire.b]],
                     comp: comp_id,
                     comp_idx: 0,
                 });
@@ -498,7 +563,6 @@ impl Connectivity {
                 let comp = self.comps[ca.0 as usize].as_mut().unwrap();
                 let pt_idx = u32::try_from(comp.points.len()).expect("point count overflow");
                 let w_idx = u32::try_from(comp.wires.len()).expect("wire count overflow");
-                comp.points.push(wire.b);
                 comp.wires.push(id);
 
                 self.points.insert(
@@ -508,8 +572,14 @@ impl Connectivity {
                         ..PointSlot::new(ca, pt_idx)
                     },
                 );
+                self.comps[ca.0 as usize]
+                    .as_mut()
+                    .unwrap()
+                    .points
+                    .push(self.points.index[&wire.b]);
                 self.wires[idx] = Some(WireEntry {
                     wire,
+                    ends: [self.points.index[&wire.a], self.points.index[&wire.b]],
                     comp: ca,
                     comp_idx: w_idx,
                 });
@@ -521,7 +591,6 @@ impl Connectivity {
                 let comp = self.comps[cb.0 as usize].as_mut().unwrap();
                 let pt_idx = u32::try_from(comp.points.len()).expect("point count overflow");
                 let w_idx = u32::try_from(comp.wires.len()).expect("wire count overflow");
-                comp.points.push(wire.a);
                 comp.wires.push(id);
 
                 self.points.insert(
@@ -531,8 +600,14 @@ impl Connectivity {
                         ..PointSlot::new(cb, pt_idx)
                     },
                 );
+                self.comps[cb.0 as usize]
+                    .as_mut()
+                    .unwrap()
+                    .points
+                    .push(self.points.index[&wire.a]);
                 self.wires[idx] = Some(WireEntry {
                     wire,
+                    ends: [self.points.index[&wire.a], self.points.index[&wire.b]],
                     comp: cb,
                     comp_idx: w_idx,
                 });
@@ -556,6 +631,7 @@ impl Connectivity {
         comp.wires.push(id);
         self.wires[idx] = Some(WireEntry {
             wire,
+            ends: [self.points.index[&wire.a], self.points.index[&wire.b]],
             comp: target_comp,
             comp_idx: w_idx,
         });
@@ -612,91 +688,67 @@ impl Connectivity {
             return Some(wire);
         }
 
-        // General path: both endpoints remain alive. Flood from `wire.a` and test whether
-        // `wire.b` is still reachable inside `old_comp`.
-        let old_points = mem::take(&mut self.comps[old_comp.0 as usize].as_mut().unwrap().points);
-        let old_wires_count = self.comps[old_comp.0 as usize]
-            .as_ref()
-            .unwrap()
-            .wires
-            .len();
-        self.comps[old_comp.0 as usize]
-            .as_mut()
-            .unwrap()
-            .wires
-            .clear();
-        self.comps[old_comp.0 as usize]
-            .as_mut()
-            .unwrap()
-            .label_counts
-            .clear();
-
-        let stamp = self.next_visit_gen();
-        let (comp1_pts, comp1_wires, comp1_labels) = self.flood_from(wire.a, stamp, old_comp);
-
-        if self.points[&wire.b].visited == stamp {
-            // Component stayed connected (wire was part of a cycle).
-            debug_assert_eq!(comp1_pts.len(), old_points.len());
-            debug_assert_eq!(comp1_wires.len(), old_wires_count);
-            let c1 = self.comps[old_comp.0 as usize].as_mut().unwrap();
-            c1.points = comp1_pts;
-            c1.wires = comp1_wires;
-            c1.label_counts = comp1_labels;
+        // Search from both ends without changing memberships. A meeting proves a cycle;
+        // otherwise the first exhausted frontier is a complete disconnected piece. Alternating
+        // point expansions bounds work for very unbalanced splits (including pin-only ends).
+        let Some((piece_side, mut piece)) = self.disconnected_piece(wire.a, wire.b) else {
             return Some(wire);
-        }
-
-        // Component split into two pieces: `old_comp` (containing `wire.a`) and `new_comp`
-        // (containing `wire.b`).
-        let c1_has_labels = !comp1_labels.is_empty();
-        {
-            let c1 = self.comps[old_comp.0 as usize].as_mut().unwrap();
-            c1.points = comp1_pts;
-            c1.wires = comp1_wires;
-            c1.label_counts = comp1_labels;
-        }
-
+        };
         let new_comp = self.alloc_comp(Comp {
             net: old_net,
             net_idx: 0,
-            points: Vec::new(),
-            wires: Vec::new(),
+            points: Vec::with_capacity(piece.len()),
+            wires: Vec::with_capacity(piece.len()),
             label_counts: LabelCounts::new(),
         });
-        let (comp2_pts, comp2_wires, comp2_labels) = self.flood_from(wire.b, stamp, new_comp);
-        let c2_has_labels = !comp2_labels.is_empty();
-        {
-            let c2 = self.comps[new_comp.0 as usize].as_mut().unwrap();
-            c2.points = comp2_pts;
-            c2.wires = comp2_wires;
-            c2.label_counts = comp2_labels;
+        for &point_id in &piece {
+            let (p, slot) = self.points.slots[point_id].as_mut().unwrap();
+            let p = *p;
+            let old_idx = slot.comp_idx;
+            slot.comp = new_comp;
+            let new = self.comps[new_comp.0 as usize].as_mut().unwrap();
+            slot.comp_idx = u32::try_from(new.points.len()).expect("point count overflow");
+            new.points.push(point_id);
+            for &lid in &slot.labels {
+                let text = &self.labels[lid.0 as usize].as_ref().unwrap().text;
+                inc_label_count(&mut new.label_counts, text, 1);
+            }
+            // Each wire is transferred exactly once, at its a endpoint. All its endpoints
+            // belong to this piece, regardless of wire direction, parallel edges or cycles.
+            for &wid in &slot.wires {
+                let entry = self.wires[wid.0 as usize].as_ref().unwrap();
+                if entry.wire.a != p {
+                    continue;
+                }
+                let old_idx = entry.comp_idx;
+                let old = self.comps[old_comp.0 as usize].as_mut().unwrap();
+                old.wires.swap_remove(old_idx as usize);
+                if let Some(&moved) = old.wires.get(old_idx as usize) {
+                    self.wires[moved.0 as usize].as_mut().unwrap().comp_idx = old_idx;
+                }
+                let new = self.comps[new_comp.0 as usize].as_mut().unwrap();
+                let entry = self.wires[wid.0 as usize].as_mut().unwrap();
+                entry.comp = new_comp;
+                entry.comp_idx = u32::try_from(new.wires.len()).expect("wire count overflow");
+                new.wires.push(wid);
+            }
+            self.remove_point_from_comp(old_comp, old_idx);
         }
-
-        debug_assert_eq!(
-            self.comps[old_comp.0 as usize]
-                .as_ref()
-                .unwrap()
-                .points
-                .len()
-                + self.comps[new_comp.0 as usize]
-                    .as_ref()
-                    .unwrap()
-                    .points
-                    .len(),
-            old_points.len()
-        );
-        debug_assert_eq!(
-            self.comps[old_comp.0 as usize]
-                .as_ref()
-                .unwrap()
-                .wires
-                .len()
-                + self.comps[new_comp.0 as usize]
-                    .as_ref()
-                    .unwrap()
-                    .wires
-                    .len(),
-            old_wires_count
-        );
+        piece.clear();
+        self.split_frontiers[piece_side] = piece;
+        let counts = self.comps[new_comp.0 as usize]
+            .as_ref()
+            .unwrap()
+            .label_counts
+            .clone();
+        let old = self.comps[old_comp.0 as usize].as_mut().unwrap();
+        for (text, count) in &counts {
+            for _ in 0..*count {
+                dec_label_count(&mut old.label_counts, text);
+            }
+        }
+        let c1_has_labels = !old.label_counts.is_empty();
+        let c2_has_labels = !counts.is_empty();
 
         // Temporarily attach `new_comp` to `old_net`, then repair `old_net` if needed.
         {
@@ -753,7 +805,7 @@ impl Connectivity {
             let comp_id = self.alloc_comp(Comp {
                 net: NetId(0),
                 net_idx: 0,
-                points: vec![label.at],
+                points: Vec::new(),
                 wires: Vec::new(),
                 label_counts: smallvec![(Arc::clone(&label.text), 1)],
             });
@@ -764,6 +816,11 @@ impl Connectivity {
                     ..PointSlot::new(comp_id, 0)
                 },
             );
+            self.comps[comp_id.0 as usize]
+                .as_mut()
+                .unwrap()
+                .points
+                .push(self.points.index[&label.at]);
             if let Some(&existing_net) = self.label_nets.get(&label.text) {
                 let net = self.nets[existing_net.0 as usize].as_mut().unwrap();
                 let net_idx = u32::try_from(net.comps.len()).expect("net comp overflow");
@@ -916,7 +973,7 @@ impl Connectivity {
             let comp_id = self.alloc_comp(Comp {
                 net: NetId(0),
                 net_idx: 0,
-                points: vec![at],
+                points: Vec::new(),
                 wires: Vec::new(),
                 label_counts: LabelCounts::new(),
             });
@@ -932,6 +989,11 @@ impl Connectivity {
                     ..PointSlot::new(comp_id, 0)
                 },
             );
+            self.comps[comp_id.0 as usize]
+                .as_mut()
+                .unwrap()
+                .points
+                .push(self.points.index[&at]);
         }
     }
 
@@ -1018,7 +1080,7 @@ impl Connectivity {
         let idx = comp_idx as usize;
         comp.points.swap_remove(idx);
         if let Some(&moved_pt) = comp.points.get(idx) {
-            self.points.get_mut(&moved_pt).unwrap().comp_idx = comp_idx;
+            self.points.slots[moved_pt].as_mut().unwrap().1.comp_idx = comp_idx;
         }
     }
 
@@ -1100,7 +1162,7 @@ impl Connectivity {
             let keep_comp = self.comps[keep.0 as usize].as_mut().unwrap();
             let base_pts = keep_comp.points.len();
             for (offset, &pt) in drop_comp.points.iter().enumerate() {
-                let slot = self.points.get_mut(&pt).unwrap();
+                let slot = &mut self.points.slots[pt].as_mut().unwrap().1;
                 slot.comp = keep;
                 slot.comp_idx = u32::try_from(base_pts + offset).expect("point count overflow");
             }
@@ -1166,58 +1228,39 @@ impl Connectivity {
         }
     }
 
-    fn flood_from(
-        &mut self,
-        start: Pt,
-        stamp: u32,
-        target_comp: CompId,
-    ) -> (Vec<Pt>, Vec<WireId>, LabelCounts) {
-        let mut pts = Vec::new();
-        let mut wires = Vec::new();
-        let mut label_counts = LabelCounts::new();
-
-        self.points.get_mut(&start).unwrap().visited = stamp;
-        self.bfs_queue.clear();
-        self.bfs_queue.push_back(start);
-
-        while let Some(p) = self.bfs_queue.pop_front() {
-            let pt_idx = u32::try_from(pts.len()).expect("point count overflow");
-            pts.push(p);
-
-            let slot = self.points.get_mut(&p).unwrap();
-            slot.comp = target_comp;
-            slot.comp_idx = pt_idx;
-
-            for &lid in &slot.labels {
-                let text = &self.labels[lid.0 as usize].as_ref().unwrap().text;
-                inc_label_count(&mut label_counts, text, 1);
-            }
-
-            let mut neighbors: SmallVec<[Pt; 4]> = SmallVec::new();
-            for &wid in &slot.wires {
-                let w = self.wires[wid.0 as usize].as_mut().unwrap();
-                if w.wire.a == p {
-                    let w_idx = u32::try_from(wires.len()).expect("wire count overflow");
-                    wires.push(wid);
-                    w.comp = target_comp;
-                    w.comp_idx = w_idx;
-                }
-                let other = if w.wire.a == p { w.wire.b } else { w.wire.a };
-                if other != p {
-                    neighbors.push(other);
-                }
-            }
-
-            for other in neighbors {
-                let neighbor_slot = self.points.get_mut(&other).unwrap();
-                if neighbor_slot.visited != stamp {
-                    neighbor_slot.visited = stamp;
-                    self.bfs_queue.push_back(other);
-                }
-            }
+    /// Returns a complete side of a cut, or None when the removed edge was on a cycle.
+    /// Membership indices remain untouched until a cut is proven. Frontiers retain capacity.
+    fn disconnected_piece(&mut self, a: Pt, b: Pt) -> Option<(usize, Vec<usize>)> {
+        let stamps = [self.next_visit_gen(), self.next_visit_gen()];
+        let mut cursors = [0; 2];
+        for (side, start) in [a, b].into_iter().enumerate() {
+            self.split_frontiers[side].clear();
+            self.split_frontiers[side].push(self.points.index[&start]);
+            self.points.get_mut(&start).unwrap().visited = stamps[side];
         }
-
-        (pts, wires, label_counts)
+        let mut side = 0;
+        loop {
+            if cursors[side] == self.split_frontiers[side].len() {
+                return Some((side, mem::take(&mut self.split_frontiers[side])));
+            }
+            let p = self.split_frontiers[side][cursors[side]];
+            cursors[side] += 1;
+            let degree = self.points.slots[p].as_ref().unwrap().1.wires.len();
+            for edge in 0..degree {
+                let wid = self.points.slots[p].as_ref().unwrap().1.wires[edge];
+                let w = self.wires[wid.0 as usize].as_ref().unwrap();
+                let other = if w.ends[0] == p { w.ends[1] } else { w.ends[0] };
+                let slot = &mut self.points.slots[other].as_mut().unwrap().1;
+                if slot.visited == stamps[1 - side] {
+                    return None;
+                }
+                if slot.visited != stamps[side] {
+                    slot.visited = stamps[side];
+                    self.split_frontiers[side].push(other);
+                }
+            }
+            side = 1 - side;
+        }
     }
 
     fn re_flood_net(&mut self, net_id: NetId) {
@@ -1383,6 +1426,23 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn assert_invariants(c: &Connectivity) {
+        let free: BTreeSet<_> = c.points.free.iter().copied().collect();
+        assert_eq!(free.len(), c.points.free.len());
+        for (id, entry) in c.points.slots.iter().enumerate() {
+            if let Some((at, _)) = entry {
+                assert_eq!(c.points.index.get(at), Some(&id));
+                assert!(!free.contains(&id));
+            } else {
+                assert!(free.contains(&id));
+            }
+        }
+        assert_eq!(c.points.index.len() + free.len(), c.points.slots.len());
+        for entry in c.wires.iter().flatten() {
+            assert_eq!(
+                entry.ends,
+                [c.points.index[&entry.wire.a], c.points.index[&entry.wire.b]]
+            );
+        }
         let mut points = BTreeSet::new();
         let mut wires = BTreeSet::new();
         let mut comps = BTreeSet::new();
@@ -1398,7 +1458,8 @@ pub(crate) mod tests {
                 let comp = c.comps[cid.0 as usize].as_ref().unwrap();
                 assert_eq!((comp.net, comp.net_idx), (NetId(ni as u32), ci as u32));
                 let mut local = LabelCounts::new();
-                for (pi, &at) in comp.points.iter().enumerate() {
+                for (pi, &point_id) in comp.points.iter().enumerate() {
+                    let at = c.points.slots[point_id].as_ref().unwrap().0;
                     assert!(points.insert((at.x, at.y)));
                     let slot = &c.points[&at];
                     assert!(!slot.is_empty());
@@ -1703,6 +1764,106 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn split_search_reuses_slots_frontiers_and_preserves_the_oracle() {
+        fn check(c: &Connectivity) {
+            let wires: BTreeMap<_, _> = c
+                .wires
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| e.map(|e| (i as u32, e.wire)))
+                .collect();
+            let labels: BTreeMap<_, _> = c
+                .labels
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| {
+                    e.as_ref().map(|e| {
+                        (
+                            i as u32,
+                            Label {
+                                at: e.at,
+                                text: e.text.clone(),
+                            },
+                        )
+                    })
+                })
+                .collect();
+            let oracle = Connectivity::rebuild_with_parts(
+                wires.iter().map(|(&i, &w)| (WireId(i), w)),
+                labels.iter().map(|(&i, l)| (LabelId(i), l)),
+                c.parts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| p.as_ref().map(|p| (PartId(i as u32), p))),
+            );
+            assert_connectivity_eq(
+                c,
+                &oracle,
+                &wires.keys().map(|&i| WireId(i)).collect::<Vec<_>>(),
+                &wires,
+                &labels,
+            );
+        }
+        let mut c = Connectivity::new();
+        // Reverse direction swaps the smaller side; pin-only ends remain live after removal.
+        for reverse in [false, true] {
+            c.clear();
+            for i in 0..32 {
+                c.add_wire(WireId(i), w(i as i32, 0, i as i32 + 1, 0));
+            }
+            c.add_part(PartId(0), &[pt(0, 0), pt(32, 0), pt(32, 0)]);
+            for i in 0..8 {
+                c.add_wire(WireId(40 + i), w(32, 0, 32, i as i32 + 1));
+                c.add_label(
+                    LabelId(i),
+                    &lbl(32, i as i32 + 1, if i % 2 == 0 { "A" } else { "B" }),
+                );
+            }
+            c.add_label(LabelId(9), &lbl(0, 0, "A"));
+            c.add_label(LabelId(10), &lbl(15, 0, "B"));
+            for id in [0, 15, 31, 40, 47] {
+                let wire = c.remove_wire(WireId(id)).unwrap();
+                check(&c);
+                let restored = if reverse {
+                    Wire {
+                        a: wire.b,
+                        b: wire.a,
+                    }
+                } else {
+                    wire
+                };
+                c.add_wire(WireId(id), restored);
+                check(&c);
+            }
+            // Free endpoint slots, reuse them elsewhere, then replace live wire and part IDs.
+            c.remove_wire(WireId(47));
+            check(&c);
+            c.remove_label(LabelId(7));
+            check(&c);
+            c.add_wire(WireId(47), w(-10, 0, -9, 0));
+            check(&c);
+            c.add_wire(WireId(47), w(32, 0, 32, 8));
+            check(&c);
+            c.add_part(PartId(0), &[pt(-10, 0)]);
+            check(&c);
+            // Alternate path causes a search meeting; the existing component is unchanged.
+            c.add_wire(WireId(80), w(0, 0, 32, 0));
+            let component = c.wires[15].unwrap().comp;
+            let before = c.comps[component.0 as usize]
+                .as_ref()
+                .unwrap()
+                .points
+                .clone();
+            c.remove_wire(WireId(15));
+            check(&c);
+            assert_eq!(
+                before,
+                c.comps[component.0 as usize].as_ref().unwrap().points
+            );
+        }
+    }
+
+    #[test]
     fn visit_gen_wraparound_works() {
         let mut c = Connectivity::new();
         c.add_wire(WireId(0), w(0, 0, 10, 0));
@@ -1710,11 +1871,11 @@ pub(crate) mod tests {
         c.add_wire(WireId(2), w(10, 10, 0, 10));
         c.add_wire(WireId(3), w(0, 10, 0, 0));
         c.visit_gen = u32::MAX - 1;
-        // Cycle remove hits BFS with gen = u32::MAX, then next wraps to 1.
+        // Each search reserves two stamps; exercise wrapping between the two sides.
         c.remove_wire(WireId(3));
-        assert_eq!(c.visit_gen, u32::MAX);
-        c.remove_wire(WireId(1));
         assert_eq!(c.visit_gen, 1);
+        c.remove_wire(WireId(1));
+        assert_eq!(c.visit_gen, 3);
         assert_ne!(c.net_of(WireId(0)), c.net_of(WireId(2)));
     }
 
