@@ -7,6 +7,8 @@ This repository currently holds the design work: FigCraft mockups, brand assets 
 
 ## Contents
 
+See the [project roadmap](ROADMAP.md) for the overall path from the technical foundation to a usable schematic and simulation application.
+
 | Path | What it is |
 | --- | --- |
 | `omnia.figcraft` | FigCraft document: Workspace, Home and First boot screens in the Graphite and Gray themes, the Mark component, and the logo and wordmark boards |
