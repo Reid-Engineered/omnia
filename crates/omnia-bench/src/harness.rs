@@ -285,6 +285,7 @@ impl Render for RunView {
                         .left(px((frame % 200) as f32))
                         .top(px(4.))
                         .size(px(4.))
+                        // Mirrors the Q2 `stage/select` overlay token until T1.2 lands tokens.
                         .bg(rgb(0x2f6feb)),
                 )
                 .into_any_element();

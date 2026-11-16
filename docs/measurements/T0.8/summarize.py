@@ -1,4 +1,9 @@
-"""Reproduce tables from raw JSON. No sample removal, interpolation, or threshold changes."""
+"""Reproduce tables from raw JSON. No sample removal, interpolation, or threshold changes.
+
+Threshold rows: T-quad and T-present use absolute medians of run p99s; T-sprite and T-text
+subtract the median of the interleaved baseline p99s (added cost). T-path divides the S4
+paint p99 median by the path count; T-replay is the cached/repaint draw p99 ratio.
+"""
 import collections
 import json
 from pathlib import Path
