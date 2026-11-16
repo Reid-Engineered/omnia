@@ -26,6 +26,10 @@ impl<T> Arena<T> {
         self.slots.get(id as usize)?.as_ref()
     }
 
+    pub(crate) fn get_mut(&mut self, id: u32) -> Option<&mut T> {
+        self.slots.get_mut(id as usize)?.as_mut()
+    }
+
     pub fn remove(&mut self, id: u32) -> Option<T> {
         self.slots.get_mut(id as usize)?.take()
     }

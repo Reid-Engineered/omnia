@@ -2,7 +2,7 @@
 //!
 //! Doc stores caller-supplied local geometry and maintains the interaction index.
 
-use crate::{Doc, GeomError, ItemId, Part, Pt, Rect, SHEET_LIMIT_NM};
+use crate::{Doc, GeomError, ItemId, Orient, Part, Pt, Rect, SHEET_LIMIT_NM};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
@@ -11,16 +11,20 @@ pub struct Hit {
     pub at: Pt,
 }
 
-pub(crate) fn part_bounds(part: &Part, local: Rect) -> Result<Rect, GeomError> {
-    let oriented = local.checked_reorient_around(part.orient, Pt::ZERO)?;
+pub(crate) fn part_bounds_at(at: Pt, orient: Orient, local: Rect) -> Result<Rect, GeomError> {
+    let oriented = local.checked_reorient_around(orient, Pt::ZERO)?;
     // Doc validates anchors and pins, not art extents. Translate in wide arithmetic
     // before clamping so edge-straddling art cannot invalidate the entire index.
     let limit = i64::from(SHEET_LIMIT_NM);
     let translate = |p: Pt| Pt {
-        x: (i64::from(p.x) + i64::from(part.at.x)).clamp(-limit, limit) as i32,
-        y: (i64::from(p.y) + i64::from(part.at.y)).clamp(-limit, limit) as i32,
+        x: (i64::from(p.x) + i64::from(at.x)).clamp(-limit, limit) as i32,
+        y: (i64::from(p.y) + i64::from(at.y)).clamp(-limit, limit) as i32,
     };
     Rect::new(translate(oriented.min), translate(oriented.max))
+}
+
+pub(crate) fn part_bounds(part: &Part, local: Rect) -> Result<Rect, GeomError> {
+    part_bounds_at(part.at, part.orient, local)
 }
 
 /// Nearest item in the inclusive Euclidean tolerance. Ties use part, wire, label,

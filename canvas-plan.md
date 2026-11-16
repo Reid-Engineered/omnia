@@ -210,7 +210,7 @@ returns a `Change` that the views use to decide what to repaint.
   are never reused in a session, and `restore(id, value)` puts a removed item back under its
   old id. Undo and redo need this; a generational slot map would hand back a new key.
 - A wire is one axis-aligned segment. A routed wire is several segments.
-- Every edit is a `Command`. `apply` returns a `Change` and pushes the inverse on the undo stack.
+- Every edit is a `Command`. `apply` returns a `Change` and pushes the inverse on the undo stack for effective edits. Validated no-ops return `dirty: None` and preserve revision, undo and redo.
 - Connectivity, geometric level: a hash map from point to the wire ends and pins at that
   point. The map resolves stable internal point slots; wire endpoints and component membership
   cache those slots for traversal. These slots may be reused after their last incidence is removed
@@ -301,7 +301,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 | INV1 | A wire is axis-aligned and its ends differ. [T2.1] |
 | INV2 | The document never holds a wire end on another wire's interior; `apply` splits. Crossing interiors never connect. [T6.1] |
 | INV3 | A junction dot exists exactly where three or more ends or pins meet. Dots are never stored. [T2.1] |
-| INV4 | The document changes only through `Doc::apply`, `undo`, `redo`. `apply(c)` then `undo()` gives a document equal to the original, ids included; `undo` then `redo` likewise. [T5.1] |
+| INV4 | The document changes only through `Doc::apply`, `undo`, `redo`. `apply(c)` then `undo()` restores `content_eq` with the original, exact live ids included; `undo` then `redo` likewise. Revision advances monotonically and issued ids remain reserved (D2/D8); persistent-state equality remains stricter. [T5.1] |
 | INV5 | During a gesture the document revision does not change. A committed gesture is exactly one undo step. Esc leaves the revision unchanged. [T5.2] |
 | INV6 | `omnia-canvas` contains no colour literal; colours come from `omnia-theme`. [T1.2] |
 | INV7 | `SheetView`'s paint calls neither `paint_path` nor `canvas()` and makes no heap allocation once warm. [T2.5] |
@@ -405,8 +405,11 @@ pub struct Part { pub symbol: SymbolId, pub at: Pt, pub orient: Orient,
 pub struct Wire { pub a: Pt, pub b: Pt }                  // INV1
 pub struct Label { pub at: Pt, pub text: Arc<str> }
 
+pub enum TextField { Designator, Value, Label }
+pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
+                        DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField } }
 pub enum Command {
-    PlacePart(Part),
+    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect },
     AddWires(Vec<Wire>),
     AddLabel(Label),
     Move { items: Vec<ItemId>, delta: Pt },
@@ -416,20 +419,21 @@ pub enum Command {
     Paste { clip: Clip, at: Pt },
     Batch(Vec<Command>),
 }
-pub struct Change { pub revision: u64, pub dirty: Rect,
+pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
                 WireBody { wire: WireId, at: Pt }, Grid(Pt) }
 pub struct Hit { pub item: ItemId, pub at: Pt }
 
-pub struct Doc { /* private */ }
+pub struct Doc { /* private, includes undo/redo history */ }
 impl Doc {
     pub fn new() -> Self;
     // T2.8: validated bulk construction; local pins and art bounds come from the caller's symbol library.
     pub fn from_items(parts: impl IntoIterator<Item = (Part, Vec<Pt>, Rect)>,
                       wires: impl IntoIterator<Item = Wire>,
                       labels: impl IntoIterator<Item = Label>) -> Result<Self, StoreError>;
-    pub fn revision(&self) -> u64;
+    pub fn revision(&self) -> u64; // advances monotonically (+1) on every committed apply, undo, or redo (D8)
+    // Validated no-ops return dirty=None with unchanged revision/history/redo.
     pub fn apply(&mut self, cmd: Command) -> Result<Change, CommandError>;
     pub fn undo(&mut self) -> Option<Change>;
     pub fn redo(&mut self) -> Option<Change>;
@@ -452,7 +456,10 @@ impl Doc {
     pub fn load(r: impl io::Read) -> io::Result<Self>;
     // Version 2 RON embeds local bounds and pins (omnia-symbols depends on omnia-doc).
     // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points, index and connectivity.
-    // Equality compares authoritative slots, local bounds, pins and revision, excluding derived state.
+    pub fn content_eq(&self, other: &Self) -> bool; // live items, exact live IDs, interior gaps, bounds/pins
+    // PartialEq compares persistent state, including revision and every reserved slot (pre-T5.1 contract).
+    // content_eq ignores revision and trailing undo reservations for INV4 + D2 + D8.
+    // History and derived caches are excluded from both comparisons and serialization.
 }
 // T4.2 interaction functions (re-exported by omnia-doc).
 // T2.8: free functions use Doc's owned index and stored body geometry.
