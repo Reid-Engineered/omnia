@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "kind": "start",
+  "config": {
+    "sheet": "empty",
+    "runs": 10,
+    "window_logical": [
+      1536.0,
+      864.0
+    ]
+  },
+  "environment": {
+    "os": "linux",
+    "arch": "x86_64",
+    "logical_cpus": 4
+  },
+  "samples_ms": [
+    172.5825,
+    239.2647,
+    210.4768,
+    201.6994,
+    238.9214,
+    211.5028,
+    214.9901,
+    211.3222,
+    238.8035,
+    208.4985
+  ],
+  "metrics": {
+    "start_ms": {
+      "median": 211.4125,
+      "max": 239.2647
+    }
+  }
+}
+bench: wrote /tmp/t16-rerun/s125/start-8.json

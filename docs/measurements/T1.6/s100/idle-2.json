@@ -41,9 +41,9 @@
   "metrics": {
     "frames": 0,
     "renders": 0,
-    "cpu_percent": 0.1,
-    "memory_mb": 48.2813,
-    "working_set_mb": 96.457,
-    "heap_peak_mb": 14.2923
+    "cpu_percent": 0.0,
+    "memory_mb": 48.4531,
+    "working_set_mb": 96.5742,
+    "heap_peak_mb": 14.2063
   }
 }

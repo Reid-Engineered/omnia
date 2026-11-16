@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "kind": "start",
+  "config": {
+    "sheet": "empty",
+    "runs": 10,
+    "window_logical": [
+      1920.0,
+      1080.0
+    ]
+  },
+  "environment": {
+    "os": "linux",
+    "arch": "x86_64",
+    "logical_cpus": 4
+  },
+  "samples_ms": [
+    174.3847,
+    205.0225,
+    207.4131,
+    190.5119,
+    207.8572,
+    236.3221,
+    235.3336,
+    207.2542,
+    208.5872,
+    203.878
+  ],
+  "metrics": {
+    "start_ms": {
+      "median": 207.3337,
+      "max": 236.3221
+    }
+  }
+}
+bench: wrote /tmp/t16-rerun/s100/start-4.json

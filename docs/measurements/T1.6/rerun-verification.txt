@@ -1,0 +1,467 @@
+2026-11-16T14:15:29-05:00
+ActiveState=inactive
+SubState=dead
+Result=success
+ExecMainStatus=0
+Nov 16 14:01:17 orion-laptop systemd[751]: Started [systemd-run] /usr/bin/kde-inhibit --power --screenSaver bash docs/measurements/T1.6/gate.sh /tmp/t16-rerun 10.
+Nov 16 14:01:21 orion-laptop kde-inhibit[17613]: [1 1/10] start
+Nov 16 14:01:24 orion-laptop kde-inhibit[17613]: [1 1/10] pan
+Nov 16 14:01:35 orion-laptop kde-inhibit[17613]: [1 1/10] zoom
+Nov 16 14:01:47 orion-laptop kde-inhibit[17613]: [1 1/10] idle
+Nov 16 14:01:58 orion-laptop kde-inhibit[17613]: [1 2/10] pan
+Nov 16 14:02:10 orion-laptop kde-inhibit[17613]: [1 2/10] zoom
+Nov 16 14:02:22 orion-laptop kde-inhibit[17613]: [1 2/10] idle
+Nov 16 14:02:33 orion-laptop kde-inhibit[17613]: [1 2/10] start
+Nov 16 14:02:36 orion-laptop kde-inhibit[17613]: [1 3/10] zoom
+Nov 16 14:02:48 orion-laptop kde-inhibit[17613]: [1 3/10] idle
+Nov 16 14:02:59 orion-laptop kde-inhibit[17613]: [1 3/10] start
+Nov 16 14:03:03 orion-laptop kde-inhibit[17613]: [1 3/10] pan
+Nov 16 14:03:14 orion-laptop kde-inhibit[17613]: [1 4/10] idle
+Nov 16 14:03:26 orion-laptop kde-inhibit[17613]: [1 4/10] start
+Nov 16 14:03:29 orion-laptop kde-inhibit[17613]: [1 4/10] pan
+Nov 16 14:03:41 orion-laptop kde-inhibit[17613]: [1 4/10] zoom
+Nov 16 14:03:52 orion-laptop kde-inhibit[17613]: [1 5/10] start
+Nov 16 14:03:56 orion-laptop kde-inhibit[17613]: [1 5/10] pan
+Nov 16 14:04:07 orion-laptop kde-inhibit[17613]: [1 5/10] zoom
+Nov 16 14:04:19 orion-laptop kde-inhibit[17613]: [1 5/10] idle
+Nov 16 14:04:30 orion-laptop kde-inhibit[17613]: [1 6/10] pan
+Nov 16 14:04:42 orion-laptop kde-inhibit[17613]: [1 6/10] zoom
+Nov 16 14:04:53 orion-laptop kde-inhibit[17613]: [1 6/10] idle
+Nov 16 14:05:05 orion-laptop kde-inhibit[17613]: [1 6/10] start
+Nov 16 14:05:08 orion-laptop kde-inhibit[17613]: [1 7/10] zoom
+Nov 16 14:05:20 orion-laptop kde-inhibit[17613]: [1 7/10] idle
+Nov 16 14:05:31 orion-laptop kde-inhibit[17613]: [1 7/10] start
+Nov 16 14:05:35 orion-laptop kde-inhibit[17613]: [1 7/10] pan
+Nov 16 14:05:46 orion-laptop kde-inhibit[17613]: [1 8/10] idle
+Nov 16 14:05:58 orion-laptop kde-inhibit[17613]: [1 8/10] start
+Nov 16 14:06:01 orion-laptop kde-inhibit[17613]: [1 8/10] pan
+Nov 16 14:06:13 orion-laptop kde-inhibit[17613]: [1 8/10] zoom
+Nov 16 14:06:24 orion-laptop kde-inhibit[17613]: [1 9/10] start
+Nov 16 14:06:28 orion-laptop kde-inhibit[17613]: [1 9/10] pan
+Nov 16 14:06:39 orion-laptop kde-inhibit[17613]: [1 9/10] zoom
+Nov 16 14:06:51 orion-laptop kde-inhibit[17613]: [1 9/10] idle
+Nov 16 14:07:02 orion-laptop kde-inhibit[17613]: [1 10/10] pan
+Nov 16 14:07:14 orion-laptop kde-inhibit[17613]: [1 10/10] zoom
+Nov 16 14:07:25 orion-laptop kde-inhibit[17613]: [1 10/10] idle
+Nov 16 14:07:37 orion-laptop kde-inhibit[17613]: [1 10/10] start
+Nov 16 14:07:43 orion-laptop kde-inhibit[17613]: [1.25 1/10] start
+Nov 16 14:07:47 orion-laptop kde-inhibit[17613]: [1.25 1/10] pan
+Nov 16 14:07:59 orion-laptop kde-inhibit[17613]: [1.25 1/10] zoom
+Nov 16 14:08:10 orion-laptop kde-inhibit[17613]: [1.25 1/10] idle
+Nov 16 14:08:22 orion-laptop kde-inhibit[17613]: [1.25 2/10] pan
+Nov 16 14:08:33 orion-laptop kde-inhibit[17613]: [1.25 2/10] zoom
+Nov 16 14:08:45 orion-laptop kde-inhibit[17613]: [1.25 2/10] idle
+Nov 16 14:08:56 orion-laptop kde-inhibit[17613]: [1.25 2/10] start
+Nov 16 14:09:00 orion-laptop kde-inhibit[17613]: [1.25 3/10] zoom
+Nov 16 14:09:11 orion-laptop kde-inhibit[17613]: [1.25 3/10] idle
+Nov 16 14:09:23 orion-laptop kde-inhibit[17613]: [1.25 3/10] start
+Nov 16 14:09:26 orion-laptop kde-inhibit[17613]: [1.25 3/10] pan
+Nov 16 14:09:38 orion-laptop kde-inhibit[17613]: [1.25 4/10] idle
+Nov 16 14:09:49 orion-laptop kde-inhibit[17613]: [1.25 4/10] start
+Nov 16 14:09:52 orion-laptop kde-inhibit[17613]: [1.25 4/10] pan
+Nov 16 14:10:04 orion-laptop kde-inhibit[17613]: [1.25 4/10] zoom
+Nov 16 14:10:16 orion-laptop kde-inhibit[17613]: [1.25 5/10] start
+Nov 16 14:10:19 orion-laptop kde-inhibit[17613]: [1.25 5/10] pan
+Nov 16 14:10:31 orion-laptop kde-inhibit[17613]: [1.25 5/10] zoom
+Nov 16 14:10:42 orion-laptop kde-inhibit[17613]: [1.25 5/10] idle
+Nov 16 14:10:54 orion-laptop kde-inhibit[17613]: [1.25 6/10] pan
+Nov 16 14:11:05 orion-laptop kde-inhibit[17613]: [1.25 6/10] zoom
+Nov 16 14:11:17 orion-laptop kde-inhibit[17613]: [1.25 6/10] idle
+Nov 16 14:11:28 orion-laptop kde-inhibit[17613]: [1.25 6/10] start
+Nov 16 14:11:32 orion-laptop kde-inhibit[17613]: [1.25 7/10] zoom
+Nov 16 14:11:43 orion-laptop kde-inhibit[17613]: [1.25 7/10] idle
+Nov 16 14:11:55 orion-laptop kde-inhibit[17613]: [1.25 7/10] start
+Nov 16 14:11:58 orion-laptop kde-inhibit[17613]: [1.25 7/10] pan
+Nov 16 14:12:10 orion-laptop kde-inhibit[17613]: [1.25 8/10] idle
+Nov 16 14:12:21 orion-laptop kde-inhibit[17613]: [1.25 8/10] start
+Nov 16 14:12:24 orion-laptop kde-inhibit[17613]: [1.25 8/10] pan
+Nov 16 14:12:36 orion-laptop kde-inhibit[17613]: [1.25 8/10] zoom
+Nov 16 14:12:48 orion-laptop kde-inhibit[17613]: [1.25 9/10] start
+Nov 16 14:12:51 orion-laptop kde-inhibit[17613]: [1.25 9/10] pan
+Nov 16 14:13:03 orion-laptop kde-inhibit[17613]: [1.25 9/10] zoom
+Nov 16 14:13:14 orion-laptop kde-inhibit[17613]: [1.25 9/10] idle
+Nov 16 14:13:26 orion-laptop kde-inhibit[17613]: [1.25 10/10] pan
+Nov 16 14:13:37 orion-laptop kde-inhibit[17613]: [1.25 10/10] zoom
+Nov 16 14:13:49 orion-laptop kde-inhibit[17613]: [1.25 10/10] idle
+Nov 16 14:14:00 orion-laptop kde-inhibit[17613]: [1.25 10/10] start
+Nov 16 14:14:04 orion-laptop systemd[751]: t16-gate2.service: Consumed 2min 44.017s CPU time over 12min 46.483s wall clock time, 109.4M memory peak.
+1248b7e2df8f9ac2feefac5dd0e47acca60fc148
+  File: target/release/omnia-bench
+  Size: 39225456  	Blocks: 76528      IO Block: 4096   regular file
+Device: 8,3	Inode: 3706564     Links: 2
+Access: (0755/-rwxr-xr-x)  Uid: ( 1000/  marcus)   Gid: ( 1000/  marcus)
+Access: 2026-11-16 13:53:04.217893615 -0500
+Modify: 2026-11-16 13:53:03.661893623 -0500
+Change: 2026-11-16 13:53:03.699893622 -0500
+ Birth: 2026-11-16 13:53:03.617893624 -0500
+993ace7e5409becd460a4f5f234cab7ffe89ef09a498b39629d613ef8201ecd5  target/release/omnia-bench
+e72c16a63d08d5fc44a16838037683b1460b38635a2d429f83cd0f00e647467b  docs/measurements/T1.6/gate.sh
+{
+    "features": 255,
+    "outputs": [
+        {
+            "brightness": 0.13,
+            "clones": [
+            ],
+            "connected": true,
+            "currentModeId": "1",
+            "edrPolicy": 1,
+            "enabled": true,
+            "followPreferredMode": false,
+            "iccProfilePath": "",
+            "icon": "",
+            "id": 1,
+            "maxBpc": 0,
+            "modes": [
+                {
+                    "id": "1",
+                    "name": "1920x1080@60",
+                    "refreshRate": 60.007999420166016,
+                    "size": {
+                        "height": 1080,
+                        "width": 1920
+                    }
+                },
+                {
+                    "id": "10",
+                    "name": "1368x768@60",
+                    "refreshRate": 59.88199996948242,
+                    "size": {
+                        "height": 768,
+                        "width": 1368
+                    }
+                },
+                {
+                    "id": "11",
+                    "name": "1368x768@60",
+                    "refreshRate": 59.88199996948242,
+                    "size": {
+                        "height": 768,
+                        "width": 1368
+                    }
+                },
+                {
+                    "id": "12",
+                    "name": "1280x720@60",
+                    "refreshRate": 59.85499954223633,
+                    "size": {
+                        "height": 720,
+                        "width": 1280
+                    }
+                },
+                {
+                    "id": "13",
+                    "name": "1280x720@60",
+                    "refreshRate": 59.85499954223633,
+                    "size": {
+                        "height": 720,
+                        "width": 1280
+                    }
+                },
+                {
+                    "id": "2",
+                    "name": "1280x1024@60",
+                    "refreshRate": 59.89500045776367,
+                    "size": {
+                        "height": 1024,
+                        "width": 1280
+                    }
+                },
+                {
+                    "id": "3",
+                    "name": "1280x1024@60",
+                    "refreshRate": 59.89500045776367,
+                    "size": {
+                        "height": 1024,
+                        "width": 1280
+                    }
+                },
+                {
+                    "id": "4",
+                    "name": "1024x768@60",
+                    "refreshRate": 59.91999816894531,
+                    "size": {
+                        "height": 768,
+                        "width": 1024
+                    }
+                },
+                {
+                    "id": "5",
+                    "name": "1024x768@60",
+                    "refreshRate": 59.91999816894531,
+                    "size": {
+                        "height": 768,
+                        "width": 1024
+                    }
+                },
+                {
+                    "id": "6",
+                    "name": "1280x800@60",
+                    "refreshRate": 59.810001373291016,
+                    "size": {
+                        "height": 800,
+                        "width": 1280
+                    }
+                },
+                {
+                    "id": "7",
+                    "name": "1280x800@60",
+                    "refreshRate": 59.810001373291016,
+                    "size": {
+                        "height": 800,
+                        "width": 1280
+                    }
+                },
+                {
+                    "id": "8",
+                    "name": "1600x900@60",
+                    "refreshRate": 59.94599914550781,
+                    "size": {
+                        "height": 900,
+                        "width": 1600
+                    }
+                },
+                {
+                    "id": "9",
+                    "name": "1600x900@60",
+                    "refreshRate": 59.94599914550781,
+                    "size": {
+                        "height": 900,
+                        "width": 1600
+                    }
+                }
+            ],
+            "name": "eDP-1",
+            "pos": {
+                "x": 0,
+                "y": 0
+            },
+            "preferredModes": [
+                "1"
+            ],
+            "priority": 1,
+            "replicationSource": 0,
+            "rgbRange": 0,
+            "rotation": 1,
+            "scale": 1,
+            "size": {
+                "height": 1080,
+                "width": 1920
+            },
+            "sizeMM": {
+                "height": 173,
+                "width": 309
+            },
+            "type": 7
+        }
+    ],
+    "screen": {
+        "currentSize": {
+            "height": 1080,
+            "width": 1920
+        },
+        "id": 0,
+        "maxActiveOutputsCount": 1,
+        "maxSize": {
+            "height": 64000,
+            "width": 64000
+        },
+        "minSize": {
+            "height": 0,
+            "width": 0
+        }
+    },
+    "tabletModeAvailable": false,
+    "tabletModeEngaged": false
+}
+    PID USER     COMMAND
+      1 root     systemd
+      2 root     kthreadd
+      3 root     pool_workqueue_release
+      4 root     kworker/R-rcu_gp
+      5 root     kworker/R-sync_wq
+      6 root     kworker/R-kvfree_rcu_reclaim
+      7 root     kworker/R-slub_flushwq
+      8 root     kworker/R-netns
+     10 root     kworker/0:0H-kblockd
+     13 root     kworker/R-mm_percpu_wq
+     15 root     ksoftirqd/0
+     16 root     rcu_preempt
+     17 root     rcub/0
+     18 root     rcu_exp_par_gp_kthread_worker/0
+     19 root     rcu_exp_gp_kthread_worker
+     20 root     migration/0
+     21 root     kprobe-optimizer
+     22 root     idle_inject/0
+     23 root     cpuhp/0
+     24 root     cpuhp/1
+     25 root     idle_inject/1
+     26 root     migration/1
+     27 root     ksoftirqd/1
+     29 root     kworker/1:0H-kblockd
+     30 root     cpuhp/2
+     31 root     idle_inject/2
+     32 root     migration/2
+     33 root     ksoftirqd/2
+     35 root     kworker/2:0H-kblockd
+     36 root     cpuhp/3
+     37 root     idle_inject/3
+     38 root     migration/3
+     39 root     ksoftirqd/3
+     41 root     kworker/3:0H-kblockd
+     42 root     kdevtmpfs
+     43 root     kworker/R-inet_frag_wq
+     44 root     rcu_tasks_kthread
+     45 root     rcu_tasks_rude_kthread
+     46 root     kauditd
+     47 root     khungtaskd
+     48 root     oom_reaper
+     51 root     kworker/R-writeback
+     52 root     kcompactd0
+     53 root     ksmd
+     54 root     khugepaged
+     55 root     kworker/R-kblockd
+     56 root     kworker/R-blkcg_punt_bio
+     57 root     kworker/R-kintegrityd
+     58 root     irq/9-acpi
+     59 root     kworker/R-tpm_dev_wq
+     60 root     kworker/R-ata_sff
+     61 root     kworker/R-edac-poller
+     62 root     kworker/R-devfreq_wq
+     63 root     watchdogd
+     64 root     kworker/R-quota_events_unbound
+     67 root     ksgxd
+     68 root     kswapd0
+     69 root     kworker/R-kthrotld
+     70 root     kworker/R-acpi_thermal_pm
+     74 root     hwrng
+     75 root     scsi_eh_0
+     76 root     kworker/R-scsi_tmf_0
+     77 root     scsi_eh_1
+     78 root     kworker/R-scsi_tmf_1
+     79 root     scsi_eh_2
+     80 root     kworker/R-scsi_tmf_2
+     83 root     kworker/R-mld
+     84 root     kworker/R-ipv6_addrconf
+     85 root     kworker/R-kstrp
+     89 root     kworker/R-zswap-shrink
+     92 root     kworker/2:1H-i915_cleanup
+    145 root     kworker/0:1H-kblockd
+    146 root     scsi_eh_3
+    147 root     kworker/R-scsi_tmf_3
+    148 root     usb-storage
+    149 root     kworker/R-uas
+    154 root     kworker/1:1H-kblockd
+    158 root     kworker/R-ktpacpid
+    172 root     kworker/R-ttm
+    173 root     jbd2/sda3-8
+    174 root     kworker/R-ext4-rsv-conversion
+    176 root     kworker/3:1H-kblockd
+    177 root     card1-crtc0
+    178 root     card1-crtc1
+    179 root     card1-crtc2
+    231 root     systemd-journal
+    256 root     systemd-userdbd
+    261 root     psimon
+    269 root     systemd-udevd
+    271 root     psimon
+    324 root     irq/130-mei_me
+    340 root     kworker/R-cfg80211
+    348 root     irq/132-iwlwifi
+    352 root     kworker/R-USBC000:00-con1
+    386 dbus     dbus-broker-lau
+    387 dbus     dbus-broker
+    388 root     NetworkManager
+    389 root     python3
+    390 root     systemd-logind
+    431 root     tailscaled
+    432 root     wpa_supplicant
+    448 root     plasmalogin
+    454 root     psimon
+    567 root     open-fprintd
+    587 polkitd  polkitd
+    626 root     upowerd
+    741 root     plasmalogin-hel
+    751 marcus   systemd
+    753 marcus   (sd-pam)
+    764 marcus   ksecretd
+    765 marcus   startplasma-way
+    810 marcus   dbus-broker-lau
+    811 marcus   dbus-broker
+    820 marcus   kwin_wayland_wr
+    825 marcus   kwin_wayland
+    828 marcus   baloo_file
+    835 root     udisksd
+    867 marcus   pipewire
+    868 marcus   wireplumber
+    888 marcus   Xwayland
+    904 marcus   at-spi-bus-laun
+    915 marcus   dbus-broker-lau
+    919 marcus   dbus-broker
+    938 marcus   ksmserver
+    940 marcus   kded6
+    951 marcus   plasmashell
+    952 marcus   at-spi2-registr
+    960 marcus   pipewire-pulse
+   1000 marcus   kactivitymanage
+   1007 marcus   gmenudbusmenupr
+   1009 marcus   kaccess
+   1011 marcus   polkit-kde-auth
+   1012 marcus   org_kde_powerde
+   1015 marcus   xembedsniproxy
+   1023 marcus   dconf-service
+   1086 marcus   xsettingsd
+   1139 marcus   kdeconnectd
+   1148 marcus   kunifiedpush-di
+   1154 marcus   xdg-desktop-por
+   1161 marcus   DiscoverNotifie
+   1200 marcus   xdg-permission-
+   1211 marcus   xdg-document-po
+   1221 root     fusermount3
+   1226 marcus   xdg-desktop-por
+   1262 marcus   xdg-desktop-por
+   1331 marcus   akonadi_control
+   1349 marcus   akonadiserver
+   1369 marcus   akonadi_archive
+   1371 marcus   akonadi_birthda
+   1372 marcus   akonadi_contact
+   1373 marcus   akonadi_followu
+   1374 marcus   akonadi_ical_re
+   1375 marcus   akonadi_indexin
+   1376 marcus   akonadi_maildir
+   1377 marcus   akonadi_maildis
+   1378 marcus   akonadi_mailfil
+   1379 marcus   akonadi_mailmer
+   1380 marcus   akonadi_migrati
+   1381 marcus   akonadi_newmail
+   1383 marcus   akonadi_sendlat
+   1384 marcus   akonadi_unified
+   2711 root     kworker/3:0-events
+   3237 root     kworker/2:1-mm_percpu_wq
+   4288 marcus   krunner
+   4641 marcus   kwalletd6
+   9369 root     kworker/u17:2-rb_allocator
+  10366 root     kworker/0:2-events
+  14451 root     kworker/u17:1-rb_allocator
+  14868 marcus   baloorunner
+  14873 marcus   konsole
+  14881 marcus   bash
+  15407 root     kworker/u16:5-events_unbound
+  17210 root     kworker/1:3-events
+  17426 root     kworker/u16:3-flush-8:0
+  18139 root     kworker/0:0
+  19075 root     kworker/2:0-i915-unordered
+  21694 root     kworker/u16:0-events_unbound
+  21695 root     kworker/1:0-inode_switch_wbs
+  21762 root     kworker/3:2
+  24734 root     kworker/u17:0
+  24829 root     kworker/u16:1-flush-8:0
+  24912 root     kworker/0:1-memcg
+  25308 marcus   drkonqi-coredum
+  25340 root     kworker/1:1
+  25344 root     systemd-userwor
+  25345 marcus   tailscaled
+  25352 root     systemd-userwor
+  25353 root     systemd-userwor
+  25358 marcus   tailscaled
+  25365 marcus   ps
