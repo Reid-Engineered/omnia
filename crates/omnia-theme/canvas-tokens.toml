@@ -1,0 +1,23 @@
+# Canvas colour tokens that are not (yet) in the `Theme` collection of omnia.figcraft.
+#
+# These are the defaults of open question Q2 in canvas-plan.md section 12. Each token has the
+# same value in both themes. A value is either a hex colour (`#RRGGBB` or `#RRGGBBAA`) or the
+# name of another token, which is resolved per theme. A token that later appears in
+# omnia.figcraft wins over the entry here.
+#
+# After editing, run `cargo xtask tokens` to regenerate crates/omnia-theme/src/generated.rs.
+
+[tokens]
+"stage/ink" = "#1D1D1F"
+"stage/ink-secondary" = "#6B6B70"
+"stage/grid" = "#00000022"
+"stage/select" = "#2F6FEB"
+"stage/select-halo" = "#9DBDFF"
+"stage/hover" = "stage/select-halo"
+"stage/net-highlight" = "stage/select"
+"stage/snap" = "accent/mint"
+"stage/tag-bg" = "#111112"
+"stage/tag-text" = "#F2F2F2"
+"stage/instrument-body" = "#FBFAF6"
+"probe/a" = "stage/select"
+"probe/b" = "#7A5AF8"
