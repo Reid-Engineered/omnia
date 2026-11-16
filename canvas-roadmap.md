@@ -25,7 +25,8 @@ Statuses: `todo`, `doing`, `done`, `blocked (reason)`, `needs-human`.
    set the task to `blocked` and log what you measured.
 4. **Report numbers with their hardware.** Write measurements to
    `docs/measurements/<task-id>.md` with CPU, GPU, resolution, scale factor and refresh rate.
-   Only the reference machine (Q4) can mark a budget met. On any other machine a gate task
+   Only the reference machine (Q4: the Orion laptop on Linux, under plan section 2.1) can mark
+   a budget met. On any other machine, or on it outside the section 2.1 protocol, a gate task
    ends as `needs-human`, with the numbers recorded.
 5. **Open questions have defaults.** Use the default in plan section 12. Do not ask again and
    do not pick a different answer. Name the `Q` id in the pull request description.
@@ -84,8 +85,8 @@ Each is about a week and ends in a gate task. Pan, zoom and grid reach budget on
 
 ```
 T0.0 -> T0.1 -+-> T0.2 (assets)
-              +-> T0.3 -> T0.4 -> T0.5 -> T0.6 [H1] -+
-              +-> T0.7                               |
+              +-> T0.3 -> T0.4 -> T0.5 -> T0.8 -> T0.6 [H1] -+
+              +-> T0.7                                       |
               +-> T1.1 (doc) --+-> T2.1 -> T2.2      |
               +-> T1.2 (assets)|                     |
               +-> T1.3 --------+-> T1.4 -> T1.5 -> T1.6
@@ -109,7 +110,7 @@ of the `canvas` lane.
 | H2 | During T3.3 | Approves the first golden images against the mockup. |
 | H3 | During T0.5 | Performs the touchpad and mouse gestures for S7 while the logger runs. |
 | H4 | After T7.5 | Reads the final budget report. |
-| — | Any time | Answers Q1 to Q7; names the reference machine (Q4). |
+| — | Any time | Answers Q1 to Q7 (Q4 answered 2026-11-15). |
 
 ---
 
@@ -173,7 +174,7 @@ of the `canvas` lane.
   the drag.
 
 ### T0.6 Spike results and rendering decision · todo → H1
-- Lane: bench · Depends: T0.4, T0.5 · Read: plan section 8 (thresholds and outcome tables)
+- Lane: bench · Depends: T0.4, T0.5, T0.8 · Read: plan section 8 (thresholds and outcome tables)
 - Owns: `docs/spike-results.md`
 - Do: tabulate each `T-` threshold against the measured value, state pass or fail, and name
   the outcome row. Record the answers to the four "not settled by reading" items in plan
@@ -181,6 +182,18 @@ of the `canvas` lane.
 - Done when: the file exists with hardware, numbers and one outcome row. If the outcome is
   Plan A on the reference machine, set D4 to DECIDED. Otherwise set this task to
   `needs-human` and stop: no rendering task may start.
+
+### T0.8 Reference machine bring-up (Linux) · todo
+- Lane: bench · Depends: T0.4 · Read: plan sections 2.1, 4 and 8
+- Owns: `docs/measurements/T0.8.md`, `docs/measurements/T0.8/`, a POSIX copy of the spike
+  measurement script, and the Linux side of `omnia-bench` features
+- Do: on the Orion laptop, build the workspace at the pinned GPUI revision; confirm GPUI renders
+  through the HD 620 Vulkan device, not llvmpipe; re-check the G facts that are Windows-specific
+  (G10 input, G11 surfaces, G12 `render_to_image`, G13 frame stats) against GPUI's Linux and
+  Vulkan code and log each difference; then run S1 to S6 and S8 under the section 2.1 protocol
+  at 100% and 125%.
+- Done when: the measurements file lists hardware, Vulkan device, power state and the S1 to S6
+  and S8 numbers from the reference machine; T0.6 reads its thresholds from these, not T0.4's.
 
 ### T0.7 Continuous integration · done
 - Lane: bench · Depends: T0.1 · Read: plan section 10
@@ -326,7 +339,7 @@ of the `canvas` lane.
   | B9 | `memory_mb` in the `10k` run | < 300 |
   | B10 | all reports | `allocs_per_frame.ours == 0` |
 
-- Done when: all pass on the reference machine at 125% and 150%. On another machine:
+- Done when: all pass on the reference machine at 100% and 125%. On another machine:
   record and set `needs-human`. If B4 misses, apply the "fails at 70k" row of the outcome
   table before reporting.
 
@@ -531,7 +544,7 @@ of the `canvas` lane.
 ### T7.5 Gate: final report · todo → H4
 - Lane: bench · Depends: T7.1, T7.2, T7.3, T7.4
 - Owns: `docs/canvas-report.md`
-- Do: measure B1 to B10 on the reference machine at 125% and 150%, plus every invariant
+- Do: measure B1 to B10 on the reference machine at 100% and 125%, plus every invariant
   test and the goldens. Write one table: budget, measured value, pass or miss.
 - Done when: the report exists. A miss is reported as a miss, with the measurement.
 
@@ -800,3 +813,13 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        changed; orchestrator requested wrap-up without more movement.
                        Standard fmt/Clippy/tests/deny and feature Clippy/release passed;
                        S7 summariser dispatch smoke passed. No check was weakened.
+2026-11-15 Q4 answered  — owner named the Orion laptop as the reference machine: Lenovo
+                       ThinkPad T470 (i5-7300U, Intel HD 620), Arch Linux on Wayland, Vulkan,
+                       native 1920x1080 at 60 Hz, measured at 100% and 125%. Plan section 2.1
+                       adds the reference protocol (hardware Vulkan device only, native panel,
+                       AC and foreground, ten interleaved repetitions, power state recorded).
+                       Windows stays the first shipping platform; the owner's ASUS TUF F16 is
+                       the Windows development machine and gates nothing. New task T0.8 brings
+                       the bench up on Orion and re-runs the spikes there; T0.6 now depends on
+                       it. An S1 re-run on the ASUS under the same protocol (T0.4-ref) showed
+                       T-quad passing there; it is Windows evidence, not a reference result.
