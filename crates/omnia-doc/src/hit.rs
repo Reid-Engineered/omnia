@@ -14,6 +14,7 @@ pub struct Hit {
 
 /// Builds a read-only interaction index. Part entries include pins as well as body
 /// bounds so snapping finds pins outside the art. Hit testing still uses only the body.
+/// Transformed art bounds are clamped to K1; valid parts may straddle sheet edges.
 /// Rebuild after edits until Doc owns and incrementally maintains this index (D3).
 pub fn build_hit_index(
     doc: &Doc,
@@ -37,9 +38,15 @@ pub fn build_hit_index(
 }
 
 pub(crate) fn part_bounds(part: &Part, local: Rect) -> Result<Rect, GeomError> {
-    local
-        .checked_reorient_around(part.orient, Pt::ZERO)?
-        .translate(part.at)
+    let oriented = local.checked_reorient_around(part.orient, Pt::ZERO)?;
+    // Doc validates anchors and pins, not art extents. Translate in wide arithmetic
+    // before clamping so edge-straddling art cannot invalidate the entire index.
+    let limit = i64::from(SHEET_LIMIT_NM);
+    let translate = |p: Pt| Pt {
+        x: (i64::from(p.x) + i64::from(part.at.x)).clamp(-limit, limit) as i32,
+        y: (i64::from(p.y) + i64::from(part.at.y)).clamp(-limit, limit) as i32,
+    };
+    Rect::new(translate(oriented.min), translate(oriented.max))
 }
 
 /// Nearest item in the inclusive Euclidean tolerance. Ties use part, wire, label,
@@ -124,7 +131,8 @@ mod tests {
     proptest! {
         #[test]
         fn indexed_matches_independent_brute_force_and_snap_inv9(
-            items in prop::collection::vec((-999_999_000i32..=999_999_000, -999_999_000i32..=999_999_000, 0u8..8), 1..80),
+            mut items in prop::collection::vec((-999_999_000i32..=999_999_000, -999_999_000i32..=999_999_000, 0u8..8), 1..80),
+            overlaps in prop::collection::vec((-100i32..=100, -100i32..=100, 0u8..8), 1..30),
             x in -SHEET_LIMIT_NM..=SHEET_LIMIT_NM,
             y in -SHEET_LIMIT_NM..=SHEET_LIMIT_NM,
             tolerance in 0i32..=SHEET_LIMIT_NM,
@@ -132,7 +140,10 @@ mod tests {
             pick in any::<usize>(),
             dx in -500i32..=500,
             dy in -500i32..=500,
+            boundary_step in 1i32..=100,
         ) {
+            // Retain full-sheet coverage and also force cross-item overlaps.
+            items.extend(overlaps);
             let mut doc = Doc::new();
             let mut oracle = Vec::new();
             for &(x, y, o) in &items {
@@ -158,7 +169,17 @@ mod tests {
             let index = build_hit_index(&doc, bounds).unwrap();
             let mut scratch = Vec::new();
             let chosen = items[pick % items.len()];
-            for at in [Pt { x, y }, Pt { x: chosen.0 + dx, y: chosen.1 + dy }] {
+            // Probe just beyond the rightmost item. Nothing else can be closer,
+            // so the nearest distance is exactly boundary_step (not merely the
+            // distance to an item hidden behind a nearer overlapping body).
+            let rightmost = oracle.iter().max_by_key(|(_, area)| area.max.x).unwrap().1;
+            let boundary = Pt { x: rightmost.max.x + boundary_step, y: ((i64::from(rightmost.min.y) + i64::from(rightmost.max.y)) / 2) as i32 };
+            for (at, tolerance) in [
+                (Pt { x, y }, tolerance),
+                (Pt { x: chosen.0 + dx, y: chosen.1 + dy }, tolerance),
+                (boundary, boundary_step),
+                (boundary, boundary_step - 1),
+            ] {
                 let expected = oracle.iter().filter_map(|&(item, area)| {
                     let q = Pt { x: at.x.max(area.min.x).min(area.max.x), y: at.y.max(area.min.y).min(area.max.y) };
                     let dx = i128::from(at.x) - i128::from(q.x);
@@ -174,6 +195,97 @@ mod tests {
             // Pin outside the symbol rectangle must still be indexed for snapping.
             let pin = doc.pins(PartId(0)).unwrap()[0];
             prop_assert!(matches!(crate::snap(&doc, &index, pin, grid, 0, &mut scratch), crate::Snap::Pin { .. }), "exact pin must snap to pin");
+        }
+    }
+
+    #[test]
+    fn art_crossing_sheet_edges_remains_indexable_pickable_and_snappable() {
+        let mut scratch = Vec::new();
+        for x in [-SHEET_LIMIT_NM, 0, SHEET_LIMIT_NM] {
+            for y in [-SHEET_LIMIT_NM, 0, SHEET_LIMIT_NM] {
+                if x == 0 && y == 0 {
+                    continue;
+                }
+                for orient in Orient::ALL {
+                    let at = Pt { x, y };
+                    let doc = Doc::from_items(
+                        [(
+                            Part {
+                                symbol: SymbolId(0),
+                                at,
+                                orient,
+                                designator: "edge".into(),
+                                value: "".into(),
+                            },
+                            vec![Pt::ZERO],
+                        )],
+                        [],
+                        [Label {
+                            at: Pt::ZERO,
+                            text: "unrelated".into(),
+                        }],
+                    )
+                    .unwrap();
+                    // Independent corner-by-corner translation/clamping reference.
+                    let corners: Vec<_> = [-101, 307]
+                        .into_iter()
+                        .flat_map(|cx| {
+                            [-203, 409].into_iter().map(move |cy| {
+                                let offset = orient.apply(Pt { x: cx, y: cy });
+                                Pt {
+                                    x: (x + offset.x).clamp(-SHEET_LIMIT_NM, SHEET_LIMIT_NM),
+                                    y: (y + offset.y).clamp(-SHEET_LIMIT_NM, SHEET_LIMIT_NM),
+                                }
+                            })
+                        })
+                        .collect();
+                    let expected = Rect {
+                        min: Pt {
+                            x: corners.iter().map(|p| p.x).min().unwrap(),
+                            y: corners.iter().map(|p| p.y).min().unwrap(),
+                        },
+                        max: Pt {
+                            x: corners.iter().map(|p| p.x).max().unwrap(),
+                            y: corners.iter().map(|p| p.y).max().unwrap(),
+                        },
+                    };
+                    let index = build_hit_index(&doc, bounds).unwrap();
+                    assert_eq!(index.len(), 2);
+                    assert_eq!(index.bounds(ItemId::Part(PartId(0))), Some(expected));
+                    for point in [at, expected.center()] {
+                        assert_eq!(
+                            hit_test(&doc, &index, point, 0, bounds, &mut scratch),
+                            Some(Hit {
+                                item: ItemId::Part(PartId(0)),
+                                at: point
+                            })
+                        );
+                    }
+                    let near_pin = Pt {
+                        x: x - x.signum() * 3,
+                        y: y - y.signum() * 4,
+                    };
+                    let snapped = crate::snap(&doc, &index, near_pin, 10, 5, &mut scratch);
+                    assert_eq!(
+                        snapped,
+                        crate::Snap::Pin {
+                            part: PartId(0),
+                            pin: 0,
+                            at
+                        }
+                    );
+                    assert_eq!(
+                        crate::snap(&doc, &index, snapped.at(), 10, 5, &mut scratch),
+                        snapped
+                    );
+                    assert_eq!(
+                        hit_test(&doc, &index, Pt::ZERO, 0, bounds, &mut scratch)
+                            .unwrap()
+                            .item,
+                        ItemId::Label(crate::LabelId(0))
+                    );
+                }
+            }
         }
     }
 

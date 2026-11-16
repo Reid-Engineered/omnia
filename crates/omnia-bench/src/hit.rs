@@ -27,8 +27,9 @@ pub fn run(sheet: &str, samples: u32, seed: u64) -> Result<Value, String> {
     let index = build_hit_index(&doc, bounds).map_err(|e| e.to_string())?;
     // At K3's 100% scale (20 px / GRID_NM), K14's 4 px is GRID_NM / 5.
     let tolerance = GRID_NM / 5;
-    // Sweep every part and wire, mixing exact hits, near hits and empty-space
-    // probes. Deterministic coordinates are prepared before measuring queries.
+    // Sweep every part and wire with exact and offset probes. Offsets may hit
+    // neighboring items: about 93% hit on 10k, a conservative dense workload.
+    // Deterministic coordinates are prepared before measuring queries.
     let mut probes = Vec::new();
     for (_, part) in doc.parts() {
         probes.extend([

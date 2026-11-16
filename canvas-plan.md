@@ -450,7 +450,9 @@ pub fn snap(doc: &Doc, index: &SpatialIndex, at: Pt, grid: i32, radius: i32,
 impl Snap { pub fn at(self) -> Pt; }
 // Live iterators skip holes and preserve ID order. Pins use usize, matching storage.
 // Interaction index part entries union transformed symbol bounds and world pins;
-// picking uses the body bounds only, labels use anchors, wires use segments.
+// transformed part body bounds are clamped to K1 for both indexing and picking,
+// so valid parts whose art straddles the sheet edge remain indexable/pickable.
+// Picking uses the clamped body only, labels use anchors, wires use segments.
 // Callers convert K14 pixels to nm using camera scale (ceil for inclusive radius).
 // Inclusive Euclidean distance; hit ties: part/wire/label then ID. Snap ties:
 // priority, distance, ID, pin index, endpoint coordinates. Reusable scratch buffers.

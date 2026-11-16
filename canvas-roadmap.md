@@ -1200,3 +1200,14 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        hardware/protocol/raw report in docs/measurements/T4.2.md and JSON.
                        Started fresh from fetched origin/main f7df2b0. Preserved the old
                        worktree's roadmap edit when detaching its obsolete task branch.
+
+2026-11-16 T4.2 PR #21 review fix: pulled merged main at 976d734. Clamp translated
+                       symbol art bounds to K1 before indexing and hit testing; legal
+                       edge-straddling parts no longer invalidate the document index or
+                       disappear from picking. Regressions cover every sheet edge/corner
+                       in all eight orientations, unrelated document items, picking and
+                       stable pin snapping. Extended the hit property with overlapping
+                       items and exact/just-outside tolerance-boundary probes, retaining
+                       its full-sheet ranges and independent geometry/distance oracle.
+                       Corrected dense benchmark probe wording and documented clamping
+                       in plan section 9. Standard checks rerun; no checks weakened.
