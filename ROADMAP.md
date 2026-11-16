@@ -1,6 +1,6 @@
 # Omnia project roadmap
 
-Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) and local wiring roadmap (`wiring-roadmap.md`, not yet tracked) provide the detailed implementation tasks beneath it.
+Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) provides the detailed implementation tasks beneath it; a wiring roadmap will be linked here once it is published.
 
 This is an outcome-based roadmap, not a schedule. Stages can overlap, but a stage is complete only when its exit criteria are demonstrated. The first-release scope below is a proposed baseline; open product decisions are recorded at the end.
 
@@ -14,7 +14,7 @@ The first release should prove this complete workflow on a small, documented set
 
 The repository contains Rust crates for the application shell (`omnia-app`), canvas (`omnia-canvas`), document model (`omnia-doc`), symbols (`omnia-symbols`), theme (`omnia-theme`), and benchmarks (`omnia-bench`). It also contains UI mockups, brand assets, generators, tests, and measurement reports.
 
-The canvas and wiring have detailed plans. Their task status and human performance gates remain authoritative; an existing crate or a passing local test does not mean a product milestone is complete. The README names ngspice and RIS-C as intended simulation engines, but that statement alone does not establish a working integration.
+The canvas has a detailed plan, and wiring planning is under way. The canvas task status and human performance gates remain authoritative; an existing crate or a passing local test does not mean a product milestone is complete. The README's design notes describe ngspice as bundled and RIS-C as a preview; those notes describe the mockups and do not establish a working integration.
 
 ## 1. Establish the technical foundation
 
@@ -34,7 +34,7 @@ Connect component selection, placement, selection, movement, rotation, deletion,
 
 **Ready when:** a user can build an agreed example circuit without developer commands, edit it with predictable wire behavior, undo mistakes, and reopen it with its circuit data intact. File errors and unsaved changes have defined behavior.
 
-**Detailed work:** editing and final integration in the [canvas roadmap](canvas-roadmap.md), wire behavior in the local wiring roadmap (`wiring-roadmap.md`, not yet tracked). Product file flows and component browsing need planning beyond test-sheet serialization.
+**Detailed work:** editing and final integration in the [canvas roadmap](canvas-roadmap.md), wire behavior in the wiring roadmap once it is published. Product file flows and component browsing need planning beyond test-sheet serialization.
 
 ## 3. Complete the simulation workflow
 

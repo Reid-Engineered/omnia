@@ -1,7 +1,7 @@
 # Omnia
 
-Schematic capture and simulation, in the spirit of Multisim, rebuilt for today. The app will be written in Rust with GPUI.
-This repository currently holds the design work: FigCraft mockups, brand assets and the generators that build them.
+Schematic capture and simulation, in the spirit of Multisim, rebuilt for today. The app is being written in Rust with GPUI.
+This repository holds the Rust workspace (`crates/`: app shell, canvas, document model, symbols, theme and benchmarks) alongside the design work: FigCraft mockups, brand assets and the generators that build them.
 
 ![Workspace · Graphite](workspace-graphite.png)
 
