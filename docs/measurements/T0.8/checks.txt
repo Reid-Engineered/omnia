@@ -1,0 +1,20 @@
+Orion: ThinkPad T470, i5-7300U, Intel HD 620, Arch Linux/KDE Wayland.
+GPUI pin: 15d136bf8e72ae43b284183ec46940c009460f5c (unchanged).
+rustc 1.98.1; cargo 1.98.1; cargo-deny 0.20.2 (temporary tool in /tmp).
+
+PASS cargo build --release -p omnia-bench --features scene-counts
+PASS cargo fmt --all --check
+PASS cargo clippy --workspace --all-targets -- -D warnings
+PASS cargo test --workspace
+PASS cargo deny check (PATH included /tmp/omnia-t08-tools)
+PASS cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings
+PASS bash -n crates/omnia-bench/src/spike/measure-ref.sh
+PASS standalone Linux process-counter test, then workspace tests
+PASS 80-run mock script rotation/power-pair verification before measurements
+PASS python3 docs/measurements/T0.8/validate.py (370 runs; 740 snapshots)
+
+Linux/FreeBSD font image test is cfg-gated: pinned PlatformWindow readback unsupported.
+Windows/supported-platform image assertions retained. No threshold/lint relaxed.
+All successful timed measurements ran with compiler processes finished.
+100% scaling restored and verified after the 125% batch; benchmark processes exited.
+No power-profile service or ACPI platform_profile is available; governor stayed powersave.

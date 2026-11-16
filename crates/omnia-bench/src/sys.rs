@@ -1,12 +1,12 @@
-//! Process memory and CPU time from the operating system. Windows only for now; other
-//! platforms report `None`.
+//! Process memory and CPU time from the operating system.
+//! Linux private_bytes is private resident memory (smaps_rollup), not Windows commit.
 
 use std::time::Duration;
 
 /// Process memory in bytes.
 #[derive(Clone, Copy, Debug)]
 pub struct Memory {
-    /// Private committed bytes (Task Manager's "Commit size"). GPU memory is not included.
+    /// Windows: private commit. Linux: private resident bytes. Excludes GPU memory.
     pub private_bytes: u64,
     pub working_set_bytes: u64,
     pub peak_working_set_bytes: u64,
@@ -105,7 +105,53 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod imp {
+    use super::Memory;
+    use std::{fs, sync::OnceLock, time::Duration};
+
+    pub fn cpu_time() -> Option<Duration> {
+        static TICKS: OnceLock<Option<u64>> = OnceLock::new();
+        let ticks = (*TICKS.get_or_init(|| {
+            // Linux auxv AT_CLKTCK (17), in native unsigned-long pairs.
+            let auxv = fs::read("/proc/self/auxv").ok()?;
+            let word = size_of::<usize>();
+            auxv.chunks_exact(2 * word).find_map(|pair| {
+                let key = usize::from_ne_bytes(pair[..word].try_into().ok()?);
+                let value = usize::from_ne_bytes(pair[word..].try_into().ok()?);
+                (key == 17 && value > 0).then_some(value as u64)
+            })
+        }))?;
+        let stat = fs::read_to_string("/proc/self/stat").ok()?;
+        // comm may contain spaces and parentheses; fields after the final ')' begin at #3.
+        let fields: Vec<_> = stat.rsplit_once(')')?.1.split_whitespace().collect();
+        let user: u64 = fields.get(11)?.parse().ok()?;
+        let system: u64 = fields.get(12)?.parse().ok()?;
+        Some(Duration::from_secs_f64(
+            (user + system) as f64 / ticks as f64,
+        ))
+    }
+
+    pub fn memory() -> Option<Memory> {
+        fn kb(text: &str, key: &str) -> Option<u64> {
+            text.lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    (name == key).then(|| value.split_whitespace().next()?.parse::<u64>().ok())?
+                })
+                .map(|n| n * 1024)
+        }
+        let status = fs::read_to_string("/proc/self/status").ok()?;
+        let smaps = fs::read_to_string("/proc/self/smaps_rollup").ok()?;
+        Some(Memory {
+            private_bytes: kb(&smaps, "Private_Clean")? + kb(&smaps, "Private_Dirty")?,
+            working_set_bytes: kb(&status, "VmRSS")?,
+            peak_working_set_bytes: kb(&status, "VmHWM")?,
+        })
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod imp {
     use super::Memory;
     use std::time::Duration;
@@ -119,7 +165,7 @@ mod imp {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(all(test, any(windows, target_os = "linux")))]
 mod tests {
     #[test]
     fn reads_process_counters() {

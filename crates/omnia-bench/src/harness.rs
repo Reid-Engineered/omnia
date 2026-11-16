@@ -63,7 +63,7 @@ fn content(
     paint_time: &Rc<Cell<Option<Duration>>>,
 ) -> AnyElement {
     match (sheet, scene) {
-        (Sheet::Placeholder, Some(scene)) => SceneElement {
+        (_, Some(scene)) => SceneElement {
             scene: scene.clone(),
             camera,
             paint_time: paint_time.clone(),
@@ -77,8 +77,16 @@ fn window_options(size_logical: (f32, f32), cx: &App, unthrottled: bool) -> Wind
     let bounds = Bounds::centered(None, size(px(size_logical.0), px(size_logical.1)), cx);
     let mut options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_min_size: Some(size(px(size_logical.0), px(size_logical.1))),
         ..Default::default()
     };
+    // Linux reference runs use the panel's exact logical size, without desktop decorations.
+    // WindowBounds::Fullscreen is verified at the pinned GPUI platform.rs:2802.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("OMNIA_BENCH_FULLSCREEN").is_some() {
+        options.window_bounds = Some(WindowBounds::Fullscreen(bounds));
+        options.window_min_size = None;
+    }
     if unthrottled {
         // GPUI caps inactive and low-power windows at about 30 fps by default; an unattended
         // run must not depend on which window has focus or on the power plan.
@@ -89,11 +97,13 @@ fn window_options(size_logical: (f32, f32), cx: &App, unthrottled: bool) -> Wind
     options
 }
 
-fn environment(window: &Window, cx: &App) -> Value {
+pub(crate) fn environment(window: &Window, cx: &App) -> Value {
     let scale = window.scale_factor();
     let viewport = window.viewport_size();
     let (w, h) = (f32::from(viewport.width), f32::from(viewport.height));
     json!({
+        "gpu": window.gpu_specs(),
+        "fullscreen": window.is_fullscreen(),
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "logical_cpus": std::thread::available_parallelism().map_or(0, |n| n.get()),
@@ -181,6 +191,7 @@ fn after_frame(frame: u32, warmup: u32, frames: u32) -> AfterFrame {
 
 struct RunView {
     config: RunConfig,
+    cached: Option<gpui::Entity<CachedSheet>>,
     scene: Option<Rc<RefCell<dyn BenchScene>>>,
     /// Index of the frame being rendered, from 0.
     frame: u32,
@@ -225,6 +236,9 @@ impl Render for RunView {
             }
         }
         self.previous_counts = counts;
+        if let Some(scene) = &self.scene {
+            scene.borrow_mut().after_frame(window);
+        }
 
         match after_frame(frame, self.config.warmup, self.config.frames) {
             AfterFrame::Draw => window.request_animation_frame(),
@@ -248,6 +262,34 @@ impl Render for RunView {
 
         let script = self.config.script;
         let camera = ours(|| script.camera(frame));
+        if matches!(self.config.sheet, Sheet::Spike(c) if c.scene == 6) {
+            let cached = self
+                .cached
+                .get_or_insert_with(|| {
+                    cx.new(|_| CachedSheet {
+                        sheet: self.config.sheet,
+                        scene: self.scene.clone(),
+                        paint_time: self.paint_time.clone(),
+                    })
+                })
+                .clone();
+            if matches!(self.config.sheet, Sheet::Spike(c) if c.mode == 0) {
+                cached.update(cx, |_, cx| cx.notify());
+            }
+            return div()
+                .size_full()
+                .child(cached.cached(gpui::StyleRefinement::default().size_full()))
+                .child(
+                    div()
+                        .absolute()
+                        .left(px((frame % 200) as f32))
+                        .top(px(4.))
+                        .size(px(4.))
+                        // Mirrors the Q2 `stage/select` overlay token until T1.2 lands tokens.
+                        .bg(rgb(0x2f6feb)),
+                )
+                .into_any_element();
+        }
         content(self.config.sheet, &self.scene, camera, &self.paint_time)
     }
 }
@@ -318,6 +360,16 @@ impl RunView {
             "present_interval_ms",
             Summary::from_nanos(&present_interval),
         );
+        // Our paint is timed only on frames that paint the scene. S6 cached replays the sheet
+        // without painting it, so its paint samples are sparse by design.
+        let paint_samples = self.paint_ms.len();
+        let paint_sampling = match (self.config.sheet, &self.scene) {
+            (Sheet::Spike(c), _) if c.scene == 6 && c.mode == 1 => "sparse-cached",
+            (_, Some(_)) => "every-frame",
+            (_, None) => "none",
+        };
+        metrics.insert("paint_samples".into(), json!(paint_samples));
+        metrics.insert("paint_sampling".into(), json!(paint_sampling));
         insert_summary(
             &mut metrics,
             "paint_ms",
@@ -355,6 +407,9 @@ impl RunView {
         if self.allocs.len() != self.config.frames as usize {
             warnings.push(format!("sampled {} frames", self.allocs.len()));
         }
+        if paint_sampling == "every-frame" && paint_samples != self.config.frames as usize {
+            warnings.push(format!("sampled paint on {paint_samples} frames"));
+        }
         if !window.is_window_active() {
             warnings.push("window was not active: present intervals are not recorded".into());
         }
@@ -363,6 +418,8 @@ impl RunView {
             "schema": SCHEMA,
             "kind": "run",
             "config": self.config.to_json(),
+            "scene_details": self.scene.as_ref().map(|s|s.borrow().details()),
+            "spike": match self.config.sheet { Sheet::Spike(c) => Some(c.json()), _ => None },
             "environment": environment(window, cx),
             "frames": {
                 "drawn": drawn,
@@ -379,7 +436,7 @@ impl RunView {
 
 /// Primitive counts by kind in the last measured frame's scene.
 #[cfg(feature = "scene-counts")]
-fn primitive_counts(window: &Window) -> Value {
+pub(crate) fn primitive_counts(window: &Window) -> Value {
     let scene = window.rendered_scene();
     json!({
         "shadows": scene.shadows.len(),
@@ -402,11 +459,21 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
         Duration::from_secs(60) + Duration::from_millis(100) * (config.frames + config.warmup),
     );
     run_app("run", move |cx, outcome| {
+        if matches!(config.sheet, Sheet::Spike(c) if c.scene==5) {
+            cx.text_system()
+                .add_fonts(vec![std::borrow::Cow::Borrowed(
+                    include_bytes!("../../../vendor/fonts/inter/Inter-SemiBold.ttf").as_slice(),
+                )])
+                .map_err(|e| format!("load bundled Inter: {e}"))?;
+        }
         let options = window_options(config.size, cx, true);
         let frames = config.frames as usize;
-        cx.open_window(options, move |_, cx| {
+        cx.open_window(options, move |_window, cx| {
+            #[cfg(not(target_os = "linux"))]
+            _window.resize(size(px(config.size.0), px(config.size.1)));
             cx.new(|_| RunView {
                 config,
+                cached: None,
                 scene: config.sheet.scene(),
                 frame: 0,
                 baseline: None,
@@ -428,6 +495,7 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
 
 #[derive(Clone, Copy, Debug)]
 pub struct IdleConfig {
+    pub size: (f32, f32),
     pub seconds: f64,
     /// Time allowed for start-up frames before the idle window is measured.
     pub settle: Duration,
@@ -467,11 +535,16 @@ pub fn idle(config: IdleConfig) -> Result<Value, String> {
         let renders: RenderLog = Rc::new(RefCell::new(Vec::with_capacity(1024)));
         let view_renders = renders.clone();
         let handle = cx
-            .open_window(window_options(T01_WINDOW, cx, false), move |_, cx| {
-                cx.new(|_| T01View {
-                    renders: view_renders,
-                })
-            })
+            .open_window(
+                window_options(config.size, cx, false),
+                move |_window, cx| {
+                    #[cfg(not(target_os = "linux"))]
+                    _window.resize(size(px(config.size.0), px(config.size.1)));
+                    cx.new(|_| T01View {
+                        renders: view_renders,
+                    })
+                },
+            )
             .map_err(|e| format!("open window: {e}"))?;
         cx.activate(true);
         let window = handle.into();
@@ -541,7 +614,7 @@ async fn measure_idle(
         "config": {
             "seconds": config.seconds,
             "settle_ms": config.settle.as_millis() as u64,
-            "window_logical": [T01_WINDOW.0, T01_WINDOW.1],
+            "window_logical": [config.size.0, config.size.1],
         },
         "environment": environment,
         "startup": { "frames": startup_draws, "renders": startup_renders },
@@ -582,19 +655,24 @@ impl Render for StartView {
 }
 
 /// Opens one window, reports its first presented frame on stdout and quits.
-pub fn start_child(sheet: Sheet) -> Result<(), String> {
+pub fn start_child(sheet: Sheet, window_size: (f32, f32)) -> Result<(), String> {
     watchdog("start child", Duration::from_secs(30));
     let outcome: Outcome = Rc::new(RefCell::new(None));
     let slot = outcome.clone();
     gpui_platform::application().run(move |cx: &mut App| {
-        let opened = cx.open_window(window_options(T01_WINDOW, cx, false), move |_, cx| {
-            cx.new(|_| StartView {
-                sheet,
-                scene: sheet.scene(),
-                paint_time: Rc::new(Cell::new(None)),
-                reported: false,
-            })
-        });
+        let opened = cx.open_window(
+            window_options(window_size, cx, false),
+            move |_window, cx| {
+                #[cfg(not(target_os = "linux"))]
+                _window.resize(size(px(window_size.0), px(window_size.1)));
+                cx.new(|_| StartView {
+                    sheet,
+                    scene: sheet.scene(),
+                    paint_time: Rc::new(Cell::new(None)),
+                    reported: false,
+                })
+            },
+        );
         match opened {
             Ok(_) => cx.activate(true),
             Err(error) => {
@@ -606,6 +684,17 @@ pub fn start_child(sheet: Sheet) -> Result<(), String> {
     match outcome.borrow_mut().take() {
         Some(Err(error)) => Err(error),
         _ => Ok(()),
+    }
+}
+
+struct CachedSheet {
+    sheet: Sheet,
+    scene: Option<Rc<RefCell<dyn BenchScene>>>,
+    paint_time: Rc<Cell<Option<Duration>>>,
+}
+impl Render for CachedSheet {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        content(self.sheet, &self.scene, Camera::default(), &self.paint_time)
     }
 }
 

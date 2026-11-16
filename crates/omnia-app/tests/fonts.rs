@@ -1,8 +1,11 @@
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 use gpui::{
     App, Bounds, Context, FontWeight, SharedString, Window, WindowBounds, WindowHandle,
     WindowOptions, div, point, prelude::*, px, rgb, size,
 };
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 use omnia_app::{STAGE_INK, STAGE_PAPER, Workspace, load_fonts, load_fonts_with};
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 use std::{
     borrow::Cow,
     collections::HashSet,
@@ -10,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 struct FontProbe {
     family: SharedString,
     weight: FontWeight,
@@ -17,6 +21,7 @@ struct FontProbe {
     text: &'static str,
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 impl Render for FontProbe {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -264,7 +269,98 @@ fn count_ink_row_bands(raw: &[u8], width: u32, height: u32, paper_rgba: [u8; 4])
     bands
 }
 
+/// The bundled TTFs, in `load_fonts` order.
+const BUNDLED_TTFS: [&[u8]; 6] = [
+    include_bytes!("../../../vendor/fonts/inter/Inter-Regular.ttf"),
+    include_bytes!("../../../vendor/fonts/inter/Inter-Medium.ttf"),
+    include_bytes!("../../../vendor/fonts/inter/Inter-SemiBold.ttf"),
+    include_bytes!("../../../vendor/fonts/source-code-pro/SourceCodePro-Regular.ttf"),
+    include_bytes!("../../../vendor/fonts/source-code-pro/SourceCodePro-Medium.ttf"),
+    include_bytes!("../../../vendor/fonts/source-code-pro/SourceCodePro-Semibold.ttf"),
+];
+
+/// The Unicode/Windows family (name IDs 1 and 16) records of an SFNT file.
+fn family_names(ttf: &[u8]) -> Vec<String> {
+    let num_tables = read_u16_be(ttf, 4) as usize;
+    let entry = (0..num_tables)
+        .map(|i| 12 + i * 16)
+        .find(|&entry| &ttf[entry..entry + 4] == b"name")
+        .expect("name table");
+    let offset = read_u32_be(ttf, entry + 8) as usize;
+    let name = &ttf[offset..offset + read_u32_be(ttf, entry + 12) as usize];
+    let strings = read_u16_be(name, 4) as usize;
+    (0..read_u16_be(name, 2) as usize)
+        .map(|i| 6 + i * 12)
+        .filter(|&rec| {
+            matches!(read_u16_be(name, rec), 0 | 3) && matches!(read_u16_be(name, rec + 6), 1 | 16)
+        })
+        .map(|rec| {
+            let start = strings + read_u16_be(name, rec + 10) as usize;
+            decode_utf16_be(&name[start..start + read_u16_be(name, rec + 8) as usize])
+        })
+        .collect()
+}
+
+/// Exercises the platform-independent helpers: TTF family patching and pixel counting.
+fn check_patching_helpers() {
+    for (i, ttf) in BUNDLED_TTFS.iter().enumerate() {
+        let (original, alias) = if i < 3 {
+            ("Inter", "OmniaAliasInter")
+        } else {
+            ("Source Code Pro", "OmniaAliasSCP")
+        };
+        let before = family_names(ttf);
+        assert!(!before.is_empty(), "font {i}: no family records");
+        assert!(
+            before.iter().all(|n| n.starts_with(original)),
+            "font {i}: {before:?}"
+        );
+        let patched = patch_ttf_family(ttf, "OmniaAliasInter", "OmniaAliasSCP");
+        let after = family_names(&patched);
+        assert_eq!(after.len(), before.len(), "font {i}");
+        for (old, new) in before.iter().zip(&after) {
+            assert_eq!(*new, old.replacen(original, alias, 1), "font {i}");
+        }
+        // Every table checksum and the whole-file checkSumAdjustment are valid.
+        let num_tables = read_u16_be(&patched, 4) as usize;
+        for entry in (0..num_tables).map(|t| 12 + t * 16) {
+            let offset = read_u32_be(&patched, entry + 8) as usize;
+            let padded = (read_u32_be(&patched, entry + 12) as usize).next_multiple_of(4);
+            let mut table = patched[offset..offset + padded].to_vec();
+            if &patched[entry..entry + 4] == b"head" {
+                table[8..12].fill(0);
+            }
+            assert_eq!(
+                sfnt_checksum(&table),
+                read_u32_be(&patched, entry + 4),
+                "font {i}: table checksum"
+            );
+        }
+        assert_eq!(
+            sfnt_checksum(&patched),
+            0xB1B0_AFBA,
+            "font {i}: file checksum"
+        );
+    }
+    assert_eq!(decode_utf16_be(&encode_utf16_be("Ω R1")), "Ω R1");
+
+    // Two ink rows separated by a paper row in a 3x4 image.
+    let (paper, ink) = ([1, 2, 3, 255], [0, 0, 0, 255]);
+    let rows = [
+        [paper, ink, paper],
+        [paper; 3],
+        [ink, ink, paper],
+        [paper; 3],
+    ];
+    let raw: Vec<u8> = rows.iter().flatten().flatten().copied().collect();
+    assert_eq!(count_non_paper_pixels(&raw, 3, 4, paper), 3);
+    assert_eq!(count_ink_row_bands(&raw, 3, 4, paper), 2);
+    println!("test bundled_font_patching_helpers ... ok");
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn main() {
+    check_patching_helpers();
     // GPUI on Windows cannot open windows without an interactive desktop, which hosted CI
     // runners lack. CI sets OMNIA_HEADLESS_CI=1 to skip this test there; it runs everywhere
     // else, including the reference machine.
@@ -527,4 +623,14 @@ fn main() {
         panic!("{err}");
     }
     println!("test bundled_fonts_register_and_render_distinctly ... ok");
+}
+
+// Linux/FreeBSD PlatformWindow inherits the unsupported readback default at this pin.
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn main() {
+    check_patching_helpers();
+    println!(
+        "test bundled_fonts_register_and_render_distinctly ... skipped: render_to_image \
+         unsupported on this platform"
+    );
 }

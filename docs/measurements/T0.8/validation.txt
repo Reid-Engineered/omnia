@@ -1,0 +1,5 @@
+100% S1: 80 successful runs; ten rotating repetitions; all AC, powersave, DPMS-on, Intel hardware, fullscreen, correct viewport/scale/60.008 Hz.
+rest: 190 successful runs; ten rotating repetitions; all AC, powersave, DPMS-on, Intel hardware, fullscreen, correct viewport/scale/60.008 Hz.
+s8: 20 successful runs; ten rotating repetitions; all AC, powersave, DPMS-on, Intel hardware, fullscreen, correct viewport/scale/60.008 Hz.
+s125: 80 successful runs; ten rotating repetitions; all AC, powersave, DPMS-on, Intel hardware, fullscreen, correct viewport/scale/60.008 Hz.
+Total: 370 successful runs, 740 before/after power records (370 pairs).
