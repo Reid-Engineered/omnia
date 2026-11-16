@@ -49,10 +49,34 @@ Repository facts:
 
 ## 2. Budgets
 
-Measured on the reference machine (Q4): mid-range Windows laptop, integrated graphics, 4K,
-125% and 150% scaling, release build, plugged in. `bench` means
+Measured on the reference machine (Q4): the Orion laptop, a Lenovo ThinkPad T470 (Intel Core
+i5-7300U, 2 cores / 4 threads, Intel HD Graphics 620, 8 GB), Arch Linux, KDE Plasma on
+Wayland, GPUI's Linux renderer on Vulkan, on its native 1920x1080 panel at 100% and 125%
+scaling, release build, plugged in. Every timed run follows the reference protocol in
+section 2.1. `bench` means
 `cargo run --release -p omnia-bench --`. Sheets: `empty`, `100`, `1k`, `10k` (10,000 parts and
 20,000 wires), `dense`, `text`.
+
+### 2.1 Reference protocol
+
+Answer to Q4 (2026-11-15). The reference machine is below the brief's "mid-range" laptop and
+runs Linux, while Windows stays the first shipping platform, so these rules apply:
+
+- **Adapter.** GPUI must render through the Intel HD 620 hardware Vulkan driver (Mesa ANV),
+  never llvmpipe. Every result records the Vulkan device; a run on any other device is not a
+  reference run.
+- **Viewport.** The native panel, 1920x1080 at 60 Hz: a full-screen window at 100% scaling
+  (1920x1080 logical) and at 125% (1536x864 logical). No window larger than the panel. The
+  owner chose native 1080p over the brief's 4K; thresholds and budgets are otherwise unchanged.
+- **120 fps (B4).** The panel refreshes at 60 Hz, so B4's 120 fps target is judged on frame
+  time only (p99 under 8.3 ms), and presentation is judged against 60 Hz.
+- **Power and noise.** On AC, the bench window in the foreground, other apps closed. Each
+  result records the power source, CPU governor and power profile.
+- **Repetitions.** Ten repetitions per case, interleaved (case order rotates each pass). The
+  gate uses the median of run p99s and reports the range.
+- **Windows.** Windows numbers (the owner's ASUS TUF F16, Intel UHD adapter) are recorded as
+  the Windows development machine. They gate nothing. Windows-only behaviour (DirectX,
+  DirectManipulation, `render_to_image`) is still checked there.
 
 | ID | Budget | Measured by |
 | --- | --- | --- |
@@ -264,8 +288,8 @@ Each has a test; the roadmap task that adds it is in brackets.
 ## 8. Day-1 spike
 
 `bench spike s1` to `s8`. Scenes are painted from a custom `Element` inside `paint_layer`,
-with the camera moving one device pixel per frame for 600 frames, at 3840×2160, 150% and
-125%. Each run records p50, p95, p99 and max of our paint time, `Window::draw` time,
+with the camera moving one device pixel per frame for 600 frames, at the reference viewport
+(section 2.1: 1920x1080, 100% and 125%). Each run records p50, p95, p99 and max of our paint time, `Window::draw` time,
 dirty-to-present and present interval (G13); allocations per frame, ours and total; memory.
 
 | ID | Scene | Sizes | Answers |
@@ -512,7 +536,7 @@ Upgrade routine, run about monthly or when a needed fix lands, as its own task:
 | Risk | Mitigation | Early test |
 | --- | --- | --- |
 | GPUI churn | One pinned revision, GPUI confined to three crates, the upgrade routine | T0.1 builds at the pin |
-| Primitive throughput on integrated graphics at 4K | No paths in the sheet layer, layers, LOD, Plans B and C | S1, S3, S4 |
+| Primitive throughput on integrated graphics (HD 620 on Linux) | No paths in the sheet layer, layers, LOD, Plans B and C | S1, S3, S4 |
 | Text at scale: atlas growth while zooming, cost per label | D6 | S5 |
 | Sprites look soft or wrong when mirrored | Per-bucket SVG with adjusted stroke; per-orientation entries | S3 |
 | The atlas never evicts | Buckets bound the entry count; cap the largest raster and draw the few visible symbols as overlay paths above it | S3, S5 second sweep |
@@ -532,7 +556,7 @@ Each has a default. Build to the default; the owner's answer replaces it here.
 | Q1 | Stroke weight across zoom: scale with zoom, or constant on screen? | Scale with zoom, floor of one device pixel (K5). |
 | Q2 | Canvas colours are not tokens. Only `stage/paper` is; `build-omnia.mjs` hard-codes the rest. Will tokens be added to the `Theme` collection? | Keep them in `canvas-tokens.toml`, same value in both themes: `stage/ink` `#1D1D1F`, `stage/ink-secondary` `#6B6B70`, `stage/grid` `#00000022`, `stage/select` `#2F6FEB`, `stage/select-halo` `#9DBDFF`, `stage/hover` = select-halo, `stage/net-highlight` = select, `stage/snap` = `accent/mint`, `stage/tag-bg` `#111112`, `stage/tag-text` `#F2F2F2`, `stage/instrument-body` `#FBFAF6`, `probe/a` = select, `probe/b` `#7A5AF8`. A token that later appears in `omnia.figcraft` wins. |
 | Q3 | Label font: the brief says Source Code Pro for designators and values; the mockup uses Inter SemiBold. | Follow the mockup (K8). |
-| Q4 | Which laptop is the reference machine (model, GPU, panel refresh rate)? Can it run gates as a self-hosted CI runner? | None named. No budget can be marked met; record numbers with the hardware they came from. |
+| Q4 | Which laptop is the reference machine (model, GPU, panel refresh rate)? Can it run gates as a self-hosted CI runner? | **Answered 2026-11-15:** the Orion laptop (Lenovo ThinkPad T470, i5-7300U, Intel HD 620, Arch Linux on Wayland, Vulkan, native 1920x1080 at 60 Hz, 100% and 125%), under the protocol in section 2.1. Self-hosted CI runner: not decided; frame-time gates run by hand on it until then. |
 | Q5 | Does B10 cover GPUI's internal allocations? | No: our code only. Total is reported, not gated. |
 | Q6 | When a part moves, do attached wires stretch? | No. Roadmap T6.3 stays blocked. |
 | Q7 | If the spike lands on Plan C, is a patched GPUI fork acceptable? | No default. Stop and ask. |
