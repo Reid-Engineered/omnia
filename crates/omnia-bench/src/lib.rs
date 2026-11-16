@@ -21,3 +21,5 @@ pub use alloc::{CountingAlloc, count_allocs};
 #[cfg(test)]
 #[global_allocator]
 static TEST_ALLOC: CountingAlloc = CountingAlloc;
+
+pub mod hit;

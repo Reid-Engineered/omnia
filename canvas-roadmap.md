@@ -392,13 +392,23 @@ of the `canvas` lane.
 - Done when: the INV10 property test passes over random add and remove sequences; a
   criterion bench shows one wire add and one wire remove under 1 ms on `10k`.
 
-### T4.2 Hit testing and snapping · todo
+### T4.2 Hit testing and snapping · done
 - Lane: doc · Depends: T2.2, T2.3 · Read: D3, K14, INV9
 - Owns: `crates/omnia-doc/src/hit.rs`, `snap.rs`
 - Do: `hit_test` (nearest part, wire or label within tolerance, parts by their bounds) and
   `snap` (priority: pin, wire end, wire body, grid). Add `bench hit`.
 - Done when: property tests show `hit_test` equal to brute force and INV9 for `snap`;
   `bench hit --sheet 10k` reports p99 < 0.2 ms (B7; reference machine for the gate).
+- Approved T4.2 integration scope: read-only `Doc::pins` (world pins, optional for
+  missing IDs), `parts`, `wires`, and `labels` (live ID/reference iterators).
+  Signatures are in plan section 9; no public mutation added.
+- `build_hit_index` takes a symbol-local bounds closure to avoid the symbols/doc
+  dependency cycle. Its part entries include world pins; picking uses body bounds.
+  Pass this index explicitly until Doc owns it; then maintain it on edits and wrap
+  the interaction functions as Doc methods. Labels currently pick by anchor.
+- Snapping settles through higher priorities after grid rounding or wire projection
+  to satisfy INV9 even with off-grid geometry. The final position can exceed the
+  initial radius; plan section 9 documents this and deterministic tie rules.
 
 ### T4.3 Overlay, hover and selection · todo
 - Lane: canvas · Depends: T3.4, T4.2 · Read: D7, INV11, G6
@@ -1190,3 +1200,39 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        refreshes and max_present_interval_ms, with GPUI's work-based count
                        renamed work_missed_refreshes. omnia-bench gains workspace deps only.
                        Numbers and rerun steps: docs/measurements/T1.6.md.
+
+2026-11-16 T4.2 done: implemented GPUI-independent hit_test and priority snap with
+                       stable ties, reusable scratch and fixed-point settling for INV9.
+                       Approved supporting accessors: Doc::pins, parts, wires, labels;
+                       public module/re-exports only otherwise. No connectivity.rs edits.
+                       Symbol-local bounds closure avoids the dependency cycle; interaction
+                       index envelopes include world pins. Pass &SpatialIndex explicitly,
+                       rebuild after edits until Doc owns/incrementally maintains the index.
+                       Plan section 9 records all signatures, usize pin indices, label-anchor
+                       picking, K1 grid clipping and settling beyond the original radius.
+                       Added bench hit in the bench lane using T2.4's 10k generator; JSON
+                       follows the existing comparison schema. No new dependencies/licences.
+                       Properties: indexed hit == independent brute force across orientations
+                       and full-sheet coordinates; INV9 over full grid range and dense
+                       off-grid geometry. Boundary, circle, tie, pin-envelope and removal
+                       regressions covered. Standard checks pass: fmt, workspace clippy
+                       -D warnings, workspace tests, cargo deny (existing warnings only).
+                       One overlapping test rebuild encountered a Windows executable lock;
+                       completed the earlier run and reran sequentially without weakening checks.
+                       bench hit --sheet 10k (20,000 samples, seed 42): p50 0.0008 ms,
+                       p99 0.0016 ms, max 0.0553 ms on i7-14650HX / RTX 5060 Laptop /
+                       Windows. Non-reference Q4 machine: B7 remains pending on Orion;
+                       hardware/protocol/raw report in docs/measurements/T4.2.md and JSON.
+                       Started fresh from fetched origin/main f7df2b0. Preserved the old
+                       worktree's roadmap edit when detaching its obsolete task branch.
+
+2026-11-16 T4.2 PR #21 review fix: pulled merged main at 976d734. Clamp translated
+                       symbol art bounds to K1 before indexing and hit testing; legal
+                       edge-straddling parts no longer invalidate the document index or
+                       disappear from picking. Regressions cover every sheet edge/corner
+                       in all eight orientations, unrelated document items, picking and
+                       stable pin snapping. Extended the hit property with overlapping
+                       items and exact/just-outside tolerance-boundary probes, retaining
+                       its full-sheet ranges and independent geometry/distance oracle.
+                       Corrected dense benchmark probe wording and documented clamping
+                       in plan section 9. Standard checks rerun; no checks weakened.

@@ -413,7 +413,7 @@ pub enum Command {
 }
 pub struct Change { pub revision: u64, pub dirty: Rect,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
-pub enum Snap { Pin { part: PartId, pin: u16, at: Pt }, WireEnd { wire: WireId, at: Pt },
+pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
                 WireBody { wire: WireId, at: Pt }, Grid(Pt) }
 pub struct Hit { pub item: ItemId, pub at: Pt }
 
@@ -433,8 +433,11 @@ impl Doc {
     pub fn label(&self, id: LabelId) -> Option<&Label>;
     pub fn query(&self, area: Rect, out: &mut Vec<ItemId>);
     pub fn junctions(&self, area: Rect, out: &mut Vec<Pt>);
-    pub fn hit_test(&self, at: Pt, tolerance: i32) -> Option<Hit>;
-    pub fn snap(&self, at: Pt, grid: i32, radius: i32) -> Snap;
+    // T4.2: until Doc owns the index, use the free functions below.
+    pub fn pins(&self, id: PartId) -> Option<&[Pt]>; // world coordinates
+    pub fn parts(&self) -> impl Iterator<Item = (PartId, &Part)>;
+    pub fn wires(&self) -> impl Iterator<Item = (WireId, &Wire)>;
+    pub fn labels(&self) -> impl Iterator<Item = (LabelId, &Label)>;
     pub fn net_of(&self, wire: WireId) -> NetId;
     pub fn net_wires(&self, net: NetId, out: &mut Vec<WireId>);
     pub fn copy(&self, items: &[ItemId]) -> Clip;
@@ -445,6 +448,27 @@ impl Doc {
     // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points.
     // Equality compares authoritative slots, pins and revision, excluding derived incidence.
 }
+// T4.2 interaction functions (re-exported by omnia-doc).
+// `bounds` is symbol-local geometry, e.g. |id| library.get(id).bounds.
+pub fn build_hit_index(doc: &Doc, bounds: impl Fn(SymbolId) -> Rect)
+    -> Result<SpatialIndex, GeomError>;
+pub fn hit_test(doc: &Doc, index: &SpatialIndex, at: Pt, tolerance: i32,
+                bounds: impl Fn(SymbolId) -> Rect, scratch: &mut Vec<ItemId>) -> Option<Hit>;
+pub fn snap(doc: &Doc, index: &SpatialIndex, at: Pt, grid: i32, radius: i32,
+            scratch: &mut Vec<ItemId>) -> Snap;
+impl Snap { pub fn at(self) -> Pt; }
+// Live iterators skip holes and preserve ID order. Pins use usize, matching storage.
+// Interaction index part entries union transformed symbol bounds and world pins;
+// transformed part body bounds are clamped to K1 for both indexing and picking,
+// so valid parts whose art straddles the sheet edge remain indexable/pickable.
+// Picking uses the clamped body only, labels use anchors, wires use segments.
+// Callers convert K14 pixels to nm using camera scale (ceil for inclusive radius).
+// Inclusive Euclidean distance; hit ties: part/wire/label then ID. Snap ties:
+// priority, distance, ID, pin index, endpoint coordinates. Reusable scratch buffers.
+// Snap settles through higher-priority targets after rounding/projection (INV9),
+// so the final point can exceed the initial radius. Grid clips to in-sheet grid lines.
+// Until Doc owns the index, rebuild after edits. When integrated, maintain body+pin
+// bounds incrementally and turn these into Doc wrappers using the owned index.
 pub const INDEX_CELL_NM: i32;                              // K12
 pub struct SpatialIndex { /* private: K12 cells, per-item bounds and generation stamp */ }
 impl SpatialIndex {                                        // D3 (T2.2); Send, not Sync
