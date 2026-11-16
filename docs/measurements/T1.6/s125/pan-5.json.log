@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "kind": "run",
+  "config": {
+    "sheet": "empty",
+    "script": "pan",
+    "frames": 600,
+    "warmup": 60,
+    "window_logical": [
+      1536.0,
+      864.0
+    ],
+    "scene_counts": false
+  },
+  "scene_details": null,
+  "spike": null,
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) HD Graphics 620 (KBL GT2)",
+      "driver_name": "Intel open-source Mesa driver",
+      "driver_info": "Mesa 26.2.3-arch1.1"
+    },
+    "fullscreen": true,
+    "os": "linux",
+    "arch": "x86_64",
+    "logical_cpus": 4,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 60.008
+  },
+  "frames": {
+    "drawn": 600,
+    "on_time": 600,
+    "late": 0,
+    "unmeasured": 0,
+    "wall_s": 11.1053
+  },
+  "warnings": [],
+  "metrics": {
+    "frame_ms": {
+      "mean": 1.7307,
+      "p50": 1.7715,
+      "p95": 1.8186,
+      "p99": 1.9241,
+      "max": 3.8564
+    },
+    "draw_ms": {
+      "mean": 1.7118,
+      "p50": 1.751,
+      "p95": 1.8002,
+      "p99": 1.9005,
+      "max": 3.8318
+    },
+    "dirty_to_present_ms": {
+      "mean": 3.2513,
+      "p50": 3.3567,
+      "p95": 3.4427,
+      "p99": 3.6065,
+      "max": 5.8286
+    },
+    "present_interval_ms": {
+      "mean": 16.7,
+      "p50": 16.6789,
+      "p95": 17.5145,
+      "p99": 17.8586,
+      "max": 18.9235
+    },
+    "paint_samples": 600,
+    "paint_sampling": "every-frame",
+    "paint_ms": {
+      "mean": 1.5683,
+      "p50": 1.6018,
+      "p95": 1.6509,
+      "p99": 1.75,
+      "max": 3.6287
+    },
+    "allocs_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 211.9467,
+        "p50": 213.0,
+        "p95": 213.0,
+        "p99": 213.0,
+        "max": 214.0
+      }
+    },
+    "alloc_bytes_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 24547.52,
+        "p50": 24624.0,
+        "p95": 24624.0,
+        "p99": 24624.0,
+        "max": 40240.0
+      }
+    },
+    "late_frames": 0,
+    "missed_refreshes": 0,
+    "present_intervals_over_2_5_refreshes": 0,
+    "max_present_interval_ms": 18.9235,
+    "work_missed_refreshes": 0,
+    "memory_mb": 48.9336,
+    "working_set_mb": 97.1953,
+    "heap_peak_mb": 13.6189
+  }
+}
+bench: wrote /tmp/t16-rerun/s125/pan-5.json

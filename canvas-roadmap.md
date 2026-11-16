@@ -253,7 +253,7 @@ of the `canvas` lane.
 - Done when: simulated-input tests show the world point under the cursor fixed across a
   zoom, and a status update notifies neither `SheetView` nor the window root.
 
-### T1.6 Gate: milestone 1 · needs-human
+### T1.6 Gate: milestone 1 · blocked (B3: 125% pan run 1 missed refresh)
 - Lane: bench · Depends: T1.5
 - Do: run and record:
 
@@ -1236,3 +1236,28 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        its full-sheet ranges and independent geometry/distance oracle.
                        Corrected dense benchmark probe wording and documented clamping
                        in plan section 9. Standard checks rerun; no checks weakened.
+
+2026-11-16 T1.6 blocked — Clean rerun t16-gate2 completed on Orion, 14:01:17–14:14:04
+                       EST, measured checkout 1248b7e2df8f9ac2feefac5dd0e47acca60fc148;
+                       existing release binary rebuilt 13:53, no concurrent rebuild/run.
+                       Q4: i5-7300U / HD 620 Mesa ANV, Wayland, native 1080p at 60.008 Hz,
+                       full screen at 100%/125%, AC, powersave, no profile available.
+                       80 reports, 160 paired snapshots; all 164 collected files match remote
+                       hashes. Protocol checks pass; named apps absent by comm fields
+                       (Konsole and desktop services remain). Service success/exit 0;
+                       panel scale restored to 1.0; laptop safe to use.
+                       B1 median 206.703 / 214.315 ms: PASS (125% max start 545.962 ms
+                       retained). B3 frame p99 pan 3.118 / 1.985 ms, zoom 3.507 / 2.282 ms:
+                       PASS. B8 zero frames/renders in all 20 runs: PASS. B10 ours 0 in
+                       all 40 motion runs: PASS. B3 presents FAIL: 125% pan run 1 has
+                       exactly one missed refresh, max interval 49.7746 ms; work p99
+                       1.9446 ms, max 3.0802 ms, late/work misses 0. Other 39 runs miss 0.
+                       Keep all-run zero-miss rule; no budgets/aggregation weakened.
+                       summarize.py exits 1 solely for that miss; cause unproven.
+                       Replaced old reports, preserved in git history; updated T1.6.md,
+                       retained summary and post-run provenance. gate.sh tracked +x;
+                       documented explicit bash invocation for Windows checkout safety.
+                       Local Windows standard checks PASS: fmt, workspace clippy with
+                       -D warnings, workspace tests (no headless override), cargo deny
+                       (existing warnings). git diff --check passes. Performance gate
+                       remains blocked; no CI watching or merge in this follow-up.

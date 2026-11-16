@@ -41,46 +41,46 @@
     "on_time": 600,
     "late": 0,
     "unmeasured": 0,
-    "wall_s": 11.0728
+    "wall_s": 11.1609
   },
   "warnings": [],
   "metrics": {
     "frame_ms": {
-      "mean": 1.8536,
-      "p50": 1.665,
-      "p95": 3.2297,
-      "p99": 3.5635,
-      "max": 6.4717
+      "mean": 1.8715,
+      "p50": 1.6855,
+      "p95": 3.1478,
+      "p99": 3.4796,
+      "max": 3.6024
     },
     "draw_ms": {
-      "mean": 1.8331,
-      "p50": 1.6456,
-      "p95": 3.2092,
-      "p99": 3.543,
-      "max": 6.4471
+      "mean": 1.8516,
+      "p50": 1.664,
+      "p95": 3.1293,
+      "p99": 3.4591,
+      "max": 3.5799
     },
     "dirty_to_present_ms": {
-      "mean": 3.4171,
-      "p50": 3.2072,
-      "p95": 5.0217,
-      "p99": 5.4477,
-      "max": 8.9539
+      "mean": 3.4445,
+      "p50": 3.2399,
+      "p95": 4.9644,
+      "p99": 5.4436,
+      "max": 5.5419
     },
     "present_interval_ms": {
-      "mean": 16.6899,
-      "p50": 16.7117,
-      "p95": 17.6783,
-      "p99": 19.3331,
-      "max": 20.8568
+      "mean": 16.6935,
+      "p50": 16.7035,
+      "p95": 17.5309,
+      "p99": 19.3823,
+      "max": 19.9885
     },
     "paint_samples": 600,
     "paint_sampling": "every-frame",
     "paint_ms": {
-      "mean": 1.6791,
-      "p50": 1.5017,
-      "p95": 2.9734,
-      "p99": 3.2916,
-      "max": 6.087
+      "mean": 1.6982,
+      "p50": 1.5319,
+      "p95": 2.9042,
+      "p99": 3.27,
+      "max": 3.319
     },
     "allocs_per_frame": {
       "ours": {
@@ -116,8 +116,11 @@
     },
     "late_frames": 0,
     "missed_refreshes": 0,
-    "memory_mb": 51.4453,
-    "working_set_mb": 99.6563,
-    "heap_peak_mb": 16.1892
+    "present_intervals_over_2_5_refreshes": 0,
+    "max_present_interval_ms": 19.9885,
+    "work_missed_refreshes": 0,
+    "memory_mb": 51.168,
+    "working_set_mb": 99.3281,
+    "heap_peak_mb": 15.8612
   }
 }
