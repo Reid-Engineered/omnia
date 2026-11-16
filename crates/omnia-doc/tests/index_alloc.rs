@@ -118,3 +118,22 @@ fn query_allocates_nothing_with_capacity() {
     let ((), allocs) = count_allocs(|| index.query(areas[0], &mut empty));
     assert!(allocs > 0);
 }
+
+#[test]
+fn doc_query_allocates_nothing_with_capacity() {
+    let doc = omnia_doc::Doc::from_items(
+        [],
+        (0..100).map(|x| omnia_doc::Wire {
+            a: Pt { x, y: 0 },
+            b: Pt { x, y: 1 },
+        }),
+        [],
+    )
+    .unwrap();
+    let mut out = Vec::with_capacity(100);
+    for area in [rect(0, 0, 100, 100), rect(0, 0, 0, 0)] {
+        let (_, allocs) = count_allocs(|| doc.query(area, &mut out));
+        assert_eq!(allocs, 0);
+        assert!(!out.is_empty());
+    }
+}

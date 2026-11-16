@@ -103,6 +103,7 @@ pub fn generate(sheet: StressSheet, seed: u64) -> Doc {
                 value: value.into(),
             },
             def.pins.iter().map(|p| p.at).collect(),
+            def.bounds,
         ));
     }
     Doc::from_items(parts, wires, std::iter::empty::<Label>())

@@ -4,8 +4,8 @@ use crate::{
     generate::{StressSheet, generate},
     stats::Summary,
 };
-use omnia_doc::{GRID_NM, Pt, build_hit_index, hit_test};
-use omnia_symbols::SymbolLibrary;
+use omnia_doc::{GRID_NM, Pt, hit_test};
+
 use serde_json::{Value, json};
 use std::{hint::black_box, time::Instant};
 
@@ -22,9 +22,6 @@ pub fn run(sheet: &str, samples: u32, seed: u64) -> Result<Value, String> {
         return Err("samples must be positive".into());
     }
     let doc = generate(workload, seed);
-    let symbols = SymbolLibrary::builtin();
-    let bounds = |id| symbols.get(id).bounds;
-    let index = build_hit_index(&doc, bounds).map_err(|e| e.to_string())?;
     // At K3's 100% scale (20 px / GRID_NM), K14's 4 px is GRID_NM / 5.
     let tolerance = GRID_NM / 5;
     // Sweep every part and wire with exact and offset probes. Offsets may hit
@@ -57,7 +54,7 @@ pub fn run(sheet: &str, samples: u32, seed: u64) -> Result<Value, String> {
     }
     let mut scratch = Vec::new();
     for &at in &probes {
-        black_box(hit_test(&doc, &index, at, tolerance, bounds, &mut scratch));
+        black_box(hit_test(&doc, at, tolerance, &mut scratch));
     }
     let mut times = Vec::with_capacity(samples as usize);
     let mut hits = 0u32;
@@ -68,10 +65,8 @@ pub fn run(sheet: &str, samples: u32, seed: u64) -> Result<Value, String> {
         let start = Instant::now();
         let hit = black_box(hit_test(
             black_box(&doc),
-            black_box(&index),
             black_box(at),
             tolerance,
-            bounds,
             &mut scratch,
         ));
         let elapsed = start.elapsed();

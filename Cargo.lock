@@ -3528,6 +3528,7 @@ dependencies = [
 name = "omnia-bench"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "gpui",
  "gpui_platform",
  "hdrhistogram",
@@ -3554,7 +3555,6 @@ dependencies = [
 name = "omnia-doc"
 version = "0.1.0"
 dependencies = [
- "criterion",
  "proptest",
  "ron",
  "rustc-hash 2.1.3",

@@ -1,4 +1,4 @@
-//! Versioned RON test sheets. Derived incidence is rebuilt through validated inserts.
+//! Versioned RON test sheets. Derived state is rebuilt through validated inserts.
 
 use std::io::{self, Read, Write};
 
@@ -27,6 +27,7 @@ struct PartRecord {
     designator: String,
     value: String,
     local_pins: Vec<Coords>,
+    local_bounds: (Coords, Coords),
 }
 
 fn coords(p: Pt) -> Coords {
@@ -41,15 +42,15 @@ fn invalid(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Er
 
 impl Doc {
     /// Builds a sheet atomically through the same validation as command insertion.
-    /// Pins are symbol-local; callers obtain them from their symbol library.
+    /// Pins and bounds are symbol-local; callers obtain them from their symbol library.
     pub fn from_items(
-        parts: impl IntoIterator<Item = (Part, Vec<Pt>)>,
+        parts: impl IntoIterator<Item = (Part, Vec<Pt>, Rect)>,
         wires: impl IntoIterator<Item = Wire>,
         labels: impl IntoIterator<Item = Label>,
     ) -> Result<Self, StoreError> {
         let mut doc = Self::new();
-        for (part, pins) in parts {
-            doc.insert_part(part, &pins)?;
+        for (part, pins, bounds) in parts {
+            doc.insert_part(part, &pins, bounds)?;
         }
         for wire in wires {
             doc.insert_wire(wire)?;
@@ -62,7 +63,7 @@ impl Doc {
 
     fn sheet(&self) -> Sheet {
         Sheet {
-            version: 1,
+            version: 2,
             revision: self.revision,
             parts: self
                 .parts
@@ -71,6 +72,7 @@ impl Doc {
                 .map(|slot| {
                     slot.as_ref().map(|s| PartRecord {
                         symbol: s.part.symbol.raw(),
+                        local_bounds: (coords(s.local_bounds.min), coords(s.local_bounds.max)),
                         at: coords(s.part.at),
                         orient: s.part.orient.to_raw(),
                         designator: s.part.designator.to_string(),
@@ -98,8 +100,8 @@ impl Doc {
         }
     }
 
-    /// Writes version 1 RON, including reserved IDs and revision, in stable slot order.
-    /// Local pin geometry is embedded to keep this crate independent of `omnia-symbols`.
+    /// Writes version 2 RON, including reserved IDs and revision, in stable slot order.
+    /// Local bounds and pin geometry are embedded to keep this crate independent of `omnia-symbols`.
     pub fn save(&self, mut w: impl Write) -> io::Result<()> {
         let text = ron::ser::to_string_pretty(&self.sheet(), ron::ser::PrettyConfig::default())
             .map_err(invalid)?;
@@ -110,7 +112,7 @@ impl Doc {
     /// Symbol IDs retain their meaning in the library used to generate the sheet.
     pub fn load(r: impl Read) -> io::Result<Self> {
         let sheet: Sheet = ron::de::from_reader(r).map_err(invalid)?;
-        if sheet.version != 1 {
+        if sheet.version != 2 {
             return Err(invalid("unsupported test-sheet version"));
         }
         for len in [sheet.parts.len(), sheet.wires.len(), sheet.labels.len()] {
@@ -132,6 +134,7 @@ impl Doc {
                         value: p.value.into(),
                     },
                     &p.local_pins.into_iter().map(point).collect::<Vec<_>>(),
+                    Rect::new(point(p.local_bounds.0), point(p.local_bounds.1)).map_err(invalid)?,
                 )
                 .map_err(invalid)?;
             } else {
@@ -190,6 +193,7 @@ mod tests {
                     value: "".into(),
                 },
                 vec![Pt::ZERO],
+                Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
             )],
             [
                 Wire {
@@ -217,6 +221,7 @@ mod tests {
                     value: "".into(),
                 },
                 &[],
+                Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
             )
             .unwrap();
         doc.remove_part(removed);
@@ -264,7 +269,8 @@ mod tests {
                         designator: "new".into(),
                         value: "".into()
                     },
-                    &[]
+                    &[],
+                    Rect::new(Pt::ZERO, Pt::ZERO).unwrap()
                 )
                 .unwrap(),
             PartId(2)
@@ -275,10 +281,10 @@ mod tests {
     fn rejects_corrupt_geometry_and_versions() {
         for text in [
             "garbage",
-            "(version:2,revision:0,parts:[],wires:[],labels:[])",
-            "(version:1,revision:0,parts:[],wires:[Some(((0,0),(1,1)))],labels:[])",
-            "(version:1,revision:0,parts:[],wires:[Some(((0,0),(0,0)))],labels:[])",
-            "(version:1,revision:0,parts:[],wires:[],labels:[Some(((1000000001,0),\"bad\"))])",
+            "(version:3,revision:0,parts:[],wires:[],labels:[])",
+            "(version:2,revision:0,parts:[],wires:[Some(((0,0),(1,1)))],labels:[])",
+            "(version:2,revision:0,parts:[],wires:[Some(((0,0),(0,0)))],labels:[])",
+            "(version:2,revision:0,parts:[],wires:[],labels:[Some(((1000000001,0),\"bad\"))])",
         ] {
             assert_eq!(
                 Doc::load(text.as_bytes()).unwrap_err().kind(),
@@ -315,7 +321,8 @@ mod tests {
                     vec![Pt {
                         x: crate::SHEET_LIMIT_NM + 1,
                         y: 0
-                    }]
+                    }],
+                    Rect::new(Pt::ZERO, Pt::ZERO).unwrap()
                 )],
                 [],
                 []
@@ -323,7 +330,12 @@ mod tests {
             .unwrap_err(),
             StoreError::OutOfBounds
         );
-        let doc = Doc::from_items([(p, vec![Pt::ZERO])], [], []).unwrap();
+        let doc = Doc::from_items(
+            [(p, vec![Pt::ZERO], Rect::new(Pt::ZERO, Pt::ZERO).unwrap())],
+            [],
+            [],
+        )
+        .unwrap();
         for (orient, at, pin) in [
             (8, (0, 0), (0, 0)),
             (0, (crate::SHEET_LIMIT_NM, 0), (1, 0)),
