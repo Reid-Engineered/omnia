@@ -205,7 +205,7 @@ of the `canvas` lane.
 
 ## Milestone 1: empty sheet
 
-### T1.1 Geometry · todo
+### T1.1 Geometry · done
 - Lane: doc · Depends: T0.1 · Read: D1, K1, K2
 - Owns: `crates/omnia-doc/src/geom.rs`
 - Do: `Pt`, `Rect`, `Orient` (the 8 orientations, composition, inverse), `snap_to`, and
@@ -797,6 +797,22 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        the bench up on Orion and re-runs the spikes there; T0.6 now depends on
                        it. An S1 re-run on the ASUS under the same protocol (T0.4-ref) showed
                        T-quad passing there; it is Windows evidence, not a reference result.
+2026-11-15 T1.1 done    — implemented crates/omnia-doc/src/geom.rs (wired and re-exported in
+                       crates/omnia-doc/src/lib.rs) with K1/K2 constants (SHEET_LIMIT_NM,
+                       GRID_NM, PIN_LATTICE_NM), GeomError, Pt, Rect, Orient (8 D4
+                       orientations matching symbols.mjs: X-mirror then quarter-turn CW in
+                       Y-down, with then/inverse/apply/checked_apply_around), and snap_to
+                       (round-half-away-from-zero in i64 for D4 equivariance and INV9).
+                       Checked constructors reject coordinates outside ±1,000,000,000 nm
+                       and inverted rects. Added proptest as dev-dependency in omnia-doc
+                       (already in Cargo.lock and plan section 10, MIT/Apache-2.0). Unit
+                       tests cover checked constructors, all 8 orientations on a point, and
+                       snap_to edge cases; proptest covers D4 group axioms, INV9 idempotence
+                       and half-step bound, and overflow-freedom on in-range points/rects.
+                       Checks passed: cargo fmt --all --check; cargo clippy --workspace
+                       --all-targets -- -D warnings; cargo test --workspace (37 passed: 6
+                       omnia-doc, 27+2 omnia-bench, 1 omnia-app fonts, 1 xtask INV12);
+                       cargo deny check (advisories ok, bans ok, licenses ok, sources ok).
 2026-11-15 T1.2 done — `cargo xtask tokens` reads the `Theme` collection of omnia.figcraft
                        (repo root; modes Graphite and Gray) and the new overlay
                        crates/omnia-theme/canvas-tokens.toml (the Q2 default values, unchanged),
