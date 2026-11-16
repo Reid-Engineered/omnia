@@ -137,3 +137,84 @@ fn doc_query_allocates_nothing_with_capacity() {
         assert!(!out.is_empty());
     }
 }
+
+#[test]
+fn doc_query_and_net_wires_allocate_nothing_after_commands() {
+    use omnia_doc::{Command, Doc, Label, Orient, Part, SymbolId, TextField, Wire};
+
+    let mut doc = Doc::new();
+    let p_ch = doc
+        .apply(Command::PlacePart {
+            part: Part {
+                symbol: SymbolId(0),
+                at: Pt::ZERO,
+                orient: Orient::IDENTITY,
+                designator: "R1".into(),
+                value: "1k".into(),
+            },
+            local_pins: vec![Pt::ZERO, Pt { x: 20, y: 0 }],
+            local_bounds: rect(-10, -10, 30, 10),
+        })
+        .unwrap();
+    let w_ch = doc
+        .apply(Command::AddWires(
+            (0..64)
+                .map(|i| Wire {
+                    a: Pt { x: i * 10, y: 0 },
+                    b: Pt {
+                        x: (i + 1) * 10,
+                        y: 0,
+                    },
+                })
+                .collect(),
+        ))
+        .unwrap();
+    let l_ch = doc
+        .apply(Command::AddLabel(Label {
+            at: Pt::ZERO,
+            text: "BUS".into(),
+        }))
+        .unwrap();
+    let mut moved = p_ch.added.clone();
+    moved.extend_from_slice(&w_ch.added[..16]);
+    moved.extend_from_slice(&l_ch.added);
+    doc.apply(Command::Move {
+        items: moved.clone(),
+        delta: Pt { x: 100, y: 100 },
+    })
+    .unwrap();
+    doc.apply(Command::Reorient {
+        items: moved,
+        pivot: Pt { x: 100, y: 100 },
+        by: Orient::ROT_90,
+    })
+    .unwrap();
+    doc.apply(Command::SetText {
+        item: l_ch.added[0],
+        field: TextField::Label,
+        text: "VCC".into(),
+    })
+    .unwrap();
+    doc.undo().unwrap();
+    doc.redo().unwrap();
+    doc.undo().unwrap();
+    doc.undo().unwrap();
+
+    let mut items_out = Vec::with_capacity(256);
+    let mut wires_out = Vec::with_capacity(128);
+    let area = rect(-1_000, -1_000, 2_000, 2_000);
+    let net = match w_ch.added[32] {
+        ItemId::Wire(id) => doc.net_of(id).unwrap(),
+        _ => unreachable!(),
+    };
+
+    for _ in 0..3 {
+        let (_, query_allocs) = count_allocs(|| doc.query(area, &mut items_out));
+        assert_eq!(query_allocs, 0);
+        assert!(!items_out.is_empty());
+
+        let (_, net_allocs) = count_allocs(|| doc.net_wires(net, &mut wires_out));
+        assert_eq!(net_allocs, 0);
+        assert!(!wires_out.is_empty());
+    }
+}
