@@ -405,8 +405,11 @@ pub struct Part { pub symbol: SymbolId, pub at: Pt, pub orient: Orient,
 pub struct Wire { pub a: Pt, pub b: Pt }                  // INV1
 pub struct Label { pub at: Pt, pub text: Arc<str> }
 
+pub enum TextField { Designator, Value, Label }
+pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
+                        DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField } }
 pub enum Command {
-    PlacePart(Part),
+    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect },
     AddWires(Vec<Wire>),
     AddLabel(Label),
     Move { items: Vec<ItemId>, delta: Pt },
@@ -422,14 +425,14 @@ pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId
                 WireBody { wire: WireId, at: Pt }, Grid(Pt) }
 pub struct Hit { pub item: ItemId, pub at: Pt }
 
-pub struct Doc { /* private */ }
+pub struct Doc { /* private, includes undo/redo history */ }
 impl Doc {
     pub fn new() -> Self;
     // T2.8: validated bulk construction; local pins and art bounds come from the caller's symbol library.
     pub fn from_items(parts: impl IntoIterator<Item = (Part, Vec<Pt>, Rect)>,
                       wires: impl IntoIterator<Item = Wire>,
                       labels: impl IntoIterator<Item = Label>) -> Result<Self, StoreError>;
-    pub fn revision(&self) -> u64;
+    pub fn revision(&self) -> u64; // advances monotonically (+1) on every committed apply, undo, or redo (D8)
     pub fn apply(&mut self, cmd: Command) -> Result<Change, CommandError>;
     pub fn undo(&mut self) -> Option<Change>;
     pub fn redo(&mut self) -> Option<Change>;
@@ -452,7 +455,8 @@ impl Doc {
     pub fn load(r: impl io::Read) -> io::Result<Self>;
     // Version 2 RON embeds local bounds and pins (omnia-symbols depends on omnia-doc).
     // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points, index and connectivity.
-    // Equality compares authoritative slots, local bounds, pins and revision, excluding derived state.
+    // T5.1 (INV4 + D2 + D8): Equality compares authoritative slots (exact live IDs and interior gaps),
+    // local bounds and pins, excluding monotonic revision, trailing undo-reserved holes, history, and derived state.
 }
 // T4.2 interaction functions (re-exported by omnia-doc).
 // T2.8: free functions use Doc's owned index and stored body geometry.

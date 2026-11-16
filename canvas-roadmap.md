@@ -463,7 +463,7 @@ of the `canvas` lane.
 
 ## Milestone 5: editing
 
-### T5.1 Commands, undo and redo · todo
+### T5.1 Commands, undo and redo · needs-human
 - Lane: doc · Depends: T4.1 · Read: D2, INV4
 - Owns: `crates/omnia-doc/src/command.rs`, `undo.rs`
 - Do: every `Command` variant except `Paste`; validation (K1 limits, INV1); inverse
@@ -1330,3 +1330,42 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        pass; diff check passes. No T1.6 outcome/threshold changes.
                        No apps killed or system settings changed; runs exited, Orion
                        safe to use. No rendering work, merge or CI watch.
+
+2026-11-16 T5.1 needs-human — implemented crates/omnia-doc/src/command.rs and undo.rs with
+                       minimal Doc/arena/hit/io/lib wiring: TextField, CommandError, all
+                       Command variants except Paste (PlacePart, AddWires, AddLabel, Move,
+                       Reorient, Delete, SetText, Batch), Change (dirty union of old and new
+                       clamped art/pin/wire/label bounds, net-added/removed items,
+                       nets_changed), and private History stacks (new committed edit clears
+                       redo). Transactional validation checks duplicate/missing IDs, K1
+                       limits, INV1 wires, part pins/bounds, and SetText target kinds before
+                       mutating Doc; nested Batch failures roll back and truncate freshly
+                       appended undo-reserved slots. Inverse operations restore exact arena
+                       IDs and keep SpatialIndex, Points, and Connectivity synchronized.
+                       INV4 + D2 + D8 reconciliation: Doc::revision() advances monotonically
+                       (+1) on every committed apply, undo, and redo (D8), and History stays
+                       private outside serialization; PartialEq for Doc compares
+                       authoritative live items/IDs, interior holes, local bounds, and pins
+                       while ignoring monotonic revision, trailing undo-reserved None slots
+                       left after undoing fresh inserts (D2), history, and derived state.
+                       RON v2 save/load preserves revision and all slots verbatim. PlacePart
+                       takes caller-supplied local_pins and local_bounds (no doc->symbols
+                       cycle). Plan section 9 updated for Command signatures and equality.
+                       Tests (46 omnia-doc unit/proptest + 3 index_alloc integration):
+                       compound 100-item Move success and failure rollback (including OOB
+                       preserving redo stack), duplicate/missing IDs, delete/restore IDs for
+                       parts/wires/labels, off-origin Reorient pivots across all 8 Orients
+                       including K1-edge-straddling parts, SetText net merge/split, partial
+                       dirty rects, nested Batch rollback, proptest INV4+INV10+RONv2 over
+                       random legal+invalid sequences, and zero-alloc query/net_wires after
+                       commands. Added focused command bench on T2.4 StressSheet::Parts10k
+                       (10,000 parts / 20,000 wires, seed 42) in omnia-bench/benches/command.rs
+                       (docs/measurements/T5.1.md). Windows dev machine only (ASUS TUF F16
+                       FX608JMR, i7-14650HX, AC 100%, Silent scheme, rustc 1.98.1; non-Q4,
+                       1 ms threshold unchanged, not certified on Orion): 1,000-obs p50/p99/max
+                       for Move 100 parts 0.0588/0.0708/0.1593 ms (undo 0.0582/0.0695/0.1611),
+                       100 wires 0.0335/0.0457/0.1327 ms (undo 0.0294/0.0410/0.3586), 100
+                       mixed 0.0385/0.0466/0.1435 ms (undo 0.0381/0.0425/0.1063), 0/1000 >= 1 ms.
+                       No new deps. All standard checks pass (fmt, clippy -D warnings, test
+                       --workspace, deny, git diff --check). Remaining for done: measure and
+                       certify the 1 ms Move-100-items benchmark on the Orion reference machine.

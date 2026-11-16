@@ -6,9 +6,11 @@ mod io;
 use std::{fmt, sync::Arc};
 
 use crate::{
-    Connectivity, NetId, Orient, Pt, Rect, SpatialIndex,
+    Change, Command, CommandError, Connectivity, GeomError, NetId, Orient, Pt, Rect, SpatialIndex,
+    TextField,
     arena::Arena,
     points::{End, Points},
+    undo::History,
 };
 
 macro_rules! id {
@@ -87,21 +89,22 @@ impl fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-#[derive(Debug)]
-struct StoredPart {
-    part: Part,
-    pins: Vec<Pt>,
-    local_bounds: Rect,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredPart {
+    pub(crate) part: Part,
+    pub(crate) pins: Vec<Pt>,
+    pub(crate) local_bounds: Rect,
 }
 
 #[derive(Debug, Default)]
 pub struct Doc {
-    parts: Arena<StoredPart>,
-    wires: Arena<Wire>,
-    labels: Arena<Label>,
-    points: Points,
-    index: SpatialIndex,
-    connectivity: Connectivity,
+    pub(crate) parts: Arena<StoredPart>,
+    pub(crate) wires: Arena<Wire>,
+    pub(crate) labels: Arena<Label>,
+    pub(crate) points: Points,
+    pub(crate) index: SpatialIndex,
+    pub(crate) connectivity: Connectivity,
+    pub(crate) history: History,
     revision: u64,
 }
 
@@ -109,6 +112,21 @@ impl Doc {
     /// Creates an empty store. Callers supply symbol-local pin positions and art bounds.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Validates and executes a command transactionally, recording its inverse for undo.
+    pub fn apply(&mut self, cmd: Command) -> Result<Change, CommandError> {
+        crate::command::apply_command(self, cmd)
+    }
+
+    /// Reverts the most recent command, restoring exact IDs and derived state.
+    pub fn undo(&mut self) -> Option<Change> {
+        crate::undo::undo(self)
+    }
+
+    /// Reapplies the most recently undone command, restoring exact IDs and derived state.
+    pub fn redo(&mut self) -> Option<Change> {
+        crate::undo::redo(self)
     }
 
     /// Replaces out; allocates nothing when its capacity holds the result.
@@ -184,12 +202,41 @@ impl Doc {
         self.points.junctions(area, out);
     }
 
-    pub(crate) fn insert_part(
+    pub(crate) fn validate_wire(wire: Wire) -> Result<(), CommandError> {
+        check_point(wire.a)?;
+        check_point(wire.b)?;
+        if wire.a == wire.b || (wire.a.x != wire.b.x && wire.a.y != wire.b.y) {
+            return Err(CommandError::InvalidWire);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn part_bounds_at(
+        at: Pt,
+        orient: Orient,
+        local_bounds: Rect,
+    ) -> Result<Rect, GeomError> {
+        crate::hit::part_bounds_at(at, orient, local_bounds)
+    }
+
+    pub(crate) fn part_envelope_raw(
+        at: Pt,
+        orient: Orient,
+        local_bounds: Rect,
+        world_pins: &[Pt],
+    ) -> Result<Rect, GeomError> {
+        let body = Self::part_bounds_at(at, orient, local_bounds)?;
+        Ok(world_pins
+            .iter()
+            .fold(body, |area, &pin| area.union(Rect { min: pin, max: pin })))
+    }
+
+    pub(crate) fn insert_part_raw(
         &mut self,
         part: Part,
         local_pins: &[Pt],
         local_bounds: Rect,
-    ) -> Result<PartId, StoreError> {
+    ) -> Result<(PartId, Rect), StoreError> {
         Rect::new(local_bounds.min, local_bounds.max).map_err(|_| StoreError::OutOfBounds)?;
         check_point(part.at)?;
         let pins = local_pins
@@ -201,27 +248,220 @@ impl Doc {
                     .map_err(|_| StoreError::OutOfBounds)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let body =
-            crate::hit::part_bounds(&part, local_bounds).map_err(|_| StoreError::OutOfBounds)?;
-        let area = pins
-            .iter()
-            .fold(body, |area, &pin| area.union(Rect { min: pin, max: pin }));
+        let area = Self::part_envelope_raw(part.at, part.orient, local_bounds, &pins)
+            .map_err(|_| StoreError::OutOfBounds)?;
         let id = PartId(self.parts.insert(StoredPart {
             part,
             pins,
             local_bounds,
         }));
         self.index.insert(ItemId::Part(id), area).unwrap();
-        self.connectivity
-            .add_part(id, &self.parts.get(id.0).unwrap().pins);
-        for (pin, &at) in self.parts.get(id.0).unwrap().pins.iter().enumerate() {
+        let pins_slice = &self.parts.get(id.0).unwrap().pins;
+        self.connectivity.add_part(id, pins_slice);
+        for (pin, &at) in pins_slice.iter().enumerate() {
             self.points.insert(at, End::Pin { part: id, pin });
         }
+        Ok((id, area))
+    }
+
+    pub(crate) fn restore_stored_part_raw(
+        &mut self,
+        id: PartId,
+        stored: StoredPart,
+    ) -> Result<Rect, StoreError> {
+        Rect::new(stored.local_bounds.min, stored.local_bounds.max)
+            .map_err(|_| StoreError::OutOfBounds)?;
+        check_point(stored.part.at)?;
+        for &pin in &stored.pins {
+            check_point(pin)?;
+        }
+        let area = Self::part_envelope_raw(
+            stored.part.at,
+            stored.part.orient,
+            stored.local_bounds,
+            &stored.pins,
+        )
+        .map_err(|_| StoreError::OutOfBounds)?;
+        self.parts
+            .restore(id.0, stored)
+            .map_err(|_| StoreError::InvalidId)?;
+        self.index.insert(ItemId::Part(id), area).unwrap();
+        let pins_slice = &self.parts.get(id.0).unwrap().pins;
+        self.connectivity.add_part(id, pins_slice);
+        for (pin, &at) in pins_slice.iter().enumerate() {
+            self.points.insert(at, End::Pin { part: id, pin });
+        }
+        Ok(area)
+    }
+
+    pub(crate) fn remove_stored_part_raw(&mut self, id: PartId) -> Option<(StoredPart, Rect)> {
+        let stored = self.parts.remove(id.0)?;
+        let bounds = self
+            .index
+            .remove(ItemId::Part(id))
+            .expect("live part must exist in index");
+        self.connectivity.remove_part(id);
+        for (pin, &at) in stored.pins.iter().enumerate() {
+            self.points.remove(at, End::Pin { part: id, pin });
+        }
+        Some((stored, bounds))
+    }
+
+    pub(crate) fn insert_wire_raw(&mut self, wire: Wire) -> Result<(WireId, Rect), StoreError> {
+        Self::validate_wire(wire).map_err(|err| match err {
+            CommandError::OutOfBounds => StoreError::OutOfBounds,
+            CommandError::InvalidWire => StoreError::InvalidWire,
+            _ => unreachable!(),
+        })?;
+        let area = Rect::from_points(wire.a, wire.b).unwrap();
+        let id = WireId(self.wires.insert(wire));
+        self.index.insert(ItemId::Wire(id), area).unwrap();
+        self.connectivity.add_wire(id, wire);
+        self.points.insert(wire.a, End::Wire(id));
+        self.points.insert(wire.b, End::Wire(id));
+        Ok((id, area))
+    }
+
+    pub(crate) fn restore_wire_raw(&mut self, id: WireId, wire: Wire) -> Result<Rect, StoreError> {
+        Self::validate_wire(wire).map_err(|err| match err {
+            CommandError::OutOfBounds => StoreError::OutOfBounds,
+            CommandError::InvalidWire => StoreError::InvalidWire,
+            _ => unreachable!(),
+        })?;
+        self.wires
+            .restore(id.0, wire)
+            .map_err(|_| StoreError::InvalidId)?;
+        let area = Rect::from_points(wire.a, wire.b).unwrap();
+        self.index.insert(ItemId::Wire(id), area).unwrap();
+        self.connectivity.add_wire(id, wire);
+        self.points.insert(wire.a, End::Wire(id));
+        self.points.insert(wire.b, End::Wire(id));
+        Ok(area)
+    }
+
+    pub(crate) fn remove_wire_raw(&mut self, id: WireId) -> Option<(Wire, Rect)> {
+        let wire = self.wires.remove(id.0)?;
+        let bounds = self
+            .index
+            .remove(ItemId::Wire(id))
+            .expect("live wire must exist in index");
+        self.connectivity.remove_wire(id);
+        self.points.remove(wire.a, End::Wire(id));
+        self.points.remove(wire.b, End::Wire(id));
+        Some((wire, bounds))
+    }
+
+    pub(crate) fn insert_label_raw(&mut self, label: Label) -> Result<(LabelId, Rect), StoreError> {
+        check_point(label.at)?;
+        let area = Rect {
+            min: label.at,
+            max: label.at,
+        };
+        let id = LabelId(self.labels.insert(label));
+        let label = self.labels.get(id.0).unwrap();
+        self.index.insert(ItemId::Label(id), area).unwrap();
+        self.connectivity.add_label(id, label);
+        Ok((id, area))
+    }
+
+    pub(crate) fn restore_label_raw(
+        &mut self,
+        id: LabelId,
+        label: Label,
+    ) -> Result<Rect, StoreError> {
+        check_point(label.at)?;
+        self.labels
+            .restore(id.0, label)
+            .map_err(|_| StoreError::InvalidId)?;
+        let label = self.labels.get(id.0).unwrap();
+        let area = Rect {
+            min: label.at,
+            max: label.at,
+        };
+        self.index.insert(ItemId::Label(id), area).unwrap();
+        self.connectivity.add_label(id, label);
+        Ok(area)
+    }
+
+    pub(crate) fn remove_label_raw(&mut self, id: LabelId) -> Option<(Label, Rect)> {
+        let label = self.labels.remove(id.0)?;
+        let bounds = self
+            .index
+            .remove(ItemId::Label(id))
+            .expect("live label must exist in index");
+        self.connectivity.remove_label(id);
+        Some((label, bounds))
+    }
+
+    pub(crate) fn set_text_raw(
+        &mut self,
+        item: ItemId,
+        field: TextField,
+        text: Arc<str>,
+    ) -> Result<(Arc<str>, Rect, bool), CommandError> {
+        match item {
+            ItemId::Part(id) => {
+                let stored = self
+                    .parts
+                    .get_mut(id.0)
+                    .ok_or(CommandError::MissingItem(item))?;
+                let slot = match field {
+                    TextField::Designator => &mut stored.part.designator,
+                    TextField::Value => &mut stored.part.value,
+                    TextField::Label => {
+                        return Err(CommandError::InvalidTextField { item, field });
+                    }
+                };
+                let old = std::mem::replace(slot, text);
+                let bounds = self
+                    .index
+                    .bounds(item)
+                    .expect("live part must exist in index");
+                Ok((old, bounds, false))
+            }
+            ItemId::Wire(id) => {
+                if self.wires.get(id.0).is_none() {
+                    return Err(CommandError::MissingItem(item));
+                }
+                Err(CommandError::InvalidTextField { item, field })
+            }
+            ItemId::Label(id) => {
+                let Some(existing) = self.labels.get(id.0) else {
+                    return Err(CommandError::MissingItem(item));
+                };
+                if field != TextField::Label {
+                    return Err(CommandError::InvalidTextField { item, field });
+                }
+                let changed = existing.text != text;
+                if changed {
+                    self.connectivity.remove_label(id);
+                }
+                let label = self.labels.get_mut(id.0).unwrap();
+                let old = std::mem::replace(&mut label.text, text);
+                if changed {
+                    self.connectivity.add_label(id, label);
+                }
+                let bounds = Rect {
+                    min: label.at,
+                    max: label.at,
+                };
+                Ok((old, bounds, changed))
+            }
+        }
+    }
+
+    pub(crate) fn insert_part(
+        &mut self,
+        part: Part,
+        local_pins: &[Pt],
+        local_bounds: Rect,
+    ) -> Result<PartId, StoreError> {
+        let (id, _) = self.insert_part_raw(part, local_pins, local_bounds)?;
         self.bump_revision();
         Ok(id)
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "T5.1 restoration entry point"))]
+    #[cfg(test)]
     pub(crate) fn restore_part(
         &mut self,
         id: PartId,
@@ -240,162 +480,70 @@ impl Doc {
                     .map_err(|_| StoreError::OutOfBounds)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let body =
-            crate::hit::part_bounds(&part, local_bounds).map_err(|_| StoreError::OutOfBounds)?;
-        let area = pins
-            .iter()
-            .fold(body, |area, &pin| area.union(Rect { min: pin, max: pin }));
-        self.parts
-            .restore(
-                id.0,
-                StoredPart {
-                    part,
-                    pins,
-                    local_bounds,
-                },
-            )
-            .map_err(|_| StoreError::InvalidId)?;
-        self.index.insert(ItemId::Part(id), area).unwrap();
-        self.connectivity
-            .add_part(id, &self.parts.get(id.0).unwrap().pins);
-        for (pin, &at) in self.parts.get(id.0).unwrap().pins.iter().enumerate() {
-            self.points.insert(at, End::Pin { part: id, pin });
-        }
+        self.restore_stored_part_raw(
+            id,
+            StoredPart {
+                part,
+                pins,
+                local_bounds,
+            },
+        )?;
         self.bump_revision();
         Ok(id)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "crate-private editing entry point for T5.1 commands"
-        )
-    )]
+    #[cfg(test)]
     pub(crate) fn remove_part(&mut self, id: PartId) -> Option<Part> {
-        let stored = self.parts.remove(id.0)?;
-        self.index.remove(ItemId::Part(id));
-        self.connectivity.remove_part(id);
-        for (pin, at) in stored.pins.into_iter().enumerate() {
-            self.points.remove(at, End::Pin { part: id, pin });
-        }
+        let (stored, _) = self.remove_stored_part_raw(id)?;
         self.bump_revision();
         Some(stored.part)
     }
 
     pub(crate) fn insert_wire(&mut self, wire: Wire) -> Result<WireId, StoreError> {
-        check_point(wire.a)?;
-        check_point(wire.b)?;
-        if wire.a == wire.b || (wire.a.x != wire.b.x && wire.a.y != wire.b.y) {
-            return Err(StoreError::InvalidWire);
-        }
-        let id = WireId(self.wires.insert(wire));
-        self.index
-            .insert(ItemId::Wire(id), Rect::from_points(wire.a, wire.b).unwrap())
-            .unwrap();
-        self.connectivity.add_wire(id, wire);
-        self.points.insert(wire.a, End::Wire(id));
-        self.points.insert(wire.b, End::Wire(id));
+        let (id, _) = self.insert_wire_raw(wire)?;
         self.bump_revision();
         Ok(id)
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "T5.1 restoration entry point"))]
+    #[cfg(test)]
     pub(crate) fn restore_wire(&mut self, id: WireId, wire: Wire) -> Result<WireId, StoreError> {
-        check_point(wire.a)?;
-        check_point(wire.b)?;
-        if wire.a == wire.b || (wire.a.x != wire.b.x && wire.a.y != wire.b.y) {
-            return Err(StoreError::InvalidWire);
-        }
-        self.wires
-            .restore(id.0, wire)
-            .map_err(|_| StoreError::InvalidId)?;
-        self.index
-            .insert(ItemId::Wire(id), Rect::from_points(wire.a, wire.b).unwrap())
-            .unwrap();
-        self.connectivity.add_wire(id, wire);
-        self.points.insert(wire.a, End::Wire(id));
-        self.points.insert(wire.b, End::Wire(id));
+        self.restore_wire_raw(id, wire)?;
         self.bump_revision();
         Ok(id)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "crate-private editing entry point for T5.1 commands"
-        )
-    )]
+    #[cfg(test)]
     pub(crate) fn remove_wire(&mut self, id: WireId) -> Option<Wire> {
-        let wire = self.wires.remove(id.0)?;
-        self.index.remove(ItemId::Wire(id));
-        self.connectivity.remove_wire(id);
-        self.points.remove(wire.a, End::Wire(id));
-        self.points.remove(wire.b, End::Wire(id));
+        let (wire, _) = self.remove_wire_raw(id)?;
         self.bump_revision();
         Some(wire)
     }
 
     pub(crate) fn insert_label(&mut self, label: Label) -> Result<LabelId, StoreError> {
-        check_point(label.at)?;
-        let id = LabelId(self.labels.insert(label));
-        let label = self.labels.get(id.0).unwrap();
-        self.index
-            .insert(
-                ItemId::Label(id),
-                Rect {
-                    min: label.at,
-                    max: label.at,
-                },
-            )
-            .unwrap();
-        self.connectivity.add_label(id, label);
+        let (id, _) = self.insert_label_raw(label)?;
         self.bump_revision();
         Ok(id)
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "T5.1 restoration entry point"))]
+    #[cfg(test)]
     pub(crate) fn restore_label(
         &mut self,
         id: LabelId,
         label: Label,
     ) -> Result<LabelId, StoreError> {
-        check_point(label.at)?;
-        self.labels
-            .restore(id.0, label)
-            .map_err(|_| StoreError::InvalidId)?;
-        let label = self.labels.get(id.0).unwrap();
-        self.index
-            .insert(
-                ItemId::Label(id),
-                Rect {
-                    min: label.at,
-                    max: label.at,
-                },
-            )
-            .unwrap();
-        self.connectivity.add_label(id, label);
+        self.restore_label_raw(id, label)?;
         self.bump_revision();
         Ok(id)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "crate-private editing entry point for T5.1 commands"
-        )
-    )]
+    #[cfg(test)]
     pub(crate) fn remove_label(&mut self, id: LabelId) -> Option<Label> {
-        let label = self.labels.remove(id.0)?;
-        self.index.remove(ItemId::Label(id));
-        self.connectivity.remove_label(id);
+        let (label, _) = self.remove_label_raw(id)?;
         self.bump_revision();
         Some(label)
     }
 
-    fn bump_revision(&mut self) {
+    pub(crate) fn bump_revision(&mut self) {
         self.revision = self
             .revision
             .checked_add(1)

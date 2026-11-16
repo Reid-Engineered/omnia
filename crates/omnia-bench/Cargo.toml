@@ -42,3 +42,7 @@ harness = false
 [[bench]]
 name = "connectivity"
 harness = false
+
+[[bench]]
+name = "command"
+harness = false

@@ -168,11 +168,21 @@ impl Doc {
     }
 }
 
-// Equality covers authoritative state, including holes, pin geometry and revision.
-// Incidence is derived and its hash-map traversal order is deliberately excluded.
+fn trim_trailing_none<T>(slots: &[Option<T>]) -> &[Option<T>] {
+    let end = slots
+        .iter()
+        .rposition(Option::is_some)
+        .map_or(0, |last| last + 1);
+    &slots[..end]
+}
+
+// Equality compares authoritative items and their exact IDs (INV4), ignoring trailing
+// undo-reserved holes (D2), monotonic revision (D8), history, and derived state.
 impl PartialEq for Doc {
     fn eq(&self, other: &Self) -> bool {
-        self.sheet() == other.sheet()
+        trim_trailing_none(&self.parts.slots) == trim_trailing_none(&other.parts.slots)
+            && trim_trailing_none(&self.wires.slots) == trim_trailing_none(&other.wires.slots)
+            && trim_trailing_none(&self.labels.slots) == trim_trailing_none(&other.labels.slots)
     }
 }
 impl Eq for Doc {}
@@ -237,6 +247,7 @@ mod tests {
         doc.save(&mut bytes).unwrap();
         let mut loaded = Doc::load(bytes.as_slice()).unwrap();
         assert_eq!(doc, loaded);
+        assert_eq!(doc.revision(), loaded.revision());
         let area = Rect::from_points(Pt { x: -10, y: -10 }, Pt { x: 10, y: 10 }).unwrap();
         let mut dots = Vec::new();
         loaded.junctions(area, &mut dots);
