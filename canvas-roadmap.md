@@ -244,7 +244,7 @@ of the `canvas` lane.
   factors 1.0, 1.25 and 1.5; on-screen pitch stays in [20, 40) px across the zoom range;
   the paint makes zero allocations after the first frame.
 
-### T1.5 Pan, zoom and status bar · todo
+### T1.5 Pan, zoom and status bar · doing
 - Lane: canvas · Depends: T1.4 · Read: G9, G10, K4, T0.5 results
 - Owns: `crates/omnia-canvas/src/input.rs`, `crates/omnia-app/src/status_bar.rs`
 - Do: wheel zoom anchored on the cursor; touchpad pixel-scroll pan; pinch zoom about the
