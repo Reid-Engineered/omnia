@@ -314,7 +314,7 @@ of the `canvas` lane.
   A future generator change to emit realistic, normal-form nets needs new B7 and WB5
   baselines. See wiring-roadmap.md W2.4.
 
-### T2.8 Doc owns index and connectivity · blocked (20k split exceeds 1 ms on Orion; full protocol confirmation pending)
+### T2.8 Doc owns index and connectivity · done
 - Lane: doc · Depends: T2.2, T2.4, T4.1, T4.2 · Read: D2, D3, K12, INV1, INV3, INV9, INV10,
   plan section 9
 - Owns: `crates/omnia-doc/`, necessary generator/hit callers and CPU benchmark harnesses
@@ -477,7 +477,7 @@ of the `canvas` lane.
 
 ## Milestone 5: editing
 
-### T5.1 Commands, undo and redo · needs-human
+### T5.1 Commands, undo and redo · done
 - Lane: doc · Depends: T4.1 · Read: D2, INV4
 - Owns: `crates/omnia-doc/src/command.rs`, `undo.rs`
 - Do: every `Command` variant except `Paste`; validation (K1 limits, INV1); inverse
@@ -1485,6 +1485,17 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        plans and measurement records. All five standard checks pass
                        locally: fmt, workspace clippy, feature-enabled bench clippy,
                        workspace tests (including Windows goldens), cargo deny.
+2026-11-17 T2.8 done — Orion command-boundary reference campaign attempt-1ORwADgV, source
+                       f4fd588, under section 2.1 with the CPU-only rule (owner decision
+                       2026-11-17; plan section 2.1 updated). AC, performance governor, no
+                       user apps; file indexer at ~8% CPU, accepted by the owner. 20k chain
+                       split through Doc::apply: median run p99 0.924 ms (0.872 to 1.051);
+                       connectivity-only 0.847 ms; every other add/remove case under 1 ms.
+                       Functional done-when checks pass in cargo test --workspace on main.
+                       Report: docs/measurements/command-boundary/reference-2026-11-17/.
+2026-11-17 T5.1 done — Same campaign: one Move of 100 items on 10k, median run p99 0.200 ms
+                       (0.126 to 0.246); the 100 most-connected parts 0.495 ms. Code was
+                       merged earlier (needs-human until this reference timing).
 2026-11-17 T1.6 blocked — Traced diagnostic campaign (attempt-LBKFmccq) on Orion at the desk,
                        source f8f56b8 (main + PR #56 tty fix), AC, performance governor,
                        other apps closed, 100% then 125%. Complete: 40/40 motion traces, 1

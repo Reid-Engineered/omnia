@@ -72,6 +72,12 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
 - **Refresh.** The panel refreshes at 60 Hz; B3 and B4 are judged against it (60 and 30 fps).
 - **Power and noise.** On AC, the bench window in the foreground, other apps closed. Each
   result records the power source, CPU governor and power profile.
+- **CPU-only runs.** Owner decision 2026-11-17 (gate-blocker audit section 3.2): a timed run
+  with no window or GPU work (for example the command-boundary runner) keeps the reference
+  hardware, AC, the `performance` governor, other user apps closed, before/after records of
+  power, governor, profile and processes, and the repetitions rule below. Adapter, Viewport,
+  Refresh and the foreground-window rule do not apply to it. Desktop background services
+  (for example the file indexer) are recorded, not stopped.
 - **Repetitions.** Ten repetitions per case, interleaved (case order rotates each pass). The
   gate uses the median of run p99s and reports the range.
 - **Windows.** Windows numbers (the owner's ASUS TUF F16, Intel UHD adapter) are recorded as
