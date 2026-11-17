@@ -1,10 +1,12 @@
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 use gpui::{
     App, Bounds, Context, FontWeight, SharedString, Window, WindowBounds, WindowHandle,
-    WindowOptions, div, point, prelude::*, px, rgb, size,
+    WindowOptions, div, point, prelude::*, px, size,
 };
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
-use omnia_app::{STAGE_INK, STAGE_PAPER, Workspace, load_fonts, load_fonts_with};
+use omnia_app::{Workspace, load_fonts, load_fonts_with, theme};
+#[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+use omnia_theme::GRAPHITE;
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 use std::{
     borrow::Cow,
@@ -26,8 +28,8 @@ impl Render for FontProbe {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .bg(rgb(STAGE_PAPER))
-            .text_color(rgb(STAGE_INK))
+            .bg(theme::color(GRAPHITE.stage_paper))
+            .text_color(theme::color(GRAPHITE.stage_ink))
             .p_4()
             .font_family(self.family.clone())
             .font_weight(self.weight)
@@ -510,11 +512,12 @@ fn main() {
                     }
                 }
 
+                let paper = GRAPHITE.stage_paper;
                 let paper_rgba = [
-                    ((STAGE_PAPER >> 16) & 0xFF) as u8,
-                    ((STAGE_PAPER >> 8) & 0xFF) as u8,
-                    (STAGE_PAPER & 0xFF) as u8,
-                    0xFF,
+                    (paper.r * 255.0).round() as u8,
+                    (paper.g * 255.0).round() as u8,
+                    (paper.b * 255.0).round() as u8,
+                    (paper.a * 255.0).round() as u8,
                 ];
 
                 let workspace_img = cx

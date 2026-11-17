@@ -3,7 +3,7 @@
 
 use crate::Rgba;
 
-/// One field per colour token: 22 from `design/omnia.figcraft`, 13 from the overlay.
+/// One field per colour token: 22 from `design/omnia.figcraft`, 17 from the overlay.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Theme {
     /// `accent/mint` (design/omnia.figcraft).
@@ -18,12 +18,20 @@ pub struct Theme {
     pub bg_panel: Rgba,
     /// `bg/raised` (design/omnia.figcraft).
     pub bg_raised: Rgba,
+    /// `brand/mark` (canvas-tokens.toml).
+    pub brand_mark: Rgba,
+    /// `brand/tile` (canvas-tokens.toml).
+    pub brand_tile: Rgba,
     /// `button/on-primary` (design/omnia.figcraft).
     pub button_on_primary: Rgba,
     /// `button/primary` (design/omnia.figcraft).
     pub button_primary: Rgba,
+    /// `focus/ring` (canvas-tokens.toml).
+    pub focus_ring: Rgba,
     /// `highlight` (design/omnia.figcraft).
     pub highlight: Rgba,
+    /// `instrument/screen` (canvas-tokens.toml).
+    pub instrument_screen: Rgba,
     /// `mark/conflict` (design/omnia.figcraft).
     pub mark_conflict: Rgba,
     /// `probe/a` (canvas-tokens.toml).
@@ -80,7 +88,7 @@ pub struct Theme {
 
 impl Theme {
     /// The number of colour tokens.
-    pub const TOKEN_COUNT: usize = 35;
+    pub const TOKEN_COUNT: usize = 39;
 
     /// Every token as `(name, colour)`, sorted by name.
     pub fn tokens(&self) -> [(&'static str, Rgba); Self::TOKEN_COUNT] {
@@ -91,9 +99,13 @@ impl Theme {
             ("bg/inset", self.bg_inset),
             ("bg/panel", self.bg_panel),
             ("bg/raised", self.bg_raised),
+            ("brand/mark", self.brand_mark),
+            ("brand/tile", self.brand_tile),
             ("button/on-primary", self.button_on_primary),
             ("button/primary", self.button_primary),
+            ("focus/ring", self.focus_ring),
             ("highlight", self.highlight),
+            ("instrument/screen", self.instrument_screen),
             ("mark/conflict", self.mark_conflict),
             ("probe/a", self.probe_a),
             ("probe/b", self.probe_b),
@@ -132,9 +144,13 @@ pub static GRAPHITE: Theme = Theme {
     bg_inset: Rgba::new(0.05882353, 0.05882353, 0.0627451, 1.0),
     bg_panel: Rgba::new(0.08627451, 0.08627451, 0.09019608, 1.0),
     bg_raised: Rgba::new(0.16470589, 0.16470589, 0.1764706, 1.0),
+    brand_mark: Rgba::new(0.06666667, 0.06666667, 0.07058824, 1.0),
+    brand_tile: Rgba::new(0.9490196, 0.9490196, 0.9490196, 1.0),
     button_on_primary: Rgba::new(0.06666667, 0.06666667, 0.07058824, 1.0),
     button_primary: Rgba::new(0.9490196, 0.9490196, 0.9490196, 1.0),
+    focus_ring: Rgba::new(0.18431373, 0.43529412, 0.92156863, 1.0),
     highlight: Rgba::new(1.0, 1.0, 1.0, 0.050980393),
+    instrument_screen: Rgba::new(0.05490196, 0.05882353, 0.06666667, 1.0),
     mark_conflict: Rgba::new(1.0, 0.5411765, 0.36078432, 1.0),
     probe_a: Rgba::new(0.18431373, 0.43529412, 0.92156863, 1.0),
     probe_b: Rgba::new(0.47843137, 0.3529412, 0.972549, 1.0),
@@ -171,9 +187,13 @@ pub static GRAY: Theme = Theme {
     bg_inset: Rgba::new(0.78431374, 0.78431374, 0.78431374, 1.0),
     bg_panel: Rgba::new(0.827451, 0.827451, 0.827451, 1.0),
     bg_raised: Rgba::new(0.9137255, 0.9254902, 0.91764706, 1.0),
+    brand_mark: Rgba::new(0.06666667, 0.06666667, 0.07058824, 1.0),
+    brand_tile: Rgba::new(0.9490196, 0.9490196, 0.9490196, 1.0),
     button_on_primary: Rgba::new(1.0, 1.0, 1.0, 1.0),
     button_primary: Rgba::new(0.14509805, 0.13725491, 0.14901961, 1.0),
+    focus_ring: Rgba::new(0.18431373, 0.43529412, 0.92156863, 1.0),
     highlight: Rgba::new(1.0, 1.0, 1.0, 0.6),
+    instrument_screen: Rgba::new(0.05490196, 0.05882353, 0.06666667, 1.0),
     mark_conflict: Rgba::new(0.7058824, 0.27450982, 0.12156863, 1.0),
     probe_a: Rgba::new(0.18431373, 0.43529412, 0.92156863, 1.0),
     probe_b: Rgba::new(0.47843137, 0.3529412, 0.972549, 1.0),
