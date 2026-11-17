@@ -5,7 +5,10 @@
 //! copied unchanged so old and new numbers stay comparable. The new `doc_*` cases
 //! time the public command boundary, `Doc::apply`, on the same workloads.
 //!
-//! Frozen case list (also mirrored in `run.sh`; do not edit after seeing results):
+//! Frozen case list (also mirrored in `run.sh`; do not edit after seeing results).
+//! Re-frozen once after T6.1 (see `command-boundary.md`); `Expect` pins each apply
+//! case's exact change set so a later change to what a command does (for example
+//! merge-on-delete) fails loudly and forces a re-freeze before any timed run:
 //!
 //! Connectivity-only, unchanged: `real_10k_leaf`, `label_5k_gnd_vcc_bridge`,
 //! `chain_20k_middle`, `index_10k`.
@@ -55,35 +58,111 @@ fn pair(conn: &mut Connectivity, id: WireId, wire: Wire) {
     }
 }
 
+/// The exact change set a frozen case must produce on every observation. A
+/// different result means the timed operation changed meaning (for example a
+/// later normalisation on `Delete` or `Move`) and the case must be re-frozen
+/// before any timed run. `Change::added`/`removed` are unordered sets and list
+/// only inserted and absorbed IDs: a merge survivor keeps its ID and is in
+/// neither list, so merges also pin the survivor's exact geometry.
+enum Expect {
+    /// `Move`: no wire is added, removed or merged.
+    Move,
+    /// `Delete` of exactly the listed wires: those IDs removed, nothing added,
+    /// no merge or split replacement of any remaining wire.
+    Delete(Vec<WireId>),
+    /// `AddWires` of `n` wires with no split and no merge: nothing removed;
+    /// exactly `n` fresh IDs, consecutive from `first_id` on the first
+    /// observation and never reused afterwards (D2).
+    Insert { first_id: u32, n: u32 },
+    /// `AddWires` that merges into an existing chain: exactly these IDs
+    /// absorbed, nothing added, and `survivor` (the lowest ID) now holds
+    /// exactly this geometry.
+    Merge {
+        removed: Vec<WireId>,
+        survivor: (WireId, Wire),
+    },
+}
+
+fn wire_ids(items: &[ItemId]) -> Vec<u32> {
+    let mut ids: Vec<u32> = items
+        .iter()
+        .map(|item| match item {
+            ItemId::Wire(id) => id.0,
+            other => panic!("expected wire IDs only, got {other:?}"),
+        })
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+fn sorted(ids: &[WireId]) -> Vec<u32> {
+    let mut ids: Vec<u32> = ids.iter().map(|id| id.0).collect();
+    ids.sort_unstable();
+    ids
+}
+
 /// Times one pre-built command per observation and restores with untimed undo.
 fn apply_case(
     doc: &mut Doc,
     reference: &Doc,
     mut build: impl FnMut() -> Command,
+    expect: Expect,
     check: impl Fn(&Doc, bool),
 ) {
     let mut samples = Vec::with_capacity(N);
-    for _ in 0..N {
+    for observation in 0..N {
         check(doc, false);
         let cmd = build();
-        let added_count = match &cmd {
-            Command::AddWires(wires) => Some(wires.len()),
-            _ => None,
-        };
+        let wires_before = doc.wires().count();
         let start = Instant::now();
         let result = doc.apply(black_box(cmd));
         let elapsed = start.elapsed().as_nanos();
         let change = black_box(result).expect("frozen case command must validate");
-        if let Some(count) = added_count {
-            assert!(
-                change.removed.is_empty(),
-                "frozen add must not merge or replace wires"
-            );
-            assert_eq!(
-                change.added.len(),
-                count,
-                "frozen add must insert exactly its wire count"
-            );
+        let wires_after = doc.wires().count();
+        match &expect {
+            Expect::Move => {
+                assert!(change.added.is_empty() && change.removed.is_empty());
+                assert_eq!(wires_after, wires_before, "frozen move must not edit wires");
+            }
+            Expect::Delete(ids) => {
+                assert_eq!(
+                    wire_ids(&change.removed),
+                    sorted(ids),
+                    "frozen delete must remove exactly the deleted wires"
+                );
+                assert!(
+                    change.added.is_empty(),
+                    "frozen delete must not merge or split remaining wires"
+                );
+                assert_eq!(wires_after, wires_before - ids.len());
+            }
+            Expect::Insert { first_id, n } => {
+                assert!(
+                    change.removed.is_empty(),
+                    "frozen add must not merge or replace wires"
+                );
+                let first = first_id + observation as u32 * n;
+                assert_eq!(
+                    wire_ids(&change.added),
+                    (first..first + n).collect::<Vec<_>>(),
+                    "frozen add must insert exactly its wires under fresh consecutive IDs"
+                );
+                assert_eq!(wires_after, wires_before + *n as usize);
+            }
+            Expect::Merge { removed, survivor } => {
+                assert!(change.added.is_empty(), "frozen merge adds no new IDs");
+                assert_eq!(
+                    wire_ids(&change.removed),
+                    sorted(removed),
+                    "frozen merge must absorb exactly these wires"
+                );
+                assert_eq!(
+                    doc.wire(survivor.0),
+                    Some(&survivor.1),
+                    "frozen merge survivor geometry"
+                );
+                assert_eq!(wires_after, wires_before - removed.len());
+            }
         }
         check(doc, true);
         samples.push(elapsed);
@@ -268,7 +347,9 @@ fn main() {
                 println!("{i},{ns},{count}");
             }
         }
-        // INV2: perpendicular leaf at wire 0 far end. Not stable under T6.1: see command-boundary.md.
+        // INV2: perpendicular leaf at wire 0 far end. Under T6.1's local planner the
+        // only contact is wire 0 itself (not a duplicate, no collinear neighbour), so
+        // this stays a plain insert; `Expect::Insert` fails loudly if that changes.
         "doc_10k_wire_add" => {
             let reference = generate(StressSheet::Parts10k, 42);
             let mut doc = generate(StressSheet::Parts10k, 42);
@@ -283,6 +364,10 @@ fn main() {
                 &mut doc,
                 &reference,
                 move || Command::AddWires(vec![wire]),
+                Expect::Insert {
+                    first_id: 20000,
+                    n: 1,
+                },
                 |doc, applied| {
                     let anchor = doc.net_of(WireId(0)).unwrap();
                     if applied {
@@ -308,6 +393,7 @@ fn main() {
                 &mut doc,
                 &reference,
                 || Command::Delete(vec![ItemId::Wire(WireId(0))]),
+                Expect::Delete(vec![WireId(0)]),
                 |doc, applied| {
                     if applied {
                         assert_eq!(doc.net_at(wire.b), None);
@@ -340,6 +426,7 @@ fn main() {
                     items: items.clone(),
                     delta,
                 },
+                Expect::Move,
                 |doc, applied| check_move(doc, &items, applied),
             );
             assert_eq!(doc.part(PartId(0)).unwrap().at, first_at);
@@ -379,11 +466,20 @@ fn main() {
                         y: GRID_NM,
                     },
                 },
+                Expect::Move,
                 |doc, applied| check_move(doc, &items, applied),
             );
         }
-        // Worst case at command level: adding the missing middle segment joins
-        // the two 10k halves of the 20k chain.
+        // T6.1 merge worst case (re-frozen after T6.1): adding the missing middle
+        // segment joins the two 10k halves of the 20k chain, and the collinear
+        // segments at the two joined points merge. D2's local planner fixes the
+        // touched points (the added ends and the two direct contacts' far ends) and
+        // lets each side extend by one collinear neighbour, so the five segments
+        // 9998..9999, 9999..10000, the added one, 10001..10002 and 10002..10003
+        // (ids 9998, 9999, new, 10000, 10001 in this construction) become one wire
+        // 9998..10003; the lowest id, 9998, survives and 9999, 10000 and 10001 are
+        // absorbed. The planner does not walk the rest of the chain. Expect::Merge
+        // pins exactly that result.
         "doc_chain_20k_add" => {
             let reference = chain_doc(false);
             let mut doc = chain_doc(false);
@@ -395,7 +491,19 @@ fn main() {
                 &mut doc,
                 &reference,
                 move || Command::AddWires(vec![middle]),
-                |doc, applied| joined(doc, middle.a, middle.b, applied),
+                Expect::Merge {
+                    removed: vec![WireId(9999), WireId(10000), WireId(10001)],
+                    survivor: (
+                        WireId(9998),
+                        Wire {
+                            a: Pt { x: 9998, y: 0 },
+                            b: Pt { x: 10003, y: 0 },
+                        },
+                    ),
+                },
+                // The joined points become wire interiors, so probe the chain's
+                // two outer ends, which are always present.
+                |doc, applied| joined(doc, Pt { x: 0, y: 0 }, Pt { x: 20000, y: 0 }, applied),
             );
             assert_eq!(doc.wires().count(), 19999);
         }
@@ -408,6 +516,7 @@ fn main() {
                 &mut doc,
                 &reference,
                 || Command::Delete(vec![ItemId::Wire(WireId(10000))]),
+                Expect::Delete(vec![WireId(10000)]),
                 |doc, applied| joined(doc, Pt { x: 10000, y: 0 }, Pt { x: 10001, y: 0 }, !applied),
             );
             assert!(doc.wire(WireId(10000)).is_some());
@@ -423,6 +532,10 @@ fn main() {
                 &mut doc,
                 &reference,
                 move || Command::AddWires(bridge.clone()),
+                Expect::Insert {
+                    first_id: 5000,
+                    n: 3,
+                },
                 |doc, applied| joined(doc, Pt { x: 0, y: 0 }, Pt { x: 10, y: 0 }, applied),
             );
             assert_eq!(doc.wires().count(), 5000);
@@ -440,13 +553,21 @@ fn main() {
                 .expect("bridge setup must validate");
             assert!(setup.removed.is_empty());
             assert_eq!(setup.added.len(), 3);
-            let ItemId::Wire(bridge_id) = setup.added[1] else {
-                panic!("bridge setup must add the middle wire");
-            };
+            // `Change::added` is an unordered set: identify the middle segment by
+            // its geometry, not by position.
+            let bridge_id = setup
+                .added
+                .iter()
+                .find_map(|item| match item {
+                    ItemId::Wire(id) if doc.wire(*id) == Some(&bridge[1]) => Some(*id),
+                    _ => None,
+                })
+                .expect("bridge setup must add the middle wire");
             apply_case(
                 &mut doc,
                 &reference,
                 move || Command::Delete(vec![ItemId::Wire(bridge_id)]),
+                Expect::Delete(vec![bridge_id]),
                 |doc, applied| joined(doc, Pt { x: 0, y: 0 }, Pt { x: 10, y: 0 }, !applied),
             );
             assert!(doc.wire(bridge_id).is_some());
