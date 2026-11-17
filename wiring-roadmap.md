@@ -539,7 +539,6 @@ a pin at its anchor and no end at its free tip; chain deletion opens a gap with 
 per side; bridge deletion leaves one end at each corner. Re-freeze those three cases on
 the final binary even though their resulting geometry does not change.
 
-<<<<<<< HEAD
 2026-11-16 W1.5 done - route.rs: `route(doc, a, b, first_leg, scratch, out)` with a
 caller-owned `RouteScratch` (signature change from the sketch; section 10 updated), `Axis`,
 `DOGLEG_REACH_NM` (WK5), `DOGLEG_CAP` (WK6), and `check_new_wires_in`, which takes the query
@@ -564,7 +563,7 @@ exists; body count uses open interiors (edges do not count). Tests: hand-built s
 each L, L blocked by a pin (and by a pin on its corner), both Ls blocked so a dogleg wins,
 level ends round a U, TC-move-12 body in the way, bends before crossings, refusal ranking
 (including a case where a dogleg outranks both invalid Ls), candidate order and the WK6 cap
-against an independent enumeration. Properties (256 cases each): every route matches a
+against an independent enumeration. Properties (256 cases each): every route matches an
 enumeration/scoring oracle (whole-sheet scan, no index; production validator reused)
 in result and blocker; is orthogonal, on the
 lattice, a chain from a to b, passes check_new_wires (WINV10); adding it keeps normal form
@@ -585,7 +584,6 @@ whole-sheet scoring oracle at all four sheet edges and asserts the specified pin
 Clarified that enumeration and scoring are independent but validity and blocker selection
 reuse check_new_wires; no independent-validator claim. No budget or default changed.
 All five standard checks pass locally on Windows after the review fixes: fmt, workspace clippy, feature bench clippy, workspace tests and cargo deny (existing warnings only). No check weakened; no measurements run.
-=======
 2026-11-16 W3.4 doing (doc half: query_within done; tool half waits T4.3) — implemented the
 doc half of WD8 in crates/omnia-doc/src/doc.rs (`Doc::query_within` and `Doc::query_touching`)
 and crates/omnia-doc/src/index.rs (`pub(crate) SpatialIndex::query_filtered`, sharing cell
@@ -608,4 +606,3 @@ with parts having external pins. For the tool half in `crates/omnia-canvas/src/s
 locally: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
 `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
 `cargo test --workspace`, and `cargo deny check` (existing dependency warnings).
->>>>>>> origin/main
