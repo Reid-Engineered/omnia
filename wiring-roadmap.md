@@ -289,12 +289,13 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 - Done when: simulated-input tests cover an accepted drag, a refused one, Esc, and undo;
   `SheetView` paints exactly twice per drag; a golden shows the refused state.
 
-### W3.4 Rubber-band modes · todo
+### W3.4 Rubber-band modes · doing (doc half: query_within done; tool half waits T4.3)
 - Lane: canvas (tool), doc (query) · Depends: T4.3 · Read: WD8, WQ3
-- Owns: `crates/schematic-canvas/src/selection.rs` (after T4.3), `Doc::query_within` in
-  `crates/schematic-doc/src/index.rs`
+- Owns: `crates/schematic-canvas/src/selection.rs` (after T4.3), `Doc::query_within` and
+  `Doc::query_touching` in `crates/schematic-doc/src/doc.rs` (via `SpatialIndex::query_filtered`
+  in `crates/schematic-doc/src/index.rs`)
 - Do: both modes from the preference; a normalised box; Shift adds. `query_within` filters
-  the index query to items wholly inside.
+  items wholly inside; `query_touching` filters items touched (symbol bounds for parts).
 - Done when: TC-band-01 to TC-band-09 pass as simulated-input tests; a property test shows
   `query_within` equal to a brute-force scan; the INV11 test still passes.
 
@@ -537,3 +538,26 @@ doc_label_bridge_delete. By fixture inspection none gains a merge: the 10k leaf 
 a pin at its anchor and no end at its free tip; chain deletion opens a gap with one end
 per side; bridge deletion leaves one end at each corner. Re-freeze those three cases on
 the final binary even though their resulting geometry does not change.
+
+2026-11-16 W3.4 doing (doc half: query_within done; tool half waits T4.3) — implemented the
+doc half of WD8 in crates/omnia-doc/src/doc.rs (`Doc::query_within` and `Doc::query_touching`)
+and crates/omnia-doc/src/index.rs (`pub(crate) SpatialIndex::query_filtered`, sharing cell
+traversal and generation-stamp deduplication with `query` via `query_with`, pre-filtering
+candidates by `bounds.intersects(area)`). Removed `SpatialIndex::query_within` (unused
+outside `Doc`; an envelope-only `query_within` on `SpatialIndex` would invite misuse for
+selection). `Doc::query` remains unchanged (index envelope `body ∪ pins` for picking and
+snapping). Both `Doc::query_within` (WD8 Enclosed) and `Doc::query_touching` (WD8
+Intersecting) normalise `area` internally, clear `out` once, allocate nothing once `out` has
+capacity, use inclusive edges (`contains_rect` / `intersects`), and count parts by clamped
+world symbol bounds (`Doc::part_body`, pins excluded), wires by segment, and labels by
+anchor point. Updated `wiring-plan.md` section 10 and `canvas-plan.md` section 9 under rule
+16. Unit tests and independent brute-force property tests in `index.rs` and `doc.rs` cover
+varied `local_bounds`/`local_pins`, clamped near-limit parts, body-vs-pin-stub regressions,
+degenerate zero-area boxes, and all four drag directions; allocation tests in
+`crates/omnia-doc/tests/index_alloc.rs` prove zero allocation once warm for both methods
+with parts having external pins. For the tool half in `crates/omnia-canvas/src/selection.rs`
+(blocked on `T4.3`): call `Doc::query_touching` for `SelectMode::Intersecting` and
+`Doc::query_within` for `SelectMode::Enclosed`. Nothing measured. Standard checks passed
+locally: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
+`cargo test --workspace`, and `cargo deny check` (existing dependency warnings).
