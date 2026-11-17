@@ -466,5 +466,5 @@ wire body cannot occur at all (half-grid stubs from pins; generator unchanged). 
 requires every other class non-zero there. Non-reference Windows dev machine (i7-14650HX, AC,
 not the reference machine): `10k` p50 0.0002 ms, p99 0.0003 ms (timed 9,845 pin / 7,253
 end / 0 / 0 / 2,902 grid); `dense` p99 0.0004 ms (junction 424). The WB5 gate is pending on
-the reference machine. Raw JSON and hardware in docs/measurements/W1.3.md. Standard checks:
-see the PR.
+the reference machine. Raw JSON and hardware in docs/measurements/W1.3.md. Standard checks
+(fmt, both clippy runs, cargo test --workspace, cargo deny) pass locally; no check weakened.
