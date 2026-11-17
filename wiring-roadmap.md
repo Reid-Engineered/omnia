@@ -188,7 +188,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 
 HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 
-### W2.1 The follow planner · todo
+### W2.1 The follow planner · done
 - Lane: doc · Depends: W1.1, W1.2, W1.5, T5.1, HW1 · Read: WD2, WD3, WINV6, WINV8
 - Owns: `crates/schematic-doc/src/follow.rs`
 - Do: `Isometry`, `FollowPlan`, `FollowError`, `plan_follow`. Steps in WD3's order: boundary
@@ -643,3 +643,43 @@ check (existing dependency warnings). The frozen runner also passes cargo check
 Diff check passes. No thresholds, ranges, lints or budgets weakened.
 WD10 does not explicitly specify implicit corner-label deletion; unselected labels
 are retained, consistent with existing wire Delete behavior, for owner review.
+2026-11-17 W2.1 done - owner exception dated 2026-11-17 explicitly authorizes W2.1
+implementation while T5.1 was awaiting Orion timing. Before this task completed, PR #57
+landed the reference evidence and marked T5.1 done; this task does not alter that status;
+no timing campaign or budget certification was performed. Implemented Isometry, RunFate,
+FollowPlan, FollowError and plan_follow in follow.rs, with lib.rs exports (WD2/WD3/WD4).
+Geometry-ordered affected runs see final moved parts/selected wires, every reserved final
+endpoint and already planned output. Rigid ignores the modifier; policy is unanimous over
+boundary parts using pre-command connected-pin counts; failed rigid detach restarts with
+the unchanged run present. Blockers map back to original identities. Planning changes no
+document state; refusal clears the output. Rigid corner labels move once, explicitly
+selected labels remain the caller's responsibility, and rerouted placement remains W3.6.
+Section 10 records these API contracts. Defaults retained: WQ1 yes, WQ2 Alt, WQ5 no old
+shape preservation, WQ6 no wire between separating direct pins, WQ7 refuse.
+Functional done-when passes: TC-move-01..13,15..17 plan-level scenarios; two 128-case
+WINV6/WINV8 properties covering selection/incidence order and different ids on rebuilt
+sheets; free-end reservation and detached-geometry regressions; cold and reused empty-
+boundary zero-allocation test including selected wires (tests/follow_alloc.rs). All five
+standard checks PASS locally on Windows: fmt, workspace all-target clippy, feature bench
+clippy, cargo test --workspace (133 doc unit tests plus integration/allocation and window
+rendering checks), cargo deny (existing dependency warnings). Diff check and added-doc/PR
+reference scan pass. No dependencies or checks weakened. Nonempty planning currently
+allocates a full private validation view and scratch per call; the warm-allocation goal
+beyond empty boundaries is unmet. Performance and WB1/WB2/WB7 remain unmeasured for W2.4;
+command integration/landed splitting belongs to W2.2. Parent arranges independent review;
+review points are endpoint reservations/blocker remapping, rigid/detach restarts, unanimous
+policy and final-geometry validation. No subagents used; no merge performed.
+
+2026-11-17 W2.1 independent review follow-up - strengthened TC-move-08 removal checks,
+TC-move-10 symmetric threshold placement and detached-wire preservation, and WINV6/WINV8
+rigid reorientation/label/incidence-order coverage (128 cases). Added a WD3 regression
+for a selected part and wire sharing a boundary: the part policy applies there; the
+wire-only fallback applies when no selected part owns that boundary. Corrected the
+historical T5.1 exception note to acknowledge the reference result already on main.
+Review objections about free-end reservations and source ids were checked against WD3
+(the far end stays) and section 10 (temporary blockers map to original run ids); those
+contracts are unchanged. Synthetic endpoint pins preserve real-pin precedence because
+their ids follow all original part slots. Collapsed runs still end at selected geometry.
+Global selected-item sheet errors remain Blocker::Sheet; command validation owns these
+errors, as the empty-boundary contract already specifies. No checks or policies weakened.
+Review follow-up validation on Windows: all five standard checks passed again (fmt, both clippy invocations, workspace tests including follow_alloc, cargo deny); no measurements run.

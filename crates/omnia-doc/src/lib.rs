@@ -27,3 +27,5 @@ pub use hit::{Hit, hit_test};
 pub use snap::{Snap, snap};
 pub mod run;
 pub use run::{Anchor, Boundary, Run};
+pub mod follow;
+pub use follow::{FollowError, FollowPlan, Isometry, RunFate, plan_follow};

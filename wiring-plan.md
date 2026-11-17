@@ -581,6 +581,26 @@ impl Doc {
 across a drag. It is not in the paint path, so B10 does not bind it, but it should allocate
 nothing once its buffers are warm.
 
+W2.1 implementation notes (2026-11-17): `FollowPlan` is `Default` and its public vectors
+follow `Doc::affected_runs` geometry order (boundary, far end, first leg, then id).
+`remove` contains only replaced unselected segments; `add` excludes selected segments,
+which the caller transforms once. `labels` likewise excludes explicitly selected labels;
+W2.2 transforms those once. `Translated` names any accepted rigid isometry, including
+rotation and mirror. `fates` has one entry per run, so several entries can share a boundary
+point. `NoRoute` names the original run's two ends. Blockers in already planned output
+are mapped to the first original wire of that run, never a temporary view id.
+Refusal clears every output vector. The empty-boundary path does not validate selected
+items; command validation remains the caller's responsibility. Nonempty planning builds
+an isolated final-geometry document view with original part/wire identities, removes all
+replaced runs, reserves every final endpoint (including free far ends), and validates
+against selected geometry and already planned runs. Endpoint reservations report the
+original incident wire as their blocker. A detach fallback restarts planning with that
+run fixed at its original geometry, so earlier runs
+also see it. Rigid corner labels move; rerouted and detached labels stay put until W3.6.
+The current nonempty path allocates its view and scratch on each call; the warm-allocation
+goal above is not yet met beyond the required empty-boundary path. W2.4 must measure
+this implementation before any WB1/WB2/WB7 verdict; no budget claim follows from W2.1.
+
 Bench additions. Every subcommand exits by itself and takes `--json <file>`.
 
 | Command | Reports |
