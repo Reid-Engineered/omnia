@@ -48,4 +48,6 @@ ignore = [
     { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; via pinned GPUI" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; via pinned GPUI" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; via pinned GPUI" },
+    # Owner decision 2026-11-17: same policy for chrono (no safe upgrade exists).
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained; via pinned GPUI" },
 ]
