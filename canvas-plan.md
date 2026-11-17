@@ -300,7 +300,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 | ID | Rule |
 | --- | --- |
 | INV1 | A wire is axis-aligned and its ends differ. [T2.1] |
-| INV2 | The document never holds a wire end on another wire's interior; `apply` splits. Crossing interiors never connect. [T6.1] |
+| INV2 | The document never holds a wire end on another wire's interior; `apply` splits. Crossing interiors never connect. Merging collinear segments keeps any point that carries a label ([wiring-plan.md](wiring-plan.md) WD4, WD9). [T6.1, W1.4] |
 | INV3 | A junction dot exists exactly where three or more ends or pins meet. Dots are never stored. [T2.1] |
 | INV4 | The document changes only through `Doc::apply`, `undo`, `redo`. `apply(c)` then `undo()` restores `content_eq` with the original, exact live ids included; `undo` then `redo` likewise. Revision advances monotonically and issued ids remain reserved (D2/D8); persistent-state equality remains stricter. [T5.1] |
 | INV5 | During a gesture the document revision does not change. A committed gesture is exactly one undo step. Esc leaves the revision unchanged. [T5.2] |
@@ -408,14 +408,16 @@ pub struct Label { pub at: Pt, pub text: Arc<str> }
 
 pub enum TextField { Designator, Value, Label }
 pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
-                        DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField } }
+                        DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField },
+                        Follow(FollowError), Segment(Blocker) } // Follow/Segment: wiring-plan.md W2.2, W3.2
 pub enum Command {
     PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect },
     AddWires(Vec<Wire>),
     AddLabel(Label),
-    Move { items: Vec<ItemId>, delta: Pt },
-    Reorient { items: Vec<ItemId>, pivot: Pt, by: Orient },
-    Delete(Vec<ItemId>),
+    Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
+    Reorient { items: Vec<ItemId>, pivot: Pt, by: Orient, follow: FollowPolicy }, // follow added in W2.2 (WD3)
+    DragSegment { wire: WireId, offset: i32 }, // wiring-plan.md WD7 (W3.2); nm, signed
+    Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false)
     SetText { item: ItemId, field: TextField, text: Arc<str> },
     Paste { clip: Clip, at: Pt },
     Batch(Vec<Command>),
@@ -423,7 +425,7 @@ pub enum Command {
 pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
-                WireBody { wire: WireId, at: Pt }, Grid(Pt) }
+                Junction { at: Pt }, WireBody { wire: WireId, at: Pt }, Grid(Pt) } // Junction added in W1.3 (WD5)
 pub struct Hit { pub item: ItemId, pub at: Pt }
 
 pub struct Doc { /* private, includes undo/redo history */ }
@@ -442,6 +444,7 @@ impl Doc {
     pub fn wire(&self, id: WireId) -> Option<&Wire>;
     pub fn label(&self, id: LabelId) -> Option<&Label>;
     pub fn query(&self, area: Rect, out: &mut Vec<ItemId>);
+    pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>); // wiring-plan.md WD8 Enclosed (W3.4)
     pub fn junctions(&self, area: Rect, out: &mut Vec<Pt>);
     pub fn part_body(&self, id: PartId) -> Option<Rect>; // clamped world body
     pub fn pins(&self, id: PartId) -> Option<&[Pt]>; // world coordinates
@@ -475,8 +478,11 @@ impl Snap { pub fn at(self) -> Pt; }
 // so valid parts whose art straddles the sheet edge remain indexable/pickable.
 // Picking uses the clamped body only, labels use anchors, wires use segments.
 // Callers convert K14 pixels to nm using camera scale (ceil for inclusive radius).
-// Inclusive Euclidean distance; hit ties: part/wire/label then ID. Snap ties:
-// priority, distance, ID, pin index, endpoint coordinates. Reusable scratch buffers.
+// Inclusive Euclidean distance; hit ties: part/wire/label then ID.
+// snap returns the chosen class (Pin, WireEnd, Junction, WireBody, Grid) per wiring-plan.md WD5 (W1.3).
+// Snap ties: class priority (Pin > WireEnd/Junction > WireBody > Grid), i64 squared distance,
+// lowest ID, pin index, endpoint coordinates; WireBody projects onto the segment and snaps to
+// the nearest grid point still on it (WD5). Reusable scratch buffers.
 // Snap settles through higher-priority targets after rounding/projection (INV9),
 // so the final point can exceed the initial radius. Grid clips to in-sheet grid lines.
 // Doc updates body+pin bounds and connectivity on every validated insert/remove/restore.
@@ -702,5 +708,5 @@ Each has a default. Build to the default; the owner's answer replaces it here.
 | Q3 | Label font: the brief says Source Code Pro for designators and values; the mockup uses Inter SemiBold. | Follow the mockup (K8). |
 | Q4 | Which laptop is the reference machine (model, GPU, panel refresh rate)? Can it run gates as a self-hosted CI runner? | **Answered 2026-11-15:** the Orion laptop (Lenovo ThinkPad T470, i5-7300U, Intel HD 620, Arch Linux on Wayland, Vulkan, native 1920x1080 at 60 Hz, 100% and 125%), under the protocol in section 2.1. Self-hosted CI runner: not decided; frame-time gates run by hand on it until then. |
 | Q5 | Does B10 cover GPUI's internal allocations? | No: our code only. Total is reported, not gated. |
-| Q6 | When a part moves, do attached wires stretch? | No. Roadmap T6.3 stays blocked. |
+| Q6 | When a part moves, do attached wires stretch? | **Answered 2026-11-16:** Yes (WQ1) — attached wires follow a moved part per [wiring-plan.md](wiring-plan.md) WD3 (implemented in [wiring-roadmap.md](wiring-roadmap.md) W2.1 to W2.5, replacing T6.3). |
 | Q7 | If the spike lands on Plan C, is a patched GPUI fork acceptable? | No default. Stop and ask. |

@@ -101,7 +101,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 - Do: check that the wiring plan contains the information needed to implement its rules.
 - Done when: the plan is self-contained and the implementation rule is recorded.
 
-### W0.2 Owner decisions · todo → HW1
+### W0.2 Owner decisions · done → HW1
 - Lane: any · Depends: W0.1 · Read: wiring-plan.md sections 6 and 12
 - Owns: wiring-plan.md section 12
 - Do: set this task to `needs-human`. The owner answers WQ1 to WQ8. Record each answer in
@@ -109,7 +109,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 - Done when: WQ1 has an answer. If it is "no", set W2.1 to W2.5 to `blocked (WQ1)` and log it;
   the rest of the roadmap still stands.
 
-### W0.3 Make both plans agree · todo
+### W0.3 Make both plans agree · done
 - Lane: any · Depends: W0.2 · Read: wiring-plan.md section 13
 - Owns: canvas-plan.md (Q6, section 9, INV2), canvas-roadmap.md (T4.2, T4.3, T5.1, T6.1, T6.2,
   T6.3, T7.2, dependency overview)
@@ -131,7 +131,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
   "does this part follow" over follow on/off, count below/at/above the threshold, and
   modifier up/down (assert all 12 rows).
 
-### W1.2 Runs · todo
+### W1.2 Runs · done
 - Lane: doc · Depends: T2.1 · Read: WD1, WD2, WD3, D2
 - Owns: `crates/schematic-doc/src/run.rs`, and a label-by-point lookup in `points.rs` or `doc.rs`
 - Do: `Anchor`, `Run`, `Doc::run_through`, `Doc::runs_at`, `Doc::connected_pins`, and
@@ -155,6 +155,8 @@ UI framework dependency and can run ahead of the `canvas` lane.
   sheet with items inserted in reverse and expects the same snap result; TC-snap-01 to
   TC-snap-08 pass as unit tests; `bench hit --sheet 10k --snap` reports p99 < 0.2 ms (WB5;
   reference machine for the gate).
+- Follow-up (W0.3, from T4.2): applies WD5 ties, grid-snapped body projection, and the
+  `Junction` class to T4.2's `snap.rs` (open in PR #41, not yet merged).
 
 ### W1.4 Normal form and the validator · todo
 - Lane: doc · Depends: T6.1 · Read: WD4, WD9, WINV3, INV2
@@ -182,7 +184,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 
 ## Milestone W2: wires follow moved parts
 
-Blocked until HW1 answers WQ1 "yes".
+HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 
 ### W2.1 The follow planner · todo
 - Lane: doc · Depends: W1.1, W1.2, W1.5, T5.1, HW1 · Read: WD2, WD3, WINV6, WINV8
@@ -208,6 +210,8 @@ Blocked until HW1 answers WQ1 "yes".
   mode), WINV4 (refusals and undo, ids included) and INV10 after every step; a criterion
   bench shows a `Move` of 100 parts with follow on `10k` under 2 ms (WB3; reference machine
   for the gate).
+- Follow-up (W0.3, from T5.1): adds `follow: FollowPolicy` to T5.1's merged `Command::Move`
+  and `Command::Reorient` (until W2.2, every run detaches).
 
 ### W2.3 Move tool: preview, modifier, refusal · todo
 - Lane: canvas · Depends: W2.2, T5.3, T6.2 · Read: WD11, WK3, WK7, WINV5, WINV11, D7
@@ -418,3 +422,56 @@ owner; (b) W3.2 names a pure `plan_segment_drag` for the tool preview but sectio
 plan sketches no signature for it; (c) W1.5 says to return the blocker of the best-scoring
 invalid candidate, but WD4 defines the score comparison only for valid candidates — applying
 the same order to invalid ones is assumed, not stated. Nothing measured; docs only.
+
+2026-11-16 W0.2 done — HW1: the owner answered WQ1 yes (wires follow, milestone W2
+unblocked), WQ3 Intersecting (Enclosed as the option), WQ4 no, WQ7 refuse, and kept the
+defaults for WQ2 (Alt), WQ5 (no; revisit after W2.3), WQ6 (no) and WQ8 (no). Recorded in
+wiring-plan.md section 12. WK10 now states the answered defaults; `WiringPrefs::default()`
+in crates/omnia-doc/src/prefs.rs follows it. W0.1 open item (c) resolved in WD4: with no
+valid candidate, the same comparison ranks the invalid ones and the refusal reports the
+lowest-scoring one's first failed rule, walking from `a`. Items (a) and (b) go to W0.3 and
+W3.2. Canvas Q6, section 9 and the canvas roadmap are W0.3's.
+
+2026-11-16 W0.3 done — applied wiring-plan.md section 13 and the W0.2/HW1 owner answers to
+canvas-plan.md (Q6 answered Yes -> WD3 and W2.1–W2.5; section 9 updated for FollowPolicy on
+Move/Reorient, DragSegment, Delete.with_wires, FollowError/Blocker, Snap::Junction, WD5 snap
+class/ties/body projection, Doc::query_within; INV2 label-keeping merge) and
+canvas-roadmap.md (dependency overview, T4.3 WD8/WQ3 Intersecting default, minimal T6.1
+Read/Do reference to WD4/WD9 keeping status/log untouched, T6.2 WD5/WD6, T6.3 -> W2.1–W2.5,
+T7.2 WD9 wire-body split). Left T4.2 (`done`) and T5.1 (`needs-human`, PR #29 merged)
+unchanged in substance, adding pointer notes and follow-ups on W1.3 (PR #41 open, not yet
+merged) and W2.2. Fixed W0.1 open item (a) in wiring-plan.md section 1 and marked section 13
+applied (`commit: see PR`). Docs only; nothing measured.
+
+2026-11-16 W1.2 done — `crates/omnia-doc/src/run.rs`: `Anchor`, `Run`, `Boundary`,
+`Doc::run_through`, `Doc::runs_at`, `Doc::connected_pins`, `Doc::boundary_points` and
+`Doc::affected_runs`; `Points::at` in `points.rs`; `Doc::labels_at` in `doc.rs`, and a
+read-only `Connectivity::labels_at` in `connectivity.rs` (see below). Property tests
+on generated sheets (built with the crate-private inserts) check that every wire is in exactly
+one run, interior points are WD1 corners, ends are anchors, corner labels are collected,
+`connected_pins` equals a brute-force count, and boundary points and affected runs are the same
+for any order of the selection, each run once (WINV8). TC-count-01 and TC-count-02 are unit
+tests. `runs_at` on `10k`: 232 to 247 ns mean, p99 0.8 µs per point; on `dense`: 1.05 to
+1.21 µs mean, p99 2.7 µs (two runs; i7-14650HX, Windows 11, AC; not the reference machine;
+docs/measurements/W1.2.md). The first run's 23.7 ms `dense` max did not recur.
+Resolved toward WD1/WD2, and recorded in wiring-plan.md section 10: (1) one anchor kind per
+point in the order Boundary, Pin, Junction, FreeEnd, so a pin on a junction is a `Pin`
+(lowest part and pin); (2) a new `Anchor::Closed` for a closed loop of corners, which has no
+anchor; both ends are its least point, and only `run_through` reports it; (3) `Anchor::Pin`
+carries `pin: usize`, as `Doc::pins` and `Snap::Pin` do; (4) WD2 boundaries need a
+selection-aware walk, so `boundary_points` and `affected_runs` were added and `runs_at` stays
+selection-free (empty at a corner); (5) `connected_pins` counts a pin when its point holds a wire
+end, another pin (the same part's included) or a label, reading WD3's "anything" literally.
+Review follow-up (PR #38): (a) `runs_at` and `affected_runs` sort their result by `a`, `b`,
+the first wire's far point, then its id, and the loop/both-boundary dedup also prefers the lesser
+first step before ids, so delete+undo and save/load (which reorder a point's incidence list)
+give the same ordered result; property-tested by rebuilding each generated sheet both ways.
+(b) Labels are now read from the connectivity point store's per-point label list (the "point
+map's side" the task asks for): one new `pub(crate)` read-only accessor,
+`Connectivity::labels_at`, in `connectivity.rs`, a small ownership extension beyond this task's
+files; no new label-maintenance code (the existing `add_label`/`remove_label` calls in every
+insert, remove, restore, `Move`, `Reorient`, undo, redo and load path keep it current, as a
+property test over those edits checks). The walk no longer queries the spatial index or
+allocates a scratch vector per call. `Doc::labels_at` now fills `Vec<LabelId>`, not
+`Vec<ItemId>`; wiring-plan.md section 10 updated (rule 16). (c) The run test helper now
+deduplicates and asserts each wire occurs exactly once, closed runs included.

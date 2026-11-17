@@ -202,6 +202,15 @@ impl Doc {
         self.points.junctions(area, out);
     }
 
+    /// Replaces `out` with the labels whose point is exactly `at`, in ascending id order. Read
+    /// from the connectivity point store, which tracks the labels at each point (D2). Allocates
+    /// nothing when `out` has room for the result.
+    pub fn labels_at(&self, at: Pt, out: &mut Vec<LabelId>) {
+        out.clear();
+        out.extend_from_slice(self.connectivity.labels_at(at));
+        out.sort_unstable_by_key(|l| l.0);
+    }
+
     pub(crate) fn validate_wire(wire: Wire) -> Result<(), CommandError> {
         check_point(wire.a)?;
         check_point(wire.b)?;
