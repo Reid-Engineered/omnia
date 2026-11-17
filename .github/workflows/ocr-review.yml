@@ -1,0 +1,129 @@
+# OpenCodeReview - AI PR review for Omnia (chore, not a roadmap task).
+#
+# Runs alibaba/open-code-review on every PR (opened/synchronize/reopened) and
+# on demand via comments starting with '/open-code-review' or
+# '@open-code-review'. Posts inline comments plus a sticky summary.
+#
+# Setup required once (Settings -> Secrets and variables -> Actions):
+#   secret    OCR_LLM_URL            LLM API endpoint
+#   secret    OCR_LLM_AUTH_TOKEN     LLM auth token (mapped to OCR_LLM_TOKEN)
+#   variable  OCR_LLM_MODEL          model name
+#   variable  OCR_LLM_USE_ANTHROPIC  'true' for Anthropic, 'false' for OpenAI-compatible
+# Until those are set the job skips itself with a notice instead of failing.
+#
+# Both the action reference and the CLI version are pinned (v1.13.11) so runs
+# are reproducible; bump them together when upgrading.
+
+name: OpenCodeReview PR Review
+
+# Per-PR concurrency: a new review cancels a stale one for the same PR, while
+# unrelated comments land in a unique noop-<run_id> group and are skipped
+# without cancelling anything (GitHub evaluates concurrency before job if).
+concurrency:
+  group: >-
+    ${{
+      (
+        github.event_name == 'pull_request_target'
+        || (
+          github.event_name == 'issue_comment'
+          && github.event.issue.pull_request
+          && github.event.comment.user.type != 'Bot'
+          && (
+            github.event.comment.author_association == 'MEMBER'
+            || github.event.comment.author_association == 'OWNER'
+            || github.event.comment.author_association == 'COLLABORATOR'
+          )
+          && (
+            startsWith(github.event.comment.body, '/open-code-review')
+            || startsWith(github.event.comment.body, '@open-code-review')
+          )
+        )
+      )
+      && format('ocr-{0}', github.event.pull_request.number || github.event.issue.number)
+      || format('noop-{0}', github.run_id)
+    }}
+  cancel-in-progress: true
+
+on:
+  # pull_request_target (not pull_request) so secrets are available even for
+  # PRs from forks. Safe because the action only reads the diff and never
+  # executes code from the PR.
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # PR events, or human-authored trigger comments from MEMBER/OWNER/
+    # COLLABORATOR (bots are excluded as a safety net for PAT/App tokens).
+    if: |
+      github.event_name == 'pull_request_target'
+      || (
+        github.event_name == 'issue_comment'
+        && github.event.issue.pull_request
+        && github.event.comment.user.type != 'Bot'
+        && (
+          github.event.comment.author_association == 'MEMBER'
+          || github.event.comment.author_association == 'OWNER'
+          || github.event.comment.author_association == 'COLLABORATOR'
+        )
+        && (
+          startsWith(github.event.comment.body, '/open-code-review')
+          || startsWith(github.event.comment.body, '@open-code-review')
+        )
+      )
+    steps:
+      # Skip gracefully (with a notice) until the LLM secrets/vars exist.
+      # Values are only tested for emptiness, never printed.
+      - name: Check OpenCodeReview configuration
+        id: config
+        env:
+          OCR_URL: ${{ secrets.OCR_LLM_URL }}
+          OCR_TOKEN: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+          OCR_MODEL: ${{ vars.OCR_LLM_MODEL }}
+        run: |
+          if [ -n "$OCR_URL" ] && [ -n "$OCR_TOKEN" ] && [ -n "$OCR_MODEL" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::OpenCodeReview is not configured yet: set secrets OCR_LLM_URL and OCR_LLM_AUTH_TOKEN and variables OCR_LLM_MODEL and OCR_LLM_USE_ANTHROPIC (see the header comment of .github/workflows/ocr-review.yml). Skipping review."
+          fi
+
+      - name: Get PR context
+        id: pr-context
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // issue_comment events have no top-level pull_request payload;
+            // resolve base/head so the action reviews the right diff.
+            const prNumber = context.issue.number;
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            });
+            core.setOutput('base_ref', pullRequest.base.ref);
+            core.setOutput('head_sha', pullRequest.head.sha);
+
+      - name: Run OpenCodeReview
+        if: steps.config.outputs.configured == 'true'
+        uses: alibaba/open-code-review@0f5a28495aeb9d27388db74c240c56c5c5f5868f # v1.13.11
+        with:
+          ocr_version: '1.13.11'
+          llm_url: ${{ secrets.OCR_LLM_URL }}
+          llm_auth_token: ${{ secrets.OCR_LLM_AUTH_TOKEN }}
+          llm_model: ${{ vars.OCR_LLM_MODEL }}
+          llm_use_anthropic: ${{ vars.OCR_LLM_USE_ANTHROPIC }}
+          language: English
+          # For issue_comment triggers pass the resolved refs; for
+          # pull_request_target the action resolves them from the event.
+          base_ref: ${{ steps.pr-context.outputs.base_ref }}
+          head_sha: ${{ steps.pr-context.outputs.head_sha }}
