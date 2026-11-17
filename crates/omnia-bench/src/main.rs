@@ -26,6 +26,7 @@ usage: bench <command> [options]
           [--json FILE]
   spike   s7 [--seconds 60] [--out FILE] | s7 --summarise FILE
   spike   chrome [--seconds 60] [--png FILE]
+  spike   shell-cache [--hover-frames 300] [--pan-frames 600] [--warmup 60] [--size 1440x900] [--json FILE]
 
 Every command exits by itself. Exit codes: 0 ok; 1 compare found a regression or a missing
 metric; 2 usage or input error, including reports that cannot be compared or a --metrics
@@ -342,6 +343,10 @@ fn write_json(path: &str, value: &Value) -> Result<(), Failure> {
 fn cmd_spike(args: impl Iterator<Item = String>) -> Result<(), Failure> {
     let args: Vec<String> = args.collect();
     if matches!(args.first().map(String::as_str), Some("s7" | "chrome")) {
+    if args
+        .first()
+        .is_some_and(|scene| matches!(scene.as_str(), "s7" | "shell-cache"))
+    {
         return omnia_bench::spike::run(args).map_err(|e| match e {
             SpikeError::Usage(message) => Failure::Usage(message),
             SpikeError::Run(message) => Failure::Run(message),

@@ -161,7 +161,7 @@ without being drawn.
 - Done when: the measurement file records, per machine, which gestures worked (UH1) and whether
   the PNG shows the bar and the popover. Set `needs-human` until UH1 is done.
 
-### U0.4 Spike US2 and US3: cached popover and readout allocations · todo
+### U0.4 Spike US2 and US3: cached popover and readout allocations · done
 - Lane: shell · Depends: none · Read: UD2, UD18, G6, B10, Q5, T1.5's `status_bar.rs`
 - Owns: `crates/omnia-bench/src/spike/shell_cache.rs`, `docs/measurements/U0.4.md`
 - Do: over the `empty` sheet, a cached prototype menu bar whose popover is a `deferred` child,
@@ -586,3 +586,20 @@ UG5, UG12, UD21). The 1440 × 900 Windows window exited on schedule and the 1800
 readback at 125% shows the title bar, all three controls and the deferred File menu.
 Owner approved the minimal CLI registration outside the listed files. Linux gestures
 and Windows snap layouts await UH1. Report and raw evidence: docs/measurements/U0.3.md.
+2026-11-17 U0.4 done — Windows non-reference spike `bench spike shell-cache` in
+`crates/omnia-bench/src/spike/shell_cache.rs` (results in `docs/measurements/U0.4.md`, raw JSON
+in `docs/measurements/U0.4/shell-cache-{nested,sibling}.json`; hardware: Windows 11 Home 26200,
+Intel Core i7-14650HX, Intel UHD Graphics driver 32.0.101.7088, 1440x900 @ 1.25 scale, 165 Hz).
+US2: 300-frame menu-label hover over the `empty` sheet gave 0 `SheetView` paints; the `deferred`
+`.occlude()` popover inside `.cached()` `PrototypeMenuBar` occluded move/middle-drag/scroll
+over the sheet on both fresh and root-notified cached replay (`replay_menu_renders = 0`,
+`replay_popover_prepaints = 0`, `replay_popover_paints = 1`), confirming UD2's in-view placement
+on Windows. US3: 600-frame `pan` (1 device px/frame) gave 0 `ours` allocations/bytes per frame
+across `subscribe`, `render`, `layout`, `prepaint`, and `paint` using stack `FixedText<128>` and
+cached Source Code Pro `ShapedLine` glyphs (`total` was 0 in `subscribe`/`render`/`layout`/
+`prepaint`, and 0 p99 / max 1 [324 B on 4 of 600 frames] in `paint`). Note for U0.6/U1.8: GPUI's
+`Window::mark_view_dirty` marks ancestor views dirty, so nesting `ReadoutsView` inside `.cached()`
+`StatusBar` caused `status_bar_renders = 600`, whereas placing `StatusBar` and `ReadoutsView` as
+sibling `.cached()` views in the bottom row dropped `status_bar_renders` to 0 and whole-frame
+`total` allocs from 59 to 51 p50. All five standard checks pass on Windows; Orion certification
+remains outside U0.4.
