@@ -158,9 +158,11 @@ UI framework dependency and can run ahead of the `canvas` lane.
 - Follow-up (W0.3, from T4.2): applies WD5 ties, grid-snapped body projection, and the
   `Junction` class to T4.2's `snap.rs` (PR #41).
 
-### W1.4 Normal form and the validator · todo
+### W1.4 Normal form and the validator · done
 - Lane: doc · Depends: T6.1 · Read: WD4, WD9, WINV3, INV2
-- Owns: `crates/schematic-doc/src/route.rs` (after T6.1)
+- Owns: `crates/schematic-doc/src/route.rs` (after T6.1); W1.4 owner-approved extension
+  (2026-11-16): local Delete integration in `command.rs`, existing inverse documentation
+  in `undo.rs`, and D2 in canvas-plan.md.
 - Do: `check_new_wires` (WD4's three validity rules, returning the `Blocker`); make T6.1's
   merge keep a point that carries a label; a debug-only `Doc::assert_normal_form` used by
   every later wiring test.
@@ -501,3 +503,37 @@ not the reference machine): `10k` p50 0.0002 ms, p99 0.0003 ms (timed 9,845 pin 
 end / 0 / 0 / 2,902 grid); `dense` p99 0.0004 ms (junction 424). The WB5 gate is pending on
 the reference machine. Raw JSON and hardware in docs/measurements/W1.3.md. Standard checks
 (fmt, both clippy runs, cargo test --workspace, cargo deny) pass locally; no check weakened.
+
+2026-11-16 W1.4 done - route.rs now provides check_new_wires and Blocker (WD4,
+WINV10), plus the debug/test-only Doc::assert_normal_form (INV1, INV2, WINV3, WD9).
+Validation queries each segment through the spatial index, collecting only local contacts;
+no whole-document copy or scan. Rule priority applies across the candidate, then segment
+order from a, then distance along that segment, geometry, kind and lowest id/index.
+Coincident pins precede ends. Own-end coordinates exempt pins/ends but never overlaps.
+Sheet also reports off-lattice or malformed segments; Pin uses usize, matching Doc::pins
+without narrowing. Section 10 records these API clarifications for W1.5. No WQ defaults
+changed. Pure interior crossings pass validation and remain different nets (INV2).
+T6.1 already kept labelled points: no replacement of that behavior was needed; a touched
+label regression verifies both AddWires splitting and retention through Delete.
+Owner-approved scope extension: command.rs shares the existing wire-plan executor with
+Delete, and undo.rs documents reuse of ReplaceWires. Delete merges only at the fixed
+endpoints of deleted wires, after all removals; exactly two collinear ends and no pin/label
+permit a join. Multiple eligible joins are united in deterministic order, keeping the
+lowest id. No traversal into distant legacy chains or document-wide repair. Undo reverses
+merges before restoring deleted items; redo restores exactly the same ids (INV4). D2 in
+canvas-plan.md records this rule. Deleting only parts/labels introduces no merge points.
+Tests: 128-case WINV3 property over lattice AddWires/wire-Delete sequences with random pins
+and labels, exact undo/redo ids and INV10 rebuild checks after every step; blocker kinds,
+rule precedence, reversed traversal/index order, own ends, multi-point Delete determinism,
+label preservation and unrelated legacy geometry. Move remains outside normal-form
+assertions, with the existing mixed-edit INV4/INV10 properties retained unchanged in range.
+All five standard checks PASS locally on Windows: fmt, workspace all-target clippy,
+scene-counts/readback bench clippy, workspace tests (103 doc tests plus allocation tests
+and Windows rendering tests), cargo deny (existing dependency warnings); diff check passes.
+No new dependencies, performance measurement or budget certification. Concurrent timing
+re-freeze files in docs/measurements/command-boundary/ were read only, never edited.
+Delete overhead changes may affect doc_10k_wire_delete, doc_chain_20k_delete and
+doc_label_bridge_delete. By fixture inspection none gains a merge: the 10k leaf retains
+a pin at its anchor and no end at its free tip; chain deletion opens a gap with one end
+per side; bridge deletion leaves one end at each corner. Re-freeze those three cases on
+the final binary even though their resulting geometry does not change.

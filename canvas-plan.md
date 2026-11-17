@@ -234,6 +234,13 @@ returns a `Change` that the views use to decide what to repaint.
   label, counting ends outside the local set as blockers. Junctions and labelled points
   are retained. This preserves normal form for normal input, while leaving pre-existing
   non-normal geometry outside this neighbourhood unchanged; Move normalisation is W2.2.
+- W1.4: Delete also merges locally, only at the fixed endpoints of deleted wires.
+  After all requested removals, exactly two collinear ends with no pin or label
+  may merge there; other points never expand the neighbourhood. Multiple eligible
+  joins are united deterministically. The same lowest-id rule applies; a batched
+  ReplaceWires inverse restores the exact pre-delete geometry and ids before
+  restoring deleted items, and redo reproduces those same ids. Deleting only a
+  part or label does not introduce wire endpoints into this merge neighbourhood.
 - The lowest existing id survives a merge. The first piece in geometry order keeps a
   split wire's id; fresh ids are assigned in geometry order. All other live ids and
   geometry stay unchanged. Undo restores every replaced wire with its exact id (INV4).

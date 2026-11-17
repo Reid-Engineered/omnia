@@ -512,8 +512,16 @@ impl Doc {
 }
 
 // ---- route.rs ----
+impl Doc {
+    #[cfg(any(debug_assertions, test))]
+    pub fn assert_normal_form(&self); // INV1, INV2, WINV3, WD9 local-query oracle
+}
 pub enum Axis { Horizontal, Vertical }
-pub enum Blocker { Pin { part: PartId, pin: u16 }, WireEnd(WireId), Overlap(WireId), Sheet }
+pub enum Blocker { Pin { part: PartId, pin: usize }, WireEnd(WireId), Overlap(WireId), Sheet }
+// Sheet also covers off-lattice/malformed candidates; pins use Doc::pins indices.
+// Rules have priority across the whole candidate, then segment order from a.
+// Within a segment: nearest along traversal, geometry, then lowest item id;
+// coincident pins precede wire ends, then lowest pin index.
 pub fn check_new_wires(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(), Blocker>;
 pub fn route(doc: &Doc, a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Wire>) -> Result<(), Blocker>;
 
