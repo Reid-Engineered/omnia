@@ -238,8 +238,149 @@ fn doc_query_and_net_wires_allocate_nothing_after_commands() {
         assert_eq!(query_allocs, 0);
         assert!(!items_out.is_empty());
 
+        let (_, query_within_allocs) = count_allocs(|| doc.query_within(area, &mut items_out));
+        assert_eq!(query_within_allocs, 0);
+        assert!(!items_out.is_empty());
+
         let (_, net_allocs) = count_allocs(|| doc.net_wires(net, &mut wires_out));
         assert_eq!(net_allocs, 0);
         assert_eq!(wires_out.len(), 64);
+    }
+}
+
+#[test]
+fn query_within_allocates_nothing_with_capacity() {
+    let mut index = SpatialIndex::new();
+    let pitch = 6 * GRID_NM;
+    let half = 2 * GRID_NM;
+    let mut id = 0;
+    for row in -30..30 {
+        for col in -30..30 {
+            let (x, y) = (col * pitch, row * pitch);
+            index
+                .insert(
+                    ItemId::Part(PartId(id)),
+                    rect(x - half, y - half, x + half, y + half),
+                )
+                .unwrap();
+            let len = if id % 10 == 0 {
+                20 * INDEX_CELL_NM
+            } else {
+                pitch - 2 * half
+            };
+            index
+                .insert(
+                    ItemId::Wire(WireId(id)),
+                    rect(x + half, y, x + half + len, y),
+                )
+                .unwrap();
+            id += 1;
+        }
+    }
+
+    let areas = [
+        // Normalised 4K-ish viewport.
+        rect(-96 * GRID_NM, -54 * GRID_NM, 96 * GRID_NM, 54 * GRID_NM),
+        // Drawn in reverse (bottom-right to top-left).
+        Rect {
+            min: Pt {
+                x: 96 * GRID_NM,
+                y: 54 * GRID_NM,
+            },
+            max: Pt {
+                x: -96 * GRID_NM,
+                y: -54 * GRID_NM,
+            },
+        },
+        // Degenerate zero-area horizontal line along row 0's wires.
+        Rect {
+            min: Pt { x: 0, y: 0 },
+            max: Pt {
+                x: 100 * GRID_NM,
+                y: 0,
+            },
+        },
+        // Whole sheet.
+        rect(-1_000_000_000, -1_000_000_000, 1_000_000_000, 1_000_000_000),
+    ];
+    let mut out = Vec::with_capacity(2 * 3_600);
+    let capacity = out.capacity();
+    let mut found = Vec::new();
+    for _ in 0..3 {
+        for &area in &areas {
+            let ((), allocs) = count_allocs(|| index.query_within(area, &mut out));
+            assert_eq!(allocs, 0, "query_within over {area:?} allocated");
+            assert_eq!(out.capacity(), capacity);
+            found.push(out.len());
+        }
+    }
+    assert!(found[0] > 100, "{found:?}");
+    assert_eq!(found[0], found[1]);
+    assert_eq!(found[3], 7_200);
+
+    // Filtering happens in-place during cell traversal: even when many items intersect the
+    // box, capacity only needs to cover the enclosed items.
+    let partial_box = rect(-10 * GRID_NM, -10 * GRID_NM, 10 * GRID_NM, 10 * GRID_NM);
+    let mut probe = Vec::new();
+    index.query(partial_box, &mut probe);
+    let mut tight = Vec::new();
+    index.query_within(partial_box, &mut tight);
+    assert!(probe.len() > tight.len() && !tight.is_empty());
+    let mut small = Vec::with_capacity(tight.len());
+    let small_cap = small.capacity();
+    let ((), allocs) = count_allocs(|| index.query_within(partial_box, &mut small));
+    assert_eq!(allocs, 0);
+    assert_eq!(small.capacity(), small_cap);
+
+    // Control: with zero capacity, growing `out` is counted.
+    let mut empty = Vec::new();
+    let ((), allocs) = count_allocs(|| index.query_within(areas[0], &mut empty));
+    assert!(allocs > 0);
+}
+
+#[test]
+fn doc_query_within_allocates_nothing_with_capacity() {
+    let doc = omnia_doc::Doc::from_items(
+        [],
+        (0..100).map(|x| omnia_doc::Wire {
+            a: Pt { x, y: 0 },
+            b: Pt { x, y: 10 },
+        }),
+        [omnia_doc::Label {
+            at: Pt { x: 5, y: 0 },
+            text: "NET".into(),
+        }],
+    )
+    .unwrap();
+    // 100 vertical wires from y=0..=10 plus 1 label at (5,0).
+    // Box (0,0)..(100,5) intersects all 100 wires, yet encloses only the 1 label!
+    let mut out = Vec::with_capacity(1);
+    for area in [
+        rect(0, 0, 100, 5),
+        Rect {
+            min: Pt { x: 100, y: 5 },
+            max: Pt { x: 0, y: 0 },
+        },
+        rect(5, 0, 5, 0),
+    ] {
+        let (_, allocs) = count_allocs(|| doc.query_within(area, &mut out));
+        assert_eq!(allocs, 0);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out.capacity(), 1);
+    }
+
+    let mut full = Vec::with_capacity(101);
+    for _ in 0..3 {
+        let (_, allocs) = count_allocs(|| {
+            doc.query_within(
+                Rect {
+                    min: Pt { x: 100, y: 10 },
+                    max: Pt::ZERO,
+                },
+                &mut full,
+            )
+        });
+        assert_eq!(allocs, 0);
+        assert_eq!(full.len(), 101);
     }
 }

@@ -287,7 +287,7 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 - Done when: simulated-input tests cover an accepted drag, a refused one, Esc, and undo;
   `SheetView` paints exactly twice per drag; a golden shows the refused state.
 
-### W3.4 Rubber-band modes · todo
+### W3.4 Rubber-band modes · doing (doc half: query_within done; tool half waits T4.3)
 - Lane: canvas (tool), doc (query) · Depends: T4.3 · Read: WD8, WQ3
 - Owns: `crates/schematic-canvas/src/selection.rs` (after T4.3), `Doc::query_within` in
   `crates/schematic-doc/src/index.rs`
@@ -501,3 +501,29 @@ not the reference machine): `10k` p50 0.0002 ms, p99 0.0003 ms (timed 9,845 pin 
 end / 0 / 0 / 2,902 grid); `dense` p99 0.0004 ms (junction 424). The WB5 gate is pending on
 the reference machine. Raw JSON and hardware in docs/measurements/W1.3.md. Standard checks
 (fmt, both clippy runs, cargo test --workspace, cargo deny) pass locally; no check weakened.
+
+2026-11-16 W3.4 doing (doc half: query_within done; tool half waits T4.3) — implemented
+                             `SpatialIndex::query_within` in `crates/omnia-doc/src/index.rs`
+                             (sharing cell traversal and generation-stamp deduplication with
+                             `query` via `query_with`) and `Doc::query_within` in
+                             `crates/omnia-doc/src/doc.rs`. Matches `Doc::query`'s conventions
+                             (caller-provided `out`, cleared before filling, zero allocation once
+                             warm). Normalises `area` internally so boxes drawn in any direction
+                             produce the same result (WD8). Edge handling is inclusive on all four
+                             sides (`Rect::contains_rect`): parts match by their indexed bounds
+                             (clamped symbol body unioned with world pins), wires by both
+                             endpoints (full segment), and labels by anchor point. Note for the
+                             tool half: WD8 mentions symbol bounds for parts, whereas `SpatialIndex`
+                             indexes body + pins (`Doc::query` also uses indexed bounds); if body-only
+                             enclosure is wanted in `selection.rs`, filter `ItemId::Part` via
+                             `Doc::part_body`. Signature matches `wiring-plan.md` section 10 and
+                             `canvas-plan.md` section 9 unchanged. Unit tests and property tests
+                             in `index.rs` and `doc.rs` verify `query_within` against brute-force
+                             scans over random documents and random boxes (including degenerate
+                             zero-area point/1D boxes and boxes drawn in reverse); allocation tests
+                             in `crates/omnia-doc/tests/index_alloc.rs` prove zero allocation once
+                             `out` has room for the enclosed result (even when many more items
+                             intersect the box). Remaining: tool half in
+                             `crates/omnia-canvas/src/selection.rs` (`SelectMode`, Shift-add,
+                             `TC-band-01`..`TC-band-09`, INV11), blocked on `T4.3`. Nothing
+                             measured; standard checks pass locally.
