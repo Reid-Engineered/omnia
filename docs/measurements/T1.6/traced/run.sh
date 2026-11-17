@@ -118,9 +118,13 @@ done
 # The copied gate summarizer resolves s100/s125 relative to itself. Only now,
 # with all 80 reports present, run it; its verdict is diagnostic under tracing.
 summary_code=0
-python3 "$attempt/summarize.py" > "$attempt/gate-summary-diagnostic.txt" || summary_code=$?
+python3 "$attempt/summarize.py" > "$attempt/gate-summary-diagnostic.txt" 2>&1 || summary_code=$?
 printf 'Gate summarizer exit %s; traced data is diagnostic only.\n' "$summary_code" >> "$attempt/gate-summary-diagnostic.txt"
 (( summary_code <= 1 )) || fail 'summarizer crashed'
 printf 'complete\n' > "$attempt/status.txt"
 complete=1
 run_analysis "$attempt" "$attempt/analysis.txt"
+printf '\nCampaign finished (diagnostic only, not a gate verdict). Result:\n'
+tail -n 3 "$attempt/analysis.txt"
+if [[ -s "$attempt/analysis-errors.txt" ]]; then printf 'Analysis errors recorded: %s\n' "$attempt/analysis-errors.txt"; fi
+printf 'Return the whole attempt directory: %s\n' "$attempt"
