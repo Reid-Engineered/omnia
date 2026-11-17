@@ -11,6 +11,9 @@ for tool in uname cat ps date git sha256sum python3 vulkaninfo kscreen-doctor ti
 done
 [[ $(uname -s) == Linux ]] || fail 'requires Linux on Orion'
 [[ ${XDG_SESSION_TYPE:-} == wayland && -n ${WAYLAND_DISPLAY:-} ]] || fail 'requires the local Wayland session'
+# kde-inhibit starts the --inhibited pass with stdin detached from the terminal;
+# reattach the controlling terminal so the scale-switch prompt can still be answered.
+if [[ ${1:-} == --inhibited ]]; then exec </dev/tty || fail 'controlling terminal unavailable after kde-inhibit'; fi
 [[ -t 0 ]] || fail 'requires owner at an interactive terminal for the scale switch'
 [[ -x $bench ]] || fail 'build first: cargo build --release --locked -p omnia-bench'
 [[ -z $(git status --porcelain --untracked-files=no) ]] || fail 'tracked source must be clean'
