@@ -800,7 +800,7 @@ mod tests {
             let mut undone = build(&ops);
             shuffle(&mut items, seed);
             for &item in &items {
-                undone.apply(Command::Delete(vec![item])).unwrap();
+                undone.apply(Command::Delete { items: vec![item], with_wires: false }).unwrap();
                 undone.undo().unwrap();
             }
             prop_assert!(undone.content_eq(&doc));
@@ -863,7 +863,7 @@ mod tests {
                         });
                     }
                     Edit::Delete { mask } => {
-                        let _ = doc.apply(Command::Delete(pick(&mask)));
+                        let _ = doc.apply(Command::Delete { items: pick(&mask), with_wires: false });
                     }
                     Edit::Undo => {
                         doc.undo();
@@ -990,8 +990,11 @@ mod tests {
         doc.run_through(ids[100], &mut run);
         assert_eq!(run.labels.as_slice(), &[corner], "(3, 2) is also a corner");
         doc.undo().unwrap();
-        doc.apply(Command::Delete(vec![ItemId::Label(corner)]))
-            .unwrap();
+        doc.apply(Command::Delete {
+            items: vec![ItemId::Label(corner)],
+            with_wires: false,
+        })
+        .unwrap();
         doc.run_through(ids[100], &mut run);
         assert!(run.labels.is_empty());
     }
@@ -1024,7 +1027,11 @@ mod tests {
             vec![w[1], w[0], w[2]]
         );
         for &id in &w {
-            doc.apply(Command::Delete(vec![ItemId::Wire(id)])).unwrap();
+            doc.apply(Command::Delete {
+                items: vec![ItemId::Wire(id)],
+                with_wires: false,
+            })
+            .unwrap();
             doc.undo().unwrap();
             assert_eq!(runs(&doc), before);
         }

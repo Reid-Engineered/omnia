@@ -662,11 +662,11 @@ Build-time steps:
 | --- | --- | --- |
 | `gpui`, `gpui_platform` (git, pinned) | UI, rendering, text, input | Apache-2.0, confirmed in source, including the in-repo crates they pull in |
 | `smallvec` | Per-point end lists | MIT or Apache-2.0 |
-| `rustc-hash` | Point map | MIT or Apache-2.0 |
+| `rustc-hash` | Point map; agent preview ids ([mcp-plan.md](mcp-plan.md) section 11.3) | MIT or Apache-2.0 |
 | `serde`, `ron` | Test-sheet save and load | MIT or Apache-2.0 |
 | `profiling`, `tracy-client` (feature `tracy`) | Spans, on the same timeline as GPUI's | MIT or Apache-2.0 |
 | `hdrhistogram` | Bench percentiles | MIT or Apache-2.0 |
-| `serde_json` | Bench JSON reports | MIT or Apache-2.0 |
+| `serde_json` | Bench JSON reports; the agent wire schema in `omnia-agent` and `omnia-cli` ([mcp-plan.md](mcp-plan.md) section 15) | MIT or Apache-2.0 |
 | `resvg` 0.46 (`omnia-bench` feature `readback` only, never default; GPUI already depends on it) | S3/S8 readback reference renders | Apache-2.0 OR MIT |
 | GPUI's Linux `wayland` feature, enabled by `omnia-bench` and `omnia-app` on Linux (transitive, listed below) | Wayland window backend | MIT, MIT OR Apache-2.0, or MIT OR Apache-2.0 OR Zlib |
 | `usvg`, `zip`, `serde_json`, `toml` (xtask only) | Codegen | Apache-2.0 or MIT; `zip` MIT |
@@ -677,9 +677,9 @@ Build-time steps:
 The crates.io licences are from memory and GPUI's transitive tree is unaudited. Roadmap T0.7
 adds `cargo deny` with an allow-list of MIT, Apache-2.0, BSD, ISC, Zlib, Unicode and MPL-2.0
 (MPL-2.0 added by the owner on 2026-11-14 for cbindgen, dwrote and option-ext, all transitive
-through GPUI). Five "unmaintained" advisories reached through GPUI (rustybuzz, ttf-parser,
-zbus_names, zvariant, zvariant_derive) are ignored by id in `deny.toml` and re-checked at each
-GPUI upgrade. A dependency not in this table needs its licence recorded in the roadmap log
+through GPUI). Six "unmaintained" advisories reached through GPUI (rustybuzz, ttf-parser,
+zbus_names, zvariant, zvariant_derive; chrono added by the owner on 2026-11-17) are ignored by
+id in `deny.toml` and re-checked at each GPUI upgrade. A dependency not in this table needs its licence recorded in the roadmap log
 before it is added.
 
 Crates the Linux `wayland` feature added to `Cargo.lock` (T0.8; licences from `cargo metadata`,
