@@ -109,7 +109,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 - Done when: WQ1 has an answer. If it is "no", set W2.1 to W2.5 to `blocked (WQ1)` and log it;
   the rest of the roadmap still stands.
 
-### W0.3 Make both plans agree · todo
+### W0.3 Make both plans agree · done
 - Lane: any · Depends: W0.2 · Read: wiring-plan.md section 13
 - Owns: canvas-plan.md (Q6, section 9, INV2), canvas-roadmap.md (T4.2, T4.3, T5.1, T6.1, T6.2,
   T6.3, T7.2, dependency overview)
@@ -155,6 +155,8 @@ UI framework dependency and can run ahead of the `canvas` lane.
   sheet with items inserted in reverse and expects the same snap result; TC-snap-01 to
   TC-snap-08 pass as unit tests; `bench hit --sheet 10k --snap` reports p99 < 0.2 ms (WB5;
   reference machine for the gate).
+- Follow-up (W0.3, from T4.2): applies WD5 ties, grid-snapped body projection, and the
+  `Junction` class to T4.2's `snap.rs` (open in PR #41, not yet merged).
 
 ### W1.4 Normal form and the validator · todo
 - Lane: doc · Depends: T6.1 · Read: WD4, WD9, WINV3, INV2
@@ -208,6 +210,8 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   mode), WINV4 (refusals and undo, ids included) and INV10 after every step; a criterion
   bench shows a `Move` of 100 parts with follow on `10k` under 2 ms (WB3; reference machine
   for the gate).
+- Follow-up (W0.3, from T5.1): adds `follow: FollowPolicy` to T5.1's merged `Command::Move`
+  and `Command::Reorient` (until W2.2, every run detaches).
 
 ### W2.3 Move tool: preview, modifier, refusal · todo
 - Lane: canvas · Depends: W2.2, T5.3, T6.2 · Read: WD11, WK3, WK7, WINV5, WINV11, D7
@@ -427,6 +431,17 @@ in crates/omnia-doc/src/prefs.rs follows it. W0.1 open item (c) resolved in WD4:
 valid candidate, the same comparison ranks the invalid ones and the refusal reports the
 lowest-scoring one's first failed rule, walking from `a`. Items (a) and (b) go to W0.3 and
 W3.2. Canvas Q6, section 9 and the canvas roadmap are W0.3's.
+
+2026-11-16 W0.3 done — applied wiring-plan.md section 13 and the W0.2/HW1 owner answers to
+canvas-plan.md (Q6 answered Yes -> WD3 and W2.1–W2.5; section 9 updated for FollowPolicy on
+Move/Reorient, DragSegment, Delete.with_wires, FollowError/Blocker, Snap::Junction, WD5 snap
+class/ties/body projection, Doc::query_within; INV2 label-keeping merge) and
+canvas-roadmap.md (dependency overview, T4.3 WD8/WQ3 Intersecting default, minimal T6.1
+Read/Do reference to WD4/WD9 keeping status/log untouched, T6.2 WD5/WD6, T6.3 -> W2.1–W2.5,
+T7.2 WD9 wire-body split). Left T4.2 (`done`) and T5.1 (`needs-human`, PR #29 merged)
+unchanged in substance, adding pointer notes and follow-ups on W1.3 (PR #41 open, not yet
+merged) and W2.2. Fixed W0.1 open item (a) in wiring-plan.md section 1 and marked section 13
+applied (`commit: see PR`). Docs only; nothing measured.
 
 2026-11-16 W1.2 done — `crates/omnia-doc/src/run.rs`: `Anchor`, `Run`, `Boundary`,
 `Doc::run_through`, `Doc::runs_at`, `Doc::connected_pins`, `Doc::boundary_points` and
