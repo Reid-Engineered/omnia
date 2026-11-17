@@ -3,13 +3,22 @@
 # Cases B1 start, B3/B10 pan and zoom on the empty sheet, B8 idle; ten interleaved
 # repetitions per case (order rotates each pass), at 100% and then 125% panel scaling.
 # Only system setting touched: the eDP-1 scale, restored on exit (success, failure, signal).
+# Pan and zoom runs carry the bench frame trace (OMNIA_BENCH_TRACE=1, no WAYLAND_DEBUG) so
+# that summarize.py can attribute every missed refresh (owner decision 2026-11-17,
+# canvas-plan.md 2.1); start and idle runs stay untraced.
 # Usage (repo root, release build already done): gate.sh [results] [repeats]
+# The results directory must not exist yet, so nothing already recorded is overwritten.
 set -euo pipefail
-out=${1:-docs/measurements/T1.6}
+out=${1:-docs/measurements/T1.6/attributed}
 repeats=${2:-10}
 bench=${BENCH:-./target/release/omnia-bench}
 export OMNIA_BENCH_FULLSCREEN=1
-[[ -x $bench ]] || { echo "build first: cargo build --release -p omnia-bench" >&2; exit 2; }
+[[ -x $bench ]] || { echo "build first: cargo build --release --locked -p omnia-bench" >&2; exit 2; }
+[[ ! -e $out ]] || { echo "refusing to reuse existing $out; pass a new results directory" >&2; exit 1; }
+mkdir -p "$(dirname "$out")" && mkdir "$out"
+git rev-parse HEAD > "$out/source-commit.txt" 2>/dev/null || echo unavailable > "$out/source-commit.txt"
+git status --short > "$out/source-status.txt" 2>/dev/null || true
+sha256sum "$bench" > "$out/binary.sha256"
 original_scale=$(kscreen-doctor --json | python3 -c '
 import json, sys
 print(next(o["scale"] for o in json.load(sys.stdin)["outputs"] if o["name"] == "eDP-1"))')
@@ -65,8 +74,8 @@ for scale in 1 1.25; do
             code=0
             case $c in
                 start) "$bench" start --sheet empty --runs 10 --size "$size" --json "$json" ;;
-                pan|zoom) "$bench" run --sheet empty --script "$c" --frames 600 --warmup 60 \
-                    --size "$size" --json "$json" ;;
+                pan|zoom) OMNIA_BENCH_TRACE=1 "$bench" run --sheet empty --script "$c" \
+                    --frames 600 --warmup 60 --size "$size" --json "$json" ;;
                 idle) "$bench" idle --sheet empty --seconds 10 --size "$size" --json "$json" ;;
             esac > "$json.log" 2>&1 || code=$?
             snapshot "$dir" "$key" "$r" after "$code"
@@ -74,3 +83,9 @@ for scale in 1 1.25; do
         done
     done
 done
+sha256sum "$bench" > "$out/binary-after.sha256"
+code=0
+python3 -B "$(dirname "$0")/summarize.py" "$out" > "$out/summary.txt" || code=$?
+cat "$out/summary.txt"
+echo "summarize.py exit $code (0: every protocol check and budget passes)"
+exit "$code"

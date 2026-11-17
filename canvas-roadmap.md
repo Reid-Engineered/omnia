@@ -255,14 +255,14 @@ of the `canvas` lane.
 - Done when: simulated-input tests show the world point under the cursor fixed across a
   zoom, and a status update notifies neither `SheetView` nor the window root.
 
-### T1.6 Gate: milestone 1 · blocked (B3: 125% pan run 1 missed refresh)
+### T1.6 Gate: milestone 1 · blocked (awaiting attributed gate rerun on Orion)
 - Lane: bench · Depends: T1.5
-- Do: run and record:
+- Do: run and record (`docs/measurements/T1.6/gate.sh`, then `summarize.py`):
 
   | Budget | Command | Pass |
   | --- | --- | --- |
   | B1 | `bench start` | < 400 ms |
-  | B3 | `bench run --sheet empty --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes) |
+  | B3 | `OMNIA_BENCH_TRACE=1 bench run --sheet empty --script pan` and `zoom` | p99 < 16.7 ms; 0 counted missed refreshes in every run: a present interval > 1.5 refreshes counts unless the trace shows it compositor-side (plan 2.1, owner decision 2026-11-17); a run without a usable trace fails |
   | B8 | `bench idle --seconds 10` | 0 frames |
   | B10 | same `run` reports | `allocs_per_frame.ours == 0` |
 
@@ -359,8 +359,8 @@ of the `canvas` lane.
   | Budget | Command | Pass |
   | --- | --- | --- |
   | B2 | `bench start --sheet 1k` minus `bench start` | < 300 ms |
-  | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes), max ≤ 33.3 ms |
-  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes, max ≤ 50 ms |
+  | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes, compositor-side ones excluded per plan 2.1), max ≤ 33.3 ms |
+  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes (compositor-side ones excluded per plan 2.1), max ≤ 50 ms |
   | B9 | `memory_mb` in the `10k` run | < 300 |
   | B10 | all reports | `allocs_per_frame.ours == 0` |
 
@@ -1506,3 +1506,21 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        signal to present. Diagnostic only; B3, its threshold and the status
                        are unchanged. Owner decides whether a compositor-skipped callback
                        counts against B3. Report: docs/measurements/T1.6/traced/results-2026-11-17/.
+2026-11-17 T1.6 blocked — Owner decision 2026-11-17: a refresh that the compositor skips
+                       while Omnia is idle does not count as a missed refresh against B3;
+                       the same exclusion applies to B4's interval rule. T1.6 closes on a
+                       fresh untraced-Wayland gate run with every miss attributed, not on
+                       the traced campaign. Plan 2.1 records the decision and the
+                       criterion: an interval over the limit is compositor-side only if the
+                       trace shows (a) previous present ended before the late signal, (b)
+                       signal more than one refresh after it, (c) signal to present end
+                       under one refresh, with one draw since the previous present and
+                       ordered timestamps; else it counts; no usable trace fails the run.
+                       gate.sh sets OMNIA_BENCH_TRACE=1 on pan/zoom only (no WAYLAND_DEBUG),
+                       same schedule, writes to a new attributed/ directory, records source
+                       and binary hashes, runs summarize.py. New attribute.py + 16 tests
+                       (real zoom-6 miss: compositor-side; slow draw, missing trace,
+                       (b)/(c) boundaries: counted). Trace cost: no `ours` allocation (GPUI
+                       records outside our scopes); Windows ABBA diagnostic, pan 125%, 5+5:
+                       frame p99 median 0.795 ms traced vs 0.848 ms untraced, ours 0 (i7-
+                       14650HX, UHD; certifies nothing). Awaiting the Orion rerun.

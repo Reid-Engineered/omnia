@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """Validate the T1.6 gate results against canvas-plan 2.1 and print the gate tables.
 
-Run from the repository root: python3 docs/measurements/T1.6/summarize.py
+Run from the repository root: python3 docs/measurements/T1.6/summarize.py [RESULTS]
+RESULTS is the directory holding s100/ and s125/ (default: this directory).
 Exit 0 when every check holds and every budget passes, 1 otherwise.
+
+B3's missed refreshes are attributed per run from the bench trace (OMNIA_BENCH_TRACE=1) by
+attribute.py, under the owner decision of 2026-11-17 (canvas-plan.md section 2.1). A run
+without a usable trace fails closed.
 """
 import json, pathlib, statistics, sys
 
-ROOT = pathlib.Path(__file__).parent
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import attribute  # noqa: E402
+
+ROOT = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else pathlib.Path(__file__).parent
 SCALES = {"s100": (1.0, [1920.0, 1080.0]), "s125": (1.25, [1536.0, 864.0])}
 CASES = ["start", "pan", "zoom", "idle"]
 problems = []
@@ -33,6 +41,7 @@ def env_ok(where, env, scale, viewport):
 
 
 verdicts = []
+attribution = []
 for tag, (scale, viewport) in SCALES.items():
     d = ROOT / tag
     reports = {c: [json.loads((d / f"{c}-{r}.json").read_text()) for r in range(1, 11)] for c in CASES}
@@ -82,24 +91,29 @@ for tag, (scale, viewport) in SCALES.items():
               f"{med_range([x['allocs_per_frame']['total']['mean'] for x in m])} |")
         verdicts.append((f"B3 {script} {tag} frame p99", f"median of run p99s "
                          f"{statistics.median(p99):.3f} ms, limit < 16.7", statistics.median(p99) < 16.7))
-        # B3 second half (owner decision 2026-11-16): zero missed refreshes, where a present
-        # interval longer than 1.5 refresh intervals is one. Reports from bench builds after
-        # this decision carry the count (`work_missed_refreshes` marks them); older ones only
-        # have the run's max interval, which gives 0 exactly when max <= 1.5 refreshes and
-        # otherwise only ">= 1". Judged in every run, not on a median; see T1.6.md.
-        missed = []
-        for rep in rs:
-            x = rep["metrics"]
-            if "work_missed_refreshes" in x:
-                missed.append(str(x["missed_refreshes"]))
-            else:
-                over = x["present_interval_ms"]["max"] > 1.5 * refresh_ms
-                missed.append(">=1" if over else "0")
-        bad = [f"run {i}: {n}" for i, n in enumerate(missed, 1) if n != "0"]
+        # B3 second half (owner decisions 2026-11-16 and 2026-11-17): zero missed refreshes,
+        # where a present interval longer than 1.5 refresh intervals is one, unless the bench
+        # trace shows it compositor-side (attribute.py; canvas-plan.md 2.1). Judged in every
+        # run, not on a median. A run without a usable trace fails closed.
+        counted, compositor, bad = 0, 0, []
+        for i, rep in enumerate(rs, 1):
+            where = f"{tag}/{script}-{i}"
+            check(rep["config"].get("diagnostic_trace") is True, f"{where}: not traced")
+            result = attribute.attribute(rep, 1.5)
+            attribution.extend(attribute.describe(where, result))
+            if not result["usable"]:
+                bad.append(f"run {i}: trace unusable")
+                continue
+            compositor += result["compositor"]
+            counted += result["counted"]
+            if result["counted"]:
+                bad.append(f"run {i}: {result['counted']} counted")
         maxes = [rep["metrics"]["present_interval_ms"]["max"] for rep in rs]
         verdicts.append((f"B3 {script} {tag} missed refreshes",
-                         f"limit 0 per run (interval > {1.5 * refresh_ms:.3f} ms); "
-                         f"{10 - len(bad)}/10 runs 0" + (f"; {', '.join(bad)}" if bad else "")
+                         f"limit 0 counted per run (interval > {1.5 * refresh_ms:.3f} ms, "
+                         f"compositor-side excluded); {10 - len(bad)}/10 runs 0 counted; "
+                         f"counted {counted}, compositor-side {compositor}"
+                         + (f"; {', '.join(bad)}" if bad else "")
                          + f"; max interval {med_range(maxes)} ms", not bad))
         verdicts.append((f"B10 {script} {tag}", f"allocs_per_frame.ours max over 10 runs = {ours:g}", ours == 0))
     # B1
@@ -126,6 +140,9 @@ for tag, (scale, viewport) in SCALES.items():
     verdicts.append((f"B8 idle {tag}", f"frames in 10 s, every run: {sorted(set(frames))}",
                      all(f == 0 for f in frames)))
 
+print("\n## Missed-refresh attribution (B3: every present interval over 1.5 refreshes)\n")
+for line in attribution:
+    print(line)
 print("\n## Gate\n\n| Budget | Measured | Result |\n| --- | --- | --- |")
 for name, text, ok in verdicts:
     print(f"| {name} | {text} | {'PASS' if ok else 'FAIL'} |")

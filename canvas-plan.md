@@ -88,8 +88,8 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
 | --- | --- | --- |
 | B1 | Cold start to an interactive empty sheet < 400 ms | `bench start` |
 | B2 | Opening the 1,000-part sheet adds < 300 ms | `bench start --sheet 1k` |
-| B3 | Pan and zoom, 1,000 parts: 60 fps. p99 frame time < 16.7 ms, and zero missed refreshes: no present interval longer than 1.5 refresh intervals | `bench run --sheet 1k --script pan` and `--script zoom`: `frame_ms.p99`, `missed_refreshes` |
-| B4 | Pan and zoom, 10,000 parts and 20,000 wires: 30 fps. p99 frame time < 33.3 ms, and no present interval longer than 2.5 refresh intervals (it never misses its 30 fps slot) | `bench run --sheet 10k --script pan` and `--script zoom`: `frame_ms.p99`, `present_intervals_over_2_5_refreshes` |
+| B3 | Pan and zoom, 1,000 parts: 60 fps. p99 frame time < 16.7 ms, and zero missed refreshes: no present interval longer than 1.5 refresh intervals, except compositor-side ones (below) | `bench run --sheet 1k --script pan` and `--script zoom`: `frame_ms.p99`, `missed_refreshes`, attributed from `diagnostic_trace` |
+| B4 | Pan and zoom, 10,000 parts and 20,000 wires: 30 fps. p99 frame time < 33.3 ms, and no present interval longer than 2.5 refresh intervals (it never misses its 30 fps slot), except compositor-side ones (below) | `bench run --sheet 10k --script pan` and `--script zoom`: `frame_ms.p99`, `present_intervals_over_2_5_refreshes`, attributed from `diagnostic_trace` |
 | B5 | No long stalls: no frame over 33.3 ms in a B3 run, none over 50 ms in a B4 run | `max_frame_ms` in the same report |
 | B6 | A dragged part or wire is drawn in the next frame | `bench run --script drag-part` and `drag-wire`: dirty-to-present p99 ≤ one refresh interval |
 | B7 | Hit test under the cursor < 0.2 ms at 10,000 parts | `bench hit --sheet 10k` |
@@ -113,6 +113,38 @@ while missed refreshes measure the intent directly. A present interval longer th
 refresh intervals counts as a missed refresh; `bench run` reports `missed_refreshes`,
 `present_intervals_over_2_5_refreshes` and `max_present_interval_ms`. GPUI's own count of
 refreshes that a frame's work overran is reported apart, as `work_missed_refreshes`.
+
+Owner decision 2026-11-17 at T1.6, verbatim: "A refresh that the compositor skips while Omnia
+is idle does NOT count as a missed refresh against B3. The same exclusion applies to B4's
+interval rule." The owner also chose to close T1.6 with a fresh untraced-Wayland gate run in
+which every miss is attributed automatically, not by reusing the traced diagnostic campaign.
+Reason: in that campaign the only miss (125% zoom run 6, frame 195, 33.13 ms) came after
+Omnia had presented frame 194 and waited 31.97 ms for its next frame signal, then took
+1.2 ms from signal to present end.
+
+The exclusion is mechanical. Gate runs of B3 and B4 set `OMNIA_BENCH_TRACE=1` on the motion
+`run`s, so each report carries `diagnostic_trace` (per frame: signal, draw start and end,
+present start and end, on one CPU clock). Let R be one refresh interval, 1/`refresh_hz`, and
+take a present interval over the budget's limit (1.5 R for B3, 2.5 R for B4). It is
+**compositor-side**, and excluded, only if the trace shows all of:
+
+- (a) the previous frame's present had ended before the late frame's signal;
+- (b) the late frame's signal arrived more than R after that present end (strictly);
+- (c) the late frame's signal-to-present-end time is under R (strictly);
+- and, so that (a) to (c) describe one idle wait and one frame of work: the late present
+  has exactly one draw since the previous present, that draw has a signal time, and
+  signal ≤ draw start ≤ draw end ≤ present start ≤ present end.
+
+Every other interval over the limit counts. A miss without a usable trace counts: the run
+fails closed when its trace is missing, truncated or inconsistent (a measured frame without
+its draw-present pair, or a traced interval that differs from the present-end difference),
+and when the bench count (`missed_refreshes`, `present_intervals_over_2_5_refreshes`) is
+below the traced count. Bench-counted intervals the trace does not show count. The limit
+stays zero counted misses in every run. The signal time is when Omnia's event loop
+dispatched the platform's frame callback, so a stall of Omnia's main thread before that
+dispatch would also look like (b). The bench does no work of its own between frames, but
+the trace cannot rule out other main-thread work there; this is a known limit. The
+criterion is implemented in `docs/measurements/T1.6/attribute.py`, with its tests.
 
 ## 3. Constants
 
