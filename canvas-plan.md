@@ -677,9 +677,9 @@ Build-time steps:
 The crates.io licences are from memory and GPUI's transitive tree is unaudited. Roadmap T0.7
 adds `cargo deny` with an allow-list of MIT, Apache-2.0, BSD, ISC, Zlib, Unicode and MPL-2.0
 (MPL-2.0 added by the owner on 2026-11-14 for cbindgen, dwrote and option-ext, all transitive
-through GPUI). Five "unmaintained" advisories reached through GPUI (rustybuzz, ttf-parser,
-zbus_names, zvariant, zvariant_derive) are ignored by id in `deny.toml` and re-checked at each
-GPUI upgrade. A dependency not in this table needs its licence recorded in the roadmap log
+through GPUI). Six "unmaintained" advisories reached through GPUI (rustybuzz, ttf-parser,
+zbus_names, zvariant, zvariant_derive; chrono added by the owner on 2026-11-17) are ignored by
+id in `deny.toml` and re-checked at each GPUI upgrade. A dependency not in this table needs its licence recorded in the roadmap log
 before it is added.
 
 Crates the Linux `wayland` feature added to `Cargo.lock` (T0.8; licences from `cargo metadata`,
