@@ -1,5 +1,7 @@
+pub mod assets;
 pub mod status_bar;
 pub mod theme;
+pub mod widgets;
 
 use gpui::{
     App, Bounds, Context, Entity, FontWeight, StyleRefinement, Window, WindowBounds, WindowHandle,
@@ -137,6 +139,11 @@ impl Render for Workspace {
                 )
             })
     }
+}
+
+/// Builds the GPUI application with the embedded Tabler icon assets attached (UD17, UG14).
+pub fn application() -> gpui::Application {
+    gpui_platform::application().with_assets(assets::Assets)
 }
 
 pub fn open_workspace(

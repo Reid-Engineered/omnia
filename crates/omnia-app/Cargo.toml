@@ -21,5 +21,9 @@ gpui_platform = { workspace = true, features = ["test-support"] }
 name = "fonts"
 harness = false
 
+[[test]]
+name = "icons"
+harness = false
+
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui_platform = { workspace = true, features = ["wayland"] }

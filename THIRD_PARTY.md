@@ -20,10 +20,14 @@ FigCraft file is vector paths and the font does not need to be installed.
 
 ## Tabler Icons
 
-Interface icons (toolbar, window controls, instruments strip, Home navigation) come from
-[Tabler Icons](https://github.com/tabler/tabler-icons) v3.19.0 by Paweł Kuna. Only the outline icons the
-mockup uses are vendored in `vendor/tabler-icons/outline/`. MIT License, full text in
-`vendor/tabler-icons/LICENSE`.
+Interface icons (toolbar, window controls, instruments strip, Home navigation, menus and dialogs)
+come from [Tabler Icons](https://github.com/tabler/tabler-icons) v3.19.0 by Paweł Kuna. Only the
+outline icons the mockup and shell use are vendored in `vendor/tabler-icons/outline/`. MIT License,
+full text in `vendor/tabler-icons/LICENSE`.
+
+Added for the application shell (`UD17`, v3.19.0 outline): `alert-triangle`, `check`,
+`chevron-left`, `chevron-right`, `file`, `info-circle`, `keyboard`, `layout-bottombar`,
+`layout-sidebar`, `restore`, `settings`, `table`, `trash`.
 
 ## Inter
 
