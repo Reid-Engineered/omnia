@@ -7,12 +7,14 @@ wires, and the tests and budgets for all of it. The work itself is in
 
 It extends [canvas-plan.md](canvas-plan.md) and does not replace it. Every `B`, `K`, `G`, `D`,
 `INV` and `Q` id without a `W` in front is defined there and still holds. Where this plan
-changes a canvas rule, section 13 lists the change, and roadmap task W0.3 applies it.
+changes a canvas rule, section 13 lists the change, and roadmap task W0.3 applied it.
 
 The rules to build are in sections 5 to 8 here.
 
-Written 2026-11-16. No wiring code exists yet. In `schematic-doc`, geometry, arenas and the point
-map exist (T1.1, T2.1); commands, connectivity, the spatial index and routing do not.
+Written 2026-11-16 (status updated 2026-11-16 in W0.3). In `schematic-doc`, geometry, arenas,
+the point map, the spatial index, connectivity, hit testing and snapping, commands and undo, and
+wiring preferences exist (T1.1, T2.1, T2.2, T4.1, T4.2, T5.1, W1.1; W1.3 snap rules open in
+PR #41); wire routing is in progress (T6.1).
 
 ## How to read this file
 
@@ -563,17 +565,18 @@ answer column below is binding. WQ5 stays open for review after W2.3, as recomme
 
 ## 13. Changes to the canvas plan and roadmap
 
-W0.3 applies these. Until it does, this section wins where the files disagree.
+**Applied 2026-11-16 by W0.3** (commit: see PR; [canvas-plan.md](canvas-plan.md) and
+[canvas-roadmap.md](canvas-roadmap.md) are now the source of truth for these items).
 
-| Where | Change |
-| --- | --- |
-| canvas-plan.md Q6 | Answer recorded; points to WD3. |
-| canvas-plan.md section 9 | `Move`, `Reorient`, `Delete` and `Snap` as in section 10 here; `Doc::snap` returns the class (WD5). |
-| canvas-plan.md INV2, T6.1 | The merge rule keeps a point that carries a label (WD4, WD9). |
-| canvas-roadmap.md T4.2 | Read WD5; ties and body projection as stated there. |
-| canvas-roadmap.md T4.3 | Rubber band per WD8: both modes, the default from WQ3. |
-| canvas-roadmap.md T5.1 | `Move` and `Reorient` take a `FollowPolicy`; until W2.2 it is ignored and every run detaches. |
-| canvas-roadmap.md T6.2 | First corner per WD6. |
-| canvas-roadmap.md T6.3 | Replaced by wiring-roadmap.md W2.1 to W2.5. |
-| canvas-roadmap.md T7.2 | Placing a label on a wire body splits the wire (WD9). |
-| canvas-roadmap.md dependency overview | T6.3 line replaced by a pointer to the wiring roadmap. |
+| Where | Change | Status |
+| --- | --- | --- |
+| canvas-plan.md Q6 | Answer recorded; points to WD3. | Applied (2026-11-16) |
+| canvas-plan.md section 9 | `Move`, `Reorient`, `Delete` and `Snap` as in section 10 here; `Doc::snap` returns the class (WD5). | Applied (2026-11-16) |
+| canvas-plan.md INV2, T6.1 | The merge rule keeps a point that carries a label (WD4, WD9). | Applied (2026-11-16) |
+| canvas-roadmap.md T4.2 | Read WD5; ties and body projection as stated there. | Applied as note/pointer (T4.2 `done`; code in W1.3, PR #41 open) |
+| canvas-roadmap.md T4.3 | Rubber band per WD8: both modes, the default from WQ3. | Applied (2026-11-16) |
+| canvas-roadmap.md T5.1 | `Move` and `Reorient` take a `FollowPolicy`; until W2.2 it is ignored and every run detaches. | Applied as note/pointer (T5.1 code merged; `FollowPolicy` deferred to W2.2) |
+| canvas-roadmap.md T6.2 | First corner per WD6. | Applied (2026-11-16) |
+| canvas-roadmap.md T6.3 | Replaced by wiring-roadmap.md W2.1 to W2.5. | Applied (2026-11-16) |
+| canvas-roadmap.md T7.2 | Placing a label on a wire body splits the wire (WD9). | Applied (2026-11-16) |
+| canvas-roadmap.md dependency overview | T6.3 line replaced by a pointer to the wiring roadmap. | Applied (2026-11-16) |
