@@ -67,10 +67,10 @@ impl WiringPrefs {
 impl Default for WiringPrefs {
     fn default() -> Self {
         Self {
-            // WK10 enables this once Q6 is answered yes; HW1 is still pending.
-            follow_on_move: false,
+            // WK10, as answered at HW1 (WQ1 yes, WQ3 Intersecting, WQ4 no).
+            follow_on_move: true,
             follow_pin_threshold: 10,
-            select_mode: SelectMode::Enclosed,
+            select_mode: SelectMode::Intersecting,
             delete_wires_with_part: false,
         }
     }
@@ -121,14 +121,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wk10_defaults_pending_q6() {
+    fn wk10_defaults() {
         let prefs = WiringPrefs::default();
-        assert!(!prefs.follow_on_move);
+        assert!(prefs.follow_on_move);
         assert_eq!(prefs.follow_pin_threshold(), 10);
-        assert_eq!(prefs.select_mode, SelectMode::Enclosed);
+        assert_eq!(prefs.select_mode, SelectMode::Intersecting);
         assert!(!prefs.delete_wires_with_part);
         let policy = prefs.follow_policy(false);
-        assert!(!policy.follow_on_move);
+        assert!(policy.follow_on_move);
         assert_eq!(policy.pin_threshold(), 10);
         assert!(!policy.invert);
     }
