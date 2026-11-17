@@ -38,10 +38,17 @@ Outside the measured span:
 - all `Command`, `Vec<Wire>` and `Vec<ItemId>` construction and cloning;
 - the `Doc::undo()` that restores the starting workload after each timed
   `apply` (undo restores exact IDs, INV4), plus the post-loop assertions that
-  the starting workload is back;
-- the effectiveness assertion (`Change.dirty` must be `Some`, so a validated
-  no-op can never pose as an effective edit) and all CSV output, which is
+  `doc.content_eq(&reference)` with an independently built reference, including
+  exact live IDs (INV4);
+- the effectiveness assertion (`Change.nets_changed` must be true) and all CSV output, which is
   buffered and printed only after the loop.
+
+The repeated loop has a warm-data bias: after the first observation, each
+apply immediately follows undo of the same data. The cold first sample can
+be much slower; it is retained among the 1,000 samples, with no warmup
+samples discarded. These results describe repeated edits on warm data, not
+cold command latency. `push_undo` clears the redo entry left by undo inside
+the timed span, so that cleanup cost is included after the first sample.
 
 Timer overhead (`Instant::now`/`elapsed`, `black_box`) is inherent to every
 observation, as in the existing T2.8 runner. Repeated `AddWires` observations
@@ -71,12 +78,13 @@ restored by untimed `undo()`):
 
 | Case | Command and starting workload |
 | --- | --- |
-| `doc_10k_wire_add` | `AddWires` with the `real_10k_leaf` leaf geometry, on actual `10k` (10,000 parts, 20,000 wires) |
+| `doc_10k_wire_add` | `AddWires` extending `WireId(0)` from its far end by 1 nm collinearly, without overlap (INV2), on actual `10k` (10,000 parts, 20,000 wires) |
 | `doc_10k_wire_delete` | `Delete` of `WireId(0)`, a leaf from part 0's first pin, on actual `10k` |
 | `doc_10k_move_100` | `Move` of the first 100 parts (`PartId(0)..PartId(100)`) by `(GRID_NM, GRID_NM)` on actual `10k`; the T5.1 done-when case |
+| `doc_10k_move_100_connected` | Pin-count worst-case `Move` on actual `10k`: select the 100 parts with most pins, ties by lowest ID, and move by `(GRID_NM, GRID_NM)`; every selected part has a pin at a wire end that it leaves |
 | `doc_chain_20k_add` | `AddWires` with the missing middle segment, on the 20k chain with that segment absent |
 | `doc_chain_20k_delete` | `Delete` of the middle segment (`WireId(10000)`), splitting the 20k chain; the T2.8 split worst case |
-| `doc_label_bridge_add` | `AddWires` with the bridge wire, shorting the GND/VCC nets over 5,000 components |
+| `doc_label_bridge_add` | `AddWires` from free end `(1,0)` to free end `(10,0)` (INV2), shorting the GND/VCC nets over 5,000 components |
 | `doc_label_bridge_delete` | `Delete` of the bridge wire, forcing the logical re-flood |
 
 ## Acceptance statistic (unchanged)
@@ -101,21 +109,26 @@ that protocol, gate nothing. The CPU-only scope question in audit section 3.2
 is still open: this preparation adopts no protocol exception, so record the
 conditions and let the gate decision weigh them.
 
-1. Freeze and record provenance: check out the campaign commit, then
-   `cargo build --manifest-path docs/measurements/command-boundary/runner/Cargo.toml --release --offline -j 2`
-   and `cargo build --release -p omnia-bench` (its binary is hashed by
-   `run.sh`). Record source and binary SHA-256 as `run.sh` does.
-2. Prepare conditions per section 2.1: on AC, other user apps closed, one
-   benchmark process at a time. Record power source, CPU governors/profile,
-   load and process inventory; `run.sh` snapshots them before and after every
-   invocation (`*.before.txt`/`*.after.txt`, `machine.txt`, `order.txt`).
-3. Run the fixed schedule: `bash docs/measurements/command-boundary/run.sh`.
-   It runs all eleven cases in each of ten rotating passes into
-   `docs/measurements/command-boundary/raw/`.
-4. Archive the raw CSVs (`raw.tar.gz`) next to `summarize.py`, then run
-   `python docs/measurements/command-boundary/summarize.py`. Keep the raw
-   CSVs, `order.txt`, condition snapshots, hashes, `run.sh` and the summary
-   output as the evidence bundle.
+1. Freeze source and case list before the first reference observation. Build
+   only the standalone runner:
+   `cargo build --manifest-path docs/measurements/command-boundary/runner/Cargo.toml --release --offline -j 2`.
+   At freeze, `run.sh` also runs
+   `cargo check --manifest-path docs/measurements/command-boundary/runner/Cargo.toml --offline`
+   to verify current `omnia-doc` APIs. No `omnia-bench` binary is used or required.
+2. Prepare section 2.1 conditions: AC, performance governors, other user apps
+   closed. The script checks tools (including `sha256sum`, `python3`, and
+   `vulkaninfo`), built runner, AC and governors before creating any directory;
+   refusal explains what is missing. It records power/profile, governors,
+   load and process inventory before and after each invocation.
+3. Run one command: `bash docs/measurements/command-boundary/run.sh`.
+   It runs all twelve cases in ten rotating passes, archives the raw data,
+   and invokes `summarize.py`, retaining `raw/`, `raw.tar.gz`, `summary.txt`,
+   conditions, hashes, order and a status file in a unique `attempt-*` directory.
+4. An aborted attempt remains labelled incomplete. A later invocation uses
+   a new directory and cannot overwrite it; retain and report every attempt,
+   with the reason for any new campaign. This is not authorization to retry
+   until green. Summarize a retained complete archive with
+   `python3 docs/measurements/command-boundary/summarize.py <attempt>/raw.tar.gz`.
 5. Run the functional checks separately: `cargo test --workspace`
    (`load(save(doc)) == doc`, the INV10 property and consistency checks, and
    the alloc-free `Doc::query` check).
@@ -127,36 +140,47 @@ runner works. It is **not** reference evidence and certifies nothing: one
 pass instead of ten, an uncontrolled Windows machine, no section 2.1
 conditions.
 
-- Machine: ASUS TUF Gaming F16 (`FX608JMR_FX608JMR`), Intel Core
-  i7-14650HX, Windows, `rustc 1.98.1 (48a229cea 2026-09-01)`, release build.
-- Source at smoke time: `0af9074d44cacadb3baf52aa9a64889dbd386860` plus this
-  change; runner binary SHA-256
-  `10454D04311B764A5FF2294B57EEC6E2C803B1C95FAEBF0F2BA0A84108A3CAD0`.
-- Command per case:
-  `docs/measurements/command-boundary/runner/target/release/command-boundary.exe <case>`
-  (build: `cargo build --manifest-path docs/measurements/command-boundary/runner/Cargo.toml --release --offline -j 2`).
-  All eleven cases exited 0 with 1,000 observations each. Values below are
-  one run's p50/p99/max in ms, recomputed from the raw CSVs; the ten-run
-  median statistic does not apply.
+- Machine: development laptop, Core i7-14650HX, integrated UHD display
+  adapter and discrete RTX 5060 Laptop GPU; Windows 11 Home version
+  10.0.26200 (build 26200), 1920x1200, 60 Hz, 125% scaling.
+- Power: battery (`PowerOnline=false`), Silent power profile; CPU governor
+  unavailable on Windows. Other apps and concurrent workspace builds were
+  uncontrolled. Environment inventory was taken immediately after the run.
+- Release build, `rustc 1.98.1 (48a229cea 2026-09-01)`; updated runner source
+  and binary hashes, base commit and raw samples are retained in
+  [smoke-windows.tar.gz](command-boundary/smoke-windows.tar.gz).
+- One fixed pass, twelve cases, 1,000 samples each; all exited successfully,
+  including connectivity-effectiveness and full INV4 restoration assertions.
+  This is a functional smoke only, non-reference and not gate evidence.
+
+All times below are milliseconds; `>= 1 ms` is a diagnostic count.
 
 | Case/operation | p50 | p99 | max | >= 1 ms |
 | --- | ---: | ---: | ---: | ---: |
-| `real_10k_leaf/add` | 0.000100 | 0.000100 | 0.000700 | 0 |
-| `real_10k_leaf/remove` | 0.000100 | 0.000100 | 0.003600 | 0 |
-| `label_5k_gnd_vcc_bridge/add` | 0.005400 | 0.020800 | 0.100800 | 0 |
-| `label_5k_gnd_vcc_bridge/remove` | 0.231500 | 0.597500 | 1.647000 | 3 |
-| `chain_20k_middle/add` | 0.052400 | 0.132200 | 0.699800 | 0 |
-| `chain_20k_middle/remove` | 0.421700 | 0.792200 | 1.002800 | 1 |
-| `index_10k/query` | 0.005900 | 0.026500 | 0.080200 | 0 |
-| `doc_10k_wire_add/apply` | 0.000200 | 0.000500 | 0.007300 | 0 |
-| `doc_10k_wire_delete/apply` | 0.000300 | 0.000400 | 0.012300 | 0 |
-| `doc_10k_move_100/apply` | 0.071700 | 0.143200 | 0.442300 | 0 |
-| `doc_chain_20k_add/apply` | 0.033500 | 0.093400 | 0.187800 | 0 |
-| `doc_chain_20k_delete/apply` | 0.329100 | 0.496800 | 0.974600 | 0 |
-| `doc_label_bridge_add/apply` | 0.005300 | 0.015800 | 0.055400 | 0 |
-| `doc_label_bridge_delete/apply` | 0.199900 | 0.370300 | 0.873200 | 0 |
+| `chain_20k_middle/add` | 0.138100 | 0.624800 | 16.465600 | 6 |
+| `chain_20k_middle/remove` | 0.989700 | 7.203700 | 36.059000 | 468 |
+| `doc_10k_move_100/apply` | 0.237000 | 0.573600 | 2.336500 | 2 |
+| `doc_10k_move_100_connected/apply` | 0.445300 | 0.820100 | 3.194000 | 5 |
+| `doc_10k_wire_add/apply` | 0.000900 | 0.001400 | 0.020300 | 0 |
+| `doc_10k_wire_delete/apply` | 0.000900 | 0.001100 | 0.032600 | 0 |
+| `doc_chain_20k_add/apply` | 0.101800 | 0.220200 | 0.661100 | 0 |
+| `doc_chain_20k_delete/apply` | 0.870200 | 6.475900 | 59.510300 | 98 |
+| `doc_label_bridge_add/apply` | 0.015200 | 0.057200 | 16.970300 | 2 |
+| `doc_label_bridge_delete/apply` | 0.516300 | 12.304400 | 28.116800 | 23 |
+| `index_10k/query` | 0.019100 | 0.032200 | 0.260900 | 0 |
+| `label_5k_gnd_vcc_bridge/add` | 0.017300 | 0.053500 | 0.216200 | 0 |
+| `label_5k_gnd_vcc_bridge/remove` | 0.715200 | 17.603600 | 33.523200 | 76 |
+| `real_10k_leaf/add` | 0.000200 | 0.000300 | 0.003200 | 0 |
+| `real_10k_leaf/remove` | 0.000200 | 0.000200 | 0.010100 | 0 |
 
-`summarize.py` was additionally exercised offline against a synthetic
-ten-copy archive of these CSVs to verify its frozen-set, ten-run and
-median/range/diagnostic reporting; that synthetic check tested the script
-only and produced no measurement claims.
+Validation after review fixes: runner fmt, clippy (`-D warnings`), offline
+check and release build passed. Workspace fmt and clippy passed. Shell
+syntax and refusal before evidence creation were checked on the development
+machine. Synthetic archives verified summary acceptance for exactly 01-10
+and rejection of missing, duplicate and out-of-range passes; synthetic data
+is script validation only.
+
+Feature-enabled bench clippy and `cargo deny check` passed. Workspace tests
+initially failed with paging-file exhaustion while mapping GPUI metadata;
+`cargo test --workspace -j 1` then passed without changing any checks.
+No reference campaign ran and no budget or roadmap status changed.

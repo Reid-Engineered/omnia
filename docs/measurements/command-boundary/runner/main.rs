@@ -10,7 +10,7 @@
 //! Connectivity-only, unchanged: `real_10k_leaf`, `label_5k_gnd_vcc_bridge`,
 //! `chain_20k_middle`, `index_10k`.
 //! Public `Doc::apply`: `doc_10k_wire_add`, `doc_10k_wire_delete`,
-//! `doc_10k_move_100`, `doc_chain_20k_add`, `doc_chain_20k_delete`,
+//! `doc_10k_move_100`, `doc_10k_move_100_connected`, `doc_chain_20k_add`, `doc_chain_20k_delete`,
 //! `doc_label_bridge_add`, `doc_label_bridge_delete`.
 //!
 //! Timed span: exactly one `Doc::apply` call per observation. Inside the span are
@@ -56,7 +56,7 @@ fn pair(conn: &mut Connectivity, id: WireId, wire: Wire) {
 }
 
 /// Times one pre-built command per observation and restores with untimed undo.
-fn apply_case(doc: &mut Doc, mut build: impl FnMut() -> Command) {
+fn apply_case(doc: &mut Doc, reference: &Doc, mut build: impl FnMut() -> Command) {
     let mut samples = Vec::with_capacity(N);
     for _ in 0..N {
         let cmd = build();
@@ -65,12 +65,16 @@ fn apply_case(doc: &mut Doc, mut build: impl FnMut() -> Command) {
         let elapsed = start.elapsed().as_nanos();
         let change = black_box(result).expect("frozen case command must validate");
         assert!(
-            change.dirty.is_some(),
-            "frozen case command must be effective, not a validated no-op"
+            change.nets_changed,
+            "frozen case command must change connectivity"
         );
         samples.push(elapsed);
         black_box(doc.undo()).expect("undo must restore the starting workload");
     }
+    assert!(
+        doc.content_eq(reference),
+        "INV4: exact live content and IDs restored"
+    );
     println!("sample,apply_ns");
     for (i, ns) in samples.into_iter().enumerate() {
         println!("{i},{ns}");
@@ -208,35 +212,39 @@ fn main() {
                 println!("{i},{ns},{count}");
             }
         }
-        // One effective wire add on the actual T2.4 10k workload: the same leaf
-        // geometry as `real_10k_leaf`, through `Command::AddWires`.
+        // INV2: extend wire 0 at its far end, without overlapping its interior.
         "doc_10k_wire_add" => {
+            let reference = generate(StressSheet::Parts10k, 42);
             let mut doc = generate(StressSheet::Parts10k, 42);
             assert_eq!(doc.parts().count(), 10000);
             assert_eq!(doc.wires().count(), 20000);
-            let a = doc.wires().next().unwrap().1.a;
+            let a = doc.wire(WireId(0)).unwrap().b;
             let wire = Wire {
                 a,
                 b: Pt { x: a.x + 1, y: a.y },
             };
-            apply_case(&mut doc, move || Command::AddWires(vec![wire]));
+            apply_case(&mut doc, &reference, move || Command::AddWires(vec![wire]));
             assert_eq!(doc.wires().count(), 20000);
         }
         // One effective wire delete on the actual 10k workload: `WireId(0)` is a
         // leaf from part 0's first pin, matching the leaf class above. Undo
         // restores the same ID outside the span.
         "doc_10k_wire_delete" => {
+            let reference = generate(StressSheet::Parts10k, 42);
             let mut doc = generate(StressSheet::Parts10k, 42);
             assert_eq!(doc.parts().count(), 10000);
             assert_eq!(doc.wires().count(), 20000);
             assert!(doc.wire(WireId(0)).is_some());
-            apply_case(&mut doc, || Command::Delete(vec![ItemId::Wire(WireId(0))]));
+            apply_case(&mut doc, &reference, || {
+                Command::Delete(vec![ItemId::Wire(WireId(0))])
+            });
             assert!(doc.wire(WireId(0)).is_some());
             assert_eq!(doc.wires().count(), 20000);
         }
         // T5.1 done-when case: one `Move` of 100 items (first 100 parts, whose
         // pins, bodies, index and connectivity all move) by one grid step.
         "doc_10k_move_100" => {
+            let reference = generate(StressSheet::Parts10k, 42);
             let mut doc = generate(StressSheet::Parts10k, 42);
             assert_eq!(doc.parts().count(), 10000);
             assert_eq!(doc.wires().count(), 20000);
@@ -246,28 +254,65 @@ fn main() {
                 x: GRID_NM,
                 y: GRID_NM,
             };
-            apply_case(&mut doc, || Command::Move {
+            apply_case(&mut doc, &reference, || Command::Move {
                 items: items.clone(),
                 delta,
             });
             assert_eq!(doc.part(PartId(0)).unwrap().at, first_at);
         }
+        // Pin-count worst case on the actual 10k sheet: max-pin parts first,
+        // ties by lowest ID. Every selected part leaves connected wire ends.
+        "doc_10k_move_100_connected" => {
+            let reference = generate(StressSheet::Parts10k, 42);
+            let mut doc = generate(StressSheet::Parts10k, 42);
+            let mut ranked: Vec<_> = doc
+                .parts()
+                .map(|(id, _)| (std::cmp::Reverse(doc.pins(id).unwrap().len()), id.0))
+                .collect();
+            ranked.sort_unstable();
+            let items: Vec<_> = ranked
+                .into_iter()
+                .take(100)
+                .map(|(_, id)| {
+                    let id = PartId(id);
+                    assert!(
+                        doc.pins(id)
+                            .unwrap()
+                            .iter()
+                            .any(|pin| { doc.wires().any(|(_, w)| w.a == *pin || w.b == *pin) })
+                    );
+                    ItemId::Part(id)
+                })
+                .collect();
+            assert_eq!(items.len(), 100);
+            apply_case(&mut doc, &reference, || Command::Move {
+                items: items.clone(),
+                delta: Pt {
+                    x: GRID_NM,
+                    y: GRID_NM,
+                },
+            });
+        }
         // Worst case at command level: adding the missing middle segment joins
         // the two 10k halves of the 20k chain.
         "doc_chain_20k_add" => {
+            let reference = chain_doc(false);
             let mut doc = chain_doc(false);
             let middle = Wire {
                 a: Pt { x: 10000, y: 0 },
                 b: Pt { x: 10001, y: 0 },
             };
-            apply_case(&mut doc, move || Command::AddWires(vec![middle]));
+            apply_case(&mut doc, &reference, move || {
+                Command::AddWires(vec![middle])
+            });
             assert_eq!(doc.wires().count(), 19999);
         }
         // Worst case at command level: deleting the middle segment splits the
         // 20k chain (the T2.8 split case).
         "doc_chain_20k_delete" => {
+            let reference = chain_doc(true);
             let mut doc = chain_doc(true);
-            apply_case(&mut doc, || {
+            apply_case(&mut doc, &reference, || {
                 Command::Delete(vec![ItemId::Wire(WireId(10000))])
             });
             assert!(doc.wire(WireId(10000)).is_some());
@@ -276,23 +321,28 @@ fn main() {
         // Worst case at command level: adding the bridge shorts the GND/VCC
         // logical nets across 5,000 one-wire components.
         "doc_label_bridge_add" => {
+            let reference = bridge_doc();
             let mut doc = bridge_doc();
             let bridge = Wire {
-                a: Pt { x: 0, y: 0 },
+                a: Pt { x: 1, y: 0 },
                 b: Pt { x: 10, y: 0 },
             };
-            apply_case(&mut doc, move || Command::AddWires(vec![bridge]));
+            apply_case(&mut doc, &reference, move || {
+                Command::AddWires(vec![bridge])
+            });
             assert_eq!(doc.wires().count(), 5000);
         }
         // Worst case at command level: deleting the bridge forces the logical
         // re-flood. Setup adds the bridge outside any timed span; its issued ID
         // is read back from the public `Change`.
         "doc_label_bridge_delete" => {
+            let mut reference = bridge_doc();
             let mut doc = bridge_doc();
             let bridge = Wire {
-                a: Pt { x: 0, y: 0 },
+                a: Pt { x: 1, y: 0 },
                 b: Pt { x: 10, y: 0 },
             };
+            reference.apply(Command::AddWires(vec![bridge])).unwrap();
             let setup = doc
                 .apply(Command::AddWires(vec![bridge]))
                 .expect("bridge setup must validate");
@@ -300,7 +350,7 @@ fn main() {
             let ItemId::Wire(bridge_id) = setup.added[0] else {
                 panic!("bridge setup must add exactly one wire");
             };
-            apply_case(&mut doc, move || {
+            apply_case(&mut doc, &reference, move || {
                 Command::Delete(vec![ItemId::Wire(bridge_id)])
             });
             assert!(doc.wire(bridge_id).is_some());

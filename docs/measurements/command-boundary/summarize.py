@@ -1,6 +1,6 @@
 """Recompute run p99s (nearest rank), median of ten, and diagnostic tails.
 
-Reads ``raw.tar.gz`` beside this file (the archive of the fixed ten-pass
+Reads the archive path argument, defaulting to ``raw.tar.gz`` beside this file (the archive of the fixed ten-pass
 campaign in ``run.sh``). The gate statistic is the median of the ten run p99s
 against the unchanged strict 1 ms target; ``>=1 ms`` counts are diagnostics
 only, never an all-samples gate. ``index_10k/query`` has no 1 ms target and is
@@ -11,6 +11,7 @@ in a separate roadmap/gate decision.
 import csv
 import io
 import statistics
+import sys
 import tarfile
 from pathlib import Path
 
@@ -29,6 +30,7 @@ EXPECTED_KEYS = {
     "doc_10k_wire_add/apply",
     "doc_10k_wire_delete/apply",
     "doc_10k_move_100/apply",
+    "doc_10k_move_100_connected/apply",
     "doc_chain_20k_add/apply",
     "doc_chain_20k_delete/apply",
     "doc_label_bridge_add/apply",
@@ -37,13 +39,19 @@ EXPECTED_KEYS = {
 NO_TARGET_KEYS = {"index_10k/query"}
 
 groups = {}
-with tarfile.open(root / "raw.tar.gz") as archive:
+passes = {}
+with tarfile.open(Path(sys.argv[1]) if len(sys.argv) > 1 else root / "raw.tar.gz") as archive:
     for member in sorted(archive.getmembers(), key=lambda m: m.name):
         if not member.name.endswith(".csv"):
             continue
         rows = list(csv.DictReader(io.TextIOWrapper(archive.extractfile(member))))
         assert len(rows) == 1000, f"{member.name}: expected 1000 rows, got {len(rows)}"
-        case = Path(member.name).stem[3:]
+        stem = Path(member.name).stem
+        pass_id, case = stem.split("-", 1)
+        assert pass_id in {f"{i:02d}" for i in range(1, 11)}, f"invalid pass: {stem}"
+        seen = passes.setdefault(case, set())
+        assert pass_id not in seen, f"duplicate pass: {stem}"
+        seen.add(pass_id)
         for field in rows[0]:
             if not field.endswith("_ns"):
                 continue
@@ -59,6 +67,7 @@ assert set(groups) == EXPECTED_KEYS, (
     f"frozen case set mismatch: missing={sorted(EXPECTED_KEYS - set(groups))} "
     f"extra={sorted(set(groups) - EXPECTED_KEYS)}"
 )
+assert all(seen == {f"{i:02d}" for i in range(1, 11)} for seen in passes.values()), "passes must be exactly 01-10"
 print("\nMedian of 10 run p99s; range; all-observation mean/max/misses (diagnostic):")
 print(f"Target: median_p99_ms < {TARGET_MS:.1f} ms (strict, unchanged). "
       ">=1ms counts are diagnostics, not an all-samples gate.")
@@ -67,6 +76,6 @@ for key, runs in sorted(groups.items()):
     p99s = [r[0] for r in runs]
     median_p99 = statistics.median(p99s)
     verdict = "n/a (no 1 ms target)" if key in NO_TARGET_KEYS else (
-        "below target" if median_p99 < TARGET_MS else "at/above target"
+        "median_p99 < 1 ms" if median_p99 < TARGET_MS else "median_p99 >= 1 ms"
     )
-    print(f"{key}: median_p99_ms={median_p99:.6f} range_ms={min(p99s):.6f}..{max(p99s):.6f} mean_ms={statistics.mean(r[3] for r in runs):.6f} max_ms={max(r[1] for r in runs):.6f} >=1ms={sum(r[2] for r in runs)}/10000 verdict={verdict}")
+    print(f"{key}: median_p99_ms={median_p99:.6f} range_ms={min(p99s):.6f}..{max(p99s):.6f} mean_ms={statistics.mean(r[3] for r in runs):.6f} max_ms={max(r[1] for r in runs):.6f} >=1ms={sum(r[2] for r in runs)}/10000 comparison={verdict} (not a gate verdict; reference conditions not verified)")
