@@ -7,6 +7,7 @@ pub mod doc;
 pub mod geom;
 pub mod index;
 mod points;
+pub mod prefs;
 mod undo;
 
 pub use command::{Change, Command, CommandError, TextField};
