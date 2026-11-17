@@ -255,7 +255,7 @@ of the `canvas` lane.
 - Done when: simulated-input tests show the world point under the cursor fixed across a
   zoom, and a status update notifies neither `SheetView` nor the window root.
 
-### T1.6 Gate: milestone 1 · blocked (awaiting attributed gate rerun on Orion)
+### T1.6 Gate: milestone 1 · done
 - Lane: bench · Depends: T1.5
 - Do: run and record (`docs/measurements/T1.6/gate.sh`, then `summarize.py`):
 
@@ -1529,3 +1529,11 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        diagnostic, pan 125%, 5+5: frame p99 median 0.795 ms traced vs
                        0.848 ms untraced, ours 0 (i7-14650HX, UHD; certifies nothing).
                        Awaiting the Orion rerun.
+2026-11-17 T1.6 done — Attributed gate on Orion, merged source 4edac17, all 80 runs
+                       and protocol checks passed. B1 startup medians 188.4/192.1 ms
+                       (100%/125%); B3 highest median of run p99s 3.499 ms, zero counted
+                       missed refreshes across 40 motion runs. The one over-limit
+                       interval, s100 pan-3 frame 218 (26.620 ms), met the compositor
+                       exclusion in plan 2.1. B8 zero idle frames across 20 runs and
+                       B10 zero paint-path allocations per frame in all motion runs.
+                       Raw reports, conditions, and verdict: docs/measurements/T1.6.md.

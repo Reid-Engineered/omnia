@@ -1,0 +1,94 @@
+
+## s100: scale 1.0, 1920x1080 logical; governors ['powersave']; power-profiles-daemon/platform_profile ['None/None']
+
+| Script | frame p99 ms, median [min, max] | draw p99 ms | present interval p50 ms | max frame ms | late frames | allocs ours max | allocs total mean |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| pan | 3.120 [2.945, 3.611] | 3.059 [2.922, 3.588] | 16.687 [16.663, 16.712] | 5.024 [3.576, 7.205] | 0.000 [0.000, 0.000] | 0 | 212.977 [212.918, 213.013] |
+| zoom | 3.499 [3.451, 3.594] | 3.478 [3.430, 3.574] | 16.679 [16.679, 16.695] | 4.238 [3.621, 8.249] | 0.000 [0.000, 0.000] | 0 | 207.068 [207.032, 207.088] |
+
+B1 start: per-run median 188.441 [185.271, 205.283] ms; per-run max 212.697 [197.464, 1231.033] ms; all 100 starts 168.0..1231.0 ms
+B8 idle: frames per run [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; renders [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; CPU % 0.000 [0.000, 0.100]; startup frames [5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+
+## s125: scale 1.25, 1536x864 logical; governors ['powersave']; power-profiles-daemon/platform_profile ['None/None']
+
+| Script | frame p99 ms, median [min, max] | draw p99 ms | present interval p50 ms | max frame ms | late frames | allocs ours max | allocs total mean |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| pan | 1.953 [1.843, 2.355] | 1.924 [1.805, 2.333] | 16.675 [16.671, 16.679] | 3.204 [2.683, 3.905] | 0.000 [0.000, 0.000] | 0 | 212.032 [211.977, 212.057] |
+| zoom | 2.265 [2.163, 2.325] | 2.244 [2.144, 2.302] | 16.675 [16.671, 16.703] | 2.426 [2.329, 3.971] | 0.000 [0.000, 0.000] | 0 | 207.124 [207.118, 207.158] |
+
+B1 start: per-run median 192.148 [190.528, 201.337] ms; per-run max 211.595 [202.621, 472.415] ms; all 100 starts 167.8..472.4 ms
+B8 idle: frames per run [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; renders [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; CPU % 0.000 [0.000, 0.000]; startup frames [5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+
+## Missed-refresh attribution (B3: every present interval over 1.5 refreshes)
+
+s100/pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/pan-3: PASS; over limit 1 traced, 0 untraced; compositor-side 1, counted 0
+  frame 218: interval 26.620 ms; present end to signal 22.771 ms; main thread idle before signal 22.771 ms; signal to present end 3.849 ms; source native; compositor-side: (a) to (e) hold
+        +0.000 ms  previous present end
+       +22.771 ms  signal
+       +22.782 ms  dirty
+       +22.787 ms  draw start
+       +25.608 ms  draw end
+       +25.616 ms  present start
+       +26.620 ms  present end
+s100/pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+
+## Gate
+
+| Budget | Measured | Result |
+| --- | --- | --- |
+| B3 pan s100 frame p99 | median of run p99s 3.120 ms, limit < 16.7 | PASS |
+| B3 pan s100 missed refreshes | limit 0 counted per run (interval > 24.997 ms, compositor-side excluded); 10/10 runs 0 counted; counted 0, compositor-side 1; max interval 19.505 [18.154, 26.624] ms | PASS |
+| B10 pan s100 | allocs_per_frame.ours max over 10 runs = 0 | PASS |
+| B3 zoom s100 frame p99 | median of run p99s 3.499 ms, limit < 16.7 | PASS |
+| B3 zoom s100 missed refreshes | limit 0 counted per run (interval > 24.997 ms, compositor-side excluded); 10/10 runs 0 counted; counted 0, compositor-side 0; max interval 20.521 [19.628, 24.740] ms | PASS |
+| B10 zoom s100 | allocs_per_frame.ours max over 10 runs = 0 | PASS |
+| B1 start s100 | median of run medians 188.4 ms < 400 (slowest of 100 starts: 1231.0 ms) | PASS |
+| B8 idle s100 | frames in 10 s, every run: [0] | PASS |
+| B3 pan s125 frame p99 | median of run p99s 1.953 ms, limit < 16.7 | PASS |
+| B3 pan s125 missed refreshes | limit 0 counted per run (interval > 24.997 ms, compositor-side excluded); 10/10 runs 0 counted; counted 0, compositor-side 0; max interval 18.686 [17.990, 19.792] ms | PASS |
+| B10 pan s125 | allocs_per_frame.ours max over 10 runs = 0 | PASS |
+| B3 zoom s125 frame p99 | median of run p99s 2.265 ms, limit < 16.7 | PASS |
+| B3 zoom s125 missed refreshes | limit 0 counted per run (interval > 24.997 ms, compositor-side excluded); 10/10 runs 0 counted; counted 0, compositor-side 0; max interval 19.194 [18.710, 20.447] ms | PASS |
+| B10 zoom s125 | allocs_per_frame.ours max over 10 runs = 0 | PASS |
+| B1 start s125 | median of run medians 192.1 ms < 400 (slowest of 100 starts: 472.4 ms) | PASS |
+| B8 idle s125 | frames in 10 s, every run: [0] | PASS |
+
+Protocol checks: all passed
