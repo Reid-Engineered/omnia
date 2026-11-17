@@ -209,9 +209,11 @@ For each affected run, in a fixed order that does not depend on the order of `it
   included. It is checked after planning, so a `FollowError` takes precedence. Its own
   ends may still land on foreign bodies (above).
 - A moved label that lands on a wire body splits it there, like a landed pin (WD9).
-- A move never takes an on-lattice wire end off the lattice, and never lands an
-  off-lattice pin or label on a wire body. Either is refused with
-  `CommandError::OffLattice(at)` before anything changes (WK1, WINV3, WINV4).
+- A move never takes an on-lattice wire end off the lattice, never lands an off-lattice
+  pin or label on a wire body, and never makes a lattice wire cover an off-lattice label.
+  Each is refused with `CommandError::OffLattice(at)`, naming the lowest such point,
+  before anything changes (WK1, WINV3, WINV4). Wire ends already off the lattice, which
+  `AddWires` still accepts, are treated as `AddWires` treats them.
 - Normal form wins at the points the moved items leave (owner decision, 2026-11-17).
   Collinear wires that now meet at a vacated pin, end or label point with nothing else
   there are merged by T6.1's rule, under follow and detach alike (WINV3).

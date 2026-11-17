@@ -1978,7 +1978,15 @@ mod tests {
                             let ItemId::Wire(id) = items[0] else { unreachable!() };
                             let w = *doc.wire(id).unwrap();
                             let lat = |p: Pt| p.x % crate::PIN_LATTICE_NM == 0 && p.y % crate::PIN_LATTICE_NM == 0;
-                            let off = [w.a, w.b].into_iter().any(|p| lat(p) && !lat(Pt { x: p.x + delta.x, y: p.y + delta.y }));
+                            let (a, b) = (Pt { x: w.a.x + delta.x, y: w.a.y + delta.y }, Pt { x: w.b.x + delta.x, y: w.b.y + delta.y });
+                            let mut off = (lat(w.a) && !lat(a)) || (lat(w.b) && !lat(b));
+                            // A lattice wire may not cover an off-lattice label (it would split there).
+                            off |= lat(a) && lat(b) && doc.labels().any(|(_, l)| {
+                                let p = l.at;
+                                !lat(p) && p != a && p != b
+                                    && (a.x.min(b.x)..=a.x.max(b.x)).contains(&p.x)
+                                    && (a.y.min(b.y)..=a.y.max(b.y)).contains(&p.y)
+                            });
                             (moved_wire_captures(&doc, id, *delta), off)
                         }
                         _ => (false, false),

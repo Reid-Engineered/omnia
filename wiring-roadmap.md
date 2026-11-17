@@ -767,7 +767,9 @@ signature). Moved labels split the wire body they land on (WD9). New
 `CommandError::OffLattice` refuses taking an on-lattice end off the lattice or landing an
 off-lattice pin/label on a wire body (WK1, WINV3). Capture blockers rank from the wire's low
 corner (determinism). The W2.2 property moves one or two parts and generates direct pin
-contacts, exempting only those nets. Two fixtures kept legal under the lattice rule: the
+contacts; under follow only pairs with a foreign pin left behind at such a contact
+are exempt. A lattice wire may not come to cover an off-lattice label, and `OffLattice`
+names the lowest violating point (re-check follow-ups). Two fixtures kept legal under the lattice rule: the
 route mixed-edit oracle predicts `OffLattice` exactly, and index_alloc moves by one lattice
 step; assertions unchanged. Open for the owner: at a point holding a selected pin, a
 foreign pin and a wire end, the run follows the moved pin and the foreign pin loses its

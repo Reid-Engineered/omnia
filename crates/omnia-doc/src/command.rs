@@ -648,25 +648,45 @@ fn on_lattice(p: Pt) -> bool {
     p.x % crate::PIN_LATTICE_NM == 0 && p.y % crate::PIN_LATTICE_NM == 0
 }
 
-// WINV3/WK1: a move never takes a wire end off the lattice, and never lands an
-// off-lattice pin or label on a wire body, where TC-move-14/WD9 would split it
-// off the lattice. Ends already off the lattice (legacy fixtures) are left alone.
+// WINV3/WK1: a move never takes a wire end off the lattice, and never creates a
+// split off the lattice: no off-lattice pin, label or end lands on a wire body
+// (TC-move-14/WD9), and no moved or routed wire covers a stationary off-lattice
+// label. Ends already off the lattice (legacy fixtures) are not judged on their
+// own. The lowest violating point is reported, independent of item and end order.
 fn validate_lattice(
     doc: &Doc,
     items: &[ItemId],
     t: Isometry,
     plan: &FollowPlan,
 ) -> Result<(), CommandError> {
+    let mut worst: Option<Pt> = None;
+    let mut report = |p: Pt| {
+        if worst.is_none_or(|w| (p.x, p.y) < (w.x, w.y)) {
+            worst = Some(p);
+        }
+    };
     let mut landed = Vec::new();
+    let mut moved_wires = plan.add.clone();
+    let mut selected_wires = Vec::new();
+    let mut moved_labels: Vec<_> = plan.labels.iter().map(|&(id, _)| id.0).collect();
     for &item in items {
         match item {
             ItemId::Wire(id) => {
+                selected_wires.push(id.0);
                 let w = *doc.wire(id).unwrap();
-                for p in [w.a, w.b] {
-                    let at = t.apply(p)?;
-                    if on_lattice(p) && !on_lattice(at) {
-                        return Err(CommandError::OffLattice(at));
+                let moved = Wire {
+                    a: t.apply(w.a)?,
+                    b: t.apply(w.b)?,
+                };
+                for (old, at) in [(w.a, moved.a), (w.b, moved.b)] {
+                    // Legacy off-lattice ends behave as AddWires treats them.
+                    if on_lattice(old) && !on_lattice(at) {
+                        report(at);
                     }
+                }
+                // Only a lattice wire can be split off the lattice by a label.
+                if on_lattice(moved.a) && on_lattice(moved.b) {
+                    moved_wires.push(moved);
                 }
             }
             ItemId::Part(id) => {
@@ -674,26 +694,20 @@ fn validate_lattice(
                     landed.push(t.apply(p)?);
                 }
             }
-            ItemId::Label(id) => landed.push(t.apply(doc.label(id).unwrap().at)?),
+            ItemId::Label(id) => {
+                moved_labels.push(id.0);
+                landed.push(t.apply(doc.label(id).unwrap().at)?);
+            }
         }
     }
     landed.extend(plan.labels.iter().map(|&(_, at)| at));
     landed.retain(|&p| !on_lattice(p));
-    if landed.is_empty() {
-        return Ok(());
-    }
     landed.sort_unstable_by_key(|p| (p.x, p.y));
     landed.dedup();
     let mut removed: Vec<_> = plan.remove.iter().map(|id| id.0).collect();
     removed.sort_unstable();
-    let mut selected: Vec<_> = items
-        .iter()
-        .filter_map(|item| match *item {
-            ItemId::Wire(id) => Some(id.0),
-            _ => None,
-        })
-        .collect();
-    selected.sort_unstable();
+    selected_wires.sort_unstable();
+    moved_labels.sort_unstable();
     let interior = |w: Wire, p: Pt| {
         p != w.a && p != w.b && Rect::from_points(w.a, w.b).is_ok_and(|r| r.contains(p))
     };
@@ -704,16 +718,35 @@ fn validate_lattice(
         hit |= query.iter().any(|item| match *item {
             ItemId::Wire(id) => {
                 removed.binary_search(&id.0).is_err()
-                    && selected.binary_search(&id.0).is_err()
+                    && selected_wires.binary_search(&id.0).is_err()
                     && interior(*doc.wire(id).unwrap(), at)
             }
             _ => false,
         });
         if hit {
-            return Err(CommandError::OffLattice(at));
+            report(at);
         }
     }
-    Ok(())
+    for wire in moved_wires {
+        let Ok(bounds) = Rect::from_points(wire.a, wire.b) else {
+            continue;
+        };
+        doc.query(bounds, &mut query);
+        for item in &query {
+            if let ItemId::Label(id) = *item
+                && moved_labels.binary_search(&id.0).is_err()
+            {
+                let at = doc.label(id).unwrap().at;
+                if !on_lattice(at) && interior(wire, at) {
+                    report(at);
+                }
+            }
+        }
+    }
+    match worst {
+        Some(at) => Err(CommandError::OffLattice(at)),
+        None => Ok(()),
+    }
 }
 
 fn apply_batch(
@@ -1504,6 +1537,62 @@ mod tests {
         )
         .unwrap();
         doc.assert_normal_form();
+
+        // The reported point is the lowest one, whatever the stored end order.
+        for reversed in [false, true] {
+            let mut doc = Doc::new();
+            let (a, b) = (del_point(0, 0), del_point(4, 0));
+            let wire = doc
+                .apply(Command::AddWires(vec![if reversed {
+                    del_wire(b, a)
+                } else {
+                    del_wire(a, b)
+                }]))
+                .unwrap()
+                .added[0];
+            assert_eq!(
+                follow_roundtrip(
+                    &mut doc,
+                    Command::Move {
+                        items: vec![wire],
+                        delta: nudge,
+                        follow: follow_policy(false),
+                    },
+                ),
+                Err(CommandError::OffLattice(nudge))
+            );
+        }
+
+        // A lattice wire may not come to cover a stationary off-lattice label:
+        // normalisation would split it there (WD9).
+        let mut doc = Doc::new();
+        let wire = doc
+            .apply(Command::AddWires(vec![del_wire(
+                del_point(0, 0),
+                del_point(4, 0),
+            )]))
+            .unwrap()
+            .added[0];
+        let label_at = Pt {
+            x: del_point(2, 0).x + 1,
+            y: del_point(0, 3).y,
+        };
+        doc.apply(Command::AddLabel(Label {
+            at: label_at,
+            text: "N".into(),
+        }))
+        .unwrap();
+        assert_eq!(
+            follow_roundtrip(
+                &mut doc,
+                Command::Move {
+                    items: vec![wire],
+                    delta: del_point(0, 3),
+                    follow: follow_policy(false),
+                },
+            ),
+            Err(CommandError::OffLattice(label_at))
+        );
     }
 
     #[test]
@@ -1798,11 +1887,12 @@ mod tests {
                 selection.push(movable[other]);
             }
             // A selected pin on an unselected pin connects directly; WQ6 lets that
-            // contact separate, so WINV1 is exempt only on the nets holding one.
+            // contact separate. Which side keeps a wire at such a junction is open
+            // (logged for the owner, 2026-11-17), so under follow only pairs that
+            // include such a left-behind foreign pin are exempt.
             let all_pins: Vec<_> = base.parts().flat_map(|(id, _)| base.pins(id).unwrap().iter().map(move |&p| (ItemId::Part(id), p))).collect();
-            let direct_nets: Vec<_> = all_pins.iter()
-                .filter(|&&(a, p)| selection.contains(&a) && all_pins.iter().any(|&(b, q)| !selection.contains(&b) && q == p))
-                .filter_map(|&(_, p)| base.net_at(p))
+            let left_behind: Vec<bool> = all_pins.iter()
+                .map(|&(a, p)| !selection.contains(&a) && all_pins.iter().any(|&(b, q)| selection.contains(&b) && q == p))
                 .collect();
             base.assert_normal_form();
             let before = pin_partition(&base);
@@ -1833,10 +1923,7 @@ mod tests {
                 if result.is_ok() {
                     let after = pin_partition(&doc);
                     let n = all_pins.len();
-                    let exempt = |k: usize| [k / n, k % n].into_iter().any(|i| base.net_at(all_pins[i].1).is_some_and(|net| direct_nets.contains(&net)));
-                    // Exact partition, except on nets holding a WQ6 direct contact:
-                    // which side keeps a wire at a selected/foreign pin junction is
-                    // open (logged for the owner, 2026-11-17).
+                    let exempt = |k: usize| follow && (left_behind[k / n] || left_behind[k % n]);
                     let expected = expected.as_ref().unwrap();
                     for k in 0..after.len() {
                         if !exempt(k) {
