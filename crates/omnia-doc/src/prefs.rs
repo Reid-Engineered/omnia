@@ -193,7 +193,8 @@ mod tests {
 
     #[test]
     fn policy_captures_preferences_and_modifier() {
-        let mut prefs = WiringPrefs::default();
+        // Built explicitly so the test does not depend on the WK10 defaults.
+        let mut prefs = WiringPrefs::new(false, 10, SelectMode::Enclosed, false).unwrap();
         let policy = prefs.follow_policy(true);
         prefs.follow_on_move = true;
         assert!(!policy.follow_on_move);
