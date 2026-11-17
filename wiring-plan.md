@@ -330,10 +330,8 @@ label is never merged away.
   one. Nothing is persisted and there is no settings window; both are out of scope.
 - A command carries the policy it was built with (`FollowPolicy`), so redo replays the same
   decision even if a preference changed in between.
-- W1.1 clarification (2026-11-16): when W1.1 was built, W0.2 had not yet recorded the
-  owner's HW1 answers, so `Default` follows WK10 as then written: `follow_on_move` false,
-  `select_mode` Enclosed, `delete_wires_with_part` false. W0.2/W0.3 update WK10 and
-  `Default` to the recorded answers. Threshold fields are private `u16`s with
+- W1.1 clarification (2026-11-16): `Default` follows WK10 as answered at HW1 (W0.2):
+  `follow_on_move` true, `select_mode` Intersecting, `delete_wires_with_part` false. Threshold fields are private `u16`s with
   read accessors; checked constructors return `InvalidFollowThreshold` for zero, so
   struct literals cannot bypass WK2. Types live in `omnia_doc::prefs` in this repository.
   `follow_policy` captures the supplied Alt state; `part_follows` inverts the entire
