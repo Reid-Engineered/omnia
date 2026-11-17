@@ -666,6 +666,7 @@ fn validate_lattice(
         }
     };
     let mut landed = Vec::new();
+    let mut legacy_ends = Vec::new();
     let mut moved_wires = plan.add.clone();
     let mut selected_wires = Vec::new();
     let mut moved_labels: Vec<_> = plan.labels.iter().map(|&(id, _)| id.0).collect();
@@ -679,9 +680,12 @@ fn validate_lattice(
                     b: t.apply(w.b)?,
                 };
                 for (old, at) in [(w.a, moved.a), (w.b, moved.b)] {
-                    // Legacy off-lattice ends behave as AddWires treats them.
                     if on_lattice(old) && !on_lattice(at) {
                         report(at);
+                    } else if !on_lattice(at) {
+                        // A legacy off-lattice end may still split legacy wires,
+                        // as AddWires does, but never a lattice wire.
+                        legacy_ends.push(at);
                     }
                 }
                 // Only a lattice wire can be split off the lattice by a label.
@@ -712,14 +716,21 @@ fn validate_lattice(
         p != w.a && p != w.b && Rect::from_points(w.a, w.b).is_ok_and(|r| r.contains(p))
     };
     let mut query = Vec::new();
-    for at in landed {
-        let mut hit = plan.add.iter().any(|&w| interior(w, at));
+    let tagged = landed
+        .into_iter()
+        .map(|p| (p, false))
+        .chain(legacy_ends.into_iter().map(|p| (p, true)));
+    for (at, legacy) in tagged {
+        let judged = |w: Wire| !legacy || (on_lattice(w.a) && on_lattice(w.b));
+        let mut hit = plan.add.iter().any(|&w| judged(w) && interior(w, at));
         doc.query(Rect { min: at, max: at }, &mut query);
         hit |= query.iter().any(|item| match *item {
             ItemId::Wire(id) => {
+                let w = *doc.wire(id).unwrap();
                 removed.binary_search(&id.0).is_err()
                     && selected_wires.binary_search(&id.0).is_err()
-                    && interior(*doc.wire(id).unwrap(), at)
+                    && judged(w)
+                    && interior(w, at)
             }
             _ => false,
         });
@@ -1563,6 +1574,38 @@ mod tests {
             );
         }
 
+        // A legacy off-lattice end may not split a lattice wire.
+        let mut doc = Doc::new();
+        doc.apply(Command::AddWires(vec![del_wire(
+            del_point(0, 0),
+            del_point(4, 0),
+        )]))
+        .unwrap();
+        let legacy = doc
+            .apply(Command::AddWires(vec![del_wire(
+                Pt {
+                    x: 1,
+                    y: del_point(0, 2).y,
+                },
+                Pt {
+                    x: 1,
+                    y: del_point(0, 3).y,
+                },
+            )]))
+            .unwrap()
+            .added[0];
+        assert_eq!(
+            follow_roundtrip(
+                &mut doc,
+                Command::Move {
+                    items: vec![legacy],
+                    delta: del_point(0, -2),
+                    follow: follow_policy(false),
+                },
+            ),
+            Err(CommandError::OffLattice(Pt { x: 1, y: 0 }))
+        );
+
         // A lattice wire may not come to cover a stationary off-lattice label:
         // normalisation would split it there (WD9).
         let mut doc = Doc::new();
@@ -1928,6 +1971,9 @@ mod tests {
                     for k in 0..after.len() {
                         if !exempt(k) {
                             prop_assert_eq!(after[k], expected[k], "pin pair {}", k);
+                        } else {
+                            // A left-behind pin may lose connections, never gain one.
+                            prop_assert!(!after[k] || expected[k], "pin pair {} gained a connection", k);
                         }
                     }
                     if follow {
