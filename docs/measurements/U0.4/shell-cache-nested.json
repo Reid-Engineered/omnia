@@ -1,0 +1,321 @@
+{
+  "schema": 1,
+  "kind": "spike-shell-cache",
+  "config": {
+    "hover_frames": 300,
+    "pan_frames": 600,
+    "warmup": 60,
+    "window_logical": [
+      1440.0,
+      900.0
+    ],
+    "readout_layout": "nested",
+    "scene_counts": true
+  },
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) UHD Graphics",
+      "driver_name": "Intel Corporation",
+      "driver_info": "32.0.101.7088"
+    },
+    "fullscreen": false,
+    "os": "windows",
+    "arch": "x86_64",
+    "logical_cpus": 24,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1440.0,
+      900.0
+    ],
+    "viewport_device": [
+      1800.0,
+      1125.0
+    ],
+    "refresh_hz": 165.0
+  },
+  "wall_s": 5.8993,
+  "us2_hover": {
+    "frames": 300,
+    "counts": {
+      "root_renders": 300,
+      "menu_renders": 300,
+      "sheet_paints": 0,
+      "status_bar_renders": 0,
+      "readouts_renders": 0,
+      "status_events": 0,
+      "popover_prepaints": 300,
+      "popover_paints": 300
+    },
+    "frame_allocs": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 371.9933,
+        "p50": 371.0,
+        "p95": 377.0,
+        "p99": 383.0,
+        "max": 392.0
+      }
+    },
+    "occlusion_and_replay": {
+      "popover_overlaps_sheet": true,
+      "popover_bounds": [
+        140.8000030517578,
+        31.199996948242188,
+        220.0,
+        176.8000030517578
+      ],
+      "sheet_bounds": [
+        0.0,
+        36.0,
+        1440.0,
+        824.0
+      ],
+      "fresh_move_occluded": true,
+      "fresh_middle_drag_occluded": true,
+      "fresh_scroll_occluded": true,
+      "fresh_sheet_paints": 0,
+      "replay_menu_renders": 0,
+      "replay_sheet_paints": 0,
+      "replay_popover_prepaints": 0,
+      "replay_popover_paints": 0,
+      "replay_move_occluded": true,
+      "replay_scroll_occluded": true,
+      "outside_move_reached_sheet": true,
+      "scene_quads_closed": 2957,
+      "scene_quads_open_fresh": 2971,
+      "scene_quads_open_replayed": 2976
+    }
+  },
+  "us3_pan": {
+    "frames": 600,
+    "counts": {
+      "root_renders": 600,
+      "menu_renders": 0,
+      "sheet_paints": 600,
+      "status_bar_renders": 600,
+      "readouts_renders": 600,
+      "status_events": 600,
+      "popover_prepaints": 0,
+      "popover_paints": 0
+    },
+    "metrics": {
+      "draw_ms": {
+        "mean": 0.4097,
+        "p50": 0.3241,
+        "p95": 0.7014,
+        "p99": 1.1581,
+        "max": 1.5565
+      },
+      "dirty_to_present_ms": {
+        "mean": 0.7353,
+        "p50": 0.6267,
+        "p95": 1.2698,
+        "p99": 2.2569,
+        "max": 2.6563
+      },
+      "present_interval_ms": {
+        "mean": 6.0707,
+        "p50": 6.058,
+        "p95": 6.9837,
+        "p99": 7.8193,
+        "max": 12.2143
+      },
+      "frame_allocs": {
+        "ours": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total": {
+          "mean": 59.0117,
+          "p50": 59.0,
+          "p95": 59.0,
+          "p99": 59.0,
+          "max": 61.0
+        }
+      },
+      "frame_alloc_bytes": {
+        "ours": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total": {
+          "mean": 18080.7067,
+          "p50": 17396.0,
+          "p95": 17396.0,
+          "p99": 17396.0,
+          "max": 410612.0
+        }
+      }
+    },
+    "readout_scopes": {
+      "subscribe": {
+        "samples": 600,
+        "ours_allocs": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "ours_bytes": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total_allocs": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total_bytes": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        }
+      },
+      "render": {
+        "samples": 600,
+        "ours_allocs": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "ours_bytes": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total_allocs": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total_bytes": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        }
+      },
+      "layout": {
+        "samples": 600,
+        "ours_allocs": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "ours_bytes": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total_allocs": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total_bytes": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        }
+      },
+      "prepaint": {
+        "samples": 600,
+        "ours_allocs": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "ours_bytes": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total_allocs": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total_bytes": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        }
+      },
+      "paint": {
+        "samples": 600,
+        "ours_allocs": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "ours_bytes": {
+          "mean": 0.0,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 0.0
+        },
+        "total_allocs": {
+          "mean": 0.0067,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 1.0
+        },
+        "total_bytes": {
+          "mean": 2.04,
+          "p50": 0.0,
+          "p95": 0.0,
+          "p99": 0.0,
+          "max": 324.0
+        }
+      }
+    }
+  }
+}
