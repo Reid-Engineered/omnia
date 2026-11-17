@@ -563,7 +563,8 @@ each L, L blocked by a pin (and by a pin on its corner), both Ls blocked so a do
 level ends round a U, TC-move-12 body in the way, bends before crossings, refusal ranking
 (including a case where a dogleg outranks both invalid Ls), candidate order and the WK6 cap
 against an independent enumeration. Properties (256 cases each): every route matches a
-brute-force oracle (whole-sheet scan, no index) in result and blocker; is orthogonal, on the
+enumeration/scoring oracle (whole-sheet scan, no index; production validator reused)
+in result and blocker; is orthogonal, on the
 lattice, a chain from a to b, passes check_new_wires (WINV10); adding it keeps normal form
 and INV10 and joins exactly the nets at a and b; and the same route comes back with a fresh
 or warm scratch and on the sheet rebuilt in reverse id order. tests/route_alloc.rs (new
@@ -574,3 +575,11 @@ battery, power scheme Silent): `10k` mean 23.2 us, per-call p50 14.0 us, p99 274
 on its own rays, the worst case). docs/measurements/W1.5.md. For W2.1: callers remove the
 run being replaced from the document view before routing, as for check_new_wires; a lone
 label (not on a pin or end, which WD9 does not produce) is not a blocker.
+
+2026-11-16 W1.5 review fixes — WD4 scores off-sheet candidates using a sheet-clipped
+index query and the original segment geometry. Invalid candidates retain body and crossing
+penalties, preserving refusal ranking. A regression compares every candidate against the
+whole-sheet scoring oracle at all four sheet edges and asserts the specified pin blocker.
+Clarified that enumeration and scoring are independent but validity and blocker selection
+reuse check_new_wires; no independent-validator claim. No budget or default changed.
+All five standard checks pass locally on Windows after the review fixes: fmt, workspace clippy, feature bench clippy, workspace tests and cargo deny (existing warnings only). No check weakened; no measurements run.

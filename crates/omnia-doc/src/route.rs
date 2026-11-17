@@ -364,8 +364,8 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
     }
 }
 
-/// WD4's score of one candidate. Off-sheet segments query nothing (the
-/// candidate is invalid anyway; its bends and length still rank it).
+/// WD4 scores invalid candidates too. Clip only the index query to K1;
+/// keep the original segment for body and crossing intersection tests.
 fn score(doc: &Doc, wires: &[Wire], number: u16, items: &mut Vec<ItemId>) -> Score {
     let mut score = Score {
         bends: (wires.len() - 1) as u8,
@@ -374,8 +374,16 @@ fn score(doc: &Doc, wires: &[Wire], number: u16, items: &mut Vec<ItemId>) -> Sco
     };
     for &w in wires {
         score.length += w.a.manhattan_distance(w.b);
-        let Ok(area) = Rect::from_points(w.a, w.b) else {
-            continue;
+        let limit = crate::SHEET_LIMIT_NM;
+        let area = Rect {
+            min: Pt {
+                x: w.a.x.min(w.b.x).clamp(-limit, limit),
+                y: w.a.y.min(w.b.y).clamp(-limit, limit),
+            },
+            max: Pt {
+                x: w.a.x.max(w.b.x).clamp(-limit, limit),
+                y: w.a.y.max(w.b.y).clamp(-limit, limit),
+            },
         };
         doc.query(area, items);
         let mut through_body = false;
@@ -1688,6 +1696,53 @@ mod tests {
     }
 
     #[test]
+    fn w15_wd4_off_sheet_candidates_keep_body_and_crossing_scores() {
+        // Reflect the review reproduction across both axes, covering all K1 edges.
+        for swap in [false, true] {
+            for sign in [-1, 1] {
+                let transform = |(x, y): (i32, i32)| {
+                    if swap { (sign * y, x) } else { (x, sign * y) }
+                };
+                let lo = transform((-2, 784));
+                let hi = transform((2, 787));
+                let pins = [(1, 786), (-1, 786), (0, 785), (0, 787)]
+                    .into_iter()
+                    .map(transform)
+                    .collect();
+                let crossing = [transform((-3, 787)), transform((3, 787))];
+                let doc = sheet(&[((lo.0, lo.1, hi.0, hi.1), pins)], &chain(&crossing));
+                let a = transform((0, 786));
+                let b = transform((6, 782));
+                let axis = if swap {
+                    Axis::Vertical
+                } else {
+                    Axis::Horizontal
+                };
+                for (number, wires) in oracle_candidates(lp(a.0, a.1), lp(b.0, b.1), axis) {
+                    let actual = score(&doc, &wires, number, &mut Vec::new());
+                    assert_eq!(
+                        (
+                            actual.bodies,
+                            actual.bends,
+                            actual.crossings,
+                            actual.length,
+                            actual.number
+                        ),
+                        oracle_score(&doc, &wires, number)
+                    );
+                }
+                assert_eq!(
+                    route_of(&doc, lp(a.0, a.1), lp(b.0, b.1), axis),
+                    Err(Blocker::Pin {
+                        part: crate::PartId(0),
+                        pin: 0
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
     fn w15_straight_and_each_l() {
         let doc = Doc::new();
         assert_eq!(
@@ -1971,7 +2026,9 @@ mod tests {
         (bodies, (wires.len() - 1) as u8, crossings, length, number)
     }
 
-    /// The oracle's answer and the number of the candidate it came from.
+    /// Independent enumeration/scoring oracle; validity and blocker selection reuse
+    /// check_new_wires, so this does not independently prove the validator.
+    /// Returns the answer and its candidate number.
     fn oracle(doc: &Doc, a: Pt, b: Pt, first_leg: Axis) -> (Result<Vec<Wire>, Blocker>, u16) {
         if a == b {
             return (Ok(vec![]), 0);
@@ -2112,7 +2169,7 @@ mod tests {
         /// WINV10 and WD4: every returned route is orthogonal, on the lattice, a
         /// chain from a to b, passes check_new_wires, keeps normal form when added,
         /// and joins exactly the nets of a and b. Ok or Err, the answer is the
-        /// brute-force oracle's: the lowest-scoring valid candidate, else the
+        /// enumeration/scoring oracle's (using the production validator): the lowest-scoring valid candidate, else the
         /// blocker of the lowest-scoring invalid one.
         #[test]
         fn w15_winv10_route_properties_and_oracle(
