@@ -156,7 +156,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
   TC-snap-08 pass as unit tests; `bench hit --sheet 10k --snap` reports p99 < 0.2 ms (WB5;
   reference machine for the gate).
 - Follow-up (W0.3, from T4.2): applies WD5 ties, grid-snapped body projection, and the
-  `Junction` class to T4.2's `snap.rs` (open in PR #41, not yet merged).
+  `Junction` class to T4.2's `snap.rs` (PR #41).
 
 ### W1.4 Normal form and the validator · todo
 - Lane: doc · Depends: T6.1 · Read: WD4, WD9, WINV3, INV2
