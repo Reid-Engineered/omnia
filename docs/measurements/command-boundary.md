@@ -40,8 +40,13 @@ Outside the measured span:
   `apply` (undo restores exact IDs, INV4), plus the post-loop assertions that
   `doc.content_eq(&reference)` with an independently built reference, including
   exact live IDs (INV4);
-- the effectiveness assertion (`Change.nets_changed` must be true) and all CSV output, which is
-  buffered and printed only after the loop.
+- public `net_at`/`net_of` topology assertions before apply, after apply and
+  after undo: bridge/chain probe nets join on add and separate on delete;
+  the leaf endpoint appears/disappears; each moved part's first pin leaves
+  its outgoing wire's net. `nets_changed` is not used as proof;
+- for every add, assertions that no items were removed and exactly the
+  submitted number of wires was added; all CSV output is buffered until
+  after the loop.
 
 The repeated loop has a warm-data bias: after the first observation, each
 apply immediately follows undo of the same data. The cold first sample can
@@ -60,7 +65,13 @@ while live content returns to the starting workload each iteration.
 
 The case list is frozen in [the runner](command-boundary/runner/main.rs) and
 mirrored in [run.sh](command-boundary/run.sh); `summarize.py` asserts exactly
-this set. Do not edit it after seeing results.
+this set. Frozen cases are defined against `AddWires` semantics at the freeze
+commit. If T6.1 or a later change alters what a case does, re-freeze the cases
+before any timed run; do not redefine them after seeing reference results.
+In particular, `doc_chain_20k_add` is intentionally defined against
+pre-T6.1 `AddWires`: its collinear join will become a merge under T6.1.
+Run it on a pre-T6.1 build or re-freeze it before the campaign. Add-count
+and removal assertions fail loudly if insertion becomes merge/split work.
 
 Connectivity-only cases, copied unchanged from the T2.8 runner for comparison
 (CSV `sample,add_ns,remove_ns`, except `index_10k` with
@@ -78,14 +89,20 @@ restored by untimed `undo()`):
 
 | Case | Command and starting workload |
 | --- | --- |
-| `doc_10k_wire_add` | `AddWires` extending `WireId(0)` from its far end by 1 nm collinearly, without overlap (INV2), on actual `10k` (10,000 parts, 20,000 wires) |
+| `doc_10k_wire_add` | `AddWires` extending `WireId(0)` from its far end by 1 nm perpendicularly, without overlap or crossed ends (INV2), on actual `10k` (10,000 parts, 20,000 wires) |
 | `doc_10k_wire_delete` | `Delete` of `WireId(0)`, a leaf from part 0's first pin, on actual `10k` |
 | `doc_10k_move_100` | `Move` of the first 100 parts (`PartId(0)..PartId(100)`) by `(GRID_NM, GRID_NM)` on actual `10k`; the T5.1 done-when case |
 | `doc_10k_move_100_connected` | Pin-count worst-case `Move` on actual `10k`: select the 100 parts with most pins, ties by lowest ID, and move by `(GRID_NM, GRID_NM)`; every selected part has a pin at a wire end that it leaves |
 | `doc_chain_20k_add` | `AddWires` with the missing middle segment, on the 20k chain with that segment absent |
 | `doc_chain_20k_delete` | `Delete` of the middle segment (`WireId(10000)`), splitting the 20k chain; the T2.8 split worst case |
-| `doc_label_bridge_add` | `AddWires` from free end `(1,0)` to free end `(10,0)` (INV2), shorting the GND/VCC nets over 5,000 components |
-| `doc_label_bridge_delete` | `Delete` of the bridge wire, forcing the logical re-flood |
+| `doc_label_bridge_add` | `AddWires` with the non-collinear three-segment route `(1,0)-(1,5)-(10,5)-(10,0)` (INV2), shorting the GND/VCC nets over 5,000 components |
+| `doc_label_bridge_delete` | `Delete` of the middle segment of that route (starting with 5,003 wires), forcing the logical re-flood |
+
+The perpendicular 1 nm leaf remains off-lattice but differs in attachment
+point and direction from `real_10k_leaf`; the routed bridge adds three wires
+rather than the comparison's one. These are component-vs-command comparisons,
+not identical geometry or operation counts. The new geometry avoids T6.1
+collinear merging, and no route crosses an existing end or pin.
 
 ## Acceptance statistic (unchanged)
 
@@ -108,6 +125,10 @@ certify the target; numbers from any other machine, or from Orion outside
 that protocol, gate nothing. The CPU-only scope question in audit section 3.2
 is still open: this preparation adopts no protocol exception, so record the
 conditions and let the gate decision weigh them.
+
+One-time setup on Orion, while online:
+`cargo fetch --manifest-path docs/measurements/command-boundary/runner/Cargo.toml`.
+This populates the dependency cache required by the offline check/build below.
 
 1. Freeze source and case list before the first reference observation. Build
    only the standalone runner:

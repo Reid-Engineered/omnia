@@ -41,7 +41,8 @@ attempt=$(mktemp -d "$base/attempt-XXXXXXXX")
 evidence=$attempt/raw
 mkdir "$evidence"
 printf 'incomplete\n' > "$attempt/status.txt"
-trap 'printf "Campaign incomplete; retained in %s\n" "$attempt" >&2' ERR
+complete=0
+trap 'if (( complete == 0 )); then printf "Campaign incomplete; retained in %s\n" "$attempt" >&2; fi' EXIT
 trap 'printf "Campaign interrupted; retained in %s\n" "$attempt" >&2; exit 130' INT TERM
 conditions() {
     date -Is
@@ -63,7 +64,7 @@ conditions() {
     cargo -V
     sha256sum "$binary"
     git rev-parse HEAD
-    git status --short
+    git status --short -- . ':!docs/measurements/command-boundary/attempt-*'
     find crates/omnia-doc crates/omnia-symbols -type f -print0 | sort -z | xargs -0 sha256sum
     sha256sum crates/omnia-bench/src/generate.rs docs/measurements/command-boundary/runner/main.rs docs/measurements/command-boundary/runner/Cargo.toml docs/measurements/command-boundary/runner/Cargo.lock docs/measurements/command-boundary/run.sh docs/measurements/command-boundary/summarize.py
     vulkaninfo --summary
@@ -87,11 +88,12 @@ done
 {
     sha256sum "$binary"
     git rev-parse HEAD
-    git status --short
+    git status --short -- . ':!docs/measurements/command-boundary/attempt-*'
 } > "$evidence/preserved.txt"
 
 tar -czf "$attempt/raw.tar.gz" -C "$attempt" raw
 python3 "$base/summarize.py" "$attempt/raw.tar.gz" > "$attempt/summary.txt"
 printf 'complete (conditions require separate human review)\n' > "$attempt/status.txt"
-trap - ERR INT TERM
+complete=1
+trap - EXIT INT TERM
 printf 'Campaign retained in %s\n' "$attempt"
