@@ -202,6 +202,22 @@ impl Doc {
         self.points.junctions(area, out);
     }
 
+    /// Replaces `out` with the labels whose point is exactly `at`, as [`ItemId::Label`], in
+    /// ascending id order. The point map holds only wire ends and pins, so the lookup goes
+    /// through the spatial index, which every label insert, remove and move keeps current.
+    /// Allocates nothing when `out` has room for every item whose bounds meet `at`.
+    pub fn labels_at(&self, at: Pt, out: &mut Vec<ItemId>) {
+        self.index.query(Rect { min: at, max: at }, out);
+        out.retain(|&item| match item {
+            ItemId::Label(id) => self.labels.get(id.0).is_some_and(|label| label.at == at),
+            _ => false,
+        });
+        out.sort_unstable_by_key(|&item| match item {
+            ItemId::Label(id) => id.0,
+            _ => unreachable!(),
+        });
+    }
+
     pub(crate) fn validate_wire(wire: Wire) -> Result<(), CommandError> {
         check_point(wire.a)?;
         check_point(wire.b)?;

@@ -131,7 +131,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
   "does this part follow" over follow on/off, count below/at/above the threshold, and
   modifier up/down (assert all 12 rows).
 
-### W1.2 Runs · todo
+### W1.2 Runs · done
 - Lane: doc · Depends: T2.1 · Read: WD1, WD2, D2
 - Owns: `crates/schematic-doc/src/run.rs`, and a label-by-point lookup in `points.rs` or `doc.rs`
 - Do: `Anchor`, `Run`, `Doc::run_through`, `Doc::runs_at`, `Doc::connected_pins`, and
@@ -378,3 +378,26 @@ Append one entry per finished or blocked task. Newest last.
 2026-11-16 plan — wiring-plan.md and wiring-roadmap.md record the design decisions and
 scenarios for wiring. Nothing measured; WB1 to WB3 and WB7 are chosen figures. The canvas
 files are not yet changed (W0.3). Milestone W2 waits on HW1.
+
+2026-11-16 W1.2 done — `crates/omnia-doc/src/run.rs`: `Anchor`, `Run`, `Boundary`,
+`Doc::run_through`, `Doc::runs_at`, `Doc::connected_pins`, `Doc::boundary_points` and
+`Doc::affected_runs`; `Points::at` in `points.rs`; `Doc::labels_at` in `doc.rs`. Property tests
+on generated sheets (built with the crate-private inserts) check that every wire is in exactly
+one run, interior points are WD1 corners, ends are anchors, corner labels are collected,
+`connected_pins` equals a brute-force count, and boundary points and affected runs are the same
+for any order of the selection, each run once (WINV8). TC-count-01 and TC-count-02 are unit
+tests. `runs_at` on `10k`: 733 ns mean, p99 1.4 µs per point; on `dense`: 5.28 µs mean
+(i7-14650HX, Windows 11; not the reference machine; docs/measurements/W1.2.md).
+Resolved toward WD1/WD2, and recorded in wiring-plan.md section 10: (1) one anchor kind per
+point in the order Boundary, Pin, Junction, FreeEnd, so a pin on a junction is a `Pin`
+(lowest part and pin); (2) a new `Anchor::Closed` for a closed loop of corners, which has no
+anchor; both ends are its least point, and only `run_through` reports it; (3) `Anchor::Pin`
+carries `pin: usize`, as `Doc::pins` and `Snap::Pin` do; (4) WD2 boundaries need a
+selection-aware walk, so `boundary_points` and `affected_runs` were added and `runs_at` stays
+selection-free (empty at a corner); (5) `connected_pins` counts a pin when its point holds a wire
+end, another pin (the same part's included) or a label, reading WD3's "anything" literally.
+Deviation: the label lookup uses the spatial index, not the point map. Labels also move through
+`command.rs` (T5.1's `Move` and `Reorient`), outside this task's files, and the index is kept
+current on every path. The cost is one index query per corner, plus one scratch vector per
+`runs_at`, `affected_runs` or `connected_pins` call; W2.1 should pass in reusable buffers if
+`plan_follow` has to allocate nothing once warm.
