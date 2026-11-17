@@ -36,7 +36,11 @@ pub enum Command {
         pivot: Pt,
         by: Orient,
     },
-    Delete(Vec<ItemId>),
+    /// WD10: optionally remove runs from selected parts' pins to their far anchors.
+    Delete {
+        items: Vec<ItemId>,
+        with_wires: bool,
+    },
     SetText {
         item: ItemId,
         field: TextField,
@@ -211,11 +215,37 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
                 by: by.inverse(),
             })
         }
-        Command::Delete(items) => {
+        Command::Delete {
+            mut items,
+            with_wires,
+        } => {
             for &item in &items {
                 ensure_exists(doc, item)?;
             }
             check_unique(&items)?;
+
+            // WD10: discover all runs against the original sheet, before removing any
+            // anchors. A shared run (or explicitly selected wire) is removed only once.
+            if with_wires {
+                let mut attached = Vec::new();
+                let mut runs = Vec::new();
+                for &item in &items {
+                    if let ItemId::Part(id) = item {
+                        for &pin in doc.pins(id).expect("validated part exists") {
+                            doc.runs_at(pin, &mut runs);
+                            attached.extend(runs.iter().flat_map(|run| run.wires.iter().copied()));
+                        }
+                    }
+                }
+                attached.sort_unstable_by_key(|id| id.0);
+                attached.dedup();
+                for id in attached {
+                    let item = ItemId::Wire(id);
+                    if !items.contains(&item) {
+                        items.push(item);
+                    }
+                }
+            }
 
             let mut parts = Vec::new();
             let mut wires = Vec::new();
@@ -768,6 +798,154 @@ mod tests {
         assert_eq!(loaded.revision(), doc.revision());
     }
 
+    // W3.5 fixtures use the pin lattice so the normal-form oracle checks WINV3 too.
+    fn del_point(x: i32, y: i32) -> Pt {
+        Pt {
+            x: x * 1_270_000,
+            y: y * 1_270_000,
+        }
+    }
+
+    fn del_part(doc: &mut Doc, at: Pt) -> ItemId {
+        let change = doc
+            .apply(Command::PlacePart {
+                part: make_part(at, Orient::IDENTITY, "P", ""),
+                local_pins: vec![Pt::ZERO],
+                local_bounds: rect(0, 0, 0, 0),
+            })
+            .unwrap();
+        change.added[0]
+    }
+
+    fn del_wire(a: Pt, b: Pt) -> Wire {
+        Wire { a, b }
+    }
+
+    fn del_snapshot(doc: &Doc) -> Doc {
+        Doc::load(doc.save_to_vec_for_test().as_slice()).unwrap()
+    }
+
+    fn assert_delete_roundtrip(doc: &mut Doc, items: Vec<ItemId>, with_wires: bool) {
+        let before = del_snapshot(doc);
+        let change = doc.apply(Command::Delete { items, with_wires }).unwrap();
+        doc.assert_normal_form();
+        assert_doc_consistent(doc); // INV10: independent connectivity rebuild.
+        let after = del_snapshot(doc);
+        if change.dirty.is_some() {
+            doc.undo().unwrap();
+            assert!(doc.content_eq(&before)); // INV4 includes exact live ids.
+            doc.assert_normal_form();
+            assert_doc_consistent(doc);
+            doc.redo().unwrap();
+            assert!(doc.content_eq(&after));
+            doc.assert_normal_form();
+            assert_doc_consistent(doc);
+        }
+    }
+
+    #[test]
+    fn tc_del_01_02_runs_to_far_pin_flag_on_and_off_inv4_inv10() {
+        for with_wires in [false, true] {
+            let mut doc = Doc::new();
+            let part = del_part(&mut doc, del_point(0, 0));
+            del_part(&mut doc, del_point(2, 2));
+            doc.apply(Command::AddWires(vec![
+                del_wire(del_point(0, 0), del_point(2, 0)),
+                del_wire(del_point(2, 0), del_point(2, 2)),
+                del_wire(del_point(2, 2), del_point(4, 2)),
+            ]))
+            .unwrap();
+            let wires: Vec<_> = doc.wires().map(|(id, w)| (id, *w)).collect();
+            assert_delete_roundtrip(&mut doc, vec![part], with_wires);
+            assert_eq!(doc.wires().count(), if with_wires { 1 } else { 3 });
+            for (id, wire) in wires {
+                let beyond_pin = wire.a == del_point(2, 2);
+                assert_eq!(doc.wire(id).is_some(), !with_wires || beyond_pin);
+            }
+        }
+    }
+
+    #[test]
+    fn tc_del_03_junction_other_wires_merge_locally_inv4_inv10() {
+        let mut doc = Doc::new();
+        let part = del_part(&mut doc, del_point(0, 0));
+        doc.apply(Command::AddWires(vec![
+            del_wire(del_point(0, 0), del_point(2, 0)),
+            del_wire(del_point(2, 0), del_point(2, 2)),
+            del_wire(del_point(0, 2), del_point(2, 2)),
+            del_wire(del_point(2, 2), del_point(4, 2)),
+        ]))
+        .unwrap();
+        assert_delete_roundtrip(&mut doc, vec![part], true);
+        assert_eq!(doc.wires().count(), 1);
+        let (_, wire) = doc.wires().next().unwrap();
+        assert_eq!(*wire, del_wire(del_point(0, 2), del_point(4, 2)));
+    }
+
+    #[test]
+    fn wd10_shared_run_explicit_selection_and_refusal_are_atomic() {
+        let mut doc = Doc::new();
+        let a = del_part(&mut doc, del_point(0, 0));
+        let b = del_part(&mut doc, del_point(2, 0));
+        doc.apply(Command::AddWires(vec![del_wire(
+            del_point(0, 0),
+            del_point(2, 0),
+        )]))
+        .unwrap();
+        let wire = ItemId::Wire(doc.wires().next().unwrap().0);
+        let before = doc.save_to_vec_for_test();
+        for items in [vec![a, a], vec![a, ItemId::Wire(WireId(999))]] {
+            assert!(
+                doc.apply(Command::Delete {
+                    items,
+                    with_wires: true
+                })
+                .is_err()
+            );
+            assert_eq!(doc.save_to_vec_for_test(), before);
+        }
+        assert_delete_roundtrip(&mut doc, vec![b, wire, a], true);
+        assert_eq!(doc.parts().count(), 0);
+        assert_eq!(doc.wires().count(), 0);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn wd10_random_sheets_selections_inv4_inv10_and_order(
+            shapes in prop::collection::vec((any::<bool>(), any::<bool>(), any::<bool>()), 1..12),
+            mask in prop::collection::vec(any::<bool>(), 0..80),
+        ) {
+            let mut base = Doc::new();
+            for (i, &(junction, far_pin, labelled)) in shapes.iter().enumerate() {
+                let x = i as i32 * 6;
+                del_part(&mut base, del_point(x, 0));
+                if far_pin { del_part(&mut base, del_point(x + 4, 2)); }
+                if labelled {
+                    base.apply(Command::AddLabel(Label { at: del_point(x + 2, 0), text: "N".into() })).unwrap();
+                }
+                let mut wires = vec![
+                    del_wire(del_point(x, 0), del_point(x + 2, 0)),
+                    del_wire(del_point(x + 2, 0), del_point(x + 2, 2)),
+                    del_wire(del_point(x + 2, 2), del_point(x + 4, 2)),
+                ];
+                if junction { wires.push(del_wire(del_point(x, 2), del_point(x + 2, 2))); }
+                base.apply(Command::AddWires(wires)).unwrap();
+            }
+            let live: Vec<_> = base.parts().map(|(id, _)| ItemId::Part(id))
+                .chain(base.wires().map(|(id, _)| ItemId::Wire(id))).collect();
+            let items: Vec<_> = live.into_iter().enumerate()
+                .filter_map(|(i, item)| mask.get(i).copied().unwrap_or(false).then_some(item)).collect();
+            for with_wires in [false, true] {
+                let mut doc = del_snapshot(&base);
+                let mut reversed = del_snapshot(&base);
+                assert_delete_roundtrip(&mut doc, items.clone(), with_wires);
+                assert_delete_roundtrip(&mut reversed, items.iter().copied().rev().collect(), with_wires);
+                prop_assert!(doc.content_eq(&reversed));
+            }
+        }
+    }
+
     #[test]
     fn no_op_commands_preserve_history_revision_and_redo() {
         let label = Label {
@@ -788,7 +966,10 @@ mod tests {
         for cmd in [
             Command::Batch(vec![]),
             Command::AddWires(vec![]),
-            Command::Delete(vec![]),
+            Command::Delete {
+                items: vec![],
+                with_wires: false,
+            },
             Command::Move {
                 items: vec![],
                 delta: Pt { x: 1, y: 0 },
@@ -812,7 +993,13 @@ mod tests {
                 field: TextField::Label,
                 text: label.text,
             },
-            Command::Batch(vec![Command::Batch(vec![]), Command::Delete(vec![])]),
+            Command::Batch(vec![
+                Command::Batch(vec![]),
+                Command::Delete {
+                    items: vec![],
+                    with_wires: false,
+                },
+            ]),
         ] {
             let change = doc.apply(cmd).unwrap();
             assert_eq!(change.revision, revision);
@@ -1160,7 +1347,12 @@ mod tests {
         }
 
         // Delete parts, wires, labels; undo restores exact IDs; new edit clears redo.
-        let del_ch = doc.apply(Command::Delete(group.clone())).unwrap();
+        let del_ch = doc
+            .apply(Command::Delete {
+                items: group.clone(),
+                with_wires: false,
+            })
+            .unwrap();
         assert_eq!(del_ch.removed, group);
         assert!(del_ch.added.is_empty());
         assert!(doc.part(p0).is_none());
@@ -1548,7 +1740,7 @@ mod tests {
                                 if missing {
                                     items.push(ItemId::Label(LabelId(99_999)));
                                 }
-                                Command::Delete(items)
+                                Command::Delete { items, with_wires: false }
                             }
                             GenStep::SetText { pick, field, net, missing } => {
                                 let item = if missing || live.is_empty() {
