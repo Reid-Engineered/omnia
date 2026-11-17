@@ -12,6 +12,7 @@ See the [project roadmap](ROADMAP.md) for the overall path from the technical fo
 | Path | What it is |
 | --- | --- |
 | `crates/`, `xtask/` | The Rust workspace and its build tasks (`cargo xtask tokens`, `cargo xtask symbols`) |
+| `AGENTS.md` | Standards and operating rules for contributors and agents (`CLAUDE.md` imports it) |
 | `ROADMAP.md` | Product roadmap |
 | `canvas-plan.md`, `canvas-roadmap.md` | Canvas technical plan and task list |
 | `canvas-plan-prompt.md` | Original planning brief for the infinite-canvas workspace |
