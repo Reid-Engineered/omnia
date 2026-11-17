@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 74a5e9b712657ffa27e16947cf4b9552b62184826f551a3c49d540c08d59c361 # shrinks to mut items = [(0, 0, 0)], overlaps = [(0, 0, 0)], x = 0, y = 0, tolerance = 0, grid = 657, pick = 0, dx = 0, dy = 0, boundary_step = 43
