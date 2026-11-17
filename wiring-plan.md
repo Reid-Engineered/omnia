@@ -512,8 +512,16 @@ impl Doc {
 }
 
 // ---- route.rs ----
+impl Doc {
+    #[cfg(any(debug_assertions, test))]
+    pub fn assert_normal_form(&self); // INV1, INV2, WINV3, WD9 local-query oracle
+}
 pub enum Axis { Horizontal, Vertical }
-pub enum Blocker { Pin { part: PartId, pin: u16 }, WireEnd(WireId), Overlap(WireId), Sheet }
+pub enum Blocker { Pin { part: PartId, pin: usize }, WireEnd(WireId), Overlap(WireId), Sheet }
+// Sheet also covers off-lattice/malformed candidates; pins use Doc::pins indices.
+// Rules have priority across the whole candidate, then segment order from a.
+// Within a segment: nearest along traversal, geometry, then lowest item id;
+// coincident pins precede wire ends, then lowest pin index.
 pub fn check_new_wires(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(), Blocker>;
 pub fn route(doc: &Doc, a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Wire>) -> Result<(), Blocker>;
 
@@ -539,7 +547,10 @@ pub enum CommandError { /* T5.1's */ Follow(FollowError), Segment(Blocker) }
 // ---- snap.rs (refines the canvas plan's Snap) ----
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
                 Junction { at: Pt }, WireBody { wire: WireId, at: Pt }, Grid(Pt) }
-impl Doc { pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>); }   // WD8 Enclosed
+impl Doc {
+    pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>);    // WD8 Enclosed (symbol bounds)
+    pub fn query_touching(&self, area: Rect, out: &mut Vec<ItemId>);  // WD8 Intersecting (symbol bounds)
+}
 ```
 
 `plan_follow` takes its output buffers from the caller so the move tool can reuse them

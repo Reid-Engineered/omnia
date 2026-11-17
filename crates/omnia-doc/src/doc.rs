@@ -138,14 +138,42 @@ impl Doc {
     ///
     /// `area` is normalised before testing, so a box drawn in any direction produces the same
     /// result. Edge handling is inclusive on all four sides (`Rect::contains_rect`):
-    /// - **Part**: its indexed bounds (clamped symbol body unioned with all world pins) lie
+    /// - **Part**: its clamped world symbol bounds ([`Doc::part_body`], pins excluded) lie
     ///   wholly inside `area`.
     /// - **Wire**: both endpoints (and thus its entire axis-aligned segment) lie inside `area`.
     /// - **Label**: its anchor point lies inside `area` (text extents are excluded, WD8).
     ///
     /// Allocates nothing when `out` already has capacity for the result.
     pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>) {
-        self.index.query_within(area, out);
+        let area = crate::index::normalize_rect(area);
+        self.index
+            .query_filtered(area, out, |item, bounds| match item {
+                ItemId::Part(id) => self
+                    .part_body(id)
+                    .is_some_and(|body| area.contains_rect(body)),
+                ItemId::Wire(_) | ItemId::Label(_) => area.contains_rect(bounds),
+            });
+    }
+
+    /// Replaces `out` with every live item touched by `area` (WD8 Intersecting).
+    ///
+    /// `area` is normalised before testing, so a box drawn in any direction produces the same
+    /// result. Edge handling is inclusive on all four sides (`Rect::intersects`):
+    /// - **Part**: its clamped world symbol bounds ([`Doc::part_body`], pins excluded)
+    ///   intersect `area` — a box touching only a pin stub outside the body does not match.
+    /// - **Wire**: its axis-aligned segment intersects `area`.
+    /// - **Label**: its anchor point lies inside `area` (text extents are excluded, WD8).
+    ///
+    /// Unlike [`Doc::query`] (which uses the body+pins envelope for picking and snapping), this
+    /// normalises inverted boxes and counts parts by symbol bounds only. Allocates nothing when
+    /// `out` already has capacity for the result.
+    pub fn query_touching(&self, area: Rect, out: &mut Vec<ItemId>) {
+        let area = crate::index::normalize_rect(area);
+        self.index
+            .query_filtered(area, out, |item, bounds| match item {
+                ItemId::Part(id) => self.part_body(id).is_some_and(|body| body.intersects(area)),
+                ItemId::Wire(_) | ItemId::Label(_) => bounds.intersects(area),
+            });
     }
     pub fn part_body(&self, id: PartId) -> Option<Rect> {
         let stored = self.parts.get(id.0)?;
@@ -951,102 +979,262 @@ mod tests {
             }
         }
 
-        /// W3.4 (doc half): `Doc::query_within` matches a brute-force scan over random
-        /// documents and random boxes, including degenerate/zero-area and reverse-drawn boxes.
+        /// W3.4 (doc half): `Doc::query_within` and `Doc::query_touching` match an independent
+        /// brute-force oracle using symbol bounds only (excluding pins) over random documents
+        /// with varied `local_bounds`/`local_pins`, clamped near-limit parts, and random
+        /// normal, reverse-drawn, and degenerate zero-area boxes.
         #[test]
-        fn query_within_matches_brute_force_over_random_docs_and_boxes(
+        fn query_within_and_touching_match_independent_brute_force(
             edits in prop::collection::vec(
-                (0u8..7, 0usize..32, -50_000_000i32..=50_000_000, -50_000_000i32..=50_000_000, 1i32..=30_000_000, 0u8..8, any::<bool>()),
+                (
+                    0u8..8,
+                    0usize..32,
+                    // Region selector: 0 = central sheet, 1..=4 = near ±SHEET_LIMIT_NM edges/corners
+                    0u8..5,
+                    -30_000_000i32..=30_000_000,
+                    -30_000_000i32..=30_000_000,
+                    // Local bounds corners & pin pattern
+                    (-8_000_000i32..=0, -8_000_000i32..=0, 0i32..=8_000_000, 0i32..=8_000_000),
+                    0u8..6,
+                    0u8..8,
+                    (1i32..=20_000_000, any::<bool>()),
+                ),
                 1..80,
             ),
             boxes in prop::collection::vec(
-                (0u8..4, -60_000_000i32..=60_000_000, -60_000_000i32..=60_000_000, -60_000_000i32..=60_000_000, -60_000_000i32..=60_000_000, any::<bool>()),
+                (
+                    0u8..4,
+                    0u8..6,
+                    -40_000_000i32..=40_000_000,
+                    -40_000_000i32..=40_000_000,
+                    -40_000_000i32..=40_000_000,
+                    -40_000_000i32..=40_000_000,
+                    any::<bool>(),
+                ),
                 1..24,
             ),
         ) {
             let mut doc = Doc::new();
-            let local_bounds = Rect::from_points(Pt { x: -1_000_000, y: -2_000_000 }, Pt { x: 3_000_000, y: 4_000_000 }).unwrap();
-            let local_pins = [Pt::ZERO, Pt { x: 5_000_000, y: 0 }];
-            for (op, pick, x, y, len, orient, horiz) in edits {
-                let at = Pt { x, y };
+            let mut oracle_parts: std::collections::BTreeMap<u32, (Part, Rect)> =
+                std::collections::BTreeMap::new();
+            let mut oracle_wires: std::collections::BTreeMap<u32, Wire> =
+                std::collections::BTreeMap::new();
+            let mut oracle_labels: std::collections::BTreeMap<u32, Label> =
+                std::collections::BTreeMap::new();
+
+            let place_pt = |region: u8, dx: i32, dy: i32| -> Pt {
+                match region {
+                    1 => Pt {
+                        x: (SHEET_LIMIT_NM - 4_000_000 + (dx % 4_000_000)).clamp(-SHEET_LIMIT_NM, SHEET_LIMIT_NM),
+                        y: dy,
+                    },
+                    2 => Pt {
+                        x: (-SHEET_LIMIT_NM + 4_000_000 + (dx % 4_000_000)).clamp(-SHEET_LIMIT_NM, SHEET_LIMIT_NM),
+                        y: dy,
+                    },
+                    3 => Pt {
+                        x: (SHEET_LIMIT_NM - 4_000_000 + (dx % 4_000_000)).clamp(-SHEET_LIMIT_NM, SHEET_LIMIT_NM),
+                        y: (SHEET_LIMIT_NM - 4_000_000 + (dy % 4_000_000)).clamp(-SHEET_LIMIT_NM, SHEET_LIMIT_NM),
+                    },
+                    4 => Pt {
+                        x: (-SHEET_LIMIT_NM + 4_000_000 + (dx % 4_000_000)).clamp(-SHEET_LIMIT_NM, SHEET_LIMIT_NM),
+                        y: (-SHEET_LIMIT_NM + 4_000_000 + (dy % 4_000_000)).clamp(-SHEET_LIMIT_NM, SHEET_LIMIT_NM),
+                    },
+                    _ => Pt { x: dx, y: dy },
+                }
+            };
+
+            for (op, pick, region, dx, dy, (lx0, ly0, lx1, ly1), pin_kind, orient, (len, horiz)) in edits {
+                let at = place_pt(region, dx, dy);
                 match op {
-                    0 | 1 => {
+                    0..=2 => {
                         let o = Orient::ALL[orient as usize];
-                        let _ = doc.insert_part(part(at, o), &local_pins, local_bounds);
-                    }
-                    2 | 3 => {
-                        let b = if horiz {
-                            Pt { x: x.saturating_add(len).min(SHEET_LIMIT_NM), y }
-                        } else {
-                            Pt { x, y: y.saturating_add(len).min(SHEET_LIMIT_NM) }
+                        let local_bounds = Rect::new(Pt { x: lx0, y: ly0 }, Pt { x: lx1, y: ly1 }).unwrap();
+                        let mid_x = ((i64::from(lx0) + i64::from(lx1)) / 2) as i32;
+                        let mid_y = ((i64::from(ly0) + i64::from(ly1)) / 2) as i32;
+                        let local_pins: Vec<Pt> = match pin_kind {
+                            // No pins
+                            0 => Vec::new(),
+                            // Pin strictly inside body (when non-degenerate)
+                            1 => vec![Pt { x: mid_x, y: mid_y }],
+                            // Pins right on body edges / corners
+                            2 => vec![Pt { x: lx0, y: mid_y }, Pt { x: lx1, y: ly1 }],
+                            // Pins far outside body
+                            3 => vec![
+                                Pt { x: lx0 - 3_000_000, y: 0 },
+                                Pt { x: lx1 + 3_000_000, y: 0 },
+                            ],
+                            // Mix of inside, edge, and external stub
+                            4 => vec![
+                                Pt { x: mid_x, y: mid_y },
+                                Pt { x: lx0, y: ly0 },
+                                Pt { x: 0, y: ly1 + 3_000_000 },
+                            ],
+                            // Single external stub
+                            _ => vec![Pt { x: lx1 + 2_500_000, y: mid_y }],
                         };
-                        if at != b {
-                            let _ = doc.insert_wire(Wire { a: at, b });
+                        let p = part(at, o);
+                        if let Ok(id) = doc.insert_part(p.clone(), &local_pins, local_bounds) {
+                            oracle_parts.insert(id.0, (p, local_bounds));
                         }
                     }
-                    4 => {
-                        let _ = doc.insert_label(Label { at, text: "N".into() });
+                    3 | 4 => {
+                        let b = if horiz {
+                            Pt { x: at.x.saturating_add(len).min(SHEET_LIMIT_NM), y: at.y }
+                        } else {
+                            Pt { x: at.x, y: at.y.saturating_add(len).min(SHEET_LIMIT_NM) }
+                        };
+                        let w = Wire { a: at, b };
+                        if let Ok(id) = doc.insert_wire(w) {
+                            oracle_wires.insert(id.0, w);
+                        }
                     }
                     5 => {
-                        let ids: Vec<_> = doc.parts().map(|(id, _)| id).collect();
-                        if !ids.is_empty() {
-                            doc.remove_part(ids[pick % ids.len()]);
+                        let l = Label { at, text: "N".into() };
+                        if let Ok(id) = doc.insert_label(l.clone()) {
+                            oracle_labels.insert(id.0, l);
+                        }
+                    }
+                    6 => {
+                        if let Some(&raw) = oracle_parts.keys().nth(pick % oracle_parts.len().max(1)) {
+                            oracle_parts.remove(&raw);
+                            doc.remove_part(PartId(raw));
                         }
                     }
                     _ => {
-                        let ids: Vec<_> = doc.wires().map(|(id, _)| id).collect();
-                        if !ids.is_empty() {
-                            doc.remove_wire(ids[pick % ids.len()]);
+                        if pick % 2 == 0 {
+                            if let Some(&raw) = oracle_wires.keys().nth(pick % oracle_wires.len().max(1)) {
+                                oracle_wires.remove(&raw);
+                                doc.remove_wire(WireId(raw));
+                            }
+                        } else if let Some(&raw) = oracle_labels.keys().nth(pick % oracle_labels.len().max(1)) {
+                            oracle_labels.remove(&raw);
+                            doc.remove_label(LabelId(raw));
                         }
                     }
                 }
             }
 
-            let mut found = Vec::new();
-            for (mode, x0, y0, x1, y1, horiz) in boxes {
-                let raw_box = match mode {
-                    0 => Rect {
-                        min: Pt { x: x0, y: y0 },
-                        max: Pt { x: x0, y: y0 },
+            // Independently compute clamped world symbol bounds from (part, local_bounds).
+            let independent_part_body = |p: &Part, local: Rect| -> Rect {
+                let limit = i64::from(SHEET_LIMIT_NM);
+                let corners = [
+                    local.min,
+                    Pt { x: local.max.x, y: local.min.y },
+                    local.max,
+                    Pt { x: local.min.x, y: local.max.y },
+                ];
+                let mut min_x = i32::MAX;
+                let mut min_y = i32::MAX;
+                let mut max_x = i32::MIN;
+                let mut max_y = i32::MIN;
+                for c in corners {
+                    let r = p.orient.apply(c);
+                    let wx = (i64::from(r.x) + i64::from(p.at.x)).clamp(-limit, limit) as i32;
+                    let wy = (i64::from(r.y) + i64::from(p.at.y)).clamp(-limit, limit) as i32;
+                    min_x = min_x.min(wx);
+                    min_y = min_y.min(wy);
+                    max_x = max_x.max(wx);
+                    max_y = max_y.max(wy);
+                }
+                Rect {
+                    min: Pt { x: min_x, y: min_y },
+                    max: Pt { x: max_x, y: max_y },
+                }
+            };
+
+            let box_pt = |region: u8, dx: i32, dy: i32| -> Pt {
+                match region {
+                    // Near +X edge (reaches past +SHEET_LIMIT_NM)
+                    1 => Pt {
+                        x: SHEET_LIMIT_NM.saturating_add(dx / 2),
+                        y: dy,
                     },
+                    // Near -X edge (reaches past -SHEET_LIMIT_NM)
+                    2 => Pt {
+                        x: (-SHEET_LIMIT_NM).saturating_add(dx / 2),
+                        y: dy,
+                    },
+                    // Near (+X, +Y) corner
+                    3 => Pt {
+                        x: SHEET_LIMIT_NM.saturating_add(dx / 2),
+                        y: SHEET_LIMIT_NM.saturating_add(dy / 2),
+                    },
+                    // Near (-X, -Y) corner
+                    4 => Pt {
+                        x: (-SHEET_LIMIT_NM).saturating_add(dx / 2),
+                        y: (-SHEET_LIMIT_NM).saturating_add(dy / 2),
+                    },
+                    // Strictly outside sheet
+                    5 => Pt {
+                        x: SHEET_LIMIT_NM + 1 + dx.abs() % 1000,
+                        y: dy,
+                    },
+                    _ => Pt { x: dx, y: dy },
+                }
+            };
+
+            let mut found = Vec::new();
+            let mut env_query = Vec::new();
+            for (mode, region, x0, y0, x1, y1, horiz) in boxes {
+                let p0 = box_pt(region, x0, y0);
+                let p1 = box_pt(region, x1, y1);
+                let raw_box = match mode {
+                    0 => Rect { min: p0, max: p0 },
                     1 => {
                         if horiz {
-                            Rect {
-                                min: Pt { x: x0, y: y0 },
-                                max: Pt { x: x1, y: y0 },
-                            }
+                            Rect { min: p0, max: Pt { x: p1.x, y: p0.y } }
                         } else {
-                            Rect {
-                                min: Pt { x: x0, y: y0 },
-                                max: Pt { x: x0, y: y1 },
-                            }
+                            Rect { min: p0, max: Pt { x: p0.x, y: p1.y } }
                         }
                     }
-                    _ => Rect {
-                        min: Pt { x: x0, y: y0 },
-                        max: Pt { x: x1, y: y1 },
-                    },
+                    _ => Rect { min: p0, max: p1 },
                 };
-                let norm = Rect::from_points(raw_box.min, raw_box.max).unwrap();
-                let mut expected: Vec<ItemId> = doc
-                    .parts()
-                    .filter_map(|(id, _)| {
-                        let mut b = doc.part_body(id).unwrap();
-                        for &p in doc.pins(id).unwrap() {
-                            b = b.union(Rect { min: p, max: p });
-                        }
-                        norm.contains_rect(b).then_some(ItemId::Part(id))
+                let norm = crate::index::normalize_rect(raw_box);
+                let mut expected_within: Vec<ItemId> = oracle_parts
+                    .iter()
+                    .filter_map(|(&id, (p, local))| {
+                        norm.contains_rect(independent_part_body(p, *local))
+                            .then_some(ItemId::Part(PartId(id)))
                     })
-                    .chain(doc.wires().filter_map(|(id, w)| {
+                    .chain(oracle_wires.iter().filter_map(|(&id, w)| {
                         let seg = Rect::from_points(w.a, w.b).unwrap();
-                        norm.contains_rect(seg).then_some(ItemId::Wire(id))
+                        norm.contains_rect(seg).then_some(ItemId::Wire(WireId(id)))
                     }))
-                    .chain(
-                        doc.labels()
-                            .filter_map(|(id, l)| norm.contains(l.at).then_some(ItemId::Label(id))),
-                    )
+                    .chain(oracle_labels.iter().filter_map(|(&id, l)| {
+                        norm.contains(l.at).then_some(ItemId::Label(LabelId(id)))
+                    }))
                     .collect();
-                expected.sort_by_key(|&id| crate::hit::item_key(id));
+                expected_within.sort_by_key(|&id| crate::hit::item_key(id));
+
+                let mut expected_touching: Vec<ItemId> = oracle_parts
+                    .iter()
+                    .filter_map(|(&id, (p, local))| {
+                        independent_part_body(p, *local)
+                            .intersects(norm)
+                            .then_some(ItemId::Part(PartId(id)))
+                    })
+                    .chain(oracle_wires.iter().filter_map(|(&id, w)| {
+                        let seg = Rect::from_points(w.a, w.b).unwrap();
+                        seg.intersects(norm).then_some(ItemId::Wire(WireId(id)))
+                    }))
+                    .chain(oracle_labels.iter().filter_map(|(&id, l)| {
+                        norm.contains(l.at).then_some(ItemId::Label(LabelId(id)))
+                    }))
+                    .collect();
+                expected_touching.sort_by_key(|&id| crate::hit::item_key(id));
+
+                doc.query(norm, &mut env_query);
+                let env_set: std::collections::HashSet<_> =
+                    env_query.iter().map(|&id| crate::hit::item_key(id)).collect();
+                let touch_set: std::collections::HashSet<_> =
+                    expected_touching.iter().map(|&id| crate::hit::item_key(id)).collect();
+                for &id in &expected_within {
+                    prop_assert!(touch_set.contains(&crate::hit::item_key(id)));
+                }
+                for &id in &expected_touching {
+                    prop_assert!(env_set.contains(&crate::hit::item_key(id)));
+                }
 
                 for variant in [
                     raw_box,
@@ -1065,14 +1253,21 @@ mod tests {
                         found.iter().map(|&id| crate::hit::item_key(id)).collect();
                     prop_assert_eq!(unique.len(), found.len());
                     found.sort_by_key(|&id| crate::hit::item_key(id));
-                    prop_assert_eq!(&found, &expected);
+                    prop_assert_eq!(&found, &expected_within);
+
+                    doc.query_touching(variant, &mut found);
+                    let unique: std::collections::HashSet<_> =
+                        found.iter().map(|&id| crate::hit::item_key(id)).collect();
+                    prop_assert_eq!(unique.len(), found.len());
+                    found.sort_by_key(|&id| crate::hit::item_key(id));
+                    prop_assert_eq!(&found, &expected_touching);
                 }
             }
         }
     }
 
     #[test]
-    fn query_within_uses_indexed_part_bounds_including_pins() {
+    fn query_within_and_touching_use_symbol_bounds_only() {
         let mut doc = Doc::new();
         let pid = doc
             .insert_part(
@@ -1095,39 +1290,72 @@ mod tests {
             .unwrap();
 
         let mut out = Vec::new();
-        // Covers the symbol body (0..=10, 0..=10) but misses the external pin at (25, 0).
+        // Enclosed regression: box covers the symbol body (0..=10, 0..=10) but NOT the external
+        // pin at (25, 0) — the part IS selected (WD8: part counts by its symbol bounds).
         doc.query_within(Rect::new(Pt::ZERO, Pt { x: 10, y: 10 }).unwrap(), &mut out);
-        assert!(out.is_empty());
-
-        // Covers the body and external pin inclusively, drawn in reverse.
+        assert_eq!(out, vec![ItemId::Part(pid)]);
+        // Reverse-drawn tight box around the body also selects the part.
         doc.query_within(
             Rect {
-                min: Pt { x: 25, y: 10 },
+                min: Pt { x: 10, y: 10 },
                 max: Pt::ZERO,
             },
             &mut out,
         );
-        out.sort_by_key(|&id| crate::hit::item_key(id));
-        assert_eq!(out, vec![ItemId::Part(pid), ItemId::Label(lid)]);
+        assert_eq!(out, vec![ItemId::Part(pid)]);
 
-        // Degenerate 1D box along y = 20 selects only the collinear wire.
-        doc.query_within(
+        // Mirror Intersecting regression: box touches only the external pin stub at (25, 0),
+        // missing the symbol body (0..=10, 0..=10). `Doc::query` (index envelope) finds `pid`,
+        // but `Doc::query_touching` does NOT select `pid` (only the label at (25, 0)).
+        let pin_only_box = Rect::new(Pt { x: 15, y: -5 }, Pt { x: 30, y: 5 }).unwrap();
+        doc.query(pin_only_box, &mut out);
+        assert!(out.contains(&ItemId::Part(pid)));
+        doc.query_touching(pin_only_box, &mut out);
+        assert_eq!(out, vec![ItemId::Label(lid)]);
+        // Reverse-drawn pin-only box gives the same result.
+        doc.query_touching(
             Rect {
-                min: Pt { x: 25, y: 20 },
-                max: Pt { x: 0, y: 20 },
+                min: Pt { x: 30, y: 5 },
+                max: Pt { x: 15, y: -5 },
             },
             &mut out,
         );
+        assert_eq!(out, vec![ItemId::Label(lid)]);
+
+        // Touching the body corner inclusively selects the part in `query_touching`,
+        // whereas 1 nm outside does not.
+        doc.query_touching(
+            Rect {
+                min: Pt { x: 20, y: 15 },
+                max: Pt { x: 10, y: 10 },
+            },
+            &mut out,
+        );
+        assert_eq!(out, vec![ItemId::Part(pid)]);
+        doc.query_touching(
+            Rect::new(Pt { x: 11, y: 0 }, Pt { x: 20, y: 10 }).unwrap(),
+            &mut out,
+        );
+        assert!(out.is_empty());
+
+        // Degenerate 1D box along y = 20 selects only the collinear wire in both modes.
+        let line = Rect {
+            min: Pt { x: 25, y: 20 },
+            max: Pt { x: 0, y: 20 },
+        };
+        doc.query_within(line, &mut out);
+        assert_eq!(out, vec![ItemId::Wire(wid)]);
+        doc.query_touching(line, &mut out);
         assert_eq!(out, vec![ItemId::Wire(wid)]);
 
-        // Degenerate point box at (25, 0) selects only the label anchor there.
-        doc.query_within(
-            Rect {
-                min: Pt { x: 25, y: 0 },
-                max: Pt { x: 25, y: 0 },
-            },
-            &mut out,
-        );
+        // Degenerate point box at (25, 0) selects only the label anchor there in both modes.
+        let pt_box = Rect {
+            min: Pt { x: 25, y: 0 },
+            max: Pt { x: 25, y: 0 },
+        };
+        doc.query_within(pt_box, &mut out);
+        assert_eq!(out, vec![ItemId::Label(lid)]);
+        doc.query_touching(pt_box, &mut out);
         assert_eq!(out, vec![ItemId::Label(lid)]);
     }
 }

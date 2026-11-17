@@ -44,9 +44,9 @@ Outside the measured span:
   after undo: bridge/chain probe nets join on add and separate on delete;
   the leaf endpoint appears/disappears; each moved part's first pin leaves
   its outgoing wire's net. `nets_changed` is not used as proof;
-- for every add, assertions that no items were removed and exactly the
-  submitted number of wires was added; all CSV output is buffered until
-  after the loop.
+- for every `doc_*` case, the exact change-set guard described under
+  "Frozen cases" (`Insert`, `Delete`, `Merge` or `Move`); all CSV output
+  is buffered until after the loop.
 
 The repeated loop has a warm-data bias: after the first observation, each
 apply immediately follows undo of the same data. The cold first sample can
@@ -57,27 +57,43 @@ before and after each command. `push_undo` clears the redo entry left by undo in
 the timed span, so that cleanup cost is included after the first sample.
 
 Timer overhead (`Instant::now`/`elapsed`, `black_box`) is inherent to every
-observation, as in the existing T2.8 runner. Repeated `AddWires` observations
-allocate a fresh wire ID each time (IDs are never reused, D2); undo removes
-the wire and retains the reserved slot, so arena capacity grows amortized
+observation, as in the existing T2.8 runner. Repeated plain-insert `AddWires`
+observations allocate fresh wire IDs each time (IDs are never reused, D2);
+undo removes the wires and retains the reserved slots, so arena capacity grows amortized
 while live content returns to the starting workload each iteration.
 
 ## Frozen cases
 
 The case list is frozen in [the runner](command-boundary/runner/main.rs) and
 mirrored in [run.sh](command-boundary/run.sh); `summarize.py` asserts exactly
-this set. Frozen cases are defined against `AddWires` semantics at the freeze
-commit. If T6.1 or a later change alters what a case does, re-freeze the cases
-before any timed run; do not redefine them after seeing reference results.
-Two cases are known to change under T6.1 (checked by building this runner
-against the T6.1 branch, PR #43): `doc_chain_20k_add`, whose collinear join
-becomes a merge, and `doc_10k_wire_add`, because the generated `10k` sheet is
-not in T6.1 normal form (about 23 part pairs have coincident first pins, so
-their outgoing wires are duplicates) and T6.1's `AddWires` as first proposed
-renormalises the whole document. Run the campaign on a pre-T6.1 build, or
-re-freeze both cases once T6.1's `AddWires` scope and the generator question
-are settled. Add-count
-and removal assertions fail loudly if insertion becomes merge/split work.
+this set. Case names, `run.sh` and `summarize.py` are unchanged by the
+re-freeze below.
+
+**Re-freeze after T6.1 (canvas T6.1, PR #43).** T6.1's local `AddWires`
+planner (D2 split/merge/id rules, INV2) changed what two cases time, so the
+cases were re-frozen once, before any timed run (none has happened). The freeze
+is the runner at commit `a7f6ec9` on top of main `f04fcd6` (merge of PR #43);
+later commits in this change are documentation and the smoke archive only. The
+case list is frozen again from here: do not redefine a case after seeing
+reference results. If a later change alters what any case does (see the
+W1.4/W2.2 notes below), re-freeze before any timed run.
+
+Every `doc_*` case now declares an exact expected change set
+(`Expect` in the runner), asserted on every one of the 1,000 observations
+against the public `Change` (added/removed IDs are unordered sets, compared
+sorted; a merge survivor keeps its ID and is in neither list, so merges also
+pin the survivor's exact geometry) plus the live-wire-count delta. A case that
+starts doing different work fails loudly instead of being timed silently:
+
+| Guard | Asserts |
+| --- | --- |
+| `Insert` (adds) | nothing removed; exactly `n` fresh wire IDs, consecutive from the first free ID on the first observation and never reused afterwards (D2); no split or merge |
+| `Delete` (deletes) | removed is exactly the deleted wire IDs; nothing added; live wires drop by exactly that many, so no merge or split of any remaining wire |
+| `Merge` (`doc_chain_20k_add`) | removed is exactly the absorbed IDs; nothing added; the surviving lowest ID holds exactly the merged geometry; live wires drop by exactly the absorbed count |
+| `Move` | no wire added or removed and the live-wire count unchanged |
+
+The `Move` guard is new in this re-freeze (the two move cases are otherwise
+unchanged); it makes the Move normalisation planned for W2.2 fail loudly too.
 
 Connectivity-only cases, copied unchanged from the T2.8 runner for comparison
 (CSV `sample,add_ns,remove_ns`, except `index_10k` with
@@ -95,11 +111,11 @@ restored by untimed `undo()`):
 
 | Case | Command and starting workload |
 | --- | --- |
-| `doc_10k_wire_add` | `AddWires` extending `WireId(0)` from its far end by 1 nm perpendicularly, without overlap or crossed ends (INV2), on actual `10k` (10,000 parts, 20,000 wires) |
+| `doc_10k_wire_add` | `AddWires` extending `WireId(0)` from its far end by 1 nm perpendicularly, without overlap or crossed ends (INV2), on actual `10k` (10,000 parts, 20,000 wires). Definition unchanged; under T6.1 it is still a plain insert (see below) |
 | `doc_10k_wire_delete` | `Delete` of `WireId(0)`, a leaf from part 0's first pin, on actual `10k` |
 | `doc_10k_move_100` | `Move` of the first 100 parts (`PartId(0)..PartId(100)`) by `(GRID_NM, GRID_NM)` on actual `10k`; the T5.1 done-when case |
 | `doc_10k_move_100_connected` | Pin-count worst-case `Move` on actual `10k`: select the 100 parts with most pins, ties by lowest ID, and move by `(GRID_NM, GRID_NM)`; every selected part has a pin at a wire end that it leaves |
-| `doc_chain_20k_add` | `AddWires` with the missing middle segment, on the 20k chain with that segment absent |
+| `doc_chain_20k_add` | **Re-defined as the T6.1 merge worst case:** `AddWires` with the missing middle segment on the 20k chain with that segment absent; the five collinear segments around the gap merge into one wire (see below) |
 | `doc_chain_20k_delete` | `Delete` of the middle segment (`WireId(10000)`), splitting the 20k chain; the T2.8 split worst case |
 | `doc_label_bridge_add` | `AddWires` with the non-collinear three-segment route `(1,0)-(1,5)-(10,5)-(10,0)` (INV2), shorting the GND/VCC nets over 5,000 components |
 | `doc_label_bridge_delete` | `Delete` of the middle segment of that route (starting with 5,003 wires), forcing the logical re-flood |
@@ -108,8 +124,84 @@ The perpendicular 1 nm leaf remains off-lattice but differs in attachment
 point and direction from `real_10k_leaf`; the routed bridge adds three wires
 rather than the comparison's one. These are component-vs-command comparisons,
 not identical geometry or operation counts. The new geometry is never
-collinear with an existing wire and no route crosses an existing end or pin;
-see the T6.1 note above for the two cases that still change.
+collinear with an existing wire and no route crosses an existing end or pin.
+
+### What changed under T6.1, case by case
+
+Found by building the pre-freeze runner against main `f04fcd6` and running one
+pass of all twelve cases: eleven ran clean, and `doc_chain_20k_add` failed its
+old "no removal" guard.
+
+- `doc_10k_wire_add`: **kept, definition unchanged.** The earlier concern was
+  that the generated `10k` sheet is not in T6.1 normal form (46 duplicate wire
+  pairs, from 23 pairs of parts whose first pins coincide, for example wire
+  IDs 386/588 and 387/589) and that T6.1 might renormalise it. The final local
+  planner does not: it only gathers segments touching the added segment. The
+  added 1 nm stub touches only `WireId(0)`'s far end, where wire 0 is the sole
+  wire end, is not in a duplicate pair and has no collinear neighbour (the stub
+  is perpendicular to it). The case passes its guards on every observation:
+  nothing removed, one fresh wire (`WireId(20000)` first), no duplicate
+  touched. What is timed now is the plain insert plus the planner's local query
+  and plan for one added segment, on top of the earlier
+  validation/index/connectivity work. The generator's non-normal geometry stays
+  untouched by this command (T2.4 follow-up: duplicates remain in `10k`; a
+  generator change needs new baselines and a further re-freeze).
+- `doc_chain_20k_add`: **re-defined as a merge worst case, not replaced.** Under
+  T6.1 the missing middle segment merges the chain, which is what users will hit
+  (T2.8/D8 care about worst cases), so the case keeps its command and workload
+  and only its expected result changes. D2 fixes the touched points (the added
+  ends and the direct contacts' far ends) and lets each side extend by one
+  collinear neighbour; it does not walk the remaining chain. In `chain_doc` the
+  segment `x = i..i+1` has ID `i` for `i <= 9999` and `i - 1` for `i >= 10001`,
+  so the add merges 9998..9999 (ID 9998), 9999..10000 (ID 9999), the new
+  segment, 10001..10002 (ID 10000) and 10002..10003 (ID 10001) into one wire
+  `(9998,0)-(10003,0)`. The lowest ID, `WireId(9998)`, survives; `WireId(9999)`,
+  `WireId(10000)` and `WireId(10001)` are absorbed (`Change::removed` exactly
+  these, `Change::added` empty), and live wires go 19,999 -> 19,996. The guard
+  is this exact result, not a looser check, asserted on every observation; undo
+  restores the absorbed wires with their exact IDs (INV4, asserted after the
+  loop). The timed span now contains the T6.1 split/merge plan, three wire
+  removals, the survivor's re-insertion, index and connectivity updates for
+  those edits and the `ReplaceWires` inverse. The topology probe changed with
+  it: the joined points become wire interiors, so it checks that the chain's
+  outer ends `(0,0)` and `(20000,0)` are in different nets before, the same
+  net after, and different again after undo.
+- `doc_label_bridge_add`: unchanged definition; the non-collinear route has no
+  split, overlap or merge, and the guard now also asserts its three fresh IDs
+  (5,000..5,002 on the first observation).
+- All other cases are unchanged, including the four Connectivity-only cases
+  (they do not call `AddWires`); the two Move cases gain only the new `Move`
+  guard. `doc_label_bridge_delete` now finds the bridge's middle wire by its
+  geometry instead of by position in the unordered `Change::added` set.
+
+### Delete cases and W1.4 (merge on delete)
+
+Wiring task W1.4 is expected to make `Delete` normalise locally: after deleting
+wires, it re-merges collinear segments at the points where deleted wires ended,
+with T6.1's merge and id rules (deleting one branch of a T merges the two
+remaining halves). It is not merged here. A merge needs exactly two collinear
+ends meeting at a point that holds no pin or label after the delete. None of
+the frozen delete cases can trigger one:
+
+- `doc_10k_wire_delete` (`Delete` `WireId(0)`): the wire's start is part 0's
+  first pin, which also carries `WireId(1)` perpendicular to it (+y vs +x) plus
+  the pin, so the one remaining wire end there is perpendicular and the pin
+  blocks any merge; its far end has no other wire end. No merge possible.
+- `doc_chain_20k_delete` (`Delete` `WireId(10000)`): each end of the deleted
+  segment leaves exactly one end behind (the neighbouring chain segment), so
+  there is nothing to merge; separating the halves is the case.
+- `doc_label_bridge_delete` (`Delete` the middle segment `(1,5)-(10,5)`): each
+  end of the deleted segment leaves exactly one end behind (a vertical leg),
+  alone at that point and perpendicular to the removed segment; the labels sit
+  at `(i*10, 0)`, not at the deleted ends. No merge possible.
+
+Because the analysis could still miss a W1.4 behaviour, each delete is guarded
+by `Expect::Delete`: if a merge on delete ever absorbs another wire, the
+absorbed ID appears in `Change::removed` (or a replacement in `Change::added`)
+and the live-wire count no longer drops by exactly the deleted count, so the
+runner panics instead of timing a different operation. If W1.4 changes any
+case's meaning, re-freeze the case list before any timed run; the guard
+failing is the signal.
 
 ## Acceptance statistic (unchanged)
 
@@ -165,45 +257,69 @@ This populates the dependency cache required by the offline check/build below.
 
 ## Windows smoke run (non-reference, not evidence)
 
-A single-pass smoke run on the Windows development machine only shows the
-runner works. It is **not** reference evidence and certifies nothing: one
-pass instead of ten, an uncontrolled Windows machine, no section 2.1
-conditions.
+A single-pass smoke run of the re-frozen runner on the Windows development
+machine only shows that it works. It is **not** reference evidence and
+certifies nothing: one pass instead of ten, an uncontrolled Windows machine, no
+section 2.1 conditions, no budget claimed.
 
-- Machine: development laptop, Core i7-14650HX, integrated UHD display
-  adapter and discrete RTX 5060 Laptop GPU; Windows 11 Home version
-  10.0.26200 (build 26200), 1920x1200, 60 Hz, 125% scaling.
-- Power: AC (`PowerOnline=true` before and after the run), Silent power profile; CPU governor
-  unavailable on Windows. Other apps and concurrent workspace builds were
-  uncontrolled. Power/profile snapshots were taken before and after the run.
-- Release build, `rustc 1.98.1 (48a229cea 2026-09-01)`; source commit,
-  SHA-256 hashes of committed source blobs (`git show <commit>:<path>`),
-  binary hash and raw samples are retained in
-  [smoke-windows.tar.gz](command-boundary/smoke-windows.tar.gz).
-- One fixed pass, twelve cases, 1,000 samples each; all exited successfully,
-  including public topology checks, add-count/removal guards and full INV4
-  restoration assertions.
-  This is a functional smoke only, non-reference and not gate evidence.
+- Machine: development laptop, Core i7-14650HX, integrated UHD display adapter
+  and discrete RTX 5060 Laptop GPU; Windows 11 Home 10.0.26200.9974,
+  1920x1200, 60 Hz, 125% scaling (display settings from the earlier smoke
+  record; not changed or re-read for this run, which draws nothing).
+- Power: **AC** (`PowerOnline=true`, `Charging=true` before and after the run),
+  Silent power profile; CPU governor unavailable on Windows. Other apps were
+  uncontrolled. The run took about six seconds.
+- Release build, `rustc 1.98.1 (48a229cea 2026-09-01)`, built from runner
+  commit `a7f6ec9` on main `f04fcd6`; source commit, SHA-256 hashes of the
+  committed source blobs (`git show <commit>:<path>`), binary hash, order file,
+  before/after power snapshots and raw samples are in
+  [smoke-windows.tar.gz](command-boundary/smoke-windows.tar.gz), which replaces
+  the pre-T6.1 smoke archive (still in git history).
+- One fixed pass, twelve cases in the frozen order, 1,000 samples each; all
+  exited successfully, so every case passed its exact change-set guard
+  (including the `Merge` guard on `doc_chain_20k_add`), the public topology
+  checks and the full INV4 restoration assertion.
 
-All times below are milliseconds; `>= 1 ms` is a diagnostic count.
+All times below are milliseconds; `>= 1 ms` is a diagnostic count. One
+`>= 1 ms` sample (max 1.56 ms) appears in `doc_chain_20k_add/apply`, one cold or
+noisy observation in a single uncontrolled pass; it is neither a verdict nor a
+finding.
 
 | Case/operation | p50 | p99 | max | >= 1 ms |
 | --- | ---: | ---: | ---: | ---: |
-| `real_10k_leaf/add` | 0.000100 | 0.000100 | 0.001700 | 0 |
-| `real_10k_leaf/remove` | 0.000100 | 0.000100 | 0.004200 | 0 |
-| `label_5k_gnd_vcc_bridge/add` | 0.007300 | 0.020700 | 0.066600 | 0 |
-| `label_5k_gnd_vcc_bridge/remove` | 0.257900 | 0.335100 | 0.402100 | 0 |
-| `chain_20k_middle/add` | 0.049200 | 0.084100 | 0.517400 | 0 |
-| `chain_20k_middle/remove` | 0.304500 | 0.457400 | 2.036300 | 1 |
-| `index_10k/query` | 0.006500 | 0.008400 | 0.012400 | 0 |
-| `doc_10k_wire_add/apply` | 0.000300 | 0.000500 | 0.007900 | 0 |
-| `doc_10k_wire_delete/apply` | 0.000300 | 0.000400 | 0.012500 | 0 |
-| `doc_10k_move_100/apply` | 0.076500 | 0.091600 | 0.154400 | 0 |
-| `doc_10k_move_100_connected/apply` | 0.156700 | 0.218600 | 0.360200 | 0 |
-| `doc_chain_20k_add/apply` | 0.042800 | 0.086800 | 0.338900 | 0 |
-| `doc_chain_20k_delete/apply` | 0.364800 | 0.613600 | 0.903100 | 0 |
-| `doc_label_bridge_add/apply` | 0.006800 | 0.022700 | 0.034300 | 0 |
-| `doc_label_bridge_delete/apply` | 0.182200 | 0.271800 | 0.450200 | 0 |
+| `real_10k_leaf/add` | 0.000100 | 0.000100 | 0.001500 | 0 |
+| `real_10k_leaf/remove` | 0.000000 | 0.000100 | 0.010700 | 0 |
+| `label_5k_gnd_vcc_bridge/add` | 0.004000 | 0.014200 | 0.072500 | 0 |
+| `label_5k_gnd_vcc_bridge/remove` | 0.159700 | 0.261900 | 0.553300 | 0 |
+| `chain_20k_middle/add` | 0.021800 | 0.046100 | 0.102900 | 0 |
+| `chain_20k_middle/remove` | 0.195400 | 0.265100 | 0.515200 | 0 |
+| `index_10k/query` | 0.003400 | 0.003600 | 0.008200 | 0 |
+| `doc_10k_wire_add/apply` | 0.002600 | 0.003000 | 0.047100 | 0 |
+| `doc_10k_wire_delete/apply` | 0.000300 | 0.000400 | 0.014600 | 0 |
+| `doc_10k_move_100/apply` | 0.055600 | 0.071100 | 0.166000 | 0 |
+| `doc_10k_move_100_connected/apply` | 0.112300 | 0.152000 | 0.333400 | 0 |
+| `doc_chain_20k_add/apply` | 0.169100 | 0.297000 | 1.560500 | 1 |
+| `doc_chain_20k_delete/apply` | 0.203100 | 0.256100 | 0.375100 | 0 |
+| `doc_label_bridge_add/apply` | 0.101300 | 0.180100 | 0.514900 | 0 |
+| `doc_label_bridge_delete/apply` | 0.131800 | 0.205200 | 0.391000 | 0 |
+
+Before/after for the cases that changed meaning, from single non-reference
+smoke passes on the same laptop (before = the earlier pre-T6.1 smoke in the
+previous version of this file; not comparable as evidence): p50/p99,
+`doc_10k_wire_add` 0.0003/0.0005 -> 0.0026/0.0030 ms (plain insert plus the
+planner's local query), `doc_chain_20k_add` 0.0428/0.0868 -> 0.1691/0.2970 ms
+(now a five-segment merge instead of an insert), `doc_label_bridge_add`
+0.0068/0.0227 -> 0.1013/0.1801 ms (same operation, now planned by T6.1).
+`doc_label_bridge_add` did not change meaning but the planner roughly fifteens
+its cost; this is a recorded observation, not a budget statement.
+
+Validation of this change: runner `cargo fmt --check`, `cargo clippy
+--all-targets -- -D warnings` and `bash -n run.sh` pass. `run.sh` and
+`summarize.py` are unchanged (names and expected keys are the same). No
+`crates/` code, roadmap status or budget changed, and no reference campaign
+ran.
+
+### Earlier validation (pre-T6.1 smoke, kept for the record)
 
 Validation after review fixes: runner fmt, clippy (`-D warnings`), offline
 check and release build passed. Workspace fmt and clippy passed. Shell

@@ -139,24 +139,35 @@ impl SpatialIndex {
     /// (as [`Rect::intersects`]). Each item appears once; order is unspecified. Allocates
     /// nothing when `out` already has room for the result.
     pub fn query(&self, area: Rect, out: &mut Vec<ItemId>) {
-        out.clear();
         if area.min.x > area.max.x || area.min.y > area.max.y {
+            out.clear();
             return;
         }
-        self.query_with(area, out, |bounds| bounds.intersects(area));
+        self.query_with(area, out, |_, bounds| bounds.intersects(area));
     }
 
-    /// Replaces `out` with every item whose indexed bounds lie wholly inside `area`, edges and
-    /// corners included (as [`Rect::contains_rect`]). An inverted `area` (`min > max` on either
-    /// axis) is normalised first so a box drawn in any direction gives the same result (WD8).
+    /// Replaces `out` with every item whose indexed bounds intersect `area` (edges and corners
+    /// included) and satisfy `predicate(item, bounds)`. `area` must be normalised (`min <= max`).
     /// Each item appears once; order is unspecified. Allocates nothing when `out` already has
     /// room for the result.
-    pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>) {
-        let area = normalize_rect(area);
-        self.query_with(area, out, |bounds| area.contains_rect(bounds));
+    pub(crate) fn query_filtered(
+        &self,
+        area: Rect,
+        out: &mut Vec<ItemId>,
+        mut predicate: impl FnMut(ItemId, Rect) -> bool,
+    ) {
+        self.query_with(area, out, |item, bounds| {
+            bounds.intersects(area) && predicate(item, bounds)
+        });
     }
 
-    fn query_with(&self, area: Rect, out: &mut Vec<ItemId>, mut matches: impl FnMut(Rect) -> bool) {
+    fn query_with(
+        &self,
+        area: Rect,
+        out: &mut Vec<ItemId>,
+        mut matches: impl FnMut(ItemId, Rect) -> bool,
+    ) {
+        debug_assert!(area.min.x <= area.max.x && area.min.y <= area.max.y);
         out.clear();
         let generation = self.next_generation();
         let (x0, y0, x1, y1) = cell_span(area);
@@ -169,7 +180,7 @@ impl SpatialIndex {
                         continue;
                     }
                     entry.stamp.set(generation);
-                    if entry.bounds.is_some_and(&mut matches) {
+                    if entry.bounds.is_some_and(|bounds| matches(item, bounds)) {
                         out.push(item);
                     }
                 }
@@ -230,7 +241,7 @@ fn cell_of(v: i32) -> usize {
     (offset / i64::from(INDEX_CELL_NM)) as usize
 }
 
-fn normalize_rect(r: Rect) -> Rect {
+pub(crate) fn normalize_rect(r: Rect) -> Rect {
     Rect {
         min: Pt {
             x: r.min.x.min(r.max.x),
@@ -491,10 +502,10 @@ mod tests {
             prop_assert_eq!(total, expected);
         }
 
-        /// `query_within` equals a brute-force scan over random inserts, moves, removes,
-        /// degenerate/zero-area boxes, and boxes drawn in reverse (WD8).
+        /// `query_filtered` equals a brute-force scan over random inserts, moves, removes,
+        /// degenerate/zero-area boxes, and item/bounds predicates.
         #[test]
-        fn query_within_matches_brute_force(
+        fn query_filtered_matches_brute_force(
             ops in prop::collection::vec(
                 prop_oneof![
                     4 => (any_item(), prop_oneof![any_rect(), wire_rect()])
@@ -519,29 +530,18 @@ mod tests {
                         prop_assert_eq!(index.remove(item), model.remove(&key(item)).map(|(_, b)| b));
                     }
                     _ => {
-                        index.query_within(bounds, &mut out);
+                        let norm = normalize_rect(bounds);
+                        index.query_filtered(norm, &mut out, |item, b| {
+                            assert!(b.intersects(norm), "predicate called for non-intersecting item");
+                            norm.contains_rect(b) && !matches!(item, ItemId::Label(_))
+                        });
                         let unique: HashSet<_> = out.iter().map(|&i| key(i)).collect();
-                        prop_assert_eq!(unique.len(), out.len(), "duplicate in query_within result");
-                        let expected = brute_within(&model, bounds);
+                        prop_assert_eq!(unique.len(), out.len(), "duplicate in query_filtered result");
+                        let expected = brute_filtered(&model, norm);
                         prop_assert_eq!(sorted(&out), expected.clone());
 
-                        // All four drag directions give the identical result.
-                        let flipped = Rect { min: bounds.max, max: bounds.min };
-                        let cross_a = Rect {
-                            min: Pt { x: bounds.min.x, y: bounds.max.y },
-                            max: Pt { x: bounds.max.x, y: bounds.min.y },
-                        };
-                        let cross_b = Rect {
-                            min: Pt { x: bounds.max.x, y: bounds.min.y },
-                            max: Pt { x: bounds.min.x, y: bounds.max.y },
-                        };
-                        for variant in [flipped, cross_a, cross_b] {
-                            index.query_within(variant, &mut out);
-                            prop_assert_eq!(sorted(&out), expected.clone());
-                        }
-
-                        // Enclosed items are always a subset of intersecting items.
-                        index.query(normalize_rect(bounds), &mut intersected);
+                        // Filtered items are always a subset of intersecting items.
+                        index.query(norm, &mut intersected);
                         let inter_set: HashSet<_> = intersected.iter().map(|&i| key(i)).collect();
                         for k in &expected {
                             prop_assert!(inter_set.contains(k));
@@ -552,11 +552,12 @@ mod tests {
         }
     }
 
-    fn brute_within(items: &BTreeMap<(u8, u32), (ItemId, Rect)>, area: Rect) -> Vec<(u8, u32)> {
-        let area = normalize_rect(area);
+    fn brute_filtered(items: &BTreeMap<(u8, u32), (ItemId, Rect)>, area: Rect) -> Vec<(u8, u32)> {
         items
             .iter()
-            .filter(|(_, (_, b))| area.contains_rect(*b))
+            .filter(|(_, (item, b))| {
+                b.intersects(area) && area.contains_rect(*b) && !matches!(item, ItemId::Label(_))
+            })
             .map(|(&k, _)| k)
             .collect()
     }
@@ -610,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn query_within_edges_degenerate_and_reverse() {
+    fn query_filtered_edges_degenerate_and_pre_filter() {
         let mut index = SpatialIndex::new();
         let part_in = ItemId::Part(PartId(0));
         let part_edge = ItemId::Part(PartId(1));
@@ -628,10 +629,14 @@ mod tests {
             .unwrap();
         index.insert(label_pt, rect(50, 0, 50, 0)).unwrap();
 
-        let mut out = vec![part_in]; // pre-populated to ensure query_within clears `out`
+        let mut out = vec![part_in]; // pre-populated to ensure query_filtered clears `out`
 
-        // Inclusive edges: part_edge exactly fills 0..=100, so it is included.
-        index.query_within(rect(0, 0, 100, 100), &mut out);
+        // Pre-filter ensures predicate only receives items whose bounds intersect `area`.
+        let area = rect(0, 0, 100, 100);
+        index.query_filtered(area, &mut out, |_, b| {
+            assert!(b.intersects(area));
+            area.contains_rect(b)
+        });
         assert_eq!(
             sorted(&out),
             vec![
@@ -643,71 +648,19 @@ mod tests {
             ]
         );
 
-        // Box drawn in reverse (bottom-right to top-left) and other diagonal give the same result.
-        for reversed in [
-            Rect {
-                min: Pt { x: 100, y: 100 },
-                max: Pt { x: 0, y: 0 },
-            },
-            Rect {
-                min: Pt { x: 100, y: 0 },
-                max: Pt { x: 0, y: 100 },
-            },
-            Rect {
-                min: Pt { x: 0, y: 100 },
-                max: Pt { x: 100, y: 0 },
-            },
-        ] {
-            index.query_within(reversed, &mut out);
-            assert_eq!(
-                sorted(&out),
-                vec![
-                    key(part_in),
-                    key(part_edge),
-                    key(wire_h),
-                    key(wire_v),
-                    key(label_pt),
-                ]
-            );
-        }
-
-        // Shrinking any edge by 1 nm excludes items touching that edge.
-        for (shrunk, expected) in [
-            (
-                rect(1, 0, 100, 100),
-                vec![key(part_in), key(wire_v), key(label_pt)],
-            ),
-            (rect(0, 1, 100, 100), vec![key(part_in)]),
-            (
-                rect(0, 0, 99, 100),
-                vec![key(part_in), key(wire_v), key(label_pt)],
-            ),
-            (
-                rect(0, 0, 100, 99),
-                vec![key(part_in), key(wire_h), key(wire_v), key(label_pt)],
-            ),
-        ] {
-            index.query_within(shrunk, &mut out);
-            assert_eq!(sorted(&out), expected);
-        }
-
-        // Degenerate zero-area 1D horizontal box: includes collinear wire_h and label_pt,
-        // excludes perpendicular wire_v and 2D parts.
-        index.query_within(
-            Rect {
-                min: Pt { x: 100, y: 0 },
-                max: Pt { x: 0, y: 0 },
-            },
-            &mut out,
-        );
+        // Degenerate zero-area 1D horizontal box: includes collinear wire_h and label_pt.
+        let line = rect(0, 0, 100, 0);
+        index.query_filtered(line, &mut out, |_, b| line.contains_rect(b));
         assert_eq!(sorted(&out), vec![key(wire_h), key(label_pt)]);
 
-        // Degenerate zero-area point box: includes only the point item at (50, 0).
-        index.query_within(rect(50, 0, 50, 0), &mut out);
+        // Degenerate zero-area point box: includes only label_pt at (50, 0) when filtering by containment.
+        let pt_box = rect(50, 0, 50, 0);
+        index.query_filtered(pt_box, &mut out, |_, b| pt_box.contains_rect(b));
         assert_eq!(sorted(&out), vec![key(label_pt)]);
 
-        // Strictly outside K1 returns nothing even though clamped cell_span touches edge cells.
-        index.query_within(
+        // Strictly outside K1 returns nothing and never invokes predicate even though clamped
+        // cell_span touches edge cells.
+        index.query_filtered(
             Rect {
                 min: Pt {
                     x: SHEET_LIMIT_NM + 1,
@@ -719,28 +672,30 @@ mod tests {
                 },
             },
             &mut out,
+            |_, _| panic!("predicate must not run for non-intersecting items"),
         );
         assert!(out.is_empty());
 
-        // Reaching past K1 still finds enclosed items, including the full-sheet wire.
-        index.query_within(
+        // Reaching past K1 still finds all items when predicate accepts all.
+        index.query_filtered(
             Rect {
                 min: Pt {
-                    x: i32::MAX,
-                    y: i32::MAX,
-                },
-                max: Pt {
                     x: i32::MIN,
                     y: i32::MIN,
                 },
+                max: Pt {
+                    x: i32::MAX,
+                    y: i32::MAX,
+                },
             },
             &mut out,
+            |_, _| true,
         );
         assert_eq!(out.len(), 6);
 
-        // Generation wrap resets stamps for query_within as well.
+        // Generation wrap resets stamps for query_filtered as well.
         index.set_generation(u32::MAX);
-        index.query_within(rect(50, 0, 50, 0), &mut out);
+        index.query_filtered(pt_box, &mut out, |_, b| pt_box.contains_rect(b));
         assert_eq!(sorted(&out), vec![key(label_pt)]);
         assert_eq!(index.generation.get(), 1);
     }

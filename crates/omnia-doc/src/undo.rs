@@ -17,7 +17,7 @@ pub(crate) enum UndoOp {
     },
     RemoveWires(Vec<WireId>),
     RestoreWires(Vec<(WireId, Wire)>),
-    /// One inverse for an `AddWires` split/merge (T6.1): take out `added`,
+    /// One inverse for an `AddWires` split/merge or local Delete merge (T6.1, W1.4): take out `added`,
     /// restore `removed` under their old ids.
     ReplaceWires {
         removed: Vec<(WireId, Wire)>,

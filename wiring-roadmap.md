@@ -158,9 +158,11 @@ UI framework dependency and can run ahead of the `canvas` lane.
 - Follow-up (W0.3, from T4.2): applies WD5 ties, grid-snapped body projection, and the
   `Junction` class to T4.2's `snap.rs` (PR #41).
 
-### W1.4 Normal form and the validator · todo
+### W1.4 Normal form and the validator · done
 - Lane: doc · Depends: T6.1 · Read: WD4, WD9, WINV3, INV2
-- Owns: `crates/schematic-doc/src/route.rs` (after T6.1)
+- Owns: `crates/schematic-doc/src/route.rs` (after T6.1); W1.4 owner-approved extension
+  (2026-11-16): local Delete integration in `command.rs`, existing inverse documentation
+  in `undo.rs`, and D2 in canvas-plan.md.
 - Do: `check_new_wires` (WD4's three validity rules, returning the `Blocker`); make T6.1's
   merge keep a point that carries a label; a debug-only `Doc::assert_normal_form` used by
   every later wiring test.
@@ -289,10 +291,11 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 
 ### W3.4 Rubber-band modes · doing (doc half: query_within done; tool half waits T4.3)
 - Lane: canvas (tool), doc (query) · Depends: T4.3 · Read: WD8, WQ3
-- Owns: `crates/schematic-canvas/src/selection.rs` (after T4.3), `Doc::query_within` in
-  `crates/schematic-doc/src/index.rs`
+- Owns: `crates/schematic-canvas/src/selection.rs` (after T4.3), `Doc::query_within` and
+  `Doc::query_touching` in `crates/schematic-doc/src/doc.rs` (via `SpatialIndex::query_filtered`
+  in `crates/schematic-doc/src/index.rs`)
 - Do: both modes from the preference; a normalised box; Shift adds. `query_within` filters
-  the index query to items wholly inside.
+  items wholly inside; `query_touching` filters items touched (symbol bounds for parts).
 - Done when: TC-band-01 to TC-band-09 pass as simulated-input tests; a property test shows
   `query_within` equal to a brute-force scan; the INV11 test still passes.
 
@@ -502,28 +505,59 @@ end / 0 / 0 / 2,902 grid); `dense` p99 0.0004 ms (junction 424). The WB5 gate is
 the reference machine. Raw JSON and hardware in docs/measurements/W1.3.md. Standard checks
 (fmt, both clippy runs, cargo test --workspace, cargo deny) pass locally; no check weakened.
 
-2026-11-16 W3.4 doing (doc half: query_within done; tool half waits T4.3) — implemented
-                             `SpatialIndex::query_within` in `crates/omnia-doc/src/index.rs`
-                             (sharing cell traversal and generation-stamp deduplication with
-                             `query` via `query_with`) and `Doc::query_within` in
-                             `crates/omnia-doc/src/doc.rs`. Matches `Doc::query`'s conventions
-                             (caller-provided `out`, cleared before filling, zero allocation once
-                             warm). Normalises `area` internally so boxes drawn in any direction
-                             produce the same result (WD8). Edge handling is inclusive on all four
-                             sides (`Rect::contains_rect`): parts match by their indexed bounds
-                             (clamped symbol body unioned with world pins), wires by both
-                             endpoints (full segment), and labels by anchor point. Note for the
-                             tool half: WD8 mentions symbol bounds for parts, whereas `SpatialIndex`
-                             indexes body + pins (`Doc::query` also uses indexed bounds); if body-only
-                             enclosure is wanted in `selection.rs`, filter `ItemId::Part` via
-                             `Doc::part_body`. Signature matches `wiring-plan.md` section 10 and
-                             `canvas-plan.md` section 9 unchanged. Unit tests and property tests
-                             in `index.rs` and `doc.rs` verify `query_within` against brute-force
-                             scans over random documents and random boxes (including degenerate
-                             zero-area point/1D boxes and boxes drawn in reverse); allocation tests
-                             in `crates/omnia-doc/tests/index_alloc.rs` prove zero allocation once
-                             `out` has room for the enclosed result (even when many more items
-                             intersect the box). Remaining: tool half in
-                             `crates/omnia-canvas/src/selection.rs` (`SelectMode`, Shift-add,
-                             `TC-band-01`..`TC-band-09`, INV11), blocked on `T4.3`. Nothing
-                             measured; standard checks pass locally.
+2026-11-16 W1.4 done - route.rs now provides check_new_wires and Blocker (WD4,
+WINV10), plus the debug/test-only Doc::assert_normal_form (INV1, INV2, WINV3, WD9).
+Validation queries each segment through the spatial index, collecting only local contacts;
+no whole-document copy or scan. Rule priority applies across the candidate, then segment
+order from a, then distance along that segment, geometry, kind and lowest id/index.
+Coincident pins precede ends. Own-end coordinates exempt pins/ends but never overlaps.
+Sheet also reports off-lattice or malformed segments; Pin uses usize, matching Doc::pins
+without narrowing. Section 10 records these API clarifications for W1.5. No WQ defaults
+changed. Pure interior crossings pass validation and remain different nets (INV2).
+T6.1 already kept labelled points: no replacement of that behavior was needed; a touched
+label regression verifies both AddWires splitting and retention through Delete.
+Owner-approved scope extension: command.rs shares the existing wire-plan executor with
+Delete, and undo.rs documents reuse of ReplaceWires. Delete merges only at the fixed
+endpoints of deleted wires, after all removals; exactly two collinear ends and no pin/label
+permit a join. Multiple eligible joins are united in deterministic order, keeping the
+lowest id. No traversal into distant legacy chains or document-wide repair. Undo reverses
+merges before restoring deleted items; redo restores exactly the same ids (INV4). D2 in
+canvas-plan.md records this rule. Deleting only parts/labels introduces no merge points.
+Tests: 128-case WINV3 property over lattice AddWires/wire-Delete sequences with random pins
+and labels, exact undo/redo ids and INV10 rebuild checks after every step; blocker kinds,
+rule precedence, reversed traversal/index order, own ends, multi-point Delete determinism,
+label preservation and unrelated legacy geometry. Move remains outside normal-form
+assertions, with the existing mixed-edit INV4/INV10 properties retained unchanged in range.
+All five standard checks PASS locally on Windows: fmt, workspace all-target clippy,
+scene-counts/readback bench clippy, workspace tests (103 doc tests plus allocation tests
+and Windows rendering tests), cargo deny (existing dependency warnings); diff check passes.
+No new dependencies, performance measurement or budget certification. Concurrent timing
+re-freeze files in docs/measurements/command-boundary/ were read only, never edited.
+Delete overhead changes may affect doc_10k_wire_delete, doc_chain_20k_delete and
+doc_label_bridge_delete. By fixture inspection none gains a merge: the 10k leaf retains
+a pin at its anchor and no end at its free tip; chain deletion opens a gap with one end
+per side; bridge deletion leaves one end at each corner. Re-freeze those three cases on
+the final binary even though their resulting geometry does not change.
+
+2026-11-16 W3.4 doing (doc half: query_within done; tool half waits T4.3) — implemented the
+doc half of WD8 in crates/omnia-doc/src/doc.rs (`Doc::query_within` and `Doc::query_touching`)
+and crates/omnia-doc/src/index.rs (`pub(crate) SpatialIndex::query_filtered`, sharing cell
+traversal and generation-stamp deduplication with `query` via `query_with`, pre-filtering
+candidates by `bounds.intersects(area)`). Removed `SpatialIndex::query_within` (unused
+outside `Doc`; an envelope-only `query_within` on `SpatialIndex` would invite misuse for
+selection). `Doc::query` remains unchanged (index envelope `body ∪ pins` for picking and
+snapping). Both `Doc::query_within` (WD8 Enclosed) and `Doc::query_touching` (WD8
+Intersecting) normalise `area` internally, clear `out` once, allocate nothing once `out` has
+capacity, use inclusive edges (`contains_rect` / `intersects`), and count parts by clamped
+world symbol bounds (`Doc::part_body`, pins excluded), wires by segment, and labels by
+anchor point. Updated `wiring-plan.md` section 10 and `canvas-plan.md` section 9 under rule
+16. Unit tests and independent brute-force property tests in `index.rs` and `doc.rs` cover
+varied `local_bounds`/`local_pins`, clamped near-limit parts, body-vs-pin-stub regressions,
+degenerate zero-area boxes, and all four drag directions; allocation tests in
+`crates/omnia-doc/tests/index_alloc.rs` prove zero allocation once warm for both methods
+with parts having external pins. For the tool half in `crates/omnia-canvas/src/selection.rs`
+(blocked on `T4.3`): call `Doc::query_touching` for `SelectMode::Intersecting` and
+`Doc::query_within` for `SelectMode::Enclosed`. Nothing measured. Standard checks passed
+locally: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
+`cargo test --workspace`, and `cargo deny check` (existing dependency warnings).

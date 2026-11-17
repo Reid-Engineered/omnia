@@ -41,6 +41,228 @@ pub fn l_route(a: Pt, b: Pt, flip: bool) -> [Option<Wire>; 2] {
     [Some(Wire { a, b: corner }), Some(Wire { a: corner, b })]
 }
 
+/// WD4 refusal. Pin indices match `Doc::pins` without narrowing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blocker {
+    Pin {
+        part: crate::PartId,
+        pin: usize,
+    },
+    WireEnd(WireId),
+    Overlap(WireId),
+    /// Outside K1 or off the WK1 lattice (also malformed candidate segments).
+    Sheet,
+}
+
+fn on_lattice(p: Pt) -> bool {
+    p.is_in_bounds() && p.x % crate::PIN_LATTICE_NM == 0 && p.y % crate::PIN_LATTICE_NM == 0
+}
+
+fn interior_contains(w: Wire, p: Pt) -> bool {
+    contains(w, p) && p != w.a && p != w.b
+}
+
+fn shared_stretch(a: Wire, b: Wire) -> bool {
+    let (al, ah, horizontal) = normalised(a);
+    let (bl, bh, other_horizontal) = normalised(b);
+    horizontal == other_horizontal
+        && if horizontal {
+            al.y == bl.y && al.x.max(bl.x) < ah.x.min(bh.x)
+        } else {
+            al.x == bl.x && al.y.max(bl.y) < ah.y.min(bh.y)
+        }
+}
+
+/// WD4: rule priority first, then segment order from `a`. Within a segment,
+/// choose the first obstruction along its direction, then geometry, kind (pin
+/// before end), and lowest id/index. Own ends exempt points, never overlaps.
+/// Query buffers contain only items intersecting one segment, not the sheet.
+/// Callers remove the old run from the document view before validating it.
+pub fn check_new_wires(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(), Blocker> {
+    for &w in wires {
+        if !on_lattice(w.a) || !on_lattice(w.b) || w.a == w.b || (w.a.x != w.b.x && w.a.y != w.b.y)
+        {
+            return Err(Blocker::Sheet);
+        }
+    }
+    let mut scratch = Vec::new();
+    for &w in wires {
+        doc.query(Rect::from_points(w.a, w.b).unwrap(), &mut scratch);
+        let mut best = None;
+        let mut consider = |p: Pt, kind: u8, id: u32, pin: usize, blocker| {
+            if interior_contains(w, p) && !own_ends.contains(&p) {
+                let key = (w.a.manhattan_distance(p), pt_key(p), kind, id, pin);
+                if best.as_ref().is_none_or(|&(old, _)| key < old) {
+                    best = Some((key, blocker));
+                }
+            }
+        };
+        for &item in &scratch {
+            match item {
+                ItemId::Part(part) => {
+                    for (pin, &p) in doc.pins(part).unwrap().iter().enumerate() {
+                        consider(p, 0, part.0, pin, Blocker::Pin { part, pin });
+                    }
+                }
+                ItemId::Wire(id) => {
+                    let other = *doc.wire(id).unwrap();
+                    for p in [other.a, other.b] {
+                        consider(p, 1, id.0, 0, Blocker::WireEnd(id));
+                    }
+                }
+                ItemId::Label(_) => {}
+            }
+        }
+        if let Some((_, blocker)) = best {
+            return Err(blocker);
+        }
+    }
+    for &w in wires {
+        doc.query(Rect::from_points(w.a, w.b).unwrap(), &mut scratch);
+        let mut best = None;
+        for &item in &scratch {
+            if let ItemId::Wire(id) = item {
+                let other = *doc.wire(id).unwrap();
+                if shared_stretch(w, other) {
+                    let (lo, hi, _) = normalised(other);
+                    let first = Pt {
+                        x: w.a.x.clamp(lo.x, hi.x),
+                        y: w.a.y.clamp(lo.y, hi.y),
+                    };
+                    let distance = w.a.manhattan_distance(first);
+                    let key = (distance, pt_key(lo), pt_key(hi), id.0);
+                    if best.as_ref().is_none_or(|&(old, _)| key < old) {
+                        best = Some((key, id));
+                    }
+                }
+            }
+        }
+        if let Some((_, id)) = best {
+            return Err(Blocker::Overlap(id));
+        }
+    }
+    Ok(())
+}
+
+impl Doc {
+    /// Debug oracle for INV1/INV2/WINV3/WD9. Uses local index queries and point
+    /// incidence; does not compare every wire with every other wire.
+    #[cfg(any(debug_assertions, test))]
+    pub fn assert_normal_form(&self) {
+        let mut scratch = Vec::new();
+        for (id, &w) in self.wires() {
+            assert!(
+                w.a != w.b && (w.a.x == w.b.x || w.a.y == w.b.y),
+                "INV1: {id:?}"
+            );
+            assert!(on_lattice(w.a) && on_lattice(w.b), "WINV3 lattice: {id:?}");
+            self.query(Rect::from_points(w.a, w.b).unwrap(), &mut scratch);
+            for &item in &scratch {
+                match item {
+                    ItemId::Wire(other_id) if other_id != id => {
+                        let other = *self.wire(other_id).unwrap();
+                        assert!(
+                            !interior_contains(w, other.a) && !interior_contains(w, other.b),
+                            "INV2: {id:?}, {other_id:?}"
+                        );
+                        assert!(
+                            !shared_stretch(w, other),
+                            "WINV3 overlap: {id:?}, {other_id:?}"
+                        );
+                    }
+                    ItemId::Part(part) => {
+                        for &p in self.pins(part).unwrap() {
+                            assert!(!interior_contains(w, p), "WINV3 pin: {id:?}");
+                        }
+                    }
+                    ItemId::Label(label) => assert!(
+                        !interior_contains(w, self.label(label).unwrap().at),
+                        "WD9 labelled point: {id:?}"
+                    ),
+                    _ => {}
+                }
+            }
+            for p in [w.a, w.b] {
+                if let Some((a, b)) = merge_pair(self, p) {
+                    panic!("WINV3 mergeable at {p:?}: {a:?}, {b:?}");
+                }
+            }
+        }
+    }
+}
+
+// Shared local merge predicate: exactly two ends, no pin/label, opposite
+// collinear segments. It never repairs pre-existing overlapping geometry.
+fn merge_pair(doc: &Doc, at: Pt) -> Option<(WireId, WireId)> {
+    if !doc.connectivity.labels_at(at).is_empty() {
+        return None;
+    }
+    let [End::Wire(a), End::Wire(b)] = doc.points.at(at) else {
+        return None;
+    };
+    let wa = *doc.wire(*a).unwrap();
+    let wb = *doc.wire(*b).unwrap();
+    if (wa.a.y == wa.b.y) != (wb.a.y == wb.b.y) || shared_stretch(wa, wb) {
+        return None;
+    }
+    Some((*a, *b))
+}
+
+/// W1.4: merge only at the fixed ends vacated by Delete. Union the eligible
+/// pairs before editing so multiple removed branches cannot make order matter.
+pub(crate) fn plan_delete_merges(doc: &Doc, points: &mut Vec<Pt>) -> AddWiresPlan {
+    points.sort_by_key(|&p| pt_key(p));
+    points.dedup();
+    let mut groups: FxHashMap<WireId, WireId> = FxHashMap::default();
+    let mut originals = BTreeMap::new();
+    fn root(groups: &mut FxHashMap<WireId, WireId>, id: WireId) -> WireId {
+        let mut r = id;
+        while groups[&r] != r {
+            r = groups[&r];
+        }
+        let mut current = id;
+        while current != r {
+            let next = groups[&current];
+            groups.insert(current, r);
+            current = next;
+        }
+        r
+    }
+    for &p in points.iter() {
+        if let Some((a, b)) = merge_pair(doc, p) {
+            for id in [a, b] {
+                groups.entry(id).or_insert(id);
+                originals.insert(id.0, *doc.wire(id).unwrap());
+            }
+            let ra = root(&mut groups, a);
+            let rb = root(&mut groups, b);
+            groups.insert(WireId(ra.0.max(rb.0)), WireId(ra.0.min(rb.0)));
+        }
+    }
+    let mut merged: BTreeMap<u32, Wire> = BTreeMap::new();
+    for (&id, &w) in &originals {
+        let r = root(&mut groups, WireId(id));
+        let (lo, hi, _) = normalised(w);
+        merged
+            .entry(r.0)
+            .and_modify(|m| {
+                m.a = if pt_key(lo) < pt_key(m.a) { lo } else { m.a };
+                m.b = if pt_key(hi) > pt_key(m.b) { hi } else { m.b };
+            })
+            .or_insert(Wire { a: lo, b: hi });
+    }
+    AddWiresPlan {
+        remove: originals
+            .into_iter()
+            .map(|(id, w)| (WireId(id), w))
+            .collect(),
+        insert: merged
+            .into_iter()
+            .map(|(id, w)| (Some(WireId(id)), w))
+            .collect(),
+    }
+}
+
 fn pt_key(p: Pt) -> (i32, i32) {
     (p.x, p.y)
 }
@@ -777,7 +999,7 @@ mod tests {
         deleted
             .apply(Command::Delete(vec![ItemId::Wire(branch)]))
             .unwrap();
-        assert_eq!(deleted.wires().count(), 2);
+        assert_eq!(deleted.wires().count(), 1);
         assert_unrelated_add_preserves(&mut deleted);
 
         let mut duplicate = Doc::from_items([], [w(0, 0, 10, 0), w(10, 0, 0, 0)], []).unwrap();
@@ -840,6 +1062,193 @@ mod tests {
                 w(x, y, x, y + len)
             }
         })
+    }
+
+    fn lattice(p: Pt) -> Pt {
+        Pt {
+            x: p.x * crate::PIN_LATTICE_NM,
+            y: p.y * crate::PIN_LATTICE_NM,
+        }
+    }
+
+    fn lw(x1: i32, y1: i32, x2: i32, y2: i32) -> Wire {
+        let w = w(x1, y1, x2, y2);
+        Wire {
+            a: lattice(w.a),
+            b: lattice(w.b),
+        }
+    }
+
+    #[test]
+    fn wd4_blockers_rule_priority_direction_and_index_order() {
+        let segment = lw(0, 0, 10, 0);
+        let check = |doc: &Doc| check_new_wires(doc, &[segment], [segment.a, segment.b]);
+        let pins = with_features(vec![lattice(Pt { x: 3, y: 0 })], vec![]);
+        assert_eq!(
+            check(&pins),
+            Err(Blocker::Pin {
+                part: crate::PartId(0),
+                pin: 0
+            })
+        );
+        let ends = Doc::from_items([], [lw(4, 0, 4, 2)], []).unwrap();
+        assert_eq!(check(&ends), Err(Blocker::WireEnd(WireId(0))));
+        let overlap = Doc::from_items([], [lw(-1, 0, 11, 0)], []).unwrap();
+        assert_eq!(check(&overlap), Err(Blocker::Overlap(WireId(0))));
+        let outside = Wire {
+            a: Pt::ZERO,
+            b: Pt {
+                x: crate::SHEET_LIMIT_NM + 1,
+                y: 0,
+            },
+        };
+        assert_eq!(
+            check_new_wires(&pins, &[segment, outside], [segment.a, outside.b]),
+            Err(Blocker::Sheet)
+        );
+        assert_eq!(
+            check_new_wires(&Doc::new(), &[w(0, 0, 1, 0)], [Pt::ZERO; 2]),
+            Err(Blocker::Sheet)
+        );
+        // Second rule outranks third even on a later segment.
+        let doc = Doc::from_items([], [lw(-1, 0, 11, 0), lw(10, 4, 12, 4)], []).unwrap();
+        assert_eq!(
+            check_new_wires(
+                &doc,
+                &[segment, lw(10, 0, 10, 8)],
+                [segment.a, lattice(Pt { x: 10, y: 8 })]
+            ),
+            Err(Blocker::WireEnd(WireId(1)))
+        );
+        let mut doc = Doc::from_items([], [lw(8, 0, 8, 2), lw(2, 0, 2, 2)], []).unwrap();
+        assert_eq!(check(&doc), Err(Blocker::WireEnd(WireId(1))));
+        let reversed = Wire {
+            a: segment.b,
+            b: segment.a,
+        };
+        assert_eq!(
+            check_new_wires(&doc, &[reversed], [segment.a, segment.b]),
+            Err(Blocker::WireEnd(WireId(0)))
+        );
+        // Undo restore changes index insertion order but not the selected blocker.
+        doc.apply(Command::Delete(vec![ItemId::Wire(WireId(0))]))
+            .unwrap();
+        doc.undo().unwrap();
+        assert_eq!(check(&doc), Err(Blocker::WireEnd(WireId(1))));
+        let own = lattice(Pt { x: 2, y: 0 });
+        assert_eq!(
+            check_new_wires(&doc, &[segment], [own, lattice(Pt { x: 8, y: 0 })]),
+            Ok(())
+        );
+        let own_pin = lattice(Pt { x: 3, y: 0 });
+        assert_eq!(
+            check_new_wires(&pins, &[segment], [own_pin, segment.b]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn inv2_validated_crossing_stays_in_different_nets() {
+        let mut doc = Doc::new();
+        doc.apply(Command::AddWires(vec![lw(0, 0, 10, 0)])).unwrap();
+        let candidate = lw(5, -5, 5, 5);
+        assert_eq!(
+            check_new_wires(&doc, &[candidate], [candidate.a, candidate.b]),
+            Ok(())
+        );
+        doc.apply(Command::AddWires(vec![candidate])).unwrap();
+        doc.assert_normal_form();
+        assert_eq!(doc.wires().count(), 2);
+        assert_ne!(doc.net_of(WireId(0)), doc.net_of(WireId(1)));
+    }
+
+    #[test]
+    fn winv3_delete_merges_only_vacated_points_and_restores_exact_ids() {
+        let mut doc = Doc::new();
+        doc.apply(Command::AddWires(vec![
+            lw(0, 0, 10, 0),
+            lw(3, 0, 3, 3),
+            lw(7, 0, 7, 3),
+        ]))
+        .unwrap();
+        let before = snapshot(&doc);
+        let branches: Vec<_> = doc
+            .wires()
+            .filter(|(_, w)| w.a.x == w.b.x)
+            .map(|(id, _)| ItemId::Wire(id))
+            .collect();
+        let mut reversed = snapshot(&doc);
+        reversed
+            .apply(Command::Delete(branches.iter().copied().rev().collect()))
+            .unwrap();
+        doc.apply(Command::Delete(branches)).unwrap();
+        doc.assert_normal_form();
+        assert_inv10(&doc);
+        assert_eq!(live_wires(&doc), vec![(WireId(0), lw(0, 0, 10, 0))]);
+        assert!(doc.content_eq(&reversed));
+        let after = snapshot(&doc);
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&before));
+        assert_inv10(&doc);
+        doc.redo().unwrap();
+        assert!(doc.content_eq(&after));
+        assert_inv10(&doc);
+        // WD9 was already implemented by T6.1: exercise a touched label,
+        // not an unrelated AddWires which never visits its point.
+        let mut labelled = with_features(vec![], vec![lattice(Pt { x: 5, y: 0 })]);
+        labelled
+            .apply(Command::AddWires(vec![lw(0, 0, 10, 0), lw(5, 0, 5, 5)]))
+            .unwrap();
+        let branch = labelled.wires().find(|(_, w)| w.a.x == w.b.x).unwrap().0;
+        labelled
+            .apply(Command::Delete(vec![ItemId::Wire(branch)]))
+            .unwrap();
+        labelled.assert_normal_form();
+        assert_eq!(labelled.wires().count(), 2);
+        assert!(labelled.net_at(lattice(Pt { x: 5, y: 0 })).is_some());
+        // A distant legacy pair is outside the deletion neighbourhood.
+        let mut local =
+            Doc::from_items([], [lw(0, 0, 5, 0), lw(5, 0, 10, 0), lw(20, 0, 21, 0)], []).unwrap();
+        local
+            .apply(Command::Delete(vec![ItemId::Wire(WireId(2))]))
+            .unwrap();
+        assert_eq!(local.wire(WireId(0)), Some(&lw(0, 0, 5, 0)));
+        assert_eq!(local.wire(WireId(1)), Some(&lw(5, 0, 10, 0)));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn winv3_inv4_inv10_add_delete_sequences(
+            steps in prop::collection::vec((any::<bool>(), prop::collection::vec(wire_strategy(), 1..4), any::<usize>()), 1..40),
+            pins in prop::collection::vec(point_strategy(), 0..8),
+            labels in prop::collection::vec(point_strategy(), 0..8),
+        ) {
+            let mut doc = with_features(pins.into_iter().map(lattice).collect(), labels.into_iter().map(lattice).collect());
+            for (delete, wires, pick) in steps {
+                let before = snapshot(&doc);
+                let live = live_wires(&doc);
+                let cmd = if delete && !live.is_empty() {
+                    Command::Delete(vec![ItemId::Wire(live[pick % live.len()].0)])
+                } else {
+                    Command::AddWires(wires.into_iter().map(|w| Wire { a: lattice(w.a), b: lattice(w.b) }).collect())
+                };
+                doc.apply(cmd).unwrap();
+                doc.assert_normal_form();
+                assert_inv10(&doc);
+                let after = snapshot(&doc);
+                if !before.content_eq(&after) {
+                    doc.undo().unwrap();
+                    prop_assert!(doc.content_eq(&before));
+                    doc.assert_normal_form();
+                    assert_inv10(&doc);
+                    doc.redo().unwrap();
+                    prop_assert!(doc.content_eq(&after));
+                    doc.assert_normal_form();
+                    assert_inv10(&doc);
+                }
+            }
+        }
     }
 
     proptest! {
