@@ -134,7 +134,7 @@ mod tests {
         let tracker = Arc::new(TrackingAssets::default());
         let mut cx =
             HeadlessAppContext::with_asset_source(Arc::new(NoopTextSystem::new()), tracker.clone());
-        cx.update(|cx| ActiveTheme::install(cx));
+        cx.update(ActiveTheme::install);
 
         let window = cx
             .open_window(size(px(640.0), px(480.0)), |_, cx| {

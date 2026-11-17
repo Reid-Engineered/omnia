@@ -80,7 +80,7 @@ fn check_headless_all_icons() {
     let tracker = Arc::new(TrackingAssets::default());
     let mut cx =
         HeadlessAppContext::with_asset_source(Arc::new(NoopTextSystem::new()), tracker.clone());
-    cx.update(|cx| ActiveTheme::install(cx));
+    cx.update(ActiveTheme::install);
 
     let rows = ICON_NAMES.len().div_ceil(COLS);
     let window = cx

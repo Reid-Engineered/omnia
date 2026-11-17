@@ -283,7 +283,7 @@ mod tests {
                 assert_eq!(image.size(0), target);
                 let raw = image.as_bytes(0).expect("frame 0 bytes");
                 assert!(
-                    raw.chunks_exact(4).any(|bgra| bgra[3] > 0),
+                    raw.as_chunks::<4>().0.iter().any(|bgra| bgra[3] > 0),
                     "{name} at {px_size}px rasterized to an empty image"
                 );
             }
