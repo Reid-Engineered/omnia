@@ -446,6 +446,9 @@ pub enum Command {
 }
 pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
+// added/removed are membership deltas only: an item that keeps its id with new geometry
+// (moved, reoriented, merge survivor, first piece of a split) is in neither; `dirty` covers
+// its old and new bounds. Consumers invalidate from dirty/revision, not the id lists.
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
                 Junction { at: Pt }, WireBody { wire: WireId, at: Pt }, Grid(Pt) } // Junction added in W1.3 (WD5)
 pub struct Hit { pub item: ItemId, pub at: Pt }
