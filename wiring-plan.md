@@ -202,6 +202,21 @@ For each affected run, in a fixed order that does not depend on the order of `it
   wire is created for it (WQ6).
 - A moved pin or end that lands on an existing end, pin or wire body connects there, by D2
   and T6.1's split rule. That is the only way a move makes a new connection (WINV1).
+- A selected wire's interior may not, after the move, hold a foreign pin or wire end, nor
+  share a stretch with a foreign wire. That includes the fixed far end of a run being
+  re-routed. The command is refused with `CommandError::Capture { wire, blocker }` before
+  anything changes (WINV4). The rule is geometric and applies under every policy, detach
+  included. It is checked after planning, so a `FollowError` takes precedence. Its own
+  ends may still land on foreign bodies (above).
+- A moved label that lands on a wire body splits it there, like a landed pin (WD9).
+- A move never takes an on-lattice wire end off the lattice, never lands an off-lattice
+  pin or label on a wire body, and never makes a lattice wire cover an off-lattice label.
+  Each is refused with `CommandError::OffLattice(at)`, naming the lowest such point,
+  before anything changes (WK1, WINV3, WINV4). Wire ends already off the lattice, which
+  `AddWires` still accepts, may split only wires that are themselves off the lattice.
+- Normal form wins at the points the moved items leave (owner decision, 2026-11-17).
+  Collinear wires that now meet at a vacated pin, end or label point with nothing else
+  there are merged by T6.1's rule, under follow and detach alike (WINV3).
 - Alternatives not adopted: the first-part-wins flag (M5), the junction left behind by a
   detach (M6), polling the key during the update (M3).
 
@@ -376,7 +391,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 | ID | Rule |
 | --- | --- |
 | WINV1 | Follow keeps connections: any two pins connected before a follow-mode `Move` or `Reorient` are connected after it, direct pin-to-pin contacts excepted (WQ6). New connections arise only where a moved pin or moved wire end lands on an existing end, pin or body. [W2.2] |
-| WINV2 | Detach changes only what it must: unselected wires are identical before and after, and the pins that lose a wire are exactly the boundary pins of detached runs. [W2.2] |
+| WINV2 | Detach changes only what it must: unselected wires are identical before and after, except for splits under landed pins and ends (TC-move-14) and merges at points the moved items vacated (WD3, owner decision 2026-11-17); the pins that lose a wire are exactly the boundary pins of detached runs. [W2.2] |
 | WINV3 | Normal form after every wiring command: INV1 and INV2 hold; every end is on the wire lattice; no two collinear segments meet at a point that holds nothing else and no label; no two segments share a stretch. [W1.4] |
 | WINV4 | A refused command leaves the document equal to the original, ids and revision included. `apply` then `undo` of any wiring command does too (extends INV4). [W2.2, W3.2] |
 | WINV5 | The plan drawn for a given document, items, isometry and policy equals what `apply` does with the same inputs. [W2.3] |
@@ -569,7 +584,9 @@ pub enum Command {
     Delete { items: Vec<ItemId>, with_wires: bool },                  // WD10
     /* the rest as in canvas-plan.md section 9 */
 }
-pub enum CommandError { /* T5.1's */ Follow(FollowError), Segment(Blocker) }
+pub enum CommandError { /* T5.1's */ Follow(FollowError), Segment(Blocker),
+                        Capture { wire: WireId, blocker: Blocker },       // WD3 capture rule
+                        OffLattice(Pt) }                                  // WD3, WK1
 
 // ---- snap.rs (refines the canvas plan's Snap) ----
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },

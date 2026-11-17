@@ -201,16 +201,27 @@ fn doc_query_and_net_wires_allocate_nothing_after_commands() {
     );
     assert_eq!(doc.net_at(Pt::ZERO), doc.net_of(first_wire));
     let mut moved = p_ch.added.clone();
-    moved.extend_from_slice(&w_ch.added[..16]);
+    // Move the complete connected workload; partial translation used to overlap
+    // the untouched staircase and depended on non-normal geometry to keep 64 wires.
+    moved.extend_from_slice(&w_ch.added);
     moved.extend_from_slice(&l_ch.added);
     doc.apply(Command::Move {
+        follow: omnia_doc::prefs::FollowPolicy::new(false, 10, false).unwrap(),
         items: moved.clone(),
-        delta: Pt { x: 100, y: 100 },
+        // A lattice step keeps the one on-lattice end, (0, 0), on the lattice (WK1).
+        delta: Pt {
+            x: omnia_doc::PIN_LATTICE_NM,
+            y: omnia_doc::PIN_LATTICE_NM,
+        },
     })
     .unwrap();
     doc.apply(Command::Reorient {
+        follow: omnia_doc::prefs::FollowPolicy::new(false, 10, false).unwrap(),
         items: moved,
-        pivot: Pt { x: 100, y: 100 },
+        pivot: Pt {
+            x: omnia_doc::PIN_LATTICE_NM,
+            y: omnia_doc::PIN_LATTICE_NM,
+        },
         by: Orient::ROT_90,
     })
     .unwrap();
@@ -227,7 +238,9 @@ fn doc_query_and_net_wires_allocate_nothing_after_commands() {
 
     let mut items_out = Vec::with_capacity(256);
     let mut wires_out = Vec::with_capacity(128);
-    let area = rect(-1_000, -1_000, 2_000, 2_000);
+    // The Move above stays applied: query around the moved workload.
+    let step = omnia_doc::PIN_LATTICE_NM;
+    let area = rect(step - 1_000, step - 1_000, step + 2_000, step + 2_000);
     let net = match w_ch.added[32] {
         ItemId::Wire(id) => doc.net_of(id).unwrap(),
         _ => unreachable!(),

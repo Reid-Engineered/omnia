@@ -151,7 +151,7 @@ without being drawn.
 - Done when: no statement in the canvas or wiring files contradicts a `UD`; section 14 is marked
   applied with the commit.
 
-### U0.3 Spike US1 and US5: chrome and goldens · todo → UH1
+### U0.3 Spike US1 and US5: chrome and goldens · needs-human → UH1
 - Lane: shell · Depends: none · Read: UD1, UG5, UG12, UD21, T0.8's G12 finding
 - Owns: `crates/omnia-bench/src/spike/chrome.rs`, `docs/measurements/U0.3.md`
 - Do: `bench spike chrome --seconds 60` opens a 1440x900 window with the 36 px bar: drag area,
@@ -161,7 +161,7 @@ without being drawn.
 - Done when: the measurement file records, per machine, which gestures worked (UH1) and whether
   the PNG shows the bar and the popover. Set `needs-human` until UH1 is done.
 
-### U0.4 Spike US2 and US3: cached popover and readout allocations · todo
+### U0.4 Spike US2 and US3: cached popover and readout allocations · done
 - Lane: shell · Depends: none · Read: UD2, UD18, G6, B10, Q5, T1.5's `status_bar.rs`
 - Owns: `crates/omnia-bench/src/spike/shell_cache.rs`, `docs/measurements/U0.4.md`
 - Do: over the `empty` sheet, a cached prototype menu bar whose popover is a `deferred` child,
@@ -171,7 +171,7 @@ without being drawn.
 - Done when: the file states sheet paints during the hover (expected 0), whether the popover
   occludes the sheet's hitbox, and allocations per frame of our code in the readout path.
 
-### U0.5 Spike US4: save and load timing · todo
+### U0.5 Spike US4: save and load timing · needs-human
 - Lane: bench · Depends: none · Read: UB10, D8, T2.4
 - Owns: `crates/omnia-bench/benches/doc_io.rs`, `docs/measurements/U0.5.md`
 - Do: criterion benches of `Doc::save` into a `Vec<u8>` and `Doc::load` from bytes for `1k` and
@@ -599,3 +599,36 @@ matrix and full `cargo test --workspace` left to CI because C: dropped to ~0.6 G
 Deviations: added `crates/omnia-app/src/widgets/mod.rs`, updated `crates/omnia-app/src/main.rs`
 for entry-point hookup, and added `crates/omnia-app/tests/icons.rs` (`[[test]]` in `Cargo.toml`)
 for real-window readback mirroring `tests/fonts.rs`.
+2026-11-17 U0.3 needs-human (UH1) — Added the standalone chrome spike (US1/US5, UD1,
+UG5, UG12, UD21). The 1440 × 900 Windows window exited on schedule and the 1800 × 1125
+readback at 125% shows the title bar, all three controls and the deferred File menu.
+Owner approved the minimal CLI registration outside the listed files. Linux gestures
+and Windows snap layouts await UH1. Report and raw evidence: docs/measurements/U0.3.md.
+2026-11-17 U0.4 done — Windows non-reference spike `bench spike shell-cache` in
+`crates/omnia-bench/src/spike/shell_cache.rs` (results in `docs/measurements/U0.4.md`, raw JSON
+in `docs/measurements/U0.4/shell-cache-{nested,sibling}.json`; hardware: Windows 11 Home 26200,
+Intel Core i7-14650HX, Intel UHD Graphics driver 32.0.101.7088, 1440x900 @ 1.25 scale, 165 Hz).
+US2: 300-frame menu-label hover over the `empty` sheet gave 0 `SheetView` paints; the `deferred`
+`.occlude()` popover inside `.cached()` `PrototypeMenuBar` occluded move/middle-drag/scroll
+over the sheet on both fresh and root-notified cached replay (`replay_menu_renders = 0`,
+`replay_popover_prepaints = 0`, `replay_popover_paints = 1`), confirming UD2's in-view placement
+on Windows. US3: 600-frame `pan` (1 device px/frame) gave 0 `ours` allocations/bytes per frame
+across `subscribe`, `render`, `layout`, `prepaint`, and `paint` using stack `FixedText<128>` and
+cached Source Code Pro `ShapedLine` glyphs (`total` was 0 in `subscribe`/`render`/`layout`/
+`prepaint`, and 0 p99 / max 1 [324 B on 4 of 600 frames] in `paint`). Note for U0.6/U1.8: GPUI's
+`Window::mark_view_dirty` marks ancestor views dirty, so nesting `ReadoutsView` inside `.cached()`
+`StatusBar` caused `status_bar_renders = 600`, whereas placing `StatusBar` and `ReadoutsView` as
+sibling `.cached()` views in the bottom row dropped `status_bar_renders` to 0 and whole-frame
+`total` allocs from 59 to 51 p50. All five standard checks pass on Windows; Orion certification
+remains outside U0.4.
+2026-11-17 U0.5 needs-human — added Criterion bench `crates/omnia-bench/benches/doc_io.rs` (`save_1k`,
+`load_1k`, `save_10k`, `load_10k` over T2.4 `generate(..., 42)`), registered `doc_io` in
+`crates/omnia-bench/Cargo.toml`, and prepared the frozen one-command Orion campaign
+(`docs/measurements/U0.5/run.sh`, `summarize.py`) under canvas-plan section 2.1 CPU-only rules.
+File sizes (RON v2): `1k` 505,548 B (`0.4821 MiB`), `10k` 5,079,273 B (`4.8440 MiB`).
+Windows 10-pass non-reference diagnostic (i7-14650HX, 32 GB, Windows 11 Home 10.0.26200, AC,
+Silent power scheme, shared session, certifies nothing): median of 10 run `p50`/`p99` (`n=100`
+per pass) `save_1k` `1.330`/`1.480` ms, `load_1k` `4.771`/`5.211` ms, `save_10k` `13.724`/`15.082` ms
+(range `13.863–50.079` ms), `load_10k` `50.710`/`52.954` ms. Nothing run on Orion; `needs-human`
+until the owner runs `bash docs/measurements/U0.5/run.sh` on Orion to decide US4 / `UB10`
+(`save_10k` < 33.3 ms p99 vs `DocSnapshot`).

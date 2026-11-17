@@ -1,0 +1,50 @@
+﻿01-load_10k: bytes=5079273 p50_ms=51.887500 p99_ms=69.193600 max_ms=71.606600 mean_ms=53.143987
+01-load_1k: bytes=505548 p50_ms=4.849400 p99_ms=5.261700 max_ms=5.282800 mean_ms=4.868251
+01-save_10k: bytes=5079273 p50_ms=13.989100 p99_ms=15.540500 max_ms=16.396100 mean_ms=13.841129
+01-save_1k: bytes=505548 p50_ms=1.315400 p99_ms=1.480600 max_ms=1.515100 mean_ms=1.324455
+02-load_10k: bytes=5079273 p50_ms=50.921900 p99_ms=53.334400 max_ms=54.756300 mean_ms=50.913585
+02-load_1k: bytes=505548 p50_ms=6.130500 p99_ms=8.393700 max_ms=9.543800 mean_ms=6.407786
+02-save_10k: bytes=5079273 p50_ms=15.834400 p99_ms=17.270200 max_ms=17.556000 mean_ms=15.797100
+02-save_1k: bytes=505548 p50_ms=1.324500 p99_ms=1.443900 max_ms=1.460200 mean_ms=1.318202
+03-load_10k: bytes=5079273 p50_ms=50.716600 p99_ms=52.574400 max_ms=52.959500 mean_ms=50.677386
+03-load_1k: bytes=505548 p50_ms=4.746300 p99_ms=5.342200 max_ms=5.590100 mean_ms=4.776784
+03-save_10k: bytes=5079273 p50_ms=13.443300 p99_ms=14.624000 max_ms=14.900200 mean_ms=13.499478
+03-save_1k: bytes=505548 p50_ms=1.334500 p99_ms=1.514600 max_ms=2.285400 mean_ms=1.349926
+04-load_10k: bytes=5079273 p50_ms=50.703100 p99_ms=54.570800 max_ms=62.497100 mean_ms=51.030025
+04-load_1k: bytes=505548 p50_ms=5.243900 p99_ms=5.691900 max_ms=5.707400 mean_ms=5.255445
+04-save_10k: bytes=5079273 p50_ms=14.544700 p99_ms=19.069800 max_ms=19.294100 mean_ms=14.932437
+04-save_1k: bytes=505548 p50_ms=1.343900 p99_ms=1.424600 max_ms=1.476200 mean_ms=1.336518
+05-load_10k: bytes=5079273 p50_ms=63.498900 p99_ms=88.186000 max_ms=89.596700 mean_ms=66.442777
+05-load_1k: bytes=505548 p50_ms=4.744400 p99_ms=5.146900 max_ms=5.434600 mean_ms=4.717173
+05-save_10k: bytes=5079273 p50_ms=18.127400 p99_ms=19.259400 max_ms=19.260400 mean_ms=18.087523
+05-save_1k: bytes=505548 p50_ms=1.360400 p99_ms=1.433700 max_ms=1.471800 mean_ms=1.358809
+06-load_10k: bytes=5079273 p50_ms=50.885800 p99_ms=53.588400 max_ms=57.506600 mean_ms=50.961521
+06-load_1k: bytes=505548 p50_ms=4.758900 p99_ms=5.133900 max_ms=5.173700 mean_ms=4.774349
+06-save_10k: bytes=5079273 p50_ms=28.774800 p99_ms=50.079000 max_ms=50.394900 mean_ms=30.224317
+06-save_1k: bytes=505548 p50_ms=1.303800 p99_ms=1.469600 max_ms=1.481900 mean_ms=1.307819
+07-load_10k: bytes=5079273 p50_ms=49.670500 p99_ms=51.365600 max_ms=52.159800 mean_ms=49.749126
+07-load_1k: bytes=505548 p50_ms=4.766600 p99_ms=5.018300 max_ms=5.061000 mean_ms=4.752627
+07-save_10k: bytes=5079273 p50_ms=13.298700 p99_ms=14.197700 max_ms=14.241900 mean_ms=13.200429
+07-save_1k: bytes=505548 p50_ms=1.349400 p99_ms=1.541800 max_ms=1.636600 mean_ms=1.351016
+08-load_10k: bytes=5079273 p50_ms=49.897800 p99_ms=52.572000 max_ms=53.536200 mean_ms=50.075903
+08-load_1k: bytes=505548 p50_ms=4.848800 p99_ms=5.140700 max_ms=5.140800 mean_ms=4.851312
+08-save_10k: bytes=5079273 p50_ms=13.458400 p99_ms=14.168000 max_ms=14.416100 mean_ms=13.275202
+08-save_1k: bytes=505548 p50_ms=1.358800 p99_ms=1.483700 max_ms=1.487900 mean_ms=1.364247
+09-load_10k: bytes=5079273 p50_ms=49.653300 p99_ms=52.146600 max_ms=52.255100 mean_ms=49.770917
+09-load_1k: bytes=505548 p50_ms=4.645500 p99_ms=5.159600 max_ms=6.387400 mean_ms=4.687730
+09-save_10k: bytes=5079273 p50_ms=13.250400 p99_ms=13.863100 max_ms=14.933800 mean_ms=13.158192
+09-save_1k: bytes=505548 p50_ms=1.317000 p99_ms=1.655000 max_ms=1.842600 mean_ms=1.338565
+10-load_10k: bytes=5079273 p50_ms=50.059700 p99_ms=51.761600 max_ms=51.868700 mean_ms=50.027379
+10-load_1k: bytes=505548 p50_ms=4.776000 p99_ms=5.301500 max_ms=5.373500 mean_ms=4.771790
+10-save_10k: bytes=5079273 p50_ms=13.259100 p99_ms=14.251900 max_ms=14.376400 mean_ms=13.265905
+10-save_1k: bytes=505548 p50_ms=1.306100 p99_ms=1.480100 max_ms=1.528200 mean_ms=1.309299
+
+File sizes:
+  1k: 505548 bytes (0.4821 MiB)
+  10k: 5079273 bytes (4.8440 MiB)
+
+Median of 10 passes (nearest-rank per pass, n=100 observations/pass):
+save_1k: bytes=505548 median_p50_ms=1.329500 p50_range_ms=1.303800..1.360400 median_p99_ms=1.480350 p99_range_ms=1.424600..1.655000 mean_ms=1.335886 max_ms=2.285400 criterion_median_est_ms=1.142100 (1.103400..1.280600)
+load_1k: bytes=505548 median_p50_ms=4.771300 p50_range_ms=4.645500..6.130500 median_p99_ms=5.210650 p99_range_ms=5.018300..8.393700 mean_ms=4.986325 max_ms=9.543800 criterion_median_est_ms=4.783850 (4.678000..9.424800)
+save_10k: bytes=5079273 median_p50_ms=13.723750 p50_range_ms=13.250400..28.774800 median_p99_ms=15.082250 p99_range_ms=13.863100..50.079000 mean_ms=15.928171 max_ms=50.394900 criterion_median_est_ms=13.031500 (12.419000..15.957000) ub10_comparison=median_p99 < 33.3 ms (not a gate verdict until Orion section 2.1 conditions verified)
+load_10k: bytes=5079273 median_p50_ms=50.709850 p50_range_ms=49.653300..63.498900 median_p99_ms=52.954400 p99_range_ms=51.365600..88.186000 mean_ms=52.279261 max_ms=89.596700 criterion_median_est_ms=51.105000 (49.866000..59.758000)

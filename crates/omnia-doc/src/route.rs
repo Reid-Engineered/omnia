@@ -1580,6 +1580,7 @@ mod tests {
         let id = moved.wires().find(|(_, wire)| wire.a.x == 5).unwrap().0;
         moved
             .apply(Command::Move {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: vec![ItemId::Wire(id)],
                 delta: Pt { x: 0, y: -5 },
             })
@@ -1953,7 +1954,7 @@ mod tests {
                 let before = snapshot(&doc);
                 let live = live_wires(&doc);
                 let cmd = match (kind, live.is_empty()) {
-                    (1, false) => Command::Move { items: vec![ItemId::Wire(live[pick % live.len()].0)], delta },
+                    (1, false) => Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(), items: vec![ItemId::Wire(live[pick % live.len()].0)], delta },
                     (2, false) => Command::Delete { items: vec![ItemId::Wire(live[pick % live.len()].0)], with_wires: false },
                     _ => Command::AddWires(wires.clone()),
                 };
@@ -1965,7 +1966,52 @@ mod tests {
                     doc.apply(cmd).unwrap();
                     prop_assert!(doc.content_eq(&reversed));
                 } else {
-                    doc.apply(cmd).unwrap();
+                    // W2.2 (WD3 capture rule): a moved wire is refused exactly
+                    // when an independent brute-force oracle finds a foreign pin
+                    // or end in its interior or a shared stretch; every other
+                    // command must succeed, as before. Refusals change nothing.
+                    // WK1/WINV3: an on-lattice end may not land off the lattice
+                    // (checked after the capture rule). These sheets use raw nm.
+                    let (expect_capture, expect_off_lattice) = match &cmd {
+                        // A zero delta is an inert command (no validation, no edit).
+                        Command::Move { items, delta, .. } if *delta != Pt::ZERO => {
+                            let ItemId::Wire(id) = items[0] else { unreachable!() };
+                            let w = *doc.wire(id).unwrap();
+                            let lat = |p: Pt| p.x % crate::PIN_LATTICE_NM == 0 && p.y % crate::PIN_LATTICE_NM == 0;
+                            let (a, b) = (Pt { x: w.a.x + delta.x, y: w.a.y + delta.y }, Pt { x: w.b.x + delta.x, y: w.b.y + delta.y });
+                            let mut off = (lat(w.a) && !lat(a)) || (lat(w.b) && !lat(b));
+                            // A lattice wire may not cover an off-lattice label (it would split there).
+                            off |= lat(a) && lat(b) && doc.labels().any(|(_, l)| {
+                                let p = l.at;
+                                !lat(p) && p != a && p != b
+                                    && (a.x.min(b.x)..=a.x.max(b.x)).contains(&p.x)
+                                    && (a.y.min(b.y)..=a.y.max(b.y)).contains(&p.y)
+                            });
+                            (moved_wire_captures(&doc, id, *delta), off)
+                        }
+                        _ => (false, false),
+                    };
+                    let mut bytes = Vec::new();
+                    doc.save(&mut bytes).unwrap();
+                    match doc.apply(cmd) {
+                        Err(crate::CommandError::Capture { .. }) => {
+                            prop_assert!(expect_capture, "refused without a capture");
+                            let mut refused = Vec::new();
+                            doc.save(&mut refused).unwrap();
+                            prop_assert_eq!(refused, bytes);
+                        }
+                        Err(crate::CommandError::OffLattice(_)) => {
+                            prop_assert!(!expect_capture && expect_off_lattice, "refused off the lattice wrongly");
+                            let mut refused = Vec::new();
+                            doc.save(&mut refused).unwrap();
+                            prop_assert_eq!(refused, bytes);
+                        }
+                        result => {
+                            prop_assert!(!expect_capture, "capture accepted: {:?}", result);
+                            prop_assert!(!expect_off_lattice, "off-lattice end accepted: {:?}", result);
+                            result.unwrap();
+                        }
+                    }
                 }
                 assert_inv10(&doc);
                 let after = snapshot(&doc);
@@ -1980,6 +2026,57 @@ mod tests {
             while doc.undo().is_some() {}
             prop_assert!(doc.content_eq(&initial));
         }
+    }
+
+    /// Brute-force WD3 capture oracle for a single selected wire translated by
+    /// `delta`, independent of the command's indexed implementation.
+    fn moved_wire_captures(doc: &Doc, id: WireId, delta: Pt) -> bool {
+        let w = *doc.wire(id).unwrap();
+        let a = Pt {
+            x: w.a.x + delta.x,
+            y: w.a.y + delta.y,
+        };
+        let b = Pt {
+            x: w.b.x + delta.x,
+            y: w.b.y + delta.y,
+        };
+        let (lo, hi) = (
+            Pt {
+                x: a.x.min(b.x),
+                y: a.y.min(b.y),
+            },
+            Pt {
+                x: a.x.max(b.x),
+                y: a.y.max(b.y),
+            },
+        );
+        let interior = |p: Pt| {
+            p != a && p != b && (lo.x..=hi.x).contains(&p.x) && (lo.y..=hi.y).contains(&p.y)
+        };
+        let pins = doc
+            .parts()
+            .any(|(part, _)| doc.pins(part).unwrap().iter().any(|&p| interior(p)));
+        let wires = doc.wires().filter(|&(other, _)| other != id).any(|(_, o)| {
+            let (olo, ohi) = (
+                Pt {
+                    x: o.a.x.min(o.b.x),
+                    y: o.a.y.min(o.b.y),
+                },
+                Pt {
+                    x: o.a.x.max(o.b.x),
+                    y: o.a.y.max(o.b.y),
+                },
+            );
+            let stretch = if a.y == b.y && o.a.y == o.b.y && a.y == o.a.y {
+                lo.x.max(olo.x) < hi.x.min(ohi.x)
+            } else if a.x == b.x && o.a.x == o.b.x && a.x == o.a.x {
+                lo.y.max(olo.y) < hi.y.min(ohi.y)
+            } else {
+                false
+            };
+            interior(o.a) || interior(o.b) || stretch
+        });
+        pins || wires
     }
 
     // ---- W1.5: route candidates (WD4, WK5, WK6, WINV10) ----

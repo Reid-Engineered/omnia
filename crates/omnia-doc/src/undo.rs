@@ -24,6 +24,10 @@ pub(crate) enum UndoOp {
         added: Vec<WireId>,
     },
     RemoveLabel(LabelId),
+    SetLabelAt {
+        id: LabelId,
+        at: Pt,
+    },
     RestoreLabel {
         id: LabelId,
         label: Label,
@@ -172,6 +176,18 @@ pub(crate) fn apply_undo_op(doc: &mut Doc, op: UndoOp, acc: &mut ChangeAcc) -> U
                 removed: present,
                 added: restored,
             }
+        }
+        UndoOp::SetLabelAt { id, at } => {
+            let (mut label, old_bounds) = doc.remove_label_raw(id).expect("planned label exists");
+            let old = label.at;
+            label.at = at;
+            let bounds = doc
+                .restore_label_raw(id, label)
+                .expect("validated label point");
+            acc.record_dirty(old_bounds);
+            acc.record_dirty(bounds);
+            acc.nets_changed = true;
+            UndoOp::SetLabelAt { id, at: old }
         }
         UndoOp::RemoveLabel(id) => {
             let (label, bounds) = doc.remove_label_raw(id).expect("undo label must exist");
