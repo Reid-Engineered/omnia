@@ -1,6 +1,6 @@
 # Omnia project roadmap
 
-Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) provides the detailed implementation tasks beneath it; a wiring roadmap will be linked here once it is published.
+Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) provides the detailed implementation tasks beneath it; a wiring roadmap will be linked here once it is published. The [agent-control plan](mcp-plan.md) and its [roadmap](mcp-roadmap.md) describe how agents and scripts drive Omnia through the same document commands as the editor; that surface serves the stages below and adds no product scope of its own.
 
 This is an outcome-based roadmap, not a schedule. Stages can overlap, but a stage is complete only when its exit criteria are demonstrated. The first-release scope below is a proposed baseline; open product decisions are recorded at the end.
 
