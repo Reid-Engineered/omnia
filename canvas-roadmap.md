@@ -501,7 +501,7 @@ of the `canvas` lane.
 
 ## Milestone 6: wiring
 
-### T6.1 Wire routing rules · todo
+### T6.1 Wire routing rules · done
 - Lane: doc · Depends: T5.1 · Read: D2, INV2
 - Owns: `crates/omnia-doc/src/route.rs`
 - Do: the L-route between two points with a `flip` flag for the corner; `AddWires` splits
@@ -1376,3 +1376,38 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        no invalidation. Invalid targets still reject without mutation.
                        Tests cover nested empty batches, empty selection operations,
                        identity/zero transforms and unchanged text with redo available.
+2026-11-16 T6.1 done — added crates/omnia-doc/src/route.rs with `l_route(a, b, flip)`
+                       (flip=false leaves `a` horizontally, flip=true vertically; plan
+                       section 9 sketch updated) and a pure, deterministic split/merge
+                       planner for `AddWires`. `Doc::apply` now splits any wire whose
+                       interior an added end lands on, splits an added wire where it
+                       passes over an existing end, pin or label point, deduplicates
+                       overlapping stretches, and merges collinear segments joined at a
+                       point holding nothing else; crossing interiors never split or
+                       connect (INV2, M18). One `UndoOp::ReplaceWires` inverse restores
+                       the pre-split wires under their old ids (INV4); a split keeps the
+                       original id on its first piece and a merge keeps the lowest id,
+                       with fresh ids assigned in geometry order, so the result does not
+                       depend on the caller's wire order or hash-map order. The merge
+                       predicate already keeps a point that carries a net label (WD4,
+                       WD9), so W1.4's "make T6.1's merge keep a labelled point" part is
+                       done here and W1.4 only needs to verify it. Dependency note: the
+                       owner approved starting T6.1 on 2026-11-16 although T5.1 is
+                       `needs-human`, because only its Move-of-100-items timing check on
+                       the Orion reference machine is outstanding; the commands/undo code
+                       is merged, and T6.1 changes no timing behaviour of T5.1 (Move and
+                       Reorient paths untouched). Tests: 8 new route tests including a
+                       128-case proptest over random AddWires batches asserting INV2, the
+                       wire normal form and INV10 against a from-scratch rebuild after
+                       every step, plus INV4 undo/redo with exact ids; the existing
+                       INV4+INV10 command proptest also passes. All standard checks pass
+                       on this Windows development machine (fmt, both clippy gates,
+                       cargo test --workspace, cargo deny check); no budget is certified
+                       here. Files outside route.rs: command.rs (AddWires only), undo.rs
+                       (the ReplaceWires variant), lib.rs (the `route` module line) and
+                       canvas-plan.md section 9. No new dependencies. One existing
+                       fixture updated: `crates/omnia-doc/tests/index_alloc.rs` built 64
+                       contiguous collinear wires and sliced the added ids, which the
+                       new merge rule correctly reduces to two wires; its wires now
+                       have gaps so the allocation assertions keep their original
+                       meaning (the assertions themselves are unchanged).

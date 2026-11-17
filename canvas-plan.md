@@ -515,6 +515,12 @@ impl Connectivity {                                        // D2, INV10 (T4.1)
     pub fn add_label(&mut self, id: LabelId, label: &Label);
     pub fn remove_label(&mut self, id: LabelId) -> Option<Label>;
 }
+pub fn l_route(a: Pt, b: Pt, flip: bool) -> Vec<Wire>;    // T6.1 (route.rs): the L-route;
+                                                           // flip=false leaves a horizontally,
+                                                           // flip=true vertically. AddWires splits
+                                                           // and merges to the INV2 normal form
+                                                           // inside apply; a point carrying a net
+                                                           // label is never merged away (WD4, WD9).
 
 // ---- omnia-symbols ----
 pub struct SymbolId(u16);

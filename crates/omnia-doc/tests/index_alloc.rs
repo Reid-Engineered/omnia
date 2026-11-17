@@ -156,13 +156,16 @@ fn doc_query_and_net_wires_allocate_nothing_after_commands() {
             local_bounds: rect(-10, -10, 30, 10),
         })
         .unwrap();
+    // Gaps keep the 64 wires separate: T6.1 merges collinear segments that
+    // join with nothing else at the meeting point, which would leave only a
+    // couple of added wires here and defeat the slicing below.
     let w_ch = doc
         .apply(Command::AddWires(
             (0..64)
                 .map(|i| Wire {
-                    a: Pt { x: i * 10, y: 0 },
+                    a: Pt { x: i * 20, y: 0 },
                     b: Pt {
-                        x: (i + 1) * 10,
+                        x: i * 20 + 10,
                         y: 0,
                     },
                 })

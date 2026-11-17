@@ -17,6 +17,12 @@ pub(crate) enum UndoOp {
     },
     RemoveWires(Vec<WireId>),
     RestoreWires(Vec<(WireId, Wire)>),
+    /// One inverse for an `AddWires` split/merge (T6.1): take out `added`,
+    /// restore `removed` under their old ids.
+    ReplaceWires {
+        removed: Vec<(WireId, Wire)>,
+        added: Vec<WireId>,
+    },
     RemoveLabel(LabelId),
     RestoreLabel {
         id: LabelId,
@@ -140,6 +146,32 @@ pub(crate) fn apply_undo_op(doc: &mut Doc, op: UndoOp, acc: &mut ChangeAcc) -> U
                 ids.push(id);
             }
             UndoOp::RemoveWires(ids)
+        }
+        UndoOp::ReplaceWires { removed, added } => {
+            let mut present = Vec::with_capacity(added.len());
+            for id in added {
+                let (wire, bounds) = doc
+                    .remove_wire_raw(id)
+                    .expect("undo replace wire must exist");
+                acc.record_dirty(bounds);
+                acc.record_removed(ItemId::Wire(id));
+                acc.nets_changed = true;
+                present.push((id, wire));
+            }
+            let mut restored = Vec::with_capacity(removed.len());
+            for (id, wire) in removed {
+                let bounds = doc
+                    .restore_wire_raw(id, wire)
+                    .expect("undo replace restore must target reserved empty slot");
+                acc.record_dirty(bounds);
+                acc.record_added(ItemId::Wire(id));
+                acc.nets_changed = true;
+                restored.push(id);
+            }
+            UndoOp::ReplaceWires {
+                removed: present,
+                added: restored,
+            }
         }
         UndoOp::RemoveLabel(id) => {
             let (label, bounds) = doc.remove_label_raw(id).expect("undo label must exist");

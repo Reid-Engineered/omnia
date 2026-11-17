@@ -18,6 +18,9 @@ pub use index::{INDEX_CELL_NM, SpatialIndex};
 
 pub use geom::{GRID_NM, GeomError, Orient, PIN_LATTICE_NM, Pt, Rect, SHEET_LIMIT_NM, snap_to};
 
+pub mod route;
+pub use route::l_route;
+
 pub mod hit;
 pub mod snap;
 pub use hit::{Hit, hit_test};
