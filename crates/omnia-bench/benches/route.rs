@@ -98,7 +98,7 @@ fn bench(c: &mut Criterion) {
                     &mut scratch,
                     &mut out,
                 );
-                black_box((r, &out));
+                let _ = black_box((r, &out));
             })
         });
     }

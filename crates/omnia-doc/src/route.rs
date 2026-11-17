@@ -1658,7 +1658,7 @@ mod tests {
 
     /// One part per entry: world = local (at the origin, identity), body in
     /// lattice units `(x0, y0, x1, y1)`, pins in lattice units.
-    fn sheet(parts: &[((i32, i32, i32, i32), Vec<(i32, i32)>)], wires: &[Wire]) -> Doc {
+    fn sheet(parts: &[PartSpec], wires: &[Wire]) -> Doc {
         Doc::from_items(
             parts
                 .iter()

@@ -171,7 +171,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
   the matching `Blocker`; a wire that only crosses a foreign wire's interior is accepted and
   the two stay in different nets (INV2).
 
-### W1.5 Route candidates · todo
+### W1.5 Route candidates · done
 - Lane: doc · Depends: W1.4 · Read: WD4, WK1, WK5, WK6, WINV10
 - Owns: `crates/schematic-doc/src/route.rs`
 - Do: `route(doc, a, b, first_leg, out)`: enumerate WD4's candidates in order, validate each,
@@ -537,3 +537,40 @@ doc_label_bridge_delete. By fixture inspection none gains a merge: the 10k leaf 
 a pin at its anchor and no end at its free tip; chain deletion opens a gap with one end
 per side; bridge deletion leaves one end at each corner. Re-freeze those three cases on
 the final binary even though their resulting geometry does not change.
+
+2026-11-16 W1.5 done - route.rs: `route(doc, a, b, first_leg, scratch, out)` with a
+caller-owned `RouteScratch` (signature change from the sketch; section 10 updated), `Axis`,
+`DOGLEG_REACH_NM` (WK5), `DOGLEG_CAP` (WK6), and `check_new_wires_in`, which takes the query
+buffer so validation allocates nothing warm (`check_new_wires` delegates to it). Candidates
+in WD4 order (straight 0; L along first_leg 1, other L 2; doglegs 3..), each scored
+(body segments, bends, crossings, length, number), sorted in place, validated in score order
+through W1.4's validator; the first valid wins, else the blocker of the lowest-scoring
+candidate (the same comparison ranks the invalid ones, as WD4 says). WD4's "first rule that
+fails, walking its segments from a" and W1.4's "rule priority before segment order" agree
+under the reading that the rule is chosen first and the walk picks within it; W1.4's
+function is used unchanged in that respect. Deviation for owner review: WD4 rule 2 now
+covers the run's corners (vertices that are not own ends). Without it a corner on a foreign
+pin, wire end or wire body passed validation and AddWires would connect a third net, which
+breaks the done-when "connects exactly a and b" and TC-move-08's rigid check. Added
+`Blocker::WireBody(WireId)` for a corner on a foreign wire's interior; WD4 and section 10
+record it. One W1.4 test case changed accordingly (its chained corner sat on a foreign
+body); its rule-precedence intent is kept with unchained wires, and new cases cover a corner
+on a pin, end and body. Enumeration choices recorded in WD4: doglegs by grid steps from a,
+H-V-H before V-H-V, towards b first (lesser coordinate when level), within the ends' span
+widened by WK5, zero-length shapes skipped and not counted, doglegs also when the straight
+exists; body count uses open interiors (edges do not count). Tests: hand-built straight,
+each L, L blocked by a pin (and by a pin on its corner), both Ls blocked so a dogleg wins,
+level ends round a U, TC-move-12 body in the way, bends before crossings, refusal ranking
+(including a case where a dogleg outranks both invalid Ls), candidate order and the WK6 cap
+against an independent enumeration. Properties (256 cases each): every route matches a
+brute-force oracle (whole-sheet scan, no index) in result and blocker; is orthogonal, on the
+lattice, a chain from a to b, passes check_new_wires (WINV10); adding it keeps normal form
+and INV10 and joins exactly the nets at a and b; and the same route comes back with a fresh
+or warm scratch and on the sheet rebuilt in reverse id order. tests/route_alloc.rs (new
+integration test, needed for the counting allocator) shows zero allocations warm. Bench
+(crates/omnia-bench/benches/route.rs, diagnostic, non-reference Windows machine i7-14650HX,
+battery, power scheme Silent): `10k` mean 23.2 us, per-call p50 14.0 us, p99 274 us;
+`dense` mean 51.2 us, p50 42.3 us, p99 455 us (every dense case refused: the moved pin sits
+on its own rays, the worst case). docs/measurements/W1.5.md. For W2.1: callers remove the
+run being replaced from the document view before routing, as for check_new_wires; a lone
+label (not on a pin or end, which WD9 does not produce) is not a blocker.
