@@ -331,7 +331,7 @@ of the `canvas` lane.
   check pass after every step; `Doc::query` allocates nothing with capacity; benches record
   whether one add and one remove stay under 1 ms on `10k` and in the worst cases.
 
-### T2.5 Sheet rendering · todo
+### T2.5 Sheet rendering · done
 - Lane: canvas · Depends: T0.6, T1.6, T2.2, T2.3, T2.4, T2.8 · Read: D4, D5, K5, K6, K9, K11, G3 to G5, INV7
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `sheet/wires.rs`, `sheet/symbols.rs`, `sheet/lod.rs`
 - Do: cull with `Doc::query`; wires as device-pixel-snapped quads; symbols as `paint_svg`
@@ -1537,3 +1537,14 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        exclusion in plan 2.1. B8 zero idle frames across 20 runs and
                        B10 zero paint-path allocations per frame in all motion runs.
                        Raw reports, conditions, and verdict: docs/measurements/T1.6.md.
+2026-11-17 T2.5 done — D4/D5, K5/K6/K9/K10/K11, G3–G5 and INV7. The document
+                       sheet culls through Doc::query, paints snapped wire quads and
+                       level-of-detail boxes, and reuses bucketed symbol masks with
+                       device-space placement and orientation. Far zoom merges touching
+                       collinear wire quads and suppresses the grid below the base pitch
+                       cutoff. Windows render_to_image verified horizontal and vertical
+                       stroke coverage and a rotated ground at 1.0, 1.25 and 1.5 with
+                       fractional pan. The warmed 1k-part paint test counted zero Omnia
+                       allocations. T2.6 picks up the renderer for real-sheet benchmarks.
+                       U2.2 supplies the live document and invalidation to SheetCanvas
+                       through SheetDocument and SheetView::with_document.

@@ -1,7 +1,7 @@
-//! `SheetView`: the sheet element. T1.4 paints the paper and the dot grid.
+//! `SheetView`: paper, grid, and document content (T1.4, T2.5).
 //!
-//! The element implements [`Element`] directly (G8: `canvas()` boxes two closures per frame)
-//! and paints inside one [`Window::paint_layer`] (G5). Grid dots are plain square quads of
+//! The element implements [`Element`] directly (G8) and groups primitives into paint layers
+//! (G5). Grid dots are plain square quads of
 //! whole device pixels (D4, G3), placed with [`crate::snap_px`] so they never move by a
 //! fraction of a pixel and never vary in size (D5).
 //!
@@ -14,16 +14,22 @@
 //! (the ones that drop when zooming out past 40 px) are drawn too, their alpha rising from
 //! 0 at 35 px to full at 40 px, so the switch between levels is continuous.
 //!
-//! The paint body allocates nothing (B10, INV7): it walks the grid directly and emits each
-//! quad as it goes, so there is no buffer to grow.
+//! The grid walks the lattice directly. Document paint reuses its query and paint buffers
+//! and uses prebuilt raster keys and SVG bytes (B10, INV7).
+
+mod lod;
+mod symbols;
+mod wires;
+
+use std::{cell::RefCell, rc::Rc};
 
 use crate::camera::Camera;
 use crate::snap_px::{centered_square, stroke_device_px};
 use gpui::{
-    App, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hsla, InspectorElementId,
-    LayoutId, PaintQuad, Pixels, Style, Window, fill, relative,
+    App, Bounds, ContentMask, Element, ElementId, Entity, GlobalElementId, Hsla,
+    InspectorElementId, LayoutId, PaintQuad, Pixels, Style, Window, fill, relative,
 };
-use omnia_doc::{GRID_NM, Pt, Rect};
+use omnia_doc::{Doc, GRID_NM, ItemId, Pt, Rect, SHEET_LIMIT_NM};
 use omnia_theme::Theme;
 
 /// K10: the on-screen grid pitch stays at or above this many logical px.
@@ -99,25 +105,214 @@ fn gpui_color(c: omnia_theme::Rgba) -> Hsla {
     .into()
 }
 
-/// The sheet element: paper and grid (T1.4). Cheap to build every frame; it owns no heap
-/// data.
+/// Keeps the live document and the renderer's persistent resources together. Create once
+/// per sheet and clone when building a new element. The owning view controls invalidation.
+#[derive(Clone, Debug)]
+pub struct SheetDocument {
+    doc: Entity<Doc>,
+    cache: Rc<DocumentCache>,
+}
+
+impl SheetDocument {
+    pub fn new(doc: Entity<Doc>) -> Self {
+        Self {
+            doc,
+            cache: Rc::new(DocumentCache::default()),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DocumentCache {
+    masks: symbols::Masks,
+    scratch: RefCell<Scratch>,
+}
+
+impl Default for DocumentCache {
+    fn default() -> Self {
+        Self {
+            masks: symbols::Masks::new(),
+            scratch: RefCell::default(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct Scratch {
+    items: Vec<ItemId>,
+    segments: Vec<wires::Segment>,
+    junctions: Vec<Pt>,
+}
+
+#[derive(Clone, Copy)]
+enum Layer {
+    WiresAndBoxes,
+    SymbolsAndDots,
+}
+
+enum Mark<'a> {
+    Quad(Bounds<Pixels>),
+    Sprite(symbols::Shape<'a>),
+}
+
+fn paint_mark(window: &mut Window, cx: &App, mark: Mark<'_>, sf: f32, ink: Hsla) {
+    match mark {
+        Mark::Quad(bounds) => window.paint_quad(fill(bounds, ink)),
+        Mark::Sprite(shape) => {
+            let (bounds, transform) = shape.sprite(sf);
+            if let Err(error) = window.paint_svg(
+                bounds,
+                shape.mask.key.clone(),
+                Some(&shape.mask.svg),
+                transform,
+                ink,
+                cx,
+            ) {
+                eprintln!("sheet mask: {error}");
+            }
+        }
+    }
+}
+
+type EmitMarks<'sprite, 'emit> = dyn FnMut(&mut dyn FnMut(Mark<'sprite>)) + 'emit;
+
+impl DocumentCache {
+    fn draw<'a>(
+        &'a self,
+        doc: &Doc,
+        camera: &Camera,
+        sf: f32,
+        mut layer: impl FnMut(Layer, &mut EmitMarks<'a, '_>),
+    ) {
+        let mut scratch = self.scratch.borrow_mut();
+        let Scratch {
+            items,
+            segments,
+            junctions,
+        } = &mut *scratch;
+        let diameter = lod::junction_diameter(camera);
+        let wire_width = wires::width(camera, sf);
+        // Include ink whose centreline is just outside the viewport, including the one-device
+        // pixel floor and the separately culled junction dots.
+        let margin_px = f64::from(wire_width).max(diameter.unwrap_or(0.0) * f64::from(sf));
+        let margin_nm = (margin_px / (f64::from(sf) * camera.scale())).ceil() as i32;
+        let view = camera.visible();
+        let area = Rect {
+            min: Pt {
+                x: view.min.x.saturating_sub(margin_nm).max(-SHEET_LIMIT_NM),
+                y: view.min.y.saturating_sub(margin_nm).max(-SHEET_LIMIT_NM),
+            },
+            max: Pt {
+                x: view.max.x.saturating_add(margin_nm).min(SHEET_LIMIT_NM),
+                y: view.max.y.saturating_add(margin_nm).min(SHEET_LIMIT_NM),
+            },
+        };
+        doc.query(area, items);
+        items.sort_unstable_by_key(|id| match *id {
+            ItemId::Part(id) => (0, id.0),
+            ItemId::Wire(id) => (1, id.0),
+            ItemId::Label(id) => (2, id.0),
+        });
+        let part_shapes = || {
+            items.iter().filter_map(|id| match *id {
+                ItemId::Part(id) => self.masks.symbol(doc.part(id)?, camera, sf),
+                _ => None,
+            })
+        };
+        let wire_segments = || {
+            items.iter().filter_map(|id| match *id {
+                ItemId::Wire(id) => doc.wire(id).copied().map(wires::Segment::from),
+                _ => None,
+            })
+        };
+
+        layer(Layer::WiresAndBoxes, &mut |sink| {
+            let mut draw = |segment: wires::Segment| {
+                sink(Mark::Quad(segment.bounds(camera, sf, wire_width)));
+            };
+            if diameter.is_some() {
+                wire_segments().for_each(&mut draw);
+            } else {
+                segments.clear();
+                segments.extend(wire_segments());
+                segments.sort_unstable();
+                let mut iter = segments.iter().copied();
+                if let Some(mut current) = iter.next() {
+                    for next in iter {
+                        if !current.merge(next) {
+                            draw(current);
+                            current = next;
+                        }
+                    }
+                    draw(current);
+                }
+            }
+            for shape in part_shapes().filter(|s| lod::symbol_box(s.logical_side)) {
+                let side = stroke_device_px(shape.logical_side, sf);
+                let scale = f64::from(sf);
+                sink(Mark::Quad(centered_square(
+                    gpui::point(shape.x / scale, shape.y / scale),
+                    side,
+                    sf,
+                )));
+            }
+        });
+
+        layer(Layer::SymbolsAndDots, &mut |sink| {
+            for shape in part_shapes().filter(|s| !lod::symbol_box(s.logical_side)) {
+                sink(Mark::Sprite(shape));
+            }
+            if let Some(diameter) = diameter {
+                doc.junctions(area, junctions);
+                junctions.sort_unstable_by_key(|p| (p.x, p.y));
+                let side = stroke_device_px(diameter, sf);
+                for &p in junctions.iter() {
+                    let center = camera.world_to_screen(p);
+                    if side < 3 {
+                        sink(Mark::Quad(centered_square(center, side, sf)));
+                    } else {
+                        sink(Mark::Sprite(
+                            self.masks.dot(center.x, center.y, diameter, sf),
+                        ));
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// The sheet element. Document-backed instances share resources across frames.
 #[derive(Clone, Debug)]
 pub struct SheetView {
     camera: Camera,
     theme: &'static Theme,
+    document: Option<SheetDocument>,
 }
 
 impl SheetView {
     /// The camera's viewport is replaced by the element's bounds at paint time.
     pub fn new(camera: Camera, theme: &'static Theme) -> Self {
-        Self { camera, theme }
+        Self {
+            camera,
+            theme,
+            document: None,
+        }
+    }
+
+    /// Builds a sheet element backed by the live document.
+    pub fn with_document(camera: Camera, theme: &'static Theme, document: SheetDocument) -> Self {
+        Self {
+            camera,
+            theme,
+            document: Some(document),
+        }
     }
 
     pub fn camera(&self) -> &Camera {
         &self.camera
     }
 
-    /// The whole paint body, with the GPUI call left to `sink`, so benches and tests can
+    /// The background paint body, with the GPUI call left to `sink`, so benches and tests can
     /// separate our allocations from GPUI's (Q5). [`Element::paint`] passes
     /// `Window::paint_quad`. Emits the paper first, then one quad per visible dot.
     pub fn paint_quads(
@@ -126,11 +321,28 @@ impl SheetView {
         scale_factor: f32,
         mut sink: impl FnMut(PaintQuad),
     ) {
+        self.draw_background(bounds, scale_factor, |bounds, color, _| {
+            sink(fill(bounds, color));
+        });
+    }
+
+    fn draw_background(
+        &self,
+        bounds: Bounds<Pixels>,
+        scale_factor: f32,
+        mut sink: impl FnMut(Bounds<Pixels>, Hsla, Option<u32>),
+    ) {
         assert!(scale_factor.is_finite() && scale_factor > 0.0);
-        sink(fill(bounds, gpui_color(self.theme.stage_paper)));
+        sink(bounds, gpui_color(self.theme.stage_paper), None);
 
         let mut camera = self.camera.clone();
         camera.set_viewport(bounds);
+        if self.document.is_some()
+            && lod::junction_diameter(&camera).is_none()
+            && f64::from(GRID_NM) * camera.scale() < MIN_PITCH
+        {
+            return;
+        }
         let level = grid_level(camera.scale());
         let side = stroke_device_px(GRID_DOT_PX, scale_factor);
         let grid = gpui_color(self.theme.stage_grid);
@@ -144,11 +356,11 @@ impl SheetView {
                 } else {
                     faded
                 };
-                sink(fill(centered_square(p, side, scale_factor), color));
+                sink(centered_square(p, side, scale_factor), color, Some(side));
             });
         } else {
             for_each_dot(&camera, area, level.step_nm, |_, _, p| {
-                sink(fill(centered_square(p, side, scale_factor), grid));
+                sink(centered_square(p, side, scale_factor), grid, Some(side));
             });
         }
     }
@@ -225,13 +437,41 @@ impl Element for SheetView {
         _request_layout: &mut Self::RequestLayoutState,
         _prepaint: &mut Self::PrepaintState,
         window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) {
         let scale_factor = window.scale_factor();
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.paint_layer(|window| {
-                self.paint_quads(bounds, scale_factor, |quad| window.paint_quad(quad));
+                self.draw_background(bounds, scale_factor, |bounds, color, dot| {
+                    let mark = if let (Some(document), Some(side)) = (&self.document, dot)
+                        && side >= 3
+                    {
+                        let center = bounds.center();
+                        let diameter = f64::from(side) / f64::from(scale_factor);
+                        Mark::Sprite(document.cache.masks.dot(
+                            f64::from(center.x),
+                            f64::from(center.y),
+                            diameter,
+                            scale_factor,
+                        ))
+                    } else {
+                        Mark::Quad(bounds)
+                    };
+                    paint_mark(window, cx, mark, scale_factor, color);
+                });
             });
+            if let Some(document) = &self.document {
+                let mut camera = self.camera.clone();
+                camera.set_viewport(bounds);
+                let ink = gpui_color(self.theme.stage_ink);
+                document
+                    .cache
+                    .draw(document.doc.read(cx), &camera, scale_factor, |_, emit| {
+                        window.paint_layer(|window| {
+                            emit(&mut |mark| paint_mark(window, cx, mark, scale_factor, ink))
+                        });
+                    });
+            }
         });
     }
 }
@@ -241,6 +481,304 @@ mod tests {
     use super::*;
     use crate::camera::{BASE_SCALE, MAX_ZOOM, MIN_ZOOM};
     use gpui::{Background, point, px, size};
+    use omnia_doc::{Command, Orient, Part, Wire};
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    struct Counting;
+
+    thread_local! {
+        static ALLOCS: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    fn count_allocation() {
+        let _ = ALLOCS.try_with(|counter| {
+            if let Some(value) = counter.get() {
+                counter.set(Some(value + 1));
+            }
+        });
+    }
+
+    // SAFETY: the counter changes no allocator inputs or results.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            count_allocation();
+            // SAFETY: the caller's contract is forwarded to System.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+            count_allocation();
+            // SAFETY: the caller's contract is forwarded to System.
+            unsafe { System.alloc_zeroed(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: the caller's contract is forwarded to System.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            count_allocation();
+            // SAFETY: the caller's contract is forwarded to System.
+            unsafe { System.realloc(ptr, layout, size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Counting = Counting;
+
+    #[test]
+    fn inv7_document_paint_reuses_buffers_for_1k_parts() {
+        let sources = [
+            include_str!("sheet.rs"),
+            include_str!("sheet/wires.rs"),
+            include_str!("sheet/symbols.rs"),
+            include_str!("sheet/lod.rs"),
+        ];
+        for source in sources {
+            assert!(!source.contains(concat!("paint_", "path")));
+            assert!(!source.contains(concat!("canvas", "(")));
+        }
+
+        let mut doc = Doc::new();
+        let library = omnia_symbols::SymbolLibrary::builtin();
+        let def = library.get(library.by_name("Resistor-IEEE-Standard").unwrap());
+        let mut wires = Vec::new();
+        for y in -12..=12 {
+            for x in -20..20 {
+                let at = Pt {
+                    x: x * 6 * GRID_NM,
+                    y: y * 6 * GRID_NM,
+                };
+                doc.apply(Command::PlacePart {
+                    part: Part {
+                        symbol: def.id,
+                        at,
+                        orient: Orient::IDENTITY,
+                        designator: "R".into(),
+                        value: "".into(),
+                    },
+                    local_pins: def.pins.iter().map(|pin| pin.at).collect(),
+                    local_bounds: def.bounds,
+                })
+                .unwrap();
+                wires.push(Wire {
+                    a: Pt {
+                        x: at.x - GRID_NM,
+                        y: at.y + 3 * GRID_NM,
+                    },
+                    b: Pt {
+                        x: at.x + GRID_NM,
+                        y: at.y + 3 * GRID_NM,
+                    },
+                });
+            }
+        }
+        doc.apply(Command::AddWires(wires)).unwrap();
+        assert_eq!(doc.parts().count(), 1000);
+        assert_eq!(doc.wires().count(), 1000);
+
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)));
+        let mut camera = Camera::new(Pt::ZERO, 0.2, bounds);
+        let cache = DocumentCache::default();
+        let paint = |camera: &Camera| {
+            let mut marks = 0;
+            cache.draw(&doc, camera, 1.25, |_, emit| {
+                emit(&mut |mark| {
+                    match mark {
+                        Mark::Quad(bounds) => {
+                            std::hint::black_box(bounds);
+                        }
+                        Mark::Sprite(shape) => {
+                            std::hint::black_box((shape.sprite(1.25), shape.mask.key.clone()));
+                        }
+                    }
+                    marks += 1;
+                })
+            });
+            marks
+        };
+        // Warm both the far zoom wire-run buffer and the close-zoom junction/query buffers.
+        assert_eq!(paint(&camera), 2000);
+        camera.zoom_about(point(960.0, 540.0), 2.0);
+        paint(&camera);
+        let mut marks = 0;
+        ALLOCS.set(Some(0));
+        for i in 0..80 {
+            camera.pan_by(point(0.25, -0.125));
+            camera.zoom_about(point(960.0, 540.0), if i % 2 == 0 { 0.5 } else { 2.0 });
+            marks += paint(&camera);
+        }
+        let allocs = ALLOCS.replace(None);
+        assert!(marks > 0);
+        assert_eq!(allocs, Some(0));
+    }
+
+    #[test]
+    fn d4_far_zoom_merges_wire_quads_without_editing_the_junction() {
+        let mut doc = Doc::new();
+        let wire = |a, b| Wire { a, b };
+        let pt = |x, y| Pt {
+            x: x * GRID_NM,
+            y: y * GRID_NM,
+        };
+        doc.apply(Command::AddWires(vec![
+            wire(pt(-1, 0), pt(1, 0)),
+            wire(pt(0, 0), pt(0, 1)),
+        ]))
+        .unwrap();
+        let cache = DocumentCache::default();
+        let count = |zoom| {
+            let (sheet, _) = sheet(zoom, (0.0, 0.0));
+            let mut quads = 0;
+            let mut sprites = 0;
+            cache.draw(&doc, sheet.camera(), 1.5, |_, emit| {
+                emit(&mut |mark| match mark {
+                    Mark::Quad(_) => quads += 1,
+                    Mark::Sprite(_) => sprites += 1,
+                })
+            });
+            (quads, sprites)
+        };
+        assert_eq!(count(1.0), (3, 1));
+        assert_eq!(count(0.2), (2, 0));
+        assert_eq!(doc.wires().count(), 3);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn d4_wire_readback_covers_constant_whole_device_pixels() {
+        use gpui::{AppContext, Context, IntoElement, Render, WindowBounds, WindowOptions};
+        use std::time::Duration;
+
+        if std::env::var_os("OMNIA_HEADLESS_CI").is_some() {
+            eprintln!("wire readback skipped: OMNIA_HEADLESS_CI");
+            return;
+        }
+        let (finished, watchdog) = std::sync::mpsc::channel();
+        let guard = std::thread::spawn(move || {
+            if matches!(
+                watchdog.recv_timeout(Duration::from_secs(60)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ) {
+                std::process::exit(3);
+            }
+        });
+        struct Probe {
+            camera: Camera,
+            document: SheetDocument,
+        }
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                SheetView::with_document(
+                    self.camera.clone(),
+                    &omnia_theme::GRAPHITE,
+                    self.document.clone(),
+                )
+            }
+        }
+
+        let result = Rc::new(RefCell::new(None));
+        let slot = result.clone();
+        gpui_platform::application().run(move |cx: &mut App| {
+            let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(640.0), px(400.0)));
+            let mut doc = Doc::new();
+            let library = omnia_symbols::SymbolLibrary::builtin();
+            let ground = library.get(library.by_name("Ground-COM-General").unwrap());
+            let pt = |x, y| Pt { x: x * GRID_NM, y: y * GRID_NM };
+            doc.apply(Command::AddWires(vec![
+                Wire { a: pt(-5, -2), b: pt(1, -2) },
+                Wire { a: pt(2, -2), b: pt(2, 3) },
+            ])).unwrap();
+            doc.apply(Command::PlacePart {
+                part: Part {
+                    symbol: ground.id,
+                    at: pt(-2, 1),
+                    orient: Orient::ROT_90,
+                    designator: "".into(),
+                    value: "".into(),
+                },
+                local_pins: ground.pins.iter().map(|pin| pin.at).collect(),
+                local_bounds: ground.bounds,
+            }).unwrap();
+            let document = SheetDocument::new(cx.new(|_| doc));
+            let handle = cx.open_window(
+                WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), show: false, focus: false, ..Default::default() },
+                |window, cx| {
+                    window.resize(bounds.size);
+                    cx.new(|_| Probe { camera: Camera::new(Pt::ZERO, 1.0, bounds), document })
+                }
+            ).unwrap();
+            cx.spawn(async move |cx| {
+                let result = cx.update(|cx| -> Result<(), String> {
+                    for sf in [1.0, 1.25, 1.5] {
+                        for pan in [(0.3, 0.7), (-2.6, 1.1)] {
+                            handle.update(cx, |probe, window, cx| {
+                                let viewport = Bounds::new(point(px(0.0), px(0.0)), window.viewport_size());
+                                let mut camera = Camera::new(Pt::ZERO, 1.0, viewport);
+                                camera.pan_by(point(pan.0, pan.1));
+                                probe.camera = camera;
+                                cx.notify();
+                            }).map_err(|e| e.to_string())?;
+                            let camera = handle.read_with(cx, |probe, _| probe.camera.clone()).map_err(|e| e.to_string())?;
+                            let image = cx.update_window(handle.into(), |_, window, cx| {
+                                window.set_scale_factor(sf);
+                                window.draw(cx).clear(cx);
+                                assert_eq!(window.scale_factor(), sf);
+                                window.render_to_image()
+                            }).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+                            let ink = omnia_theme::GRAPHITE.stage_ink;
+                            let rgb = [ink.r, ink.g, ink.b].map(|c| (c * 255.0).round() as u8);
+                            let is_ink = |x: i32, y: i32| {
+                                image.get_pixel(x as u32, y as u32).0[..3].iter().zip(rgb)
+                                    .all(|(&a, b)| a.abs_diff(b) <= 1)
+                            };
+                            let origin = camera.world_to_screen(Pt::ZERO);
+                            let device = |p: f64| (p * f64::from(sf)).round() as i32;
+                            let width = (1.8f32 * sf).round() as usize;
+                            // A clockwise turn puts the local downward stem to the left of the pin.
+                            let pin = camera.world_to_screen(pt(-2, 1));
+                            let stem_x = device(pin.x - 12.0);
+                            let stem_y = device(pin.y);
+                            if !(stem_y - 1..=stem_y + 1).any(|y| is_ink(stem_x, y))
+                                || (stem_y - 1..=stem_y + 1).any(|y| is_ink(device(pin.x + 12.0), y))
+                            {
+                                return Err(format!("rotated ground stem at scale {sf}, pan {pan:?}"));
+                            }
+                            for (vertical, at) in [(false, pt(0, -2)), (true, pt(2, 0))] {
+                                let center = camera.world_to_screen(at);
+                                let (along, across) = if vertical {
+                                    (device(origin.y), center.x)
+                                } else {
+                                    (device(origin.x) - 25, center.y)
+                                };
+                                let edge = (across * f64::from(sf) - width as f64 / 2.0 + 0.5).floor() as i32;
+                                for x in along - 20..along + 20 {
+                                    for y in edge - 1..=edge + width as i32 {
+                                        let covered = if vertical { is_ink(y, x) } else { is_ink(x, y) };
+                                        if covered != (edge..edge + width as i32).contains(&y) {
+                                            return Err(format!("wire readback at scale {sf}, pan {pan:?}, vertical {vertical}: pixel ({x}, {y})"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                });
+                *slot.borrow_mut() = Some(result);
+                cx.update(|cx| cx.quit());
+            }).detach();
+        });
+        finished.send(()).unwrap();
+        guard.join().unwrap();
+        result
+            .borrow_mut()
+            .take()
+            .expect("render task completed")
+            .unwrap();
+    }
 
     fn check(level: GridLevel, scale: f64) {
         assert!(

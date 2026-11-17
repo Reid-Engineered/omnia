@@ -3547,6 +3547,7 @@ dependencies = [
  "gpui",
  "gpui_platform",
  "omnia-doc",
+ "omnia-symbols",
  "omnia-theme",
  "proptest",
 ]
