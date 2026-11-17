@@ -1,0 +1,3 @@
+{"event":"decorations","granted":"Server"}
+{"event":"bounds","origin":[135.1999969482422,128.0],"size":[1137.5999755859375,656.7999877929688],"moved":false,"resized":false,"maximized":false}
+{"event":"environment","details":{"gpu":{"is_software_emulated":false,"device_name":"Intel(R) UHD Graphics","driver_name":"Intel Corporation","driver_info":"32.0.101.7088"},"fullscreen":false,"os":"windows","arch":"x86_64","logical_cpus":24,"scale_factor":1.25,"viewport_logical":[1137.5999755859375,656.7999877929688],"viewport_device":[1422.0,821.0],"refresh_hz":165.0}}
