@@ -307,7 +307,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 | INV6 | `omnia-canvas` contains no colour literal; colours come from `omnia-theme`. [T1.2] |
 | INV7 | `SheetView`'s paint calls neither `paint_path` nor `canvas()` and makes no heap allocation once warm. [T2.5] |
 | INV8 | No `f32` holds a world coordinate. World to screen subtracts the camera centre in integers first. [T1.3] |
-| INV9 | `snap(snap(p)) == snap(p)`. [T1.1, T4.2] |
+| INV9 | Grid snapping is idempotent: `snap_to(snap_to(p, s), s) == snap_to(p, s)`. Priority snapping keeps a snapped point: with `r = snap(p)` and `q = r.at()`, `snap(q) == r` unless a target of a higher WD5 class than `r` lies within the snap radius of `q`; then `snap(q)` is of a higher class. A pin result is therefore always kept. Owner decision 2026-11-16, "radius wins": `snap` never returns a pin, end, junction or body target farther than the radius from `p`, so the earlier `snap(snap(p)) == snap(p)`, which off-grid geometry met only by settling past the radius, no longer applies to `snap` (wiring-plan.md WD5, WINV7). [T1.1, T4.2, W1.3] |
 | INV10 | After any command sequence, incremental connectivity equals a from-scratch rebuild. [T4.1] |
 | INV11 | A hover, selection or drag-move change does not notify `SheetView`. [T4.3] |
 | INV12 | `omnia-doc` and `omnia-symbols` do not depend on GPUI. [T0.1] |
@@ -483,8 +483,8 @@ impl Snap { pub fn at(self) -> Pt; }
 // Snap ties: class priority (Pin > WireEnd/Junction > WireBody > Grid), i64 squared distance,
 // lowest ID, pin index, endpoint coordinates; WireBody projects onto the segment and snaps to
 // the nearest grid point still on it (WD5). Reusable scratch buffers.
-// Snap settles through higher-priority targets after rounding/projection (INV9),
-// so the final point can exceed the initial radius. Grid clips to in-sheet grid lines.
+// Radius wins (owner decision 2026-11-16, WD5): no settling; a non-grid result lies
+// within the radius of the input (INV9 as reworded). Grid clips to in-sheet grid lines.
 // Doc updates body+pin bounds and connectivity on every validated insert/remove/restore.
 // Restore accepts only reserved empty slots; new inserts never reuse arena IDs (D2).
 // NetId is valid until the next edit; resolve again from a wire or point after edits.

@@ -306,6 +306,12 @@ of the `canvas` lane.
   20,000 wires. `Doc::save` and `Doc::load` in RON.
 - Done when: the same seed gives the same sheet; `load(save(doc)) == doc`; `10k` generates
   in under 2 s.
+- Follow-up (2026-11-16, from W1.3 and T6.1 reviews): no generated sheet produces a
+  wire-body snap and only `dense` produces a junction (every `10k` wire is a half-grid stub
+  from a pin), so WB5's class coverage rests on `dense` and unit tests; `10k` also has about
+  23 duplicate wire pairs where parts' first pins coincide, so it is not in T6.1 normal form.
+  A future generator change to emit realistic, normal-form nets needs new B7 and WB5
+  baselines. See wiring-roadmap.md W2.4.
 
 ### T2.8 Doc owns index and connectivity · blocked (20k split exceeds 1 ms on Orion; full protocol confirmation pending)
 - Lane: doc · Depends: T2.2, T2.4, T4.1, T4.2 · Read: D2, D3, K12, INV1, INV3, INV9, INV10,
@@ -429,7 +435,10 @@ of the `canvas` lane.
   initial radius; plan section 9 documents this and deterministic tie rules.
 - Note (W0.3): [wiring-plan.md](wiring-plan.md) WD5 refines snap ties, grid-snapped body
   projection, and the `Junction` class; implemented by [wiring-roadmap.md](wiring-roadmap.md)
-  W1.3 (open in PR #41, not yet merged).
+  W1.3 (PR #41).
+- Note (2026-11-16, W1.3): superseded by the owner decision "radius wins". `snap` no
+  longer settles; a non-grid result is always within the radius, and INV9 is reworded in
+  plan section 7 (wiring-plan.md WD5, WINV7). The settling bullet above is historical.
 
 ### T4.3 Overlay, hover and selection · todo
 - Lane: canvas · Depends: T3.4, T4.2 · Read: D7, INV11, G6, wiring-plan.md WD8

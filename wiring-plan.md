@@ -13,8 +13,8 @@ The rules to build are in sections 5 to 8 here.
 
 Written 2026-11-16 (status updated 2026-11-16 in W0.3). In `schematic-doc`, geometry, arenas,
 the point map, the spatial index, connectivity, hit testing and snapping, commands and undo, and
-wiring preferences exist (T1.1, T2.1, T2.2, T4.1, T4.2, T5.1, W1.1; W1.3 snap rules open in
-PR #41); wire routing is in progress (T6.1).
+wiring preferences exist (T1.1, T2.1, T2.2, T4.1, T4.2, T5.1, W1.1, W1.2 runs, W1.3 snap
+rules); wire routing is in progress (T6.1).
 
 ## How to read this file
 
@@ -247,9 +247,22 @@ label is never merged away.
 - Ties inside a class: smaller distance first (compared as `i64` squared distances), then
   the lower id (`PartId` then pin index; `WireId`). The result never depends on the order
   the index returns items.
+- Radius wins (owner decision 2026-11-16): `snap` never returns a pin, end, junction or
+  body target farther than the radius from the cursor. There is no second pass that moves
+  on from the chosen target, so snapping the result again keeps it unless a higher-class
+  target lies within the radius of the result (INV9 as reworded, WINV7). The grid fallback
+  is the nearest grid point, clipped to the sheet (K1).
 - Wire body: the target is the cursor's point projected onto the segment and clamped to it,
-  then moved along the segment to the nearest grid point that is still on it. Distance is
-  measured to that final point.
+  then moved along the segment to the nearest grid point that is still on it (a projection
+  exactly between two grid points rounds away from zero, as grid snapping does). Distance
+  is measured to that final point. Only the coordinate along the wire is snapped: on a
+  half-grid wire (for example one leaving a pin on the K2 pin lattice) the target keeps the
+  wire's off-grid perpendicular coordinate. A segment with no grid point on it has no body
+  target.
+- Wire end and junction are one class. A junction target is a point where three or more
+  wire ends meet (a pin there would be a `Pin` target, which ranks higher); one or two ends
+  give a `WireEnd` naming the lower `WireId`. Inside the class, a junction ranks by the
+  lowest `WireId` among its wires.
 - A pin or end that already has wires is a normal target (M9 alternative not adopted).
 - Grid snap is the fallback only when no other class has a target in the radius.
 - The radius is a screen distance (WK4), so it does not change with zoom (M8 alternative not adopted).
@@ -352,7 +365,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 | WINV4 | A refused command leaves the document equal to the original, ids and revision included. `apply` then `undo` of any wiring command does too (extends INV4). [W2.2, W3.2] |
 | WINV5 | The plan drawn for a given document, items, isometry and policy equals what `apply` does with the same inputs. [W2.3] |
 | WINV6 | `plan_follow` gives the same plan for any ordering of `items`, and for the same document rebuilt with different ids in the index's iteration order. [W2.1] |
-| WINV7 | `snap` returns the highest class with a target in the radius; inside a class the nearest, then the lowest id; `snap(snap(p)) == snap(p)` (INV9). [W1.3] |
+| WINV7 | `snap` returns the highest class with a target in the radius; inside a class the nearest, then the lowest id; a non-grid result lies within the radius of the cursor; snapping the result again returns it unless a higher-class target lies within the radius of the result, and then the second snap is of a higher class (INV9 as reworded by the owner decision of 2026-11-16, "radius wins"). [W1.3] |
 | WINV8 | Each affected run appears in a plan exactly once. [W2.1] |
 | WINV9 | After a follow, every label that sat on an affected run still sits on a wire end or pin of the net it was on, with its text unchanged. [W3.6] |
 | WINV10 | No wire added by the planner, a segment drag or the router has a foreign end or pin in its interior, or shares a stretch with a foreign wire. [W1.5] |
@@ -521,7 +534,7 @@ pub enum Command {
 pub enum CommandError { /* T5.1's */ Follow(FollowError), Segment(Blocker) }
 
 // ---- snap.rs (refines the canvas plan's Snap) ----
-pub enum Snap { Pin { part: PartId, pin: u16, at: Pt }, WireEnd { wire: WireId, at: Pt },
+pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
                 Junction { at: Pt }, WireBody { wire: WireId, at: Pt }, Grid(Pt) }
 impl Doc { pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>); }   // WD8 Enclosed
 ```
@@ -582,7 +595,8 @@ answer column below is binding. WQ5 stays open for review after W2.3, as recomme
 | canvas-plan.md Q6 | Answer recorded; points to WD3. | Applied (2026-11-16) |
 | canvas-plan.md section 9 | `Move`, `Reorient`, `Delete` and `Snap` as in section 10 here; `Doc::snap` returns the class (WD5). | Applied (2026-11-16) |
 | canvas-plan.md INV2, T6.1 | The merge rule keeps a point that carries a label (WD4, WD9). | Applied (2026-11-16) |
-| canvas-roadmap.md T4.2 | Read WD5; ties and body projection as stated there. | Applied as note/pointer (T4.2 `done`; code in W1.3, PR #41 open) |
+| canvas-roadmap.md T4.2 | Read WD5; ties and body projection as stated there. | Applied as note/pointer (T4.2 `done`; code in W1.3, PR #41) |
+| canvas-plan.md INV9, section 9; canvas-roadmap.md T4.2 | Owner decision 2026-11-16, "radius wins" (WD5): no settling past the radius; INV9 reworded as in WINV7. | Applied 2026-11-16 by W1.3 (PR #41; T4.2 gets a dated note) |
 | canvas-roadmap.md T4.3 | Rubber band per WD8: both modes, the default from WQ3. | Applied (2026-11-16) |
 | canvas-roadmap.md T5.1 | `Move` and `Reorient` take a `FollowPolicy`; until W2.2 it is ignored and every run detaches. | Applied as note/pointer (T5.1 code merged; `FollowPolicy` deferred to W2.2) |
 | canvas-roadmap.md T6.2 | First corner per WD6. | Applied (2026-11-16) |

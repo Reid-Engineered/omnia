@@ -145,7 +145,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
   (WINV8); a criterion bench records `runs_at` on `10k` once T2.4's generator exists (log
   "not measured" until then).
 
-### W1.3 Snap rules · todo
+### W1.3 Snap rules · done
 - Lane: doc · Depends: T4.2 · Read: WD5, WK4, WINV7
 - Owns: `crates/schematic-doc/src/snap.rs` (after T4.2)
 - Do: bring `snap` to WD5: the class ranking, inclusive radius, `i64` distance ties then
@@ -156,7 +156,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
   TC-snap-08 pass as unit tests; `bench hit --sheet 10k --snap` reports p99 < 0.2 ms (WB5;
   reference machine for the gate).
 - Follow-up (W0.3, from T4.2): applies WD5 ties, grid-snapped body projection, and the
-  `Junction` class to T4.2's `snap.rs` (open in PR #41, not yet merged).
+  `Junction` class to T4.2's `snap.rs` (PR #41).
 
 ### W1.4 Normal form and the validator · todo
 - Lane: doc · Depends: T6.1 · Read: WD4, WD9, WINV3, INV2
@@ -475,3 +475,29 @@ property test over those edits checks). The walk no longer queries the spatial i
 allocates a scratch vector per call. `Doc::labels_at` now fills `Vec<LabelId>`, not
 `Vec<ItemId>`; wiring-plan.md section 10 updated (rule 16). (c) The run test helper now
 deduplicates and asserts each wire occurs exactly once, closed runs included.
+
+2026-11-16 W1.3 done — brought `crates/omnia-doc/src/snap.rs` to WD5: `Pin` > `WireEnd`/`Junction`
+> `WireBody` > `Grid`, inclusive `i64` Euclidean radius, ties by distance then lowest id then
+coordinates, the body target moved along the segment to a grid point on it, and
+`Snap::Junction { at }`. Kept `Snap::Pin::pin: usize` (matching `Doc` storage and canvas plan
+section 9; wiring-plan.md section 10 says so). Review fixes (PR #41): owner decision 2026-11-16
+"radius wins": removed T4.2's settle loop, so a pin, end, junction or body result is never
+beyond the radius. INV9 is reworded in canvas-plan.md (owner-approved change of the
+invariant, not a weakened check; property ranges unchanged): snapping the result again
+returns it unless a higher-class target lies within the radius of the result. Recorded in
+WD5, WINV7, wiring-plan.md section 13, the canvas plan section 9 comment and a dated T4.2
+note. The INV9 property tests (snap.rs, and T4.2's in crates/omnia-doc/src/hit.rs) assert the
+reworded invariant exactly. The WINV7 oracle is now independent: it ranks a flat list of
+every target of every class over all items. Regressions: 50% zoom junction one grid from a
+pin, one-grid stub at 50% and half-grid stub at 100% (cursor 0.1 mm off the free end gives
+`WireEnd`; exactly at the free end the pin is at the radius and wins), WireBody ties in both
+id and index orders (dropping the id from the tie key fails it). WD5 now states the
+half-grid body rule, no body target without a grid point on the segment, and the shared
+end/junction class ranked by lowest `WireId`. `bench hit --snap` probes every class and
+reports `probe_classes`, timed `classes` and `unreachable_classes`. On `10k` junction and
+wire body cannot occur at all (half-grid stubs from pins; generator unchanged). The test
+requires every other class non-zero there. Non-reference Windows dev machine (i7-14650HX, AC,
+not the reference machine): `10k` p50 0.0002 ms, p99 0.0003 ms (timed 9,845 pin / 7,253
+end / 0 / 0 / 2,902 grid); `dense` p99 0.0004 ms (junction 424). The WB5 gate is pending on
+the reference machine. Raw JSON and hardware in docs/measurements/W1.3.md. Standard checks
+(fmt, both clippy runs, cargo test --workspace, cargo deny) pass locally; no check weakened.

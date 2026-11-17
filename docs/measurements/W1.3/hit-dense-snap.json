@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "kind": "hit",
+  "config": {
+    "sheet": "dense",
+    "seed": 42,
+    "samples": 20000,
+    "snap": true,
+    "radius_nm": 1270000,
+    "grid_nm": 2540000
+  },
+  "environment": {
+    "os": "windows",
+    "arch": "x86_64",
+    "window": null
+  },
+  "classes": {
+    "pin": 5721,
+    "wire_end": 11130,
+    "junction": 424,
+    "wire_body": 0,
+    "grid": 2725
+  },
+  "probes": 63553,
+  "probe_classes": {
+    "pin": 18213,
+    "wire_end": 35264,
+    "junction": 1417,
+    "wire_body": 0,
+    "grid": 8659
+  },
+  "unreachable_classes": [
+    "wire_body"
+  ],
+  "parts": 1000,
+  "wires": 12000,
+  "metrics": {
+    "snap_ms": {
+      "mean": 0.0002,
+      "p50": 0.0002,
+      "p95": 0.0003,
+      "p99": 0.0004,
+      "max": 0.0312
+    }
+  },
+  "reference_machine": false,
+  "note": "WB5 requires the Q4 reference machine; this report does not certify the gate"
+}
