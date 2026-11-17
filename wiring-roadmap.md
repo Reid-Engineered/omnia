@@ -578,7 +578,7 @@ on its own rays, the worst case). docs/measurements/W1.5.md. For W2.1: callers r
 run being replaced from the document view before routing, as for check_new_wires; a lone
 label (not on a pin or end, which WD9 does not produce) is not a blocker.
 
-2026-11-16 W1.5 review fixes — WD4 scores off-sheet candidates using a sheet-clipped
+2026-11-16 W1.5 review fixes - WD4 scores off-sheet candidates using a sheet-clipped
 index query and the original segment geometry. Invalid candidates retain body and crossing
 penalties, preserving refusal ranking. A regression compares every candidate against the
 whole-sheet scoring oracle at all four sheet edges and asserts the specified pin blocker.
