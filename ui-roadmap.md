@@ -151,7 +151,7 @@ without being drawn.
 - Done when: no statement in the canvas or wiring files contradicts a `UD`; section 14 is marked
   applied with the commit.
 
-### U0.3 Spike US1 and US5: chrome and goldens · todo → UH1
+### U0.3 Spike US1 and US5: chrome and goldens · needs-human → UH1
 - Lane: shell · Depends: none · Read: UD1, UG5, UG12, UD21, T0.8's G12 finding
 - Owns: `crates/omnia-bench/src/spike/chrome.rs`, `docs/measurements/U0.3.md`
 - Do: `bench spike chrome --seconds 60` opens a 1440x900 window with the 36 px bar: drag area,
@@ -580,3 +580,9 @@ regenerated with `cargo xtask tokens` (twice, no diff). UINV1 source test over
 machine (certifies no reference budget). Deviations: `crates/omnia-app/tests/fonts.rs` and
 `crates/omnia-theme/tests/tokens.rs` updated only to follow the removed constants and the
 new token count. `System` resolves to Graphite until U3.2 follows window appearance.
+
+2026-11-17 U0.3 needs-human (UH1) — Added the standalone chrome spike (US1/US5, UD1,
+UG5, UG12, UD21). The 1440 × 900 Windows window exited on schedule and the 1800 × 1125
+readback at 125% shows the title bar, all three controls and the deferred File menu.
+Owner approved the minimal CLI registration outside the listed files. Linux gestures
+and Windows snap layouts await UH1. Report and raw evidence: docs/measurements/U0.3.md.

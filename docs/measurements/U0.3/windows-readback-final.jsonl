@@ -1,0 +1,5 @@
+{"event":"decorations","granted":"Server"}
+{"event":"bounds","origin":[160.8000030517578,153.60000610351562],"size":[1137.5999755859375,656.7999877929688],"moved":false,"resized":false,"maximized":false}
+{"event":"bounds","origin":[160.8000030517578,153.60000610351562],"size":[1440.0,900.0],"moved":false,"resized":true,"maximized":false}
+{"event":"environment","details":{"gpu":{"is_software_emulated":false,"device_name":"Intel(R) UHD Graphics","driver_name":"Intel Corporation","driver_info":"32.0.101.7088"},"fullscreen":false,"os":"windows","arch":"x86_64","logical_cpus":24,"scale_factor":1.25,"viewport_logical":[1440.0,900.0],"viewport_device":[1800.0,1125.0],"refresh_hz":165.0}}
+{"event":"readback","path":"docs/measurements/U0.3/chrome-menu.png","width":1800,"height":1125}
