@@ -121,7 +121,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 
 ## Milestone W1: document-side foundations
 
-### W1.1 Wiring preferences · todo
+### W1.1 Wiring preferences · done
 - Lane: doc · Depends: T2.1 · Read: WD3, WD12, WK2, WK3, WK10
 - Owns: `crates/schematic-doc/src/prefs.rs`
 - Do: `SelectMode`, `WiringPrefs` with the WK10 defaults, `FollowPolicy`, and the function
@@ -378,6 +378,25 @@ Append one entry per finished or blocked task. Newest last.
 2026-11-16 plan — wiring-plan.md and wiring-roadmap.md record the design decisions and
 scenarios for wiring. Nothing measured; WB1 to WB3 and WB7 are chosen figures. The canvas
 files are not yet changed (W0.3). Milestone W2 waits on HW1.
+
+2026-11-16 W1.1 done — implemented SelectMode, checked WiringPrefs and FollowPolicy,
+                             preference-to-policy capture and WD3 part/wire decisions in
+                             crates/omnia-doc/src/prefs.rs; one-line public module registration.
+                             Six unit tests cover defaults, zero rejection in both constructors,
+                             valid threshold bounds, custom threshold, captured policy, moved
+                             wires and all 12 explicit part-follow truth-table rows. Full
+                             cargo test --workspace passes (59 doc unit tests + 3 allocation
+                             tests); fmt --all --check, workspace all-targets clippy -D warnings,
+                             cargo deny check (existing dependency warnings), diff check pass.
+                             No performance measurement or new dependencies. Ambiguities:
+                             WK10's true is conditional on Q6 yes; unanswered Q6/WQ1 means
+                             follow defaults false until HW1, WQ3 Enclosed and WQ4 false.
+                             Alt inverts the entire WD3 conjunction, including threshold;
+                             rigid translation stays the follow planner's responsibility.
+                             Sketch threshold fields made private with checked constructors
+                             and read accessors to prevent zero; counts use usize without
+                             narrowing. WD12/API sketch updated under rule 16. W1.2-owned
+                             files untouched; W2 remains gated on HW1.
 
 2026-11-16 W0.1 done — every WD, WK, WINV, WB, TC, WQ and M id is defined exactly once in
 wiring-plan.md and every reference in either wiring file resolves, including the references
