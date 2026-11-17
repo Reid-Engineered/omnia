@@ -571,7 +571,10 @@ pub enum CommandError { /* T5.1's */ Follow(FollowError), Segment(Blocker) }
 // ---- snap.rs (refines the canvas plan's Snap) ----
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
                 Junction { at: Pt }, WireBody { wire: WireId, at: Pt }, Grid(Pt) }
-impl Doc { pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>); }   // WD8 Enclosed
+impl Doc {
+    pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>);    // WD8 Enclosed (symbol bounds)
+    pub fn query_touching(&self, area: Rect, out: &mut Vec<ItemId>);  // WD8 Intersecting (symbol bounds)
+}
 ```
 
 `plan_follow` takes its output buffers from the caller so the move tool can reuse them

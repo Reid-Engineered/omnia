@@ -468,8 +468,9 @@ impl Doc {
     pub fn part(&self, id: PartId) -> Option<&Part>;
     pub fn wire(&self, id: WireId) -> Option<&Wire>;
     pub fn label(&self, id: LabelId) -> Option<&Label>;
-    pub fn query(&self, area: Rect, out: &mut Vec<ItemId>);
-    pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>); // wiring-plan.md WD8 Enclosed (W3.4)
+    pub fn query(&self, area: Rect, out: &mut Vec<ItemId>); // index envelope (body+pins); used by hit_test and snap
+    pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>); // wiring-plan.md WD8 Enclosed (W3.4; symbol bounds)
+    pub fn query_touching(&self, area: Rect, out: &mut Vec<ItemId>); // wiring-plan.md WD8 Intersecting (W3.4; symbol bounds)
     pub fn junctions(&self, area: Rect, out: &mut Vec<Pt>);
     pub fn part_body(&self, id: PartId) -> Option<Rect>; // clamped world body
     pub fn pins(&self, id: PartId) -> Option<&[Pt]>; // world coordinates

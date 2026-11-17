@@ -11,7 +11,7 @@
 
 use std::cell::Cell;
 
-use crate::{GRID_NM, GeomError, ItemId, Rect, SHEET_LIMIT_NM};
+use crate::{GRID_NM, GeomError, ItemId, Pt, Rect, SHEET_LIMIT_NM};
 
 /// K12: the side of one index cell, 8 grid steps.
 pub const INDEX_CELL_NM: i32 = 8 * GRID_NM;
@@ -139,10 +139,36 @@ impl SpatialIndex {
     /// (as [`Rect::intersects`]). Each item appears once; order is unspecified. Allocates
     /// nothing when `out` already has room for the result.
     pub fn query(&self, area: Rect, out: &mut Vec<ItemId>) {
-        out.clear();
         if area.min.x > area.max.x || area.min.y > area.max.y {
+            out.clear();
             return;
         }
+        self.query_with(area, out, |_, bounds| bounds.intersects(area));
+    }
+
+    /// Replaces `out` with every item whose indexed bounds intersect `area` (edges and corners
+    /// included) and satisfy `predicate(item, bounds)`. `area` must be normalised (`min <= max`).
+    /// Each item appears once; order is unspecified. Allocates nothing when `out` already has
+    /// room for the result.
+    pub(crate) fn query_filtered(
+        &self,
+        area: Rect,
+        out: &mut Vec<ItemId>,
+        mut predicate: impl FnMut(ItemId, Rect) -> bool,
+    ) {
+        self.query_with(area, out, |item, bounds| {
+            bounds.intersects(area) && predicate(item, bounds)
+        });
+    }
+
+    fn query_with(
+        &self,
+        area: Rect,
+        out: &mut Vec<ItemId>,
+        mut matches: impl FnMut(ItemId, Rect) -> bool,
+    ) {
+        debug_assert!(area.min.x <= area.max.x && area.min.y <= area.max.y);
+        out.clear();
         let generation = self.next_generation();
         let (x0, y0, x1, y1) = cell_span(area);
         for cy in y0..=y1 {
@@ -154,7 +180,7 @@ impl SpatialIndex {
                         continue;
                     }
                     entry.stamp.set(generation);
-                    if entry.bounds.is_some_and(|b| b.intersects(area)) {
+                    if entry.bounds.is_some_and(|bounds| matches(item, bounds)) {
                         out.push(item);
                     }
                 }
@@ -215,6 +241,19 @@ fn cell_of(v: i32) -> usize {
     (offset / i64::from(INDEX_CELL_NM)) as usize
 }
 
+pub(crate) fn normalize_rect(r: Rect) -> Rect {
+    Rect {
+        min: Pt {
+            x: r.min.x.min(r.max.x),
+            y: r.min.y.min(r.max.y),
+        },
+        max: Pt {
+            x: r.min.x.max(r.max.x),
+            y: r.min.y.max(r.max.y),
+        },
+    }
+}
+
 /// Inclusive cell range `(x0, y0, x1, y1)` under `r` (`r.min <= r.max`).
 fn cell_span(r: Rect) -> (usize, usize, usize, usize) {
     (
@@ -228,7 +267,7 @@ fn cell_span(r: Rect) -> (usize, usize, usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{LabelId, PartId, Pt, WireId};
+    use crate::{LabelId, PartId, WireId};
     use proptest::prelude::*;
     use std::collections::{BTreeMap, HashSet};
 
@@ -462,5 +501,202 @@ mod tests {
                 .sum();
             prop_assert_eq!(total, expected);
         }
+
+        /// `query_filtered` equals a brute-force scan over random inserts, moves, removes,
+        /// degenerate/zero-area boxes, and item/bounds predicates.
+        #[test]
+        fn query_filtered_matches_brute_force(
+            ops in prop::collection::vec(
+                prop_oneof![
+                    4 => (any_item(), prop_oneof![any_rect(), wire_rect()])
+                        .prop_map(|(i, r)| (0u8, i, r)),
+                    1 => any_item().prop_map(|i| (1u8, i, rect(0, 0, 0, 0))),
+                    3 => raw_box().prop_map(|r| (2u8, ItemId::Part(PartId(0)), r)),
+                ],
+                1..200,
+            )
+        ) {
+            let mut index = SpatialIndex::new();
+            let mut model: BTreeMap<(u8, u32), (ItemId, Rect)> = BTreeMap::new();
+            let mut out = Vec::new();
+            let mut intersected = Vec::new();
+            for (kind, item, bounds) in ops {
+                match kind {
+                    0 => {
+                        let old = index.insert(item, bounds).unwrap();
+                        prop_assert_eq!(old, model.insert(key(item), (item, bounds)).map(|(_, b)| b));
+                    }
+                    1 => {
+                        prop_assert_eq!(index.remove(item), model.remove(&key(item)).map(|(_, b)| b));
+                    }
+                    _ => {
+                        let norm = normalize_rect(bounds);
+                        index.query_filtered(norm, &mut out, |item, b| {
+                            assert!(b.intersects(norm), "predicate called for non-intersecting item");
+                            norm.contains_rect(b) && !matches!(item, ItemId::Label(_))
+                        });
+                        let unique: HashSet<_> = out.iter().map(|&i| key(i)).collect();
+                        prop_assert_eq!(unique.len(), out.len(), "duplicate in query_filtered result");
+                        let expected = brute_filtered(&model, norm);
+                        prop_assert_eq!(sorted(&out), expected.clone());
+
+                        // Filtered items are always a subset of intersecting items.
+                        index.query(norm, &mut intersected);
+                        let inter_set: HashSet<_> = intersected.iter().map(|&i| key(i)).collect();
+                        for k in &expected {
+                            prop_assert!(inter_set.contains(k));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn brute_filtered(items: &BTreeMap<(u8, u32), (ItemId, Rect)>, area: Rect) -> Vec<(u8, u32)> {
+        items
+            .iter()
+            .filter(|(_, (item, b))| {
+                b.intersects(area) && area.contains_rect(*b) && !matches!(item, ItemId::Label(_))
+            })
+            .map(|(&k, _)| k)
+            .collect()
+    }
+
+    /// Raw query boxes including normalised, reverse-drawn, and degenerate zero-area boxes.
+    fn raw_box() -> impl Strategy<Value = Rect> {
+        prop_oneof![
+            // Arbitrary two corners (any drag direction, including reverse).
+            (coord(), coord(), coord(), coord()).prop_map(|(x0, y0, x1, y1)| Rect {
+                min: Pt { x: x0, y: y0 },
+                max: Pt { x: x1, y: y1 },
+            }),
+            // Zero-area point box.
+            (coord(), coord()).prop_map(|(x, y)| Rect {
+                min: Pt { x, y },
+                max: Pt { x, y },
+            }),
+            // Zero-area 1D horizontal/vertical line box (possibly reversed).
+            (coord(), coord(), coord(), any::<bool>()).prop_map(|(a, b, fixed, horiz)| {
+                if horiz {
+                    Rect {
+                        min: Pt { x: a, y: fixed },
+                        max: Pt { x: b, y: fixed },
+                    }
+                } else {
+                    Rect {
+                        min: Pt { x: fixed, y: a },
+                        max: Pt { x: fixed, y: b },
+                    }
+                }
+            }),
+            // Local cell-sized box in any direction.
+            (
+                coord(),
+                coord(),
+                -INDEX_CELL_NM * 2..=INDEX_CELL_NM * 2,
+                -INDEX_CELL_NM * 2..=INDEX_CELL_NM * 2,
+            )
+                .prop_map(|(x, y, dx, dy)| Rect {
+                    min: Pt { x, y },
+                    max: Pt {
+                        x: (i64::from(x) + i64::from(dx))
+                            .clamp(i64::from(-SHEET_LIMIT_NM), i64::from(SHEET_LIMIT_NM))
+                            as i32,
+                        y: (i64::from(y) + i64::from(dy))
+                            .clamp(i64::from(-SHEET_LIMIT_NM), i64::from(SHEET_LIMIT_NM))
+                            as i32,
+                    },
+                }),
+        ]
+    }
+
+    #[test]
+    fn query_filtered_edges_degenerate_and_pre_filter() {
+        let mut index = SpatialIndex::new();
+        let part_in = ItemId::Part(PartId(0));
+        let part_edge = ItemId::Part(PartId(1));
+        let wire_h = ItemId::Wire(WireId(0));
+        let wire_v = ItemId::Wire(WireId(1));
+        let wire_long = ItemId::Wire(WireId(2));
+        let label_pt = ItemId::Label(LabelId(0));
+
+        index.insert(part_in, rect(10, 10, 90, 90)).unwrap();
+        index.insert(part_edge, rect(0, 0, 100, 100)).unwrap();
+        index.insert(wire_h, rect(0, 0, 100, 0)).unwrap();
+        index.insert(wire_v, rect(50, 0, 50, 50)).unwrap();
+        index
+            .insert(wire_long, rect(-SHEET_LIMIT_NM, 0, SHEET_LIMIT_NM, 0))
+            .unwrap();
+        index.insert(label_pt, rect(50, 0, 50, 0)).unwrap();
+
+        let mut out = vec![part_in]; // pre-populated to ensure query_filtered clears `out`
+
+        // Pre-filter ensures predicate only receives items whose bounds intersect `area`.
+        let area = rect(0, 0, 100, 100);
+        index.query_filtered(area, &mut out, |_, b| {
+            assert!(b.intersects(area));
+            area.contains_rect(b)
+        });
+        assert_eq!(
+            sorted(&out),
+            vec![
+                key(part_in),
+                key(part_edge),
+                key(wire_h),
+                key(wire_v),
+                key(label_pt),
+            ]
+        );
+
+        // Degenerate zero-area 1D horizontal box: includes collinear wire_h and label_pt.
+        let line = rect(0, 0, 100, 0);
+        index.query_filtered(line, &mut out, |_, b| line.contains_rect(b));
+        assert_eq!(sorted(&out), vec![key(wire_h), key(label_pt)]);
+
+        // Degenerate zero-area point box: includes only label_pt at (50, 0) when filtering by containment.
+        let pt_box = rect(50, 0, 50, 0);
+        index.query_filtered(pt_box, &mut out, |_, b| pt_box.contains_rect(b));
+        assert_eq!(sorted(&out), vec![key(label_pt)]);
+
+        // Strictly outside K1 returns nothing and never invokes predicate even though clamped
+        // cell_span touches edge cells.
+        index.query_filtered(
+            Rect {
+                min: Pt {
+                    x: SHEET_LIMIT_NM + 1,
+                    y: -10,
+                },
+                max: Pt {
+                    x: SHEET_LIMIT_NM + 100,
+                    y: 10,
+                },
+            },
+            &mut out,
+            |_, _| panic!("predicate must not run for non-intersecting items"),
+        );
+        assert!(out.is_empty());
+
+        // Reaching past K1 still finds all items when predicate accepts all.
+        index.query_filtered(
+            Rect {
+                min: Pt {
+                    x: i32::MIN,
+                    y: i32::MIN,
+                },
+                max: Pt {
+                    x: i32::MAX,
+                    y: i32::MAX,
+                },
+            },
+            &mut out,
+            |_, _| true,
+        );
+        assert_eq!(out.len(), 6);
+
+        // Generation wrap resets stamps for query_filtered as well.
+        index.set_generation(u32::MAX);
+        index.query_filtered(pt_box, &mut out, |_, b| pt_box.contains_rect(b));
+        assert_eq!(sorted(&out), vec![key(label_pt)]);
+        assert_eq!(index.generation.get(), 1);
     }
 }
