@@ -49,6 +49,9 @@ pub enum Blocker {
         pin: usize,
     },
     WireEnd(WireId),
+    /// A corner of the new wires (a vertex that is not one of the two own ends)
+    /// lies in this foreign wire's interior (W1.5 clarification of WD4 rule 2).
+    WireBody(WireId),
     Overlap(WireId),
     /// Outside K1 or off the WK1 lattice (also malformed candidate segments).
     Sheet,
@@ -75,29 +78,42 @@ fn shared_stretch(a: Wire, b: Wire) -> bool {
 
 /// WD4: rule priority first, then segment order from `a`. Within a segment,
 /// choose the first obstruction along its direction, then geometry, kind (pin
-/// before end), and lowest id/index. Own ends exempt points, never overlaps.
+/// before end before body), and lowest id/index. Own ends exempt points, never
+/// overlaps. Rule 2 covers the run's whole interior: a segment's interior and
+/// its vertices that are not own ends (the run's corners), where a foreign pin,
+/// a foreign wire end or a foreign wire's interior blocks (W1.5).
 /// Query buffers contain only items intersecting one segment, not the sheet.
 /// Callers remove the old run from the document view before validating it.
 pub fn check_new_wires(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(), Blocker> {
+    check_new_wires_in(doc, wires, own_ends, &mut Vec::new())
+}
+
+/// [`check_new_wires`] with a caller-owned query buffer: allocates nothing once
+/// `scratch` holds the largest single-segment query result.
+pub fn check_new_wires_in(
+    doc: &Doc,
+    wires: &[Wire],
+    own_ends: [Pt; 2],
+    scratch: &mut Vec<ItemId>,
+) -> Result<(), Blocker> {
     for &w in wires {
         if !on_lattice(w.a) || !on_lattice(w.b) || w.a == w.b || (w.a.x != w.b.x && w.a.y != w.b.y)
         {
             return Err(Blocker::Sheet);
         }
     }
-    let mut scratch = Vec::new();
     for &w in wires {
-        doc.query(Rect::from_points(w.a, w.b).unwrap(), &mut scratch);
+        doc.query(Rect::from_points(w.a, w.b).unwrap(), scratch);
         let mut best = None;
         let mut consider = |p: Pt, kind: u8, id: u32, pin: usize, blocker| {
-            if interior_contains(w, p) && !own_ends.contains(&p) {
+            if contains(w, p) && !own_ends.contains(&p) {
                 let key = (w.a.manhattan_distance(p), pt_key(p), kind, id, pin);
                 if best.as_ref().is_none_or(|&(old, _)| key < old) {
                     best = Some((key, blocker));
                 }
             }
         };
-        for &item in &scratch {
+        for &item in scratch.iter() {
             match item {
                 ItemId::Part(part) => {
                     for (pin, &p) in doc.pins(part).unwrap().iter().enumerate() {
@@ -109,6 +125,11 @@ pub fn check_new_wires(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(
                     for p in [other.a, other.b] {
                         consider(p, 1, id.0, 0, Blocker::WireEnd(id));
                     }
+                    for v in [w.a, w.b] {
+                        if interior_contains(other, v) {
+                            consider(v, 2, id.0, 0, Blocker::WireBody(id));
+                        }
+                    }
                 }
                 ItemId::Label(_) => {}
             }
@@ -118,9 +139,9 @@ pub fn check_new_wires(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(
         }
     }
     for &w in wires {
-        doc.query(Rect::from_points(w.a, w.b).unwrap(), &mut scratch);
+        doc.query(Rect::from_points(w.a, w.b).unwrap(), scratch);
         let mut best = None;
-        for &item in &scratch {
+        for &item in scratch.iter() {
             if let ItemId::Wire(id) = item {
                 let other = *doc.wire(id).unwrap();
                 if shared_stretch(w, other) {
@@ -142,6 +163,272 @@ pub fn check_new_wires(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(
         }
     }
     Ok(())
+}
+
+/// The axis a route leaves `a` along.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+/// WK5: dogleg mid-lines reach this far beyond the box spanned by the ends.
+pub const DOGLEG_REACH_NM: i32 = 8 * crate::GRID_NM;
+/// WK6: at most this many doglegs per route (after the two L-routes).
+pub const DOGLEG_CAP: usize = 128;
+/// Straight or two L-routes, plus WK6's doglegs.
+const CANDIDATE_CAP: usize = 2 + DOGLEG_CAP;
+
+/// WD4's comparison, lowest first; field order is the comparison order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+struct Score {
+    /// Segments whose interior passes through the interior of any part body.
+    bodies: u8,
+    bends: u8,
+    /// Foreign wires crossed at a point interior to both.
+    crossings: u32,
+    length: i64,
+    /// WD4's candidate number: 0 straight, 1 and 2 the L-routes, 3 on doglegs.
+    number: u16,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Candidate {
+    wires: [Wire; 3],
+    len: u8,
+    score: Score,
+}
+
+impl Candidate {
+    fn wires(&self) -> &[Wire] {
+        &self.wires[..self.len as usize]
+    }
+}
+
+/// Caller-owned buffers for [`route`]. A warm scratch makes `route` allocation
+/// free: the candidate list is reserved on construction and the query buffer
+/// keeps the capacity of the largest query it has served.
+#[derive(Debug)]
+pub struct RouteScratch {
+    candidates: Vec<Candidate>,
+    items: Vec<ItemId>,
+}
+
+impl RouteScratch {
+    pub fn new() -> Self {
+        Self {
+            candidates: Vec::with_capacity(CANDIDATE_CAP),
+            items: Vec::new(),
+        }
+    }
+}
+
+impl Default for RouteScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// WD4: route a new run from `a` to `b`.
+///
+/// Enumerates the candidates in WD4's order (straight; the L leaving `a` along
+/// `first_leg`, then the other L; then up to WK6 doglegs), scores each, and
+/// returns the lowest-scoring valid one in `out`, segments directed from `a` to
+/// `b`. Validity is [`check_new_wires_in`] with `[a, b]` as the own ends. With no
+/// valid candidate, `out` is left empty and the error is the blocker of the
+/// lowest-scoring invalid candidate (the same comparison ranks them). `a == b`
+/// routes to nothing.
+///
+/// Doglegs: for `d = 1, 2, ...` grid steps (K2) from `a`'s coordinate, H-V-H
+/// (vertical at `x = m`) then V-H-V (horizontal at `y = m`), each first on the
+/// side towards `b` (the lesser coordinate when level), within the span of the
+/// ends widened by WK5 on both sides; shapes with a zero-length segment are not
+/// candidates and do not count towards WK6.
+///
+/// Cost is the candidates' local index queries; nothing scales with the
+/// document beyond them, and a warm `scratch` and `out` allocate nothing. The
+/// caller removes the run being replaced from the document first, as for
+/// [`check_new_wires`].
+pub fn route(
+    doc: &Doc,
+    a: Pt,
+    b: Pt,
+    first_leg: Axis,
+    scratch: &mut RouteScratch,
+    out: &mut Vec<Wire>,
+) -> Result<(), Blocker> {
+    out.clear();
+    if a == b {
+        return Ok(());
+    }
+    let RouteScratch { candidates, items } = scratch;
+    enumerate_candidates(a, b, first_leg, candidates);
+    for candidate in candidates.iter_mut() {
+        candidate.score = score(doc, candidate.wires(), candidate.score.number, items);
+    }
+    // Unique candidate numbers make the order total; the unstable sort is in place.
+    candidates.sort_unstable_by_key(|c| c.score);
+    let mut first_blocker = None;
+    for candidate in candidates.iter() {
+        match check_new_wires_in(doc, candidate.wires(), [a, b], items) {
+            Ok(()) => {
+                out.extend_from_slice(candidate.wires());
+                return Ok(());
+            }
+            Err(blocker) => {
+                first_blocker.get_or_insert(blocker);
+            }
+        }
+    }
+    // a != b always yields a candidate (the straight or both Ls).
+    Err(first_blocker.unwrap_or(Blocker::Sheet))
+}
+
+fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>) {
+    out.clear();
+    let mut push = |points: &[Pt], number: u16| {
+        let mut wires = [Wire { a, b: a }; 3];
+        for (slot, pair) in wires.iter_mut().zip(points.windows(2)) {
+            *slot = Wire {
+                a: pair[0],
+                b: pair[1],
+            };
+        }
+        out.push(Candidate {
+            wires,
+            len: (points.len() - 1) as u8,
+            score: Score {
+                number,
+                ..Score::default()
+            },
+        });
+    };
+    if a.x == b.x || a.y == b.y {
+        push(&[a, b], 0);
+    } else {
+        let horizontal_first = Pt { x: b.x, y: a.y };
+        let vertical_first = Pt { x: a.x, y: b.y };
+        let (first, second) = match first_leg {
+            Axis::Horizontal => (horizontal_first, vertical_first),
+            Axis::Vertical => (vertical_first, horizontal_first),
+        };
+        push(&[a, first, b], 1);
+        push(&[a, second, b], 2);
+    }
+    let step = i64::from(crate::GRID_NM);
+    let reach = i64::from(DOGLEG_REACH_NM);
+    let (ax, ay, bx, by) = (
+        i64::from(a.x),
+        i64::from(a.y),
+        i64::from(b.x),
+        i64::from(b.y),
+    );
+    // (a's coordinate, b's coordinate, low, high): H-V-H (m is an x), then V-H-V.
+    let families = [
+        (ax, bx, ax.min(bx) - reach, ax.max(bx) + reach, a.y != b.y),
+        (ay, by, ay.min(by) - reach, ay.max(by) + reach, a.x != b.x),
+    ];
+    let max_steps = families
+        .iter()
+        .map(|&(from, _, lo, hi, _)| (hi - from).max(from - lo) / step)
+        .max()
+        .unwrap_or(0);
+    let mut number = 3u16;
+    for d in 1..=max_steps {
+        for (family, &(from, to, lo, hi, has_middle)) in families.iter().enumerate() {
+            if !has_middle {
+                continue;
+            }
+            let toward = if to > from { 1 } else { -1 };
+            for side in [toward, -toward] {
+                let m = from + side * d * step;
+                if m < lo || m > hi || m == to {
+                    continue;
+                }
+                // Inside [lo, hi]; i32 for any ends within K1.
+                let Ok(m) = i32::try_from(m) else {
+                    continue;
+                };
+                let points = if family == 0 {
+                    [a, Pt { x: m, y: a.y }, Pt { x: m, y: b.y }, b]
+                } else {
+                    [a, Pt { x: a.x, y: m }, Pt { x: b.x, y: m }, b]
+                };
+                push(&points, number);
+                number += 1;
+                if usize::from(number - 3) == DOGLEG_CAP {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// WD4 scores invalid candidates too. Clip only the index query to K1;
+/// keep the original segment for body and crossing intersection tests.
+fn score(doc: &Doc, wires: &[Wire], number: u16, items: &mut Vec<ItemId>) -> Score {
+    let mut score = Score {
+        bends: (wires.len() - 1) as u8,
+        number,
+        ..Score::default()
+    };
+    for &w in wires {
+        score.length += w.a.manhattan_distance(w.b);
+        let limit = crate::SHEET_LIMIT_NM;
+        let area = Rect {
+            min: Pt {
+                x: w.a.x.min(w.b.x).clamp(-limit, limit),
+                y: w.a.y.min(w.b.y).clamp(-limit, limit),
+            },
+            max: Pt {
+                x: w.a.x.max(w.b.x).clamp(-limit, limit),
+                y: w.a.y.max(w.b.y).clamp(-limit, limit),
+            },
+        };
+        doc.query(area, items);
+        let mut through_body = false;
+        for &item in items.iter() {
+            match item {
+                ItemId::Part(id) => {
+                    through_body |= doc
+                        .part_body(id)
+                        .is_some_and(|body| passes_through(w, body));
+                }
+                ItemId::Wire(id) => {
+                    score.crossings += u32::from(crosses(w, *doc.wire(id).unwrap()));
+                }
+                ItemId::Label(_) => {}
+            }
+        }
+        score.bodies += u8::from(through_body);
+    }
+    score
+}
+
+/// The open segment meets the open rectangle (running along an edge or
+/// touching a corner does not count).
+fn passes_through(w: Wire, body: Rect) -> bool {
+    let (lo, hi, horizontal) = normalised(w);
+    if horizontal {
+        body.min.y < lo.y && lo.y < body.max.y && lo.x.max(body.min.x) < hi.x.min(body.max.x)
+    } else {
+        body.min.x < lo.x && lo.x < body.max.x && lo.y.max(body.min.y) < hi.y.min(body.max.y)
+    }
+}
+
+/// Perpendicular segments meeting at a point interior to both (INV2: not a
+/// connection).
+fn crosses(w: Wire, other: Wire) -> bool {
+    let (lo, hi, horizontal) = normalised(w);
+    let (olo, ohi, other_horizontal) = normalised(other);
+    if horizontal == other_horizontal {
+        return false;
+    }
+    if horizontal {
+        lo.x < olo.x && olo.x < hi.x && olo.y < lo.y && lo.y < ohi.y
+    } else {
+        lo.y < olo.y && olo.y < hi.y && olo.x < lo.x && lo.x < ohi.x
+    }
 }
 
 impl Doc {
@@ -1110,7 +1397,17 @@ mod tests {
             check_new_wires(&Doc::new(), &[w(0, 0, 1, 0)], [Pt::ZERO; 2]),
             Err(Blocker::Sheet)
         );
-        // Second rule outranks third even on a later segment.
+        // Second rule outranks third even on a later segment. The two wires
+        // are not chained, so the first segment's own ends exempt every point
+        // on it and only its overlap fails there.
+        let doc = Doc::from_items([], [lw(-1, 0, 11, 0), lw(20, 4, 22, 4)], []).unwrap();
+        assert_eq!(
+            check_new_wires(&doc, &[segment, lw(20, 0, 20, 8)], [segment.a, segment.b]),
+            Err(Blocker::WireEnd(WireId(1)))
+        );
+        // W1.5: a corner (a vertex that is not an own end) is in the run's
+        // interior, so a foreign wire's interior there blocks under rule 2,
+        // before the later segment's end and the first segment's overlap.
         let doc = Doc::from_items([], [lw(-1, 0, 11, 0), lw(10, 4, 12, 4)], []).unwrap();
         assert_eq!(
             check_new_wires(
@@ -1118,7 +1415,23 @@ mod tests {
                 &[segment, lw(10, 0, 10, 8)],
                 [segment.a, lattice(Pt { x: 10, y: 8 })]
             ),
-            Err(Blocker::WireEnd(WireId(1)))
+            Err(Blocker::WireBody(WireId(0)))
+        );
+        // A corner on a foreign pin or a foreign wire end blocks too (TC-move-08).
+        let corner = [segment, lw(10, 0, 10, 8)];
+        let ends = [segment.a, lattice(Pt { x: 10, y: 8 })];
+        let pin_at_corner = with_features(vec![lattice(Pt { x: 10, y: 0 })], vec![]);
+        assert_eq!(
+            check_new_wires(&pin_at_corner, &corner, ends),
+            Err(Blocker::Pin {
+                part: crate::PartId(0),
+                pin: 0
+            })
+        );
+        let end_at_corner = Doc::from_items([], [lw(10, 0, 14, 0)], []).unwrap();
+        assert_eq!(
+            check_new_wires(&end_at_corner, &corner, ends),
+            Err(Blocker::WireEnd(WireId(0)))
         );
         let mut doc = Doc::from_items([], [lw(8, 0, 8, 2), lw(2, 0, 2, 2)], []).unwrap();
         assert_eq!(check(&doc), Err(Blocker::WireEnd(WireId(1))));
@@ -1335,6 +1648,612 @@ mod tests {
             }
             while doc.undo().is_some() {}
             prop_assert!(doc.content_eq(&initial));
+        }
+    }
+
+    // ---- W1.5: route candidates (WD4, WK5, WK6, WINV10) ----
+
+    fn lp(x: i32, y: i32) -> Pt {
+        lattice(Pt { x, y })
+    }
+
+    fn chain(points: &[(i32, i32)]) -> Vec<Wire> {
+        points
+            .windows(2)
+            .map(|p| lw(p[0].0, p[0].1, p[1].0, p[1].1))
+            .collect()
+    }
+
+    /// One part per entry: world = local (at the origin, identity), body in
+    /// lattice units `(x0, y0, x1, y1)`, pins in lattice units.
+    fn sheet(parts: &[PartSpec], wires: &[Wire]) -> Doc {
+        Doc::from_items(
+            parts
+                .iter()
+                .enumerate()
+                .map(|(i, &((x0, y0, x1, y1), ref pins))| {
+                    (
+                        Part {
+                            symbol: SymbolId(0),
+                            at: Pt::ZERO,
+                            orient: Orient::IDENTITY,
+                            designator: format!("U{i}").into(),
+                            value: "1k".into(),
+                        },
+                        pins.iter().map(|&(x, y)| lp(x, y)).collect(),
+                        Rect::from_points(lp(x0, y0), lp(x1, y1)).unwrap(),
+                    )
+                }),
+            wires.iter().copied(),
+            [],
+        )
+        .unwrap()
+    }
+
+    fn route_of(doc: &Doc, a: Pt, b: Pt, first_leg: Axis) -> Result<Vec<Wire>, Blocker> {
+        let mut out = Vec::new();
+        route(doc, a, b, first_leg, &mut RouteScratch::new(), &mut out).map(|()| out)
+    }
+
+    #[test]
+    fn w15_wd4_off_sheet_candidates_keep_body_and_crossing_scores() {
+        // Reflect the review reproduction across both axes, covering all K1 edges.
+        for swap in [false, true] {
+            for sign in [-1, 1] {
+                let transform = |(x, y): (i32, i32)| {
+                    if swap { (sign * y, x) } else { (x, sign * y) }
+                };
+                let lo = transform((-2, 784));
+                let hi = transform((2, 787));
+                let pins = [(1, 786), (-1, 786), (0, 785), (0, 787)]
+                    .into_iter()
+                    .map(transform)
+                    .collect();
+                let crossing = [transform((-3, 787)), transform((3, 787))];
+                let doc = sheet(&[((lo.0, lo.1, hi.0, hi.1), pins)], &chain(&crossing));
+                let a = transform((0, 786));
+                let b = transform((6, 782));
+                let axis = if swap {
+                    Axis::Vertical
+                } else {
+                    Axis::Horizontal
+                };
+                for (number, wires) in oracle_candidates(lp(a.0, a.1), lp(b.0, b.1), axis) {
+                    let actual = score(&doc, &wires, number, &mut Vec::new());
+                    assert_eq!(
+                        (
+                            actual.bodies,
+                            actual.bends,
+                            actual.crossings,
+                            actual.length,
+                            actual.number
+                        ),
+                        oracle_score(&doc, &wires, number)
+                    );
+                }
+                assert_eq!(
+                    route_of(&doc, lp(a.0, a.1), lp(b.0, b.1), axis),
+                    Err(Blocker::Pin {
+                        part: crate::PartId(0),
+                        pin: 0
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn w15_straight_and_each_l() {
+        let doc = Doc::new();
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(10, 0), Axis::Vertical),
+            Ok(chain(&[(0, 0), (10, 0)]))
+        );
+        assert_eq!(
+            route_of(&doc, lp(0, 6), lp(0, -4), Axis::Horizontal),
+            Ok(chain(&[(0, 6), (0, -4)]))
+        );
+        // The two Ls tie on everything but the candidate number: first_leg decides.
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(10, 6), Axis::Horizontal),
+            Ok(chain(&[(0, 0), (10, 0), (10, 6)]))
+        );
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(10, 6), Axis::Vertical),
+            Ok(chain(&[(0, 0), (0, 6), (10, 6)]))
+        );
+        assert_eq!(
+            route_of(&doc, lp(3, 3), lp(3, 3), Axis::Vertical),
+            Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn w15_l_blocked_by_pin_takes_the_other_l() {
+        let doc = sheet(&[((20, 20, 22, 22), vec![(5, 0)])], &[]);
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(10, 6), Axis::Horizontal),
+            Ok(chain(&[(0, 0), (0, 6), (10, 6)]))
+        );
+        // A pin on the L's corner blocks it too.
+        let doc = sheet(&[((20, 20, 22, 22), vec![(10, 0)])], &[]);
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(10, 6), Axis::Horizontal),
+            Ok(chain(&[(0, 0), (0, 6), (10, 6)]))
+        );
+    }
+
+    #[test]
+    fn w15_both_ls_blocked_dogleg_wins() {
+        let doc = sheet(&[((20, 20, 22, 22), vec![(5, 0), (0, 3)])], &[]);
+        // Nearest mid-line one grid step (two lattice units) from a towards b:
+        // H-V-H at x = 2 ties V-H-V at y = 2 on length 16; H-V-H is numbered first.
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(10, 6), Axis::Horizontal),
+            Ok(chain(&[(0, 0), (2, 0), (2, 6), (10, 6)]))
+        );
+        // Blocking the straight sends a level pair round a U-shaped dogleg; level
+        // ends try the lesser coordinate first.
+        let doc = sheet(&[((20, 20, 22, 22), vec![(4, 0)])], &[]);
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(10, 0), Axis::Horizontal),
+            Ok(chain(&[(0, 0), (0, -2), (10, -2), (10, 0)]))
+        );
+    }
+
+    #[test]
+    fn w15_tc_move_12_part_body_in_the_way() {
+        // The moved part's body spans (-4, -2)..(0, 2); its pin a sits on the right
+        // edge. A foreign pin at (-4, 4) blocks the vertical-first L, so the only L
+        // left runs through the body. The V-H-V dogleg along the body's top edge
+        // passes through no body interior and wins despite its extra bend.
+        let doc = sheet(
+            &[
+                ((-4, -2, 0, 2), vec![(0, 0)]),
+                ((20, 20, 22, 22), vec![(-4, 4)]),
+            ],
+            &[],
+        );
+        let routed = route_of(&doc, lp(0, 0), lp(-8, 4), Axis::Horizontal).unwrap();
+        assert_eq!(routed, chain(&[(0, 0), (0, 2), (-8, 2), (-8, 4)]));
+        // Without the dogleg rule the body L would be the only L.
+        assert_eq!(
+            check_new_wires(
+                &doc,
+                &chain(&[(0, 0), (-8, 0), (-8, 4)]),
+                [lp(0, 0), lp(-8, 4)]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn w15_crossings_rank_after_bends_and_corner_on_a_body_is_invalid() {
+        // A foreign vertical wire crosses the horizontal-first L: the other L wins.
+        let doc = sheet(&[], &[lw(5, -3, 5, 3)]);
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(10, 6), Axis::Horizontal),
+            Ok(chain(&[(0, 0), (0, 6), (10, 6)]))
+        );
+        // The vertical-first L's corner (0, 6) lies on a foreign wire's interior: it
+        // would connect that wire, so it is invalid and the crossing L wins.
+        let doc = sheet(&[], &[lw(5, -3, 5, 3), lw(-3, 6, 3, 6)]);
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(10, 6), Axis::Vertical),
+            Ok(chain(&[(0, 0), (10, 0), (10, 6)]))
+        );
+    }
+
+    #[test]
+    fn w15_refusal_reports_lowest_scoring_invalid_candidate() {
+        // Pins one lattice unit from a on all four sides: every candidate's first
+        // segment holds one. The best invalid candidate is the first L.
+        let doc = sheet(
+            &[((20, 20, 22, 22), vec![(1, 0), (-1, 0), (0, 1), (0, -1)])],
+            &[],
+        );
+        let pin = |pin| Blocker::Pin {
+            part: crate::PartId(0),
+            pin,
+        };
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(6, 4), Axis::Horizontal),
+            Err(pin(0))
+        );
+        assert_eq!(
+            route_of(&doc, lp(0, 0), lp(6, 4), Axis::Vertical),
+            Err(pin(2))
+        );
+        // A body band crossed by both Ls ranks them below the V-H-V dogleg at
+        // y = -2 (running along the band's bottom edge), so the refusal names that
+        // dogleg's blocker (the pin below a), not the first L's.
+        let doc = sheet(
+            &[
+                ((20, 20, 22, 22), vec![(1, 0), (-1, 0), (0, 1), (0, -1)]),
+                ((2, -2, 4, 6), vec![]),
+            ],
+            &[],
+        );
+        let mut out = vec![lw(0, 0, 1, 0)];
+        let got = route(
+            &doc,
+            lp(0, 0),
+            lp(6, 4),
+            Axis::Horizontal,
+            &mut RouteScratch::new(),
+            &mut out,
+        );
+        assert!(out.is_empty());
+        assert_eq!(got, Err(pin(3)));
+        let expected = oracle(&doc, lp(0, 0), lp(6, 4), Axis::Horizontal);
+        assert!(expected.0.is_err() && expected.1 >= 3, "{expected:?}");
+        assert_eq!(got, expected.0.map(|_| ()));
+        // Off-lattice ends: every candidate fails the first rule.
+        assert_eq!(
+            route_of(&Doc::new(), Pt { x: 1, y: 0 }, lp(6, 4), Axis::Vertical),
+            Err(Blocker::Sheet)
+        );
+    }
+
+    #[test]
+    fn w15_dogleg_order_reach_and_cap() {
+        let mut candidates = Vec::new();
+        enumerate_candidates(lp(0, 0), lp(10, 6), Axis::Horizontal, &mut candidates);
+        let numbers: Vec<u16> = candidates.iter().map(|c| c.score.number).collect();
+        assert_eq!(numbers, (1..=numbers.len() as u16).collect::<Vec<_>>());
+        // The independent oracle lists the same candidates in the same order.
+        let expected = oracle_candidates(lp(0, 0), lp(10, 6), Axis::Horizontal);
+        assert_eq!(candidates.len(), expected.len());
+        for (c, (number, wires)) in candidates.iter().zip(&expected) {
+            assert_eq!((c.score.number, c.wires()), (*number, wires.as_slice()));
+        }
+        // A long span hits the WK6 cap.
+        enumerate_candidates(lp(0, 0), lp(400, 300), Axis::Vertical, &mut candidates);
+        assert_eq!(candidates.len(), 2 + DOGLEG_CAP);
+        assert_eq!(
+            candidates[2].wires(),
+            chain(&[(0, 0), (2, 0), (2, 300), (400, 300)])
+        );
+        assert_eq!(
+            candidates[3].wires(),
+            chain(&[(0, 0), (-2, 0), (-2, 300), (400, 300)])
+        );
+        assert_eq!(
+            candidates[4].wires(),
+            chain(&[(0, 0), (0, 2), (400, 2), (400, 300)])
+        );
+    }
+
+    /// Independent oracle for WD4: brute-force over every item (no index), the
+    /// candidate list built by sorting every mid-line by (steps, family, side).
+    fn oracle_candidates(a: Pt, b: Pt, first_leg: Axis) -> Vec<(u16, Vec<Wire>)> {
+        let seg = |pts: &[Pt]| {
+            pts.windows(2)
+                .map(|p| Wire { a: p[0], b: p[1] })
+                .collect::<Vec<_>>()
+        };
+        let mut out = Vec::new();
+        if a.x == b.x || a.y == b.y {
+            out.push((0, seg(&[a, b])));
+        } else {
+            let h = seg(&[a, Pt { x: b.x, y: a.y }, b]);
+            let v = seg(&[a, Pt { x: a.x, y: b.y }, b]);
+            let (first, second) = if first_leg == Axis::Horizontal {
+                (h, v)
+            } else {
+                (v, h)
+            };
+            out.push((1, first));
+            out.push((2, second));
+        }
+        let g = i64::from(crate::GRID_NM);
+        let reach = 8 * g;
+        let mut mids = Vec::new();
+        for family in 0..2 {
+            let (from, to) = if family == 0 {
+                (i64::from(a.x), i64::from(b.x))
+            } else {
+                (i64::from(a.y), i64::from(b.y))
+            };
+            let degenerate = if family == 0 { a.y == b.y } else { a.x == b.x };
+            let (lo, hi) = (from.min(to) - reach, from.max(to) + reach);
+            for k in -1000i64..=1000 {
+                let m = from + k * g;
+                if k == 0 || m < lo || m > hi || m == to || degenerate {
+                    continue;
+                }
+                let towards =
+                    (m - from).signum() == (to - from).signum() || (to == from && m < from);
+                mids.push((k.abs(), family, if towards { 0 } else { 1 }, m as i32));
+            }
+        }
+        mids.sort();
+        for (i, &(_, family, _, m)) in mids.iter().take(DOGLEG_CAP).enumerate() {
+            let pts = if family == 0 {
+                [a, Pt { x: m, y: a.y }, Pt { x: m, y: b.y }, b]
+            } else {
+                [a, Pt { x: a.x, y: m }, Pt { x: b.x, y: m }, b]
+            };
+            out.push((3 + i as u16, seg(&pts)));
+        }
+        out
+    }
+
+    fn oracle_score(doc: &Doc, wires: &[Wire], number: u16) -> (u8, u8, u32, i64, u16) {
+        let open = |a: i32, b: i32| (a.min(b), a.max(b));
+        let mut bodies = 0;
+        let mut crossings = 0;
+        let mut length = 0;
+        for w in wires {
+            length += i64::from((w.a.x - w.b.x).abs()) + i64::from((w.a.y - w.b.y).abs());
+            let horizontal = w.a.y == w.b.y;
+            let (s0, s1) = if horizontal {
+                open(w.a.x, w.b.x)
+            } else {
+                open(w.a.y, w.b.y)
+            };
+            let fixed = if horizontal { w.a.y } else { w.a.x };
+            if doc.parts().any(|(id, _)| {
+                let r = doc.part_body(id).unwrap();
+                let (along, across) = if horizontal {
+                    ((r.min.x, r.max.x), (r.min.y, r.max.y))
+                } else {
+                    ((r.min.y, r.max.y), (r.min.x, r.max.x))
+                };
+                across.0 < fixed
+                    && fixed < across.1
+                    && s0 < along.1
+                    && along.0 < s1
+                    && along.0 < along.1
+            }) {
+                bodies += 1;
+            }
+            for (_, o) in doc.wires() {
+                if (o.a.y == o.b.y) == horizontal {
+                    continue;
+                }
+                let (o0, o1) = if horizontal {
+                    open(o.a.y, o.b.y)
+                } else {
+                    open(o.a.x, o.b.x)
+                };
+                let ofixed = if horizontal { o.a.x } else { o.a.y };
+                if s0 < ofixed && ofixed < s1 && o0 < fixed && fixed < o1 {
+                    crossings += 1;
+                }
+            }
+        }
+        (bodies, (wires.len() - 1) as u8, crossings, length, number)
+    }
+
+    /// Independent enumeration/scoring oracle; validity and blocker selection reuse
+    /// check_new_wires, so this does not independently prove the validator.
+    /// Returns the answer and its candidate number.
+    fn oracle(doc: &Doc, a: Pt, b: Pt, first_leg: Axis) -> (Result<Vec<Wire>, Blocker>, u16) {
+        if a == b {
+            return (Ok(vec![]), 0);
+        }
+        let mut ranked: Vec<_> = oracle_candidates(a, b, first_leg)
+            .into_iter()
+            .map(|(n, wires)| (oracle_score(doc, &wires, n), wires))
+            .collect();
+        ranked.sort_by_key(|(score, _)| *score);
+        for (score, wires) in &ranked {
+            if check_new_wires(doc, wires, [a, b]).is_ok() {
+                return (Ok(wires.clone()), score.4);
+            }
+        }
+        let (score, wires) = &ranked[0];
+        (
+            Err(check_new_wires(doc, wires, [a, b]).unwrap_err()),
+            score.4,
+        )
+    }
+
+    type PartSpec = ((i32, i32, i32, i32), Vec<(i32, i32)>);
+
+    fn part_strategy() -> impl Strategy<Value = PartSpec> {
+        (
+            -8i32..8,
+            -8i32..8,
+            1i32..5,
+            1i32..5,
+            prop::collection::vec((0i32..5, 0i32..5, 0u8..4), 0..3),
+        )
+            .prop_map(|(x, y, w, h, pins)| {
+                // Pins on the body's edges, as symbols place them.
+                let pins = pins
+                    .into_iter()
+                    .map(|(u, v, side)| match side {
+                        0 => (x + u.min(w), y),
+                        1 => (x + u.min(w), y + h),
+                        2 => (x, y + v.min(h)),
+                        _ => (x + w, y + v.min(h)),
+                    })
+                    .collect();
+                ((x, y, x + w, y + h), pins)
+            })
+    }
+
+    fn random_sheet(parts: &[PartSpec], batches: Vec<Vec<Wire>>) -> Doc {
+        let mut doc = sheet(parts, &[]);
+        for batch in batches {
+            let wires = batch
+                .into_iter()
+                .map(|w| Wire {
+                    a: lattice(Pt {
+                        x: w.a.x * 2,
+                        y: w.a.y * 2,
+                    }),
+                    b: lattice(Pt {
+                        x: w.b.x * 2,
+                        y: w.b.y * 2,
+                    }),
+                })
+                .collect();
+            doc.apply(Command::AddWires(wires)).unwrap();
+        }
+        doc.assert_normal_form();
+        doc
+    }
+
+    /// Union-find classes over probe points from `net_at`, optionally joining two.
+    /// The net at `p`: its point's, or that of a wire whose body holds it (a
+    /// merge removes a point but not its place on the net).
+    fn net_here(doc: &Doc, p: Pt) -> Option<crate::NetId> {
+        doc.net_at(p).or_else(|| {
+            doc.wires()
+                .find(|(_, w)| contains(**w, p))
+                .and_then(|(id, _)| doc.net_of(id))
+        })
+    }
+
+    /// Probes at the same point are one place, whatever `net_at` says.
+    fn same_net_matrix(doc: &Doc, probes: &[Pt], join: &[(usize, usize)]) -> Vec<Vec<bool>> {
+        let n = probes.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(p: &mut [usize], i: usize) -> usize {
+            if p[i] == i {
+                i
+            } else {
+                let r = find(p, p[i]);
+                p[i] = r;
+                r
+            }
+        }
+        let union = |p: &mut Vec<usize>, i: usize, j: usize| {
+            let (ri, rj) = (find(p, i), find(p, j));
+            p[ri] = rj;
+        };
+        for i in 0..n {
+            for j in 0..n {
+                let (ni, nj) = (net_here(doc, probes[i]), net_here(doc, probes[j]));
+                if probes[i] == probes[j] || (ni.is_some() && ni == nj) {
+                    union(&mut parent, i, j);
+                }
+            }
+        }
+        for &(i, j) in join {
+            union(&mut parent, i, j);
+        }
+        (0..n)
+            .map(|i| {
+                (0..n)
+                    .map(|j| find(&mut parent, i) == find(&mut parent, j))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Geometry of a blocker, for comparing across documents with different ids.
+    fn blocker_shape(doc: &Doc, blocker: Blocker) -> (u8, Option<Pt>) {
+        match blocker {
+            Blocker::Pin { part, pin } => (0, Some(doc.pins(part).unwrap()[pin])),
+            Blocker::WireEnd(_) => (1, None),
+            Blocker::WireBody(_) => (2, None),
+            Blocker::Overlap(_) => (3, None),
+            Blocker::Sheet => (4, None),
+        }
+    }
+
+    fn axis(vertical: bool) -> Axis {
+        if vertical {
+            Axis::Vertical
+        } else {
+            Axis::Horizontal
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+        /// WINV10 and WD4: every returned route is orthogonal, on the lattice, a
+        /// chain from a to b, passes check_new_wires, keeps normal form when added,
+        /// and joins exactly the nets of a and b. Ok or Err, the answer is the
+        /// enumeration/scoring oracle's (using the production validator): the lowest-scoring valid candidate, else the
+        /// blocker of the lowest-scoring invalid one.
+        #[test]
+        fn w15_winv10_route_properties_and_oracle(
+            parts in prop::collection::vec(part_strategy(), 0..5),
+            batches in prop::collection::vec(prop::collection::vec(wire_strategy(), 1..3), 0..5),
+            a in (-10i32..11, -10i32..11),
+            b in (-10i32..11, -10i32..11),
+            vertical in any::<bool>(),
+        ) {
+            let mut doc = random_sheet(&parts, batches);
+            let (a, b) = (lp(a.0, a.1), lp(b.0, b.1));
+            let first_leg = axis(vertical);
+            let mut scratch = RouteScratch::new();
+            let mut out = vec![lw(0, 0, 1, 0)];
+            let got = route(&doc, a, b, first_leg, &mut scratch, &mut out);
+            let (expected, _) = oracle(&doc, a, b, first_leg);
+            match (&got, &expected) {
+                (Ok(()), Ok(wires)) => prop_assert_eq!(&out, wires),
+                (Err(g), Err(e)) => {
+                    prop_assert_eq!(g, e);
+                    prop_assert!(out.is_empty());
+                }
+                _ => prop_assert!(false, "route {got:?} {out:?}, oracle {expected:?}"),
+            }
+            if got.is_err() || a == b {
+                return Ok(());
+            }
+            prop_assert_eq!(out.first().unwrap().a, a);
+            prop_assert_eq!(out.last().unwrap().b, b);
+            for pair in out.windows(2) {
+                prop_assert_eq!(pair[0].b, pair[1].a);
+            }
+            for w in &out {
+                prop_assert!(w.a != w.b && (w.a.x == w.b.x || w.a.y == w.b.y));
+                prop_assert!(on_lattice(w.a) && on_lattice(w.b));
+            }
+            prop_assert_eq!(check_new_wires(&doc, &out, [a, b]), Ok(()));
+            // Probe every pin and wire end, then a and b.
+            let mut probes: Vec<Pt> = doc
+                .parts()
+                .flat_map(|(id, _)| doc.pins(id).unwrap().to_vec())
+                .chain(doc.wires().flat_map(|(_, w)| [w.a, w.b]))
+                .collect();
+            probes.extend([a, b]);
+            let n = probes.len();
+            // a and b join. An end on a foreign wire's body is on that wire's net
+            // (net_here), as D2's split makes it (TC-move-14).
+            let expected_nets = same_net_matrix(&doc, &probes, &[(n - 2, n - 1)]);
+            doc.apply(Command::AddWires(out.clone())).unwrap();
+            doc.assert_normal_form();
+            assert_inv10(&doc);
+            prop_assert_eq!(same_net_matrix(&doc, &probes, &[]), expected_nets);
+        }
+
+        /// Determinism: the same inputs give the same route with a fresh or a warm
+        /// scratch, and on the same sheet rebuilt with items in reverse id order.
+        #[test]
+        fn w15_route_is_deterministic(
+            parts in prop::collection::vec(part_strategy(), 0..5),
+            batches in prop::collection::vec(prop::collection::vec(wire_strategy(), 1..3), 0..5),
+            ends in prop::collection::vec(((-10i32..11, -10i32..11), (-10i32..11, -10i32..11), any::<bool>()), 1..6),
+        ) {
+            let doc = random_sheet(&parts, batches);
+            let mut rev_parts = parts.clone();
+            rev_parts.reverse();
+            let rev_wires: Vec<Wire> = doc.wires().map(|(_, &w)| w).collect::<Vec<_>>().into_iter().rev().collect();
+            let rebuilt = sheet(&rev_parts, &rev_wires);
+            let mut warm = RouteScratch::new();
+            let mut warm_out = Vec::new();
+            for (a, b, vertical) in ends {
+                let (a, b, leg) = (lp(a.0, a.1), lp(b.0, b.1), axis(vertical));
+                let fresh = route_of(&doc, a, b, leg);
+                let again = route(&doc, a, b, leg, &mut warm, &mut warm_out).map(|()| warm_out.clone());
+                prop_assert_eq!(&fresh, &again);
+                let other = route_of(&rebuilt, a, b, leg);
+                match (&fresh, &other) {
+                    (Ok(x), Ok(y)) => prop_assert_eq!(x, y),
+                    (Err(x), Err(y)) => prop_assert_eq!(
+                        blocker_shape(&doc, *x),
+                        blocker_shape(&rebuilt, *y)
+                    ),
+                    _ => prop_assert!(false, "{fresh:?} vs rebuilt {other:?}"),
+                }
+            }
         }
     }
 }
