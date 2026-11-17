@@ -27,6 +27,11 @@ impl Points {
         }
     }
 
+    /// Wire ends and pins at `at`, in insertion order; empty when nothing is there.
+    pub(crate) fn at(&self, at: Pt) -> &[End] {
+        self.0.get(&at).map_or(&[], Vec::as_slice)
+    }
+
     pub(crate) fn junctions(&self, area: Rect, out: &mut Vec<Pt>) {
         out.clear();
         out.extend(
