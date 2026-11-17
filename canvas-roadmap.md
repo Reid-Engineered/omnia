@@ -516,7 +516,7 @@ of the `canvas` lane.
 
 ## Milestone 6: wiring
 
-### T6.1 Wire routing rules · doing
+### T6.1 Wire routing rules · done
 - Lane: doc · Depends: T5.1 · Read: D2, INV2, wiring-plan.md WD4, WD9
 - Owns: `crates/omnia-doc/src/route.rs`
 - Do: the L-route between two points with a `flip` flag for the corner; `AddWires` splits
@@ -1444,7 +1444,7 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        were initially given gaps; this weakened the connected-net
                        workload and is corrected by the T6.1 rework entry below.
 
-2026-11-16 T6.1 rework done � merged origin/main through W0.3/W1.2, retaining
+2026-11-16 T6.1 rework done — merged origin/main through W0.3/W1.2, retaining
                        main's T6.1 Read/Do wording and all roadmap log entries.
                        AddWires now plans only spatial-query contacts with added
                        segments; fixed touched points permit one boundary extension
