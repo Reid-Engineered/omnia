@@ -21,7 +21,7 @@ usage: bench <command> [options]
           [--size 1280x800] [--json FILE]
   spike   s1..s6|s8 [--count N] [--mode fixed|sweep|square|rounded|sprite|direct|direct-sweep|cached|repaint|quality|monitors|displays]\n          [--frames 600] [--warmup 60] [--size 3072x1728] [--json FILE]\n  start   [--sheet empty|t01|placeholder] [--runs 10] [--size 960x640] [--json FILE]
   idle    [--sheet empty|t01|placeholder] [--seconds 10] [--settle-ms 1000] [--size 960x640] [--json FILE]
-  hit     [--sheet 10k|1k|100|dense|text] [--samples 20000] [--seed 42] [--json FILE]
+  hit     [--sheet 10k|1k|100|dense|text] [--samples 20000] [--seed 42] [--snap] [--json FILE]
   compare BASE.json NEW.json [--max-regression 10] [--metrics PREFIX[,PREFIX..]]
           [--json FILE]
   spike   s7 [--seconds 60] [--out FILE] | s7 --summarise FILE
@@ -31,27 +31,43 @@ metric; 2 usage or input error, including reports that cannot be compared or a -
 prefix that selects no base metric; 3 the run failed or timed out. compare --json writes
 the per-metric result and the verdict whether it passes or finds a regression.";
 
-/// Command-line options after the subcommand: `--name value` pairs and positionals.
+/// Command-line options after the subcommand: `--name value` pairs, `--flag` switches, and positionals.
 struct Args {
     positional: Vec<String>,
     options: Vec<(String, String)>,
+    flags: Vec<String>,
 }
 
 impl Args {
     fn parse(args: impl IntoIterator<Item = String>, allowed: &[&str]) -> Result<Self, String> {
+        Self::parse_with_flags(args, allowed, &[])
+    }
+
+    fn parse_with_flags(
+        args: impl IntoIterator<Item = String>,
+        allowed: &[&str],
+        allowed_flags: &[&str],
+    ) -> Result<Self, String> {
         let mut positional = Vec::new();
         let mut options = Vec::new();
+        let mut flags = Vec::new();
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             if let Some(name) = arg.strip_prefix("--") {
-                if !allowed.contains(&name) {
+                if allowed_flags.contains(&name) {
+                    if flags.iter().any(|n| n == name) {
+                        return Err(format!("--{name} given twice"));
+                    }
+                    flags.push(name.to_string());
+                } else if allowed.contains(&name) {
+                    if options.iter().any(|(n, _)| n == name) {
+                        return Err(format!("--{name} given twice"));
+                    }
+                    let value = args.next().ok_or(format!("--{name} needs a value"))?;
+                    options.push((name.to_string(), value));
+                } else {
                     return Err(format!("unknown option --{name}"));
                 }
-                if options.iter().any(|(n, _)| n == name) {
-                    return Err(format!("--{name} given twice"));
-                }
-                let value = args.next().ok_or(format!("--{name} needs a value"))?;
-                options.push((name.to_string(), value));
             } else {
                 positional.push(arg);
             }
@@ -59,7 +75,12 @@ impl Args {
         Ok(Self {
             positional,
             options,
+            flags,
         })
+    }
+
+    fn flag(&self, name: &str) -> bool {
+        self.flags.iter().any(|n| n == name)
     }
 
     fn get(&self, name: &str) -> Option<&str> {
@@ -201,12 +222,20 @@ fn cmd_idle(args: impl Iterator<Item = String>) -> Result<(), Failure> {
 }
 
 fn cmd_hit(args: impl Iterator<Item = String>) -> Result<(), Failure> {
-    let args = usage(Args::parse(args, &["sheet", "samples", "seed", "json"]))?;
+    let args = usage(Args::parse_with_flags(
+        args,
+        &["sheet", "samples", "seed", "json"],
+        &["snap"],
+    ))?;
     usage(args.no_positionals())?;
     let sheet = args.get("sheet").unwrap_or("10k");
     let samples = positive("samples", usage(args.number("samples", 20_000))?)?;
     let seed = usage(args.number("seed", 42u64))?;
-    let report = usage(omnia_bench::hit::run(sheet, samples, seed))?;
+    let report = if args.flag("snap") {
+        usage(omnia_bench::hit::run_snap(sheet, samples, seed))?
+    } else {
+        usage(omnia_bench::hit::run(sheet, samples, seed))?
+    };
     finish(&report, args.get("json"))
 }
 

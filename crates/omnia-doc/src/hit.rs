@@ -155,9 +155,9 @@ mod tests {
                     (d <= i128::from(tolerance).pow(2)).then_some((d, item_key(item), Hit { item, at: q }))
                 }).min_by_key(|&(d, key, _)| (d, key)).map(|(_, _, h)| h);
                 prop_assert_eq!(hit_test(&doc, at, tolerance, &mut scratch), expected);
-                let first = crate::snap(&doc, at, grid, tolerance, &mut scratch);
-                prop_assert!(first.at().is_in_bounds());
-                prop_assert_eq!(crate::snap(&doc, first.at(), grid, tolerance, &mut scratch), first);
+                // INV9 as reworded by the owner decision of 2026-11-16 ("radius wins"):
+                // an owner-approved change of the invariant; the ranges are unchanged.
+                crate::snap::oracle::assert_inv9(&doc, at, grid, tolerance, &mut scratch)?;
             }
             // Pin outside the symbol rectangle must still be indexed for snapping.
             let pin = doc.pins(PartId(0)).unwrap()[0];
