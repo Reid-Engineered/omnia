@@ -44,9 +44,9 @@ Outside the measured span:
   after undo: bridge/chain probe nets join on add and separate on delete;
   the leaf endpoint appears/disappears; each moved part's first pin leaves
   its outgoing wire's net. `nets_changed` is not used as proof;
-- for every add, assertions that no items were removed and exactly the
-  submitted number of wires was added; all CSV output is buffered until
-  after the loop.
+- for every `doc_*` case, the exact change-set guard described under
+  "Frozen cases" (`Insert`, `Delete`, `Merge` or `Move`); all CSV output
+  is buffered until after the loop.
 
 The repeated loop has a warm-data bias: after the first observation, each
 apply immediately follows undo of the same data. The cold first sample can
@@ -57,9 +57,9 @@ before and after each command. `push_undo` clears the redo entry left by undo in
 the timed span, so that cleanup cost is included after the first sample.
 
 Timer overhead (`Instant::now`/`elapsed`, `black_box`) is inherent to every
-observation, as in the existing T2.8 runner. Repeated `AddWires` observations
-allocate a fresh wire ID each time (IDs are never reused, D2); undo removes
-the wire and retains the reserved slot, so arena capacity grows amortized
+observation, as in the existing T2.8 runner. Repeated plain-insert `AddWires`
+observations allocate fresh wire IDs each time (IDs are never reused, D2);
+undo removes the wires and retains the reserved slots, so arena capacity grows amortized
 while live content returns to the starting workload each iteration.
 
 ## Frozen cases
