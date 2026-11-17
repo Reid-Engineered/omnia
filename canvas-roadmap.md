@@ -1489,9 +1489,9 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        source f8f56b8 (main + PR #56 tty fix), AC, performance governor,
                        other apps closed, 100% then 125%. Complete: 40/40 motion traces, 1
                        missed refresh (125% zoom run 6, frame 195, 33.13 ms interval); all
-                       other gate lines pass under tracing. The trace puts the miss on the
-                       compositor side: Omnia had presented frame 194 and was waiting, two
-                       frame callbacks arrived 33 ms apart, and frame 195 took 1.2 ms from
+                       other gate lines pass under tracing. The trace is consistent with a
+                       compositor-side skip (temporal association only): Omnia had presented
+                       frame 194 and was waiting, two frame callbacks arrived 33 ms apart, and frame 195 took 1.2 ms from
                        signal to present. Diagnostic only; B3, its threshold and the status
                        are unchanged. Owner decides whether a compositor-skipped callback
                        counts against B3. Report: docs/measurements/T1.6/traced/results-2026-11-17/.

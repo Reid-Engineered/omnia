@@ -40,12 +40,13 @@ Timeline around the miss (CPU clock, from `analysis.txt`):
 
 The client log shows the compositor's frame callbacks `wl_callback.done(1168490)` and
 `wl_callback.done(1168523)` arriving 33 ms apart, with Omnia's next frame request sent
-0.5 ms after the first. So between frames 194 and 195 Omnia had already presented and was
-waiting for the compositor. The callback for the next refresh did not arrive; the following
-one did. Omnia's own work for frame 195 took 1.2 ms from signal to present end.
+0.5 ms after the first. The Omnia trace shows that between frames 194 and 195 Omnia had already presented and
+was waiting for its next frame signal. Omnia's own work for frame 195 took 1.2 ms from
+signal to present end. The Wayland log is matched to the trace by time only (a clock
+offset and a candidate surface, as `analysis.txt` says; no causal attribution).
 
-Reading, for the owner: in this instance the missed refresh happened while the client was
-idle, and the compositor skipped one frame callback. Nothing in the trace points to Omnia's
+Reading, for the owner: in this instance the evidence is consistent with the compositor
+skipping one frame callback while the client waited. Nothing in the trace points to Omnia's
 draw or present time. One instance cannot show whether the earlier untraced misses had the
 same cause. Whether a compositor-side skip counts against B3 is an owner decision; this
 report does not change B3, its threshold or T1.6's status.
