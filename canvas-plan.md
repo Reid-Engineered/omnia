@@ -308,7 +308,8 @@ returns a `Change` that the views use to decide what to repaint.
 - Wires and LOD boxes: plain quads (G3).
 - Symbols: monochrome atlas sprites through `paint_svg` (G4). SVG bytes are generated per
   (symbol, size bucket) with the stroke widened so it never falls below one device pixel.
-  Orientation goes in the sprite matrix.
+  The size ladder is in device pixels and tops out at 1024 px before the 2× raster.
+  The sprite matrix maps that raster to the placed size and orientation.
 - Junction and grid dots: plain square quads under about 3 device px, one dot sprite above.
 - No `paint_path` and no `canvas()` in the sheet layer (G1, G2, G8). Paths are allowed in the
   overlay, where counts are in the tens.
@@ -317,8 +318,10 @@ returns a `Change` that the views use to decide what to repaint.
   varies by a pixel; pass GPUI logical values its own snap leaves unchanged.
 - Sheet layers, bottom to top: paper and grid; wires and LOD boxes; symbols and dots; text.
 - Far zoom (from T0.6, because the reference GPU is the limit on the 10,000-part sheet): merge
-  collinear wire segments into one quad, drop the dot grid when its pitch is under K10's
-  threshold, and draw symbols as LOD boxes. Labels use direct glyph emission, not one
+  touching collinear wire segments into one quad once K9 hides junctions. At those zooms,
+  drop the document grid if the base lattice pitch is below K10's lower bound. Keep the
+  T1.6 empty-sheet grid baseline. Draw symbols under K9's box threshold as LOD boxes.
+  Labels use direct glyph emission, not one
   `ShapedLine::paint` per label (S5: half the cost), with the visible-label cap in K9.
 - Fallback if B4 still misses after far zoom: Plan B (section 8). Ask the owner first.
 
@@ -639,9 +642,14 @@ pub struct CanvasStatus { pub cursor: Option<Pt>, pub grid: i32, pub zoom: f32 }
                                                      // over the sheet; grid: drawn K10 step (T1.5)
 pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged }
 
-pub struct SheetView { /* camera: Camera, theme: &'static Theme */ }  // implements Element (G8)
+pub struct SheetDocument { /* entity and persistent paint resources */ }
+impl SheetDocument {
+    pub fn new(doc: Entity<Doc>) -> Self;
+}
+pub struct SheetView { /* camera, theme, optional SheetDocument */ }  // implements Element (G8)
 impl SheetView {
     pub fn new(camera: Camera, theme: &'static Theme) -> Self;
+    pub fn with_document(camera: Camera, theme: &'static Theme, document: SheetDocument) -> Self;
     pub fn paint_quads(&self, bounds: Bounds<Pixels>, scale_factor: f32, sink: impl FnMut(PaintQuad));
 }
 pub fn grid_level(scale: f64) -> GridLevel;              // K10: level, step_nm, pitch, fade
@@ -653,7 +661,8 @@ pub struct SheetCanvas { /* private */ }                  // T1.5: camera, Navig
 impl SheetCanvas {
     pub fn new(doc: Entity<Doc>, theme: &'static Theme,
                window: &mut Window, cx: &mut Context<Self>) -> Self;
-    // Until the document is wired in (T2.5) it is `new(camera: Camera, theme, cx)`.
+    // The shell document integration (U2.2) supplies the live entity to the T2.5 renderer.
+    // Until then the navigation shell uses `new(camera: Camera, theme, cx)`.
     pub fn camera(&self) -> &Camera;
     pub fn status(&self) -> CanvasStatus;
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
