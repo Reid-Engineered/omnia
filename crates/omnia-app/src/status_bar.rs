@@ -5,7 +5,8 @@
 //! never reads the canvas while rendering, so the canvas's cached frame does not depend on
 //! it either.
 
-use gpui::{Context, Entity, Hsla, IntoElement, Render, Subscription, Window, div, prelude::*, px};
+use crate::theme;
+use gpui::{Context, Entity, IntoElement, Render, Subscription, Window, div, prelude::*, px};
 use omnia_canvas::{CanvasEvent, CanvasStatus, SheetCanvas};
 use omnia_theme::Theme;
 
@@ -91,16 +92,6 @@ pub fn format_status(status: &CanvasStatus) -> String {
     )
 }
 
-fn color(c: omnia_theme::Rgba) -> Hsla {
-    gpui::Rgba {
-        r: c.r,
-        g: c.g,
-        b: c.b,
-        a: c.a,
-    }
-    .into()
-}
-
 impl Render for StatusBar {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
@@ -111,12 +102,12 @@ impl Render for StatusBar {
             .items_center()
             .justify_end()
             .px(px(14.0))
-            .bg(color(self.theme.bg_panel))
+            .bg(theme::color(self.theme.bg_panel))
             .border_t_1()
-            .border_color(color(self.theme.rule))
+            .border_color(theme::color(self.theme.rule))
             .font_family("Source Code Pro")
             .text_size(px(11.5))
-            .text_color(color(self.theme.text_secondary))
+            .text_color(theme::color(self.theme.text_secondary))
             .child(format_status(&self.status))
     }
 }

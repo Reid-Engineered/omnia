@@ -189,7 +189,7 @@ without being drawn.
 
 ## Milestone U1: the workspace shell
 
-### U1.1 Theme plumbing and no literals · todo
+### U1.1 Theme plumbing and no literals · done
 - Lane: shell, assets · Depends: none · Read: UD13, UINV1, UQ6, INV6, T1.2
 - Owns: `crates/omnia-app/src/theme.rs`, `lib.rs`, `crates/omnia-theme/canvas-tokens.toml` (UQ6
   entries only) and the regenerated `generated.rs`
@@ -568,3 +568,15 @@ Append one entry per finished or blocked task. Newest last.
 2026-11-16 plan — ui-plan.md and ui-roadmap.md written. GPUI facts UG1 to UG14 read from source at
 15d136bf. Contrast measured from the generated tokens (ui-plan.md UD20). Nothing else measured;
 UD1's Linux half, UD2's popover placement and UD18's readout design wait for spikes US1 to US3.
+
+2026-11-17 U1.1 done — `ActiveTheme` global, `ThemeChoice` and `theme::color` in
+`crates/omnia-app/src/theme.rs` (UD13); `STAGE_PAPER`/`STAGE_INK` and the colour literals in
+`lib.rs` replaced with `stage/paper`/`stage/ink` tokens; `status_bar.rs` colour helper routed
+through `theme::color`. UQ6 default overlay tokens added (`brand/tile`, `brand/mark`,
+`instrument/screen`, `focus/ring` as `stage/select`; 39 tokens total) and `generated.rs`
+regenerated with `cargo xtask tokens` (twice, no diff). UINV1 source test over
+`crates/omnia-app/src` passes and fails on a planted literal (verified, probe removed).
+`omnia-app --frames 60` exits 0. All five standard checks pass on a Windows development
+machine (certifies no reference budget). Deviations: `crates/omnia-app/tests/fonts.rs` and
+`crates/omnia-theme/tests/tokens.rs` updated only to follow the removed constants and the
+new token count. `System` resolves to Graphite until U3.2 follows window appearance.

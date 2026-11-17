@@ -1,17 +1,15 @@
 pub mod status_bar;
+pub mod theme;
 
 use gpui::{
     App, Bounds, Context, Entity, FontWeight, StyleRefinement, Window, WindowBounds, WindowHandle,
-    WindowOptions, div, prelude::*, px, rgb, size,
+    WindowOptions, div, prelude::*, px, size,
 };
 use omnia_canvas::{Camera, SheetCanvas};
 use omnia_doc::Pt;
 use status_bar::{STATUS_BAR_HEIGHT, StatusBar};
 use std::{borrow::Cow, num::NonZeroU64};
-
-// Temporary until T1.2 generates omnia-theme tokens. Theme/stage/paper and stage/ink in omnia.figcraft / Q2.
-pub const STAGE_PAPER: u32 = 0xEFEDE6;
-pub const STAGE_INK: u32 = 0x1D1D1F;
+use theme::ActiveTheme;
 
 pub fn load_fonts(cx: &App) -> gpui::Result<()> {
     load_fonts_with(cx, Cow::Borrowed)
@@ -64,7 +62,7 @@ impl Workspace {
     /// Adds the sheet below the text, starting at 100% centred on the sheet origin, with
     /// pan and zoom (T1.5) and the status bar under it.
     pub fn with_sheet(mut self, cx: &mut Context<Self>) -> Self {
-        let theme = &omnia_theme::GRAPHITE;
+        let theme = theme::theme(cx);
         let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
         let canvas = cx.new(|cx| SheetCanvas::new(camera, theme, cx));
         let status_bar = cx.new(|cx| StatusBar::new(&canvas, theme, cx));
@@ -82,7 +80,8 @@ impl Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let active = theme::theme(cx);
         if let Some(remaining) = self.frames_remaining {
             self.frames_remaining = NonZeroU64::new(remaining.get() - 1);
             if self.frames_remaining.is_some() {
@@ -114,8 +113,8 @@ impl Render for Workspace {
             );
         div()
             .size_full()
-            .bg(rgb(STAGE_PAPER))
-            .text_color(rgb(STAGE_INK))
+            .bg(theme::color(active.stage_paper))
+            .text_color(theme::color(active.stage_ink))
             .flex()
             .flex_col()
             .child(header)
@@ -144,6 +143,7 @@ pub fn open_workspace(
     cx: &mut App,
     frames: Option<NonZeroU64>,
 ) -> gpui::Result<WindowHandle<Workspace>> {
+    ActiveTheme::install(cx);
     load_fonts(cx)?;
     cx.on_window_closed(|cx, _| {
         if cx.windows().is_empty() {

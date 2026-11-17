@@ -1,10 +1,11 @@
-//! The generated themes: 22 colour tokens from omnia.figcraft plus the 13 Q2 overlay tokens.
+//! The generated themes: 22 colour tokens from omnia.figcraft plus the 17 overlay tokens
+//! (13 from Q2 and 4 from UQ6).
 
 use omnia_theme::{GRAPHITE, GRAY, Rgba, Theme};
 
 #[test]
 fn both_themes_have_every_token() {
-    assert_eq!(Theme::TOKEN_COUNT, 35);
+    assert_eq!(Theme::TOKEN_COUNT, 39);
     for theme in [&GRAPHITE, &GRAY] {
         let tokens = theme.tokens();
         assert!(tokens.windows(2).all(|pair| pair[0].0 < pair[1].0));
@@ -36,4 +37,18 @@ fn overlay_values_follow_q2() {
     }
     assert_ne!(GRAPHITE.stage_snap, GRAY.stage_snap);
     assert_eq!(GRAPHITE.stage_paper, GRAY.stage_paper);
+}
+
+#[test]
+fn overlay_values_follow_uq6() {
+    let hex = |rgb: u32, a: u8| {
+        let byte = |shift: u32| f32::from(((rgb >> shift) & 0xff) as u8) / 255.0;
+        Rgba::new(byte(16), byte(8), byte(0), f32::from(a) / 255.0)
+    };
+    for theme in [&GRAPHITE, &GRAY] {
+        assert_eq!(theme.brand_tile, hex(0xF2F2F2, 0xFF));
+        assert_eq!(theme.brand_mark, hex(0x111112, 0xFF));
+        assert_eq!(theme.instrument_screen, hex(0x0E0F11, 0xFF));
+        assert_eq!(theme.focus_ring, theme.stage_select);
+    }
 }

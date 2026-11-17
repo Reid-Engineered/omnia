@@ -8,6 +8,10 @@
 # After editing, run `cargo xtask tokens` to regenerate crates/omnia-theme/src/generated.rs.
 
 [tokens]
+"brand/mark" = "#111112"
+"brand/tile" = "#F2F2F2"
+"focus/ring" = "stage/select"
+"instrument/screen" = "#0E0F11"
 "stage/ink" = "#1D1D1F"
 "stage/ink-secondary" = "#6B6B70"
 "stage/grid" = "#00000022"
