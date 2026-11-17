@@ -443,17 +443,28 @@ unchanged in substance, adding pointer notes and follow-ups on W1.3 (PR #41 open
 merged) and W2.2. Fixed W0.1 open item (a) in wiring-plan.md section 1 and marked section 13
 applied (`commit: see PR`). Docs only; nothing measured.
 
-2026-11-16 W1.3 done — brought `crates/omnia-doc/src/snap.rs` to WD5 (`Pin` > `WireEnd`/`Junction`
-> `WireBody` > `Grid`, inclusive `i64` Euclidean radius, `(distance_sq, min_id, coords)`
-tie-breaking, `WireBody` along-segment grid snapping, and `Snap::Junction { at }`), kept T4.2
-tests passing unchanged, added `TC-snap-01`..`TC-snap-08` and `WINV7` (including reverse-insertion
-sheet equivalence), and added `bench hit --snap`. Non-reference Windows figure (Windows x86_64,
-Intel Core i7-14650HX, 31.6 GB RAM): `bench hit --sheet 10k --snap` p50 0.0003 ms, p99 0.0008 ms,
-max 0.0516 ms (WB5 gate < 0.2 ms remains for the reference machine); `dense`: p50 0.0005 ms, p99
-0.0013 ms. Kept `Snap::Pin::pin: usize` (matching `Doc` storage and `canvas-plan.md` section 9;
-updated `wiring-plan.md` section 10). `WireEnd` and `Junction` share tier 1 ranked by `(distance_sq,
-min_wire_id, x, y)`. `WireBody` moves along the segment axis to the nearest `grid` multiple still on
-the segment (returning no body target if none lies on it), preserving half-grid (`PIN_LATTICE_NM`)
-wires. Standard checks (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
-warnings`, `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D
-warnings`, `cargo test --workspace`, `cargo deny check`) all passed.
+2026-11-16 W1.3 done — brought `crates/omnia-doc/src/snap.rs` to WD5: `Pin` > `WireEnd`/`Junction`
+> `WireBody` > `Grid`, inclusive `i64` Euclidean radius, ties by distance then lowest id then
+coordinates, the body target moved along the segment to a grid point on it, and
+`Snap::Junction { at }`. Kept `Snap::Pin::pin: usize` (matching `Doc` storage and canvas plan
+section 9; wiring-plan.md section 10 says so). Review fixes (PR #41): owner decision 2026-11-16
+"radius wins": removed T4.2's settle loop, so a pin, end, junction or body result is never
+beyond the radius. INV9 is reworded in canvas-plan.md (owner-approved change of the
+invariant, not a weakened check; property ranges unchanged): snapping the result again
+returns it unless a higher-class target lies within the radius of the result. Recorded in
+WD5, WINV7, wiring-plan.md section 13, the canvas plan section 9 comment and a dated T4.2
+note. The INV9 property tests (snap.rs, and T4.2's in crates/omnia-doc/src/hit.rs) assert the
+reworded invariant exactly. The WINV7 oracle is now independent: it ranks a flat list of
+every target of every class over all items. Regressions: 50% zoom junction one grid from a
+pin, one-grid stub at 50% and half-grid stub at 100% (cursor 0.1 mm off the free end gives
+`WireEnd`; exactly at the free end the pin is at the radius and wins), WireBody ties in both
+id and index orders (dropping the id from the tie key fails it). WD5 now states the
+half-grid body rule, no body target without a grid point on the segment, and the shared
+end/junction class ranked by lowest `WireId`. `bench hit --snap` probes every class and
+reports `probe_classes`, timed `classes` and `unreachable_classes`. On `10k` junction and
+wire body cannot occur at all (half-grid stubs from pins; generator unchanged). The test
+requires every other class non-zero there. Non-reference Windows dev machine (i7-14650HX, AC,
+not the reference machine): `10k` p50 0.0002 ms, p99 0.0003 ms (timed 9,845 pin / 7,253
+end / 0 / 0 / 2,902 grid); `dense` p99 0.0004 ms (junction 424). The WB5 gate is pending on
+the reference machine. Raw JSON and hardware in docs/measurements/W1.3.md. Standard checks:
+see the PR.

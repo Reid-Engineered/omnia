@@ -184,6 +184,9 @@ pub(crate) mod oracle {
     use proptest::prelude::*;
     use std::collections::BTreeMap;
 
+    /// WD5 ranking key: class, squared distance, id, sub-id (pin index), x, y.
+    type RankKey = (u8, i128, u32, usize, i32, i32);
+
     /// WD5 class rank: lower is higher priority.
     pub(crate) fn class(s: Snap) -> u8 {
         match s {
@@ -236,7 +239,7 @@ pub(crate) mod oracle {
 
     pub(crate) fn snap(doc: &Doc, at: Pt, grid: i32, radius: i32) -> Snap {
         // (class, distance, id, sub-id, x, y) for every target of every class.
-        let mut candidates: Vec<((u8, i128, u32, usize, i32, i32), Snap)> = Vec::new();
+        let mut candidates: Vec<(RankKey, Snap)> = Vec::new();
         let mut push = |id: u32, sub: usize, s: Snap| {
             let p = s.at();
             candidates.push(((class(s), dist_sq(at, p), id, sub, p.x, p.y), s));

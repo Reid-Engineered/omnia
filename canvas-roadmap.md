@@ -430,6 +430,9 @@ of the `canvas` lane.
 - Note (W0.3): [wiring-plan.md](wiring-plan.md) WD5 refines snap ties, grid-snapped body
   projection, and the `Junction` class; implemented by [wiring-roadmap.md](wiring-roadmap.md)
   W1.3 (open in PR #41, not yet merged).
+- Note (2026-11-16, W1.3): superseded by the owner decision "radius wins". `snap` no
+  longer settles; a non-grid result is always within the radius, and INV9 is reworded in
+  plan section 7 (wiring-plan.md WD5, WINV7). The settling bullet above is historical.
 
 ### T4.3 Overlay, hover and selection · todo
 - Lane: canvas · Depends: T3.4, T4.2 · Read: D7, INV11, G6, wiring-plan.md WD8
