@@ -194,6 +194,35 @@ impl Doc {
         self.revision
     }
 
+    /// Opaque id of the current state in the undo history (UD6, U2.1). An
+    /// effective `apply` moves to a fresh value; `undo` and `redo` move back
+    /// to the stored value, so equality means the same history state. A
+    /// document is modified exactly when this differs from the cursor
+    /// captured at its last save.
+    pub fn history_cursor(&self) -> u64 {
+        self.history.cursor()
+    }
+
+    /// Whether `undo` would change the document.
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    /// Whether `redo` would change the document.
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    /// Number of live parts.
+    pub fn part_count(&self) -> usize {
+        self.parts().count()
+    }
+
+    /// Number of live logical nets.
+    pub fn net_count(&self) -> usize {
+        self.connectivity.net_count()
+    }
+
     pub fn part(&self, id: PartId) -> Option<&Part> {
         self.parts.get(id.0).map(|stored| &stored.part)
     }

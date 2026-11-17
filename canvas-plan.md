@@ -515,6 +515,11 @@ impl Doc {
     pub fn apply(&mut self, cmd: Command) -> Result<Change, CommandError>;
     pub fn undo(&mut self) -> Option<Change>;
     pub fn redo(&mut self) -> Option<Change>;
+    pub fn history_cursor(&self) -> u64;      // UD6 (U2.1): current state's id; effective apply → fresh value, undo/redo move to the stored value
+    pub fn can_undo(&self) -> bool;           // U2.1
+    pub fn can_redo(&self) -> bool;           // U2.1
+    pub fn part_count(&self) -> usize;        // U2.1
+    pub fn net_count(&self) -> usize;         // U2.1: Connectivity::net_count
     pub fn part(&self, id: PartId) -> Option<&Part>;
     pub fn wire(&self, id: WireId) -> Option<&Wire>;
     pub fn label(&self, id: LabelId) -> Option<&Label>;
