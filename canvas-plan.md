@@ -662,11 +662,11 @@ Build-time steps:
 | --- | --- | --- |
 | `gpui`, `gpui_platform` (git, pinned) | UI, rendering, text, input | Apache-2.0, confirmed in source, including the in-repo crates they pull in |
 | `smallvec` | Per-point end lists | MIT or Apache-2.0 |
-| `rustc-hash` | Point map | MIT or Apache-2.0 |
+| `rustc-hash` | Point map; agent preview ids ([mcp-plan.md](mcp-plan.md) section 11.3) | MIT or Apache-2.0 |
 | `serde`, `ron` | Test-sheet save and load | MIT or Apache-2.0 |
 | `profiling`, `tracy-client` (feature `tracy`) | Spans, on the same timeline as GPUI's | MIT or Apache-2.0 |
 | `hdrhistogram` | Bench percentiles | MIT or Apache-2.0 |
-| `serde_json` | Bench JSON reports | MIT or Apache-2.0 |
+| `serde_json` | Bench JSON reports; the agent wire schema in `omnia-agent` and `omnia-cli` ([mcp-plan.md](mcp-plan.md) section 15) | MIT or Apache-2.0 |
 | `resvg` 0.46 (`omnia-bench` feature `readback` only, never default; GPUI already depends on it) | S3/S8 readback reference renders | Apache-2.0 OR MIT |
 | GPUI's Linux `wayland` feature, enabled by `omnia-bench` and `omnia-app` on Linux (transitive, listed below) | Wayland window backend | MIT, MIT OR Apache-2.0, or MIT OR Apache-2.0 OR Zlib |
 | `usvg`, `zip`, `serde_json`, `toml` (xtask only) | Codegen | Apache-2.0 or MIT; `zip` MIT |

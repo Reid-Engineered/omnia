@@ -9,14 +9,15 @@ Read these before you change anything they cover. In order of authority:
 
 | File | What it decides |
 | --- | --- |
-| `canvas-plan.md`, `wiring-plan.md` | Budgets, constants, decisions, invariants, open questions with defaults |
-| `canvas-roadmap.md`, `wiring-roadmap.md` | Tasks, their status, dependencies, owned files, done-when checks, the log |
+| `canvas-plan.md`, `wiring-plan.md`, `mcp-plan.md` | Budgets, constants, decisions, invariants, open questions with defaults |
+| `canvas-roadmap.md`, `wiring-roadmap.md`, `mcp-roadmap.md` | Tasks, their status, dependencies, owned files, done-when checks, the log |
 | `ROADMAP.md` | Product stages above the technical roadmaps |
 | `docs/measurements/` | Recorded numbers and gate evidence |
 
 Ids are global: `B`, `K`, `D`, `INV`, `Q`, `T` live in the canvas files; `W`-prefixed ids
-(`WB`, `WK`, `WD`, `WINV`, `WQ`, `TC`, `M`) live in the wiring files. Cite ids in commits,
-pull requests and log entries.
+(`WB`, `WK`, `WD`, `WINV`, `WQ`, `TC`, `M`) live in the wiring files; `A`-prefixed ids
+(`AB`, `AK`, `AD`, `AINV`, `ATC`, `AQ`, `HA`, tasks `A0.1`…) live in the agent-control files
+(`mcp-plan.md`, `mcp-roadmap.md`). Cite ids in commits, pull requests and log entries.
 
 The wiring files name crates `schematic-doc`, `schematic-canvas` and `schematic-bench`.
 Those are this repository's `omnia-doc`, `omnia-canvas` and `omnia-bench`.
