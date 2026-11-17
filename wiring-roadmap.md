@@ -421,13 +421,15 @@ the same order to invalid ones is assumed, not stated. Nothing measured; docs on
 
 2026-11-16 W1.2 done — `crates/omnia-doc/src/run.rs`: `Anchor`, `Run`, `Boundary`,
 `Doc::run_through`, `Doc::runs_at`, `Doc::connected_pins`, `Doc::boundary_points` and
-`Doc::affected_runs`; `Points::at` in `points.rs`; `Doc::labels_at` in `doc.rs`. Property tests
+`Doc::affected_runs`; `Points::at` in `points.rs`; `Doc::labels_at` in `doc.rs`, and a
+read-only `Connectivity::labels_at` in `connectivity.rs` (see below). Property tests
 on generated sheets (built with the crate-private inserts) check that every wire is in exactly
 one run, interior points are WD1 corners, ends are anchors, corner labels are collected,
 `connected_pins` equals a brute-force count, and boundary points and affected runs are the same
 for any order of the selection, each run once (WINV8). TC-count-01 and TC-count-02 are unit
-tests. `runs_at` on `10k`: 733 ns mean, p99 1.4 µs per point; on `dense`: 5.28 µs mean
-(i7-14650HX, Windows 11; not the reference machine; docs/measurements/W1.2.md).
+tests. `runs_at` on `10k`: 232 to 247 ns mean, p99 0.8 µs per point; on `dense`: 1.05 to
+1.21 µs mean, p99 2.7 µs (two runs; i7-14650HX, Windows 11, AC; not the reference machine;
+docs/measurements/W1.2.md). The first run's 23.7 ms `dense` max did not recur.
 Resolved toward WD1/WD2, and recorded in wiring-plan.md section 10: (1) one anchor kind per
 point in the order Boundary, Pin, Junction, FreeEnd, so a pin on a junction is a `Pin`
 (lowest part and pin); (2) a new `Anchor::Closed` for a closed loop of corners, which has no
@@ -436,8 +438,16 @@ carries `pin: usize`, as `Doc::pins` and `Snap::Pin` do; (4) WD2 boundaries need
 selection-aware walk, so `boundary_points` and `affected_runs` were added and `runs_at` stays
 selection-free (empty at a corner); (5) `connected_pins` counts a pin when its point holds a wire
 end, another pin (the same part's included) or a label, reading WD3's "anything" literally.
-Deviation: the label lookup uses the spatial index, not the point map. Labels also move through
-`command.rs` (T5.1's `Move` and `Reorient`), outside this task's files, and the index is kept
-current on every path. The cost is one index query per corner, plus one scratch vector per
-`runs_at`, `affected_runs` or `connected_pins` call; W2.1 should pass in reusable buffers if
-`plan_follow` has to allocate nothing once warm.
+Review follow-up (PR #38): (a) `runs_at` and `affected_runs` sort their result by `a`, `b`,
+the first wire's far point, then its id, and the loop/both-boundary dedup also prefers the lesser
+first step before ids, so delete+undo and save/load (which reorder a point's incidence list)
+give the same ordered result; property-tested by rebuilding each generated sheet both ways.
+(b) Labels are now read from the connectivity point store's per-point label list (the "point
+map's side" the task asks for): one new `pub(crate)` read-only accessor,
+`Connectivity::labels_at`, in `connectivity.rs`, a small ownership extension beyond this task's
+files; no new label-maintenance code (the existing `add_label`/`remove_label` calls in every
+insert, remove, restore, `Move`, `Reorient`, undo, redo and load path keep it current, as a
+property test over those edits checks). The walk no longer queries the spatial index or
+allocates a scratch vector per call. `Doc::labels_at` now fills `Vec<LabelId>`, not
+`Vec<ItemId>`; wiring-plan.md section 10 updated (rule 16). (c) The run test helper now
+deduplicates and asserts each wire occurs exactly once, closed runs included.

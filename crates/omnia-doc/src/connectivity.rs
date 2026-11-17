@@ -229,6 +229,15 @@ impl Connectivity {
         Some(comp.net)
     }
 
+    /// The labels whose point is exactly `at`, read from the point store; empty when none.
+    /// Order is unspecified (removal reorders it). Read-only: the store is kept current by
+    /// `add_label` and `remove_label` on every insert, remove, move, undo, redo and load.
+    pub(crate) fn labels_at(&self, at: Pt) -> &[LabelId] {
+        self.points
+            .get(&at)
+            .map_or(&[], |slot| slot.labels.as_slice())
+    }
+
     /// Replaces `out` with every live wire in `net`. Order is unspecified.
     ///
     /// Allocates nothing when `out` already has enough capacity for the result.
