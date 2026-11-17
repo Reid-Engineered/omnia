@@ -96,7 +96,7 @@ T2.5 -> T3.2 -+
 T2.2 -> T4.1, T4.2 (doc)    T3.4 + T4.2 -> T4.3 -> T4.4, T4.5 -> T4.6
 T2.2 + T2.4 + T4.1 + T4.2 -> T2.8 (doc) -> T2.5
 T4.1 -> T5.1 (doc)          T4.6 + T5.1 -> T5.2 -> T5.3 -> T5.4
-T5.1 -> T6.1 (doc)          T5.4 + T6.1 -> T6.2 -> T6.4      T6.3 blocked (Q6)
+T5.1 -> T6.1 (doc)          T5.4 + T6.1 -> T6.2 -> T6.4      T6.3 -> wiring-roadmap.md W2.1..W2.5
 T6.4 -> T7.1, T7.2, T7.3, T7.4 -> T7.5 [H4]
 ```
 
@@ -427,13 +427,17 @@ of the `canvas` lane.
 - Snapping settles through higher priorities after grid rounding or wire projection
   to satisfy INV9 even with off-grid geometry. The final position can exceed the
   initial radius; plan section 9 documents this and deterministic tie rules.
+- Note (W0.3): [wiring-plan.md](wiring-plan.md) WD5 refines snap ties, grid-snapped body
+  projection, and the `Junction` class; implemented by [wiring-roadmap.md](wiring-roadmap.md)
+  W1.3 (open in PR #41, not yet merged).
 
 ### T4.3 Overlay, hover and selection · todo
-- Lane: canvas · Depends: T3.4, T4.2 · Read: D7, INV11, G6
+- Lane: canvas · Depends: T3.4, T4.2 · Read: D7, INV11, G6, wiring-plan.md WD8
 - Owns: `crates/omnia-canvas/src/overlay.rs`, `selection.rs`
-- Do: `OverlayView`; hover outline; click and shift-click selection; rubber band (window
-  selection of items fully inside). `SheetView` embedded with `.cached()`. Colours from
-  `stage/select`, `stage/select-halo`, `stage/hover`.
+- Do: `OverlayView`; hover outline; click and shift-click selection; rubber band per WD8
+  (normalised box; both Intersecting and Enclosed modes, defaulting to Intersecting per WQ3;
+  Shift adds; W3.4 adds `Doc::query_within` and `TC-band-*`). `SheetView` embedded with
+  `.cached()`. Colours from `stage/select`, `stage/select-halo`, `stage/hover`.
 - Done when: the INV11 test passes: a paint counter on `SheetView` does not move during 100
   simulated hover moves, a selection change and a rubber-band drag; goldens for selected
   and hovered states exist in both themes.
@@ -472,6 +476,8 @@ of the `canvas` lane.
 - Done when: the INV4 property test passes over random command sequences, comparing
   documents including ids; INV10 still holds after every step; one `Move` of 100 items on
   `10k` applies in under 1 ms.
+- Note (W0.3): T5.1's code is merged without `follow: FollowPolicy`; [wiring-roadmap.md](wiring-roadmap.md)
+  W2.2 adds `FollowPolicy` to `Move` and `Reorient` (WD3; until W2.2, every run detaches).
 
 ### T5.2 Tools and keys · todo
 - Lane: canvas · Depends: T4.6, T5.1 · Read: plan section 5, INV5
@@ -502,29 +508,29 @@ of the `canvas` lane.
 ## Milestone 6: wiring
 
 ### T6.1 Wire routing rules · todo
-- Lane: doc · Depends: T5.1 · Read: D2, INV2
+- Lane: doc · Depends: T5.1 · Read: D2, INV2, wiring-plan.md WD4, WD9
 - Owns: `crates/omnia-doc/src/route.rs`
 - Do: the L-route between two points with a `flip` flag for the corner; `AddWires` splits
   any wire whose interior an added end lands on, and splits the added wire where it passes
   over an existing end or pin; segments that end up collinear and joined with no third end
-  between them are merged.
+  or label between them (WD4, WD9) are merged.
 - Done when: property tests pass for INV2 (two wires crossing at interiors are in different
   nets; a wire ending on another's body joins its net) and INV10; undo restores the
   pre-split wires with their ids (INV4).
 
 ### T6.2 Wire tool · todo
-- Lane: canvas · Depends: T5.4, T6.1 · Read: K14, D7
+- Lane: canvas · Depends: T5.4, T6.1 · Read: K14, D7, wiring-plan.md WD5, WD6
 - Owns: `crates/omnia-canvas/src/tool/wire.rs`, `overlay/snap_marker.rs`
-- Do: W starts wiring; an L-shaped preview follows the cursor; Space flips the corner; the
-  snap target (pin, wire end, wire body) is marked in `stage/snap` before the click; click
-  commits the segment and continues from its end; a click on a pin or wire ends the wire;
-  Esc cancels.
+- Do: W starts wiring; an L-shaped preview follows the cursor with its first corner chosen
+  per WD6 (Space flips the corner); the snap target (pin, wire end, junction, wire body per
+  WD5) is marked in `stage/snap` before the click; click commits the segment and continues
+  from its end; a click on a pin or wire ends the wire; Esc cancels.
 - Done when: simulated-input tests wire two resistors pin to pin and get one net; the
   preview costs no `SheetView` paint; goldens show the preview and each snap marker kind.
 
-### T6.3 Wires follow moved parts · blocked (Q6)
-- Lane: doc, canvas · Depends: T6.2
-- Do: not specified until Q6 is answered "yes". Do not start.
+### T6.3 Wires follow moved parts · replaced by wiring-roadmap.md W2.1 to W2.5
+- Replaced by [wiring-roadmap.md](wiring-roadmap.md) W2.1 to W2.5 (Q6/WQ1 answered "yes"
+  on 2026-11-16; no longer blocked). See [wiring-plan.md](wiring-plan.md) WD3.
 
 ### T6.4 Gate: milestone 6 · todo
 - Lane: bench · Depends: T6.2
@@ -544,11 +550,12 @@ of the `canvas` lane.
   connectivity as its source and no connection to it.
 
 ### T7.2 Net labels · todo
-- Lane: canvas · Depends: T6.4 · Read: D2
+- Lane: canvas · Depends: T6.4 · Read: D2, wiring-plan.md WD9
 - Owns: `crates/omnia-canvas/src/tool/label.rs`
-- Do: `Tool::Label` places a label on a wire or pin; text entry through GPUI's input
-  handling (read `crates/gpui/examples/input.rs` at the pinned revision first); editing an
-  existing label is one `SetText` command.
+- Do: `Tool::Label` places a label on a wire or pin (placing a label on a wire body splits
+  the wire there per WD9, and the merge rule keeps that point); text entry through GPUI's
+  input handling (read `crates/gpui/examples/input.rs` at the pinned revision first); editing
+  an existing label is one `SetText` command.
 - Done when: two unconnected wires given the same label share a `NetId`, and separate again
   when one label is deleted (INV10 holds).
 
@@ -1376,3 +1383,16 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        no invalidation. Invalid targets still reject without mutation.
                        Tests cover nested empty batches, empty selection operations,
                        identity/zero transforms and unchanged text with redo available.
+
+2026-11-16 W0.3 done — synced canvas-plan.md and canvas-roadmap.md with wiring-plan.md
+                       section 13 and the HW1/W0.2 answers: recorded Q6 (Yes, WD3,
+                       replaced by W2.1–W2.5); updated section 9 (Move/Reorient
+                       FollowPolicy, DragSegment, Delete.with_wires, Snap::Junction,
+                       WD5 snap class/ties/projection, Doc::query_within) and INV2
+                       (merge keeps labelled points, WD4/WD9); updated T4.3 (WD8/WQ3
+                       Intersecting default), T6.1 Read/Do minimally (WD4/WD9 label
+                       merge), T6.2 (WD5/WD6 first corner), T6.3 + dependency overview
+                       (points to W2.1–W2.5), and T7.2 (WD9 wire-body split). Left
+                       T4.2 (`done`) and T5.1 (`needs-human`, code merged) unchanged in
+                       substance with pointer notes to W1.3 (PR #41 open) and W2.2.
+                       Docs only; nothing measured.
