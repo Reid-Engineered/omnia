@@ -342,10 +342,9 @@ fn write_json(path: &str, value: &Value) -> Result<(), Failure> {
 
 fn cmd_spike(args: impl Iterator<Item = String>) -> Result<(), Failure> {
     let args: Vec<String> = args.collect();
-    if matches!(args.first().map(String::as_str), Some("s7" | "chrome")) {
     if args
         .first()
-        .is_some_and(|scene| matches!(scene.as_str(), "s7" | "shell-cache"))
+        .is_some_and(|scene| matches!(scene.as_str(), "s7" | "chrome" | "shell-cache"))
     {
         return omnia_bench::spike::run(args).map_err(|e| match e {
             SpikeError::Usage(message) => Failure::Usage(message),
