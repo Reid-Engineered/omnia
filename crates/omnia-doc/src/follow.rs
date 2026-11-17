@@ -89,6 +89,7 @@ fn allows(doc: &Doc, items: &[ItemId], run: &Run, policy: FollowPolicy) -> bool 
                     }
                 }
             }
+            // WD3: the wire policy is the fallback for a boundary without a moved part.
             part_found || policy.wire_follows()
         })
 }
@@ -457,6 +458,8 @@ mod tests {
         part(&mut d, &[p(3, 2)]);
         let out = plan(&d, &items, Isometry::Translate(p(1, 0)), policy(false));
         assert_eq!(out.fates, vec![(p(0, 0), RunFate::Rerouted)]);
+        assert_eq!(out.remove.len(), 3);
+        assert!(d.wires().all(|(id, _)| out.remove.contains(&id)));
         assert_eq!(
             out.add,
             vec![Wire {
@@ -467,37 +470,70 @@ mod tests {
     }
     #[test]
     fn tc_move_10_unanimous_policy_after_failed_rigid() {
-        let (mut d, mut items) = bent();
-        // Add eight/nine connected pins to the two selected parts respectively.
-        let a = match items[0] {
-            ItemId::Part(id) => id,
-            _ => unreachable!(),
-        };
-        let b = match items[1] {
-            ItemId::Part(id) => id,
-            _ => unreachable!(),
-        };
-        for (id, n) in [(a, 8), (b, 9)] {
-            let (mut stored, _) = d.remove_stored_part_raw(id).unwrap();
-            for k in 0..n {
-                let at = p(20 + id.0 as i32 * 5, k * 3);
-                stored.pins.push(at);
-                wire(&mut d, at, p(21 + id.0 as i32 * 5, k * 3));
+        for reverse_thresholds in [false, true] {
+            let (mut d, mut items) = bent();
+            let selected: Vec<_> = items
+                .iter()
+                .map(|item| match *item {
+                    ItemId::Part(id) => id,
+                    _ => unreachable!(),
+                })
+                .collect();
+            let shared: Vec<_> = d.wires().map(|(id, _)| id).collect();
+            for (index, &id) in selected.iter().enumerate() {
+                let n = if (index == 0) ^ reverse_thresholds {
+                    8
+                } else {
+                    9
+                };
+                let (mut stored, _) = d.remove_stored_part_raw(id).unwrap();
+                for k in 0..n {
+                    let at = p(20 + id.0 as i32 * 5, k * 3);
+                    stored.pins.push(at);
+                    wire(&mut d, at, p(21 + id.0 as i32 * 5, k * 3));
+                }
+                d.restore_stored_part_raw(id, stored).unwrap();
             }
-            d.restore_stored_part_raw(id, stored).unwrap();
+            part(&mut d, &[p(3, 2)]);
+            let out = plan(&d, &items, Isometry::Translate(p(1, 0)), policy(false));
+            assert_eq!(
+                out.fates.iter().find(|(at, _)| *at == p(0, 0)).unwrap().1,
+                RunFate::Detached
+            );
+            assert!(shared.iter().all(|id| !out.remove.contains(id)));
+            assert!(
+                out.add
+                    .iter()
+                    .all(|w| w.a.x >= 20 * GRID_NM && w.b.x >= 20 * GRID_NM)
+            );
+            items.reverse();
+            assert_eq!(
+                out,
+                plan(&d, &items, Isometry::Translate(p(1, 0)), policy(false))
+            );
         }
-        part(&mut d, &[p(3, 2)]);
-        let out = plan(&d, &items, Isometry::Translate(p(1, 0)), policy(false));
-        assert_eq!(
-            out.fates.iter().find(|(at, _)| *at == p(0, 0)).unwrap().1,
-            RunFate::Detached
-        );
-        items.reverse();
-        assert_eq!(
-            out,
-            plan(&d, &items, Isometry::Translate(p(1, 0)), policy(false))
-        );
     }
+    #[test]
+    fn wd3_part_policy_at_boundary_shared_with_selected_wire() {
+        let mut d = Doc::new();
+        let a = part(&mut d, &[p(0, 0)]);
+        let selected = wire(&mut d, p(0, 0), p(0, -2));
+        let replaced = wire(&mut d, p(0, 0), p(4, 0));
+        // WD3 applies the wire policy only to an end belonging to a moved wire,
+        // not a part. Here the part allows follow and wire-only policy denies it.
+        let pol = FollowPolicy::new(true, 1, true).unwrap();
+        assert!(pol.part_follows(1));
+        assert!(!pol.wire_follows());
+        let out = plan(
+            &d,
+            &[ItemId::Part(a), ItemId::Wire(selected)],
+            Isometry::Translate(p(1, 0)),
+            pol,
+        );
+        assert_eq!(out.remove, vec![replaced]);
+        assert_eq!(out.fates, vec![(p(0, 0), RunFate::Rerouted)]);
+    }
+
     #[test]
     fn tc_move_11_rotation_and_mirrors() {
         let (d, id) = fan(2);
@@ -648,6 +684,25 @@ mod tests {
     }
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn winv6_winv8_rigid_reorientation_and_labels(
+            orientation in 0usize..8, x in -8i32..9, y in -8i32..9,
+            invert in any::<bool>()
+        ) {
+            let (mut d, mut items) = bent();
+            let label = d.insert_label(Label { at: p(0, 2), text: "net".into() }).unwrap();
+            let t = Isometry::Reorient { pivot: p(x, y), by: Orient::ALL[orientation] };
+            let expected = plan(&d, &items, t, policy(invert));
+            prop_assert_eq!(&expected.fates, &vec![(p(0, 0), RunFate::Translated)]);
+            prop_assert_eq!(&expected.labels, &vec![(label, t.apply(p(0, 2)).unwrap())]);
+            prop_assert_eq!(expected.remove.len(), 3);
+            prop_assert_eq!(&expected.add, &d.wires().map(|(_, w)| t.wire(*w).unwrap()).collect::<Vec<_>>());
+            items.reverse();
+            let wires: Vec<_> = d.wires().map(|(id, w)| (id, *w)).collect();
+            for &(id, _) in &wires { d.remove_wire_raw(id).unwrap(); }
+            for &(id, w) in wires.iter().rev() { d.restore_wire_raw(id, w).unwrap(); }
+            prop_assert_eq!(&expected, &plan(&d, &items, t, policy(!invert)));
+        }
         #[test]
         fn winv6_winv8_different_ids_and_multiple_selected_parts(n in 2i32..9, dx in -2i32..3, dy in -2i32..3, invert in any::<bool>()) {
             let (d,id)=fan(n);

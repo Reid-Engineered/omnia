@@ -644,7 +644,8 @@ Diff check passes. No thresholds, ranges, lints or budgets weakened.
 WD10 does not explicitly specify implicit corner-label deletion; unselected labels
 are retained, consistent with existing wire Delete behavior, for owner review.
 2026-11-17 W2.1 done - owner exception dated 2026-11-17 explicitly authorizes W2.1
-implementation while T5.1 remains needs-human for Orion timing. T5.1's status is unchanged;
+implementation while T5.1 was awaiting Orion timing. Before this task completed, PR #57
+landed the reference evidence and marked T5.1 done; this task does not alter that status;
 no timing campaign or budget certification was performed. Implemented Isometry, RunFate,
 FollowPlan, FollowError and plan_follow in follow.rs, with lib.rs exports (WD2/WD3/WD4).
 Geometry-ordered affected runs see final moved parts/selected wires, every reserved final
@@ -668,3 +669,17 @@ beyond empty boundaries is unmet. Performance and WB1/WB2/WB7 remain unmeasured 
 command integration/landed splitting belongs to W2.2. Parent arranges independent review;
 review points are endpoint reservations/blocker remapping, rigid/detach restarts, unanimous
 policy and final-geometry validation. No subagents used; no merge performed.
+
+2026-11-17 W2.1 independent review follow-up - strengthened TC-move-08 removal checks,
+TC-move-10 symmetric threshold placement and detached-wire preservation, and WINV6/WINV8
+rigid reorientation/label/incidence-order coverage (128 cases). Added a WD3 regression
+for a selected part and wire sharing a boundary: the part policy applies there; the
+wire-only fallback applies when no selected part owns that boundary. Corrected the
+historical T5.1 exception note to acknowledge the reference result already on main.
+Review objections about free-end reservations and source ids were checked against WD3
+(the far end stays) and section 10 (temporary blockers map to original run ids); those
+contracts are unchanged. Synthetic endpoint pins preserve real-pin precedence because
+their ids follow all original part slots. Collapsed runs still end at selected geometry.
+Global selected-item sheet errors remain Blocker::Sheet; command validation owns these
+errors, as the empty-boundary contract already specifies. No checks or policies weakened.
+Review follow-up validation on Windows: all five standard checks passed again (fmt, both clippy invocations, workspace tests including follow_alloc, cargo deny); no measurements run.
