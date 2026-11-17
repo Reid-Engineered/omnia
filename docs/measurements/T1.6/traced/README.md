@@ -13,7 +13,9 @@ native eDP-1 panel alone, 1920x1080 at approximately 60 Hz, initially 100% scale
 Plug in AC. Close other user apps, including editors, browsers and chat clients;
 leave normal desktop services alone. Keep the launching terminal for the prompts,
 and leave every fullscreen bench window in the foreground. Do not rebuild or edit
-the checkout during the campaign. Ensure enough free disk space for verbose logs.
+the checkout during the campaign. Preflight requires at least **1 GB free** on
+the evidence filesystem. Expect about **1.2 MB per client log**, roughly **100 MB
+per campaign** in client logs, plus JSON traces and condition inventories.
 
 Run this **one command from the repository root**:
 
@@ -36,6 +38,8 @@ the gate: empty sheet, start ten samples, motion warmup 60 / measured frames 600
 idle ten seconds. Every invocation has `OMNIA_BENCH_TRACE=1` and
 `WAYLAND_DEBUG=client`. Only `run` supports `diagnostic_trace`; start and idle
 still preserve their JSON and client log.
+`WAYLAND_DEBUG` writes synchronously to stderr and adds diagnostic overhead,
+most visibly to B1 start and B8 idle; these results cannot certify those budgets.
 
 At the pause, use display settings to set eDP-1 to **125%**, close settings,
 return to the terminal and press Enter. The script verifies 1536x864 logical
@@ -52,11 +56,20 @@ A crash, 120-second per-invocation timeout (15-second termination grace), interr
 lost AC, invalid environment/report or changed binary/source stops early. The
 EXIT trap preserves an `incomplete` status and final conditions. Do not resume,
 discard data, swap cases or launch another campaign to obtain a clean result.
+An existing `attempt-*` triggers a one-line notice before readiness confirmation;
+do not start another campaign without owner direction. Analysis failures are
+recorded as `analysis-error` in `analysis-errors.txt` and do not abort the schedule.
+Foreground timeout handling lets Ctrl-C reach the bench promptly.
 
 After all 80 invocations, the copied gate summarizer runs against the captured
 directories; its output and exit status are explicitly diagnostic. It is never
 run on an incomplete dataset. Analysis prints `not reproduced in 40 motion runs`
-only when all 40 usable traces have no raw interval above 1.5 measured refreshes.
+only when `status.txt` reads `complete`, exactly 40 usable scheduled motion traces
+exist, and none has a raw miss or aggregate/raw disagreement. A partial directory
+or individual JSON always prints an explicit incomplete-dataset notice. Nonzero
+aggregate misses with zero raw misses are flagged as possible bucket-top overcount
+(audit 2.3.5), and that run is not counted as clean. Completion describes data
+collection; recorded analysis errors still require inspection.
 
 Reanalyze on any machine with standard-library Python:
 
@@ -79,6 +92,8 @@ presentation feedback, if present. Ambiguous/unmatched logs print callback traff
 on its own clock and explicitly say correlation is unresolved. This conservative
 association is not proof of callback origin, scan-out, compositor delay or client
 descheduling. Scheduler/compositor evidence may still be required (audit 2.3).
+Both numeric millisecond and HH:MM:SS client timestamps are accepted, including
+midnight rollover; archived gzip client logs can be correlated directly.
 
 Send back the **whole attempt**, even if incomplete, including all logs and status:
 

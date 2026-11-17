@@ -4,6 +4,7 @@ Usage: python analyze.py ATTEMPT_OR_JSON [MORE_PATHS...]
 Missing traces do not establish absence of misses. Raw trace intervals, rather
 than histogram bucket tops, determine reproduced misses.
 """
+import gzip
 import json
 import pathlib
 import re
@@ -39,17 +40,28 @@ def timeline(report):
 
 def wayland_lines(path):
     lines = []
-    epoch, previous = 0, None
-    for number, line in enumerate(path.read_text(errors='replace').splitlines(), 1):
+    epoch, previous = {}, {}
+    opener = gzip.open if path.suffix == '.gz' else open
+    with opener(path, 'rt', errors='replace') as stream:
+        raw = stream.read()
+    for number, line in enumerate(raw.splitlines(), 1):
+        tod = re.search(r'\[(\d{2}):(\d{2}):(\d{2}\.\d+)\]', line)
         match = re.search(r'\[\s*(\d+\.\d+)\]', line)
-        if not match:
+        if tod:
+            clock = 'time-of-day'
+            stamp = (int(tod[1]) * 3600 + int(tod[2]) * 60 + float(tod[3])) * 1000
+            period, wrap = 86_400_000, 43_200_000
+        elif match:
+            clock = 'milliseconds'
+            stamp = float(match[1])
+            period, wrap = 2**32, 2**31
+        else:
             continue
-        stamp = float(match[1])
-        # Client debug clock is milliseconds, with possible 32-bit wrap.
-        if previous is not None and previous - stamp > 2**31:
-            epoch += 2**32
-        previous = stamp
-        lines.append(((stamp + epoch) * 1e6, number, line))
+        # Time-of-day wraps at midnight; numeric client timestamps wrap at 2^32 ms.
+        if previous.get(clock, stamp) - stamp > wrap:
+            epoch[clock] = epoch.get(clock, 0) + period
+        previous[clock] = stamp
+        lines.append(((stamp + epoch.get(clock, 0)) * 1e6, number, line))
     return lines
 
 
@@ -98,23 +110,28 @@ def correlate(path, rows, low, high):
         print(f'    {path.name}:{number}: {line}')
     if not selected:
         print('    no callback/presentation feedback traffic in correlated window')
+    return surface, lower, upper
 
 
 def analyze(path):
     report = json.loads(path.read_text())
     if report.get('kind') != 'run' or report.get('config', {}).get('script') not in ('pan', 'zoom'):
-        return 0, 0, 0
+        return 0, 0, 0, 0
     print(f'{path}: diagnostic motion run')
     if not report.get('diagnostic_trace'):
         metrics = report.get('metrics', {})
         print('  diagnostic_trace missing; measured index and callback correlation unavailable; '
               f"aggregate missed_refreshes={metrics.get('missed_refreshes', 'unknown')}")
-        return 1, 0, 0
+        return 1, 0, 0, 0
     rows, measured = timeline(report)
     threshold = 1.5e9 / report['environment']['refresh_hz']
     misses = [row for row in measured if row[2]['animation_interval_ns'] > threshold]
     print(f'  raw misses={len(misses)}; threshold={threshold / 1e6:.6f} ms; '
           f"histogram count={report.get('metrics', {}).get('missed_refreshes', 'unknown')} (bucket upper bound)")
+    disagreement = not misses and report.get('metrics', {}).get('missed_refreshes', 0) > 0
+    if disagreement:
+        print('  aggregate/raw disagreement: aggregate missed_refreshes > 0 but no raw miss; '
+              'possible bucket-top overcount (audit 2.3.5); run is not counted as clean')
     for index, draw, present, previous in misses:
         print(f"  measured_index={index}; interval_ms={present['animation_interval_ns'] / 1e6:.6f}; "
               f"platform_present_ms={(present['end_ns'] - present['start_ns']) / 1e6:.6f}")
@@ -134,7 +151,7 @@ def analyze(path):
         for ns, label in sorted(set(stamps)):
             print(f'    {ns:>16} ns  {label}')
         correlate(path.with_suffix('.wayland.log'), rows, previous['end_ns'], present['end_ns'])
-    return 1, 1, len(misses)
+    return 1, 1, len(misses), int(disagreement)
 
 
 def main(args):
@@ -142,7 +159,7 @@ def main(args):
     for arg in args:
         path = pathlib.Path(arg)
         paths.update(path.rglob('*.json') if path.is_dir() else [path])
-    counts = [0, 0, 0]
+    counts = [0, 0, 0, 0]
     errors = 0
     print('DIAGNOSTIC ONLY - not a gate verdict; no causal attribution')
     for path in sorted(paths):
@@ -152,12 +169,20 @@ def main(args):
         except (ValueError, KeyError, TypeError, OSError, ZeroDivisionError) as error:
             errors += 1
             print(f'{path}: analysis incomplete: {error}')
-    runs, traced, misses = counts
-    if misses == 0 and traced == runs and runs and not errors:
+    runs, traced, misses, disagreements = counts
+    root = pathlib.Path(args[0]) if len(args) == 1 else None
+    status = root / 'status.txt' if root is not None and root.is_dir() else None
+    complete = status is not None and status.exists() and status.read_text().strip() == 'complete'
+    expected = {root / tag / f'{case}-{rep}.json'
+                for tag in ('s100', 's125') for case in ('pan', 'zoom') for rep in range(1, 11)} if root else set()
+    complete = complete and expected.issubset(paths) and runs == traced == 40 and not errors
+    if not complete:
+        print('incomplete diagnostic dataset: require status.txt=complete and exactly 40 usable scheduled motion traces')
+    if complete and misses == 0 and disagreements == 0:
         print(f'not reproduced in {runs} motion runs')
     else:
         print(f'{runs} motion runs; {traced} usable traces; {misses} raw misses; '
-              f'{runs - traced} missing traces; {errors} analysis errors; '
+              f'{runs - traced} missing traces; {errors} analysis errors; {disagreements} aggregate/raw disagreements; '
               'absence of reproduction cannot be asserted for missing/incomplete traces')
     return int(bool(errors))
 

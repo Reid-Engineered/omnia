@@ -3,6 +3,7 @@ import datetime
 import glob
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -53,7 +54,7 @@ def check(rec, scale):
     panel = rec['edp'] or {}
     if (rec['enabled_outputs'] != 1 or panel.get('scale') != scale
             or panel.get('size') != dict(width=1920, height=1080)
-            or abs((panel.get('refresh') or 0) - 60000) > 100):
+            or abs((panel.get('refresh') or 0) - 60.0) > 0.1):
         raise ValueError(f'require only native eDP-1, 1920x1080 ~60 Hz, scale {scale}; set display settings first')
     if 'on' not in (rec['dpms'] or '').lower() or not rec['processes']:
         raise ValueError('panel awake/process inventory could not be verified')
@@ -88,6 +89,8 @@ if __name__ == '__main__':
         else:
             rec = snapshot()
             if mode == 'check':
+                if shutil.disk_usage(pathlib.Path(__file__).parent).free < 1_000_000_000:
+                    raise ValueError('at least 1 GB free space required for diagnostic evidence')
                 check(rec, float(sys.argv[2]))
             elif mode == 'record':
                 directory, key, rep, phase, code = sys.argv[2:]

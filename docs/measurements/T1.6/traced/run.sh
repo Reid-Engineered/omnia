@@ -18,6 +18,12 @@ python3 "$base/conditions.py" check 1
 vulkaninfo --summary >/dev/null 2>&1 || fail 'Vulkan inventory unavailable'
 # Inhibit sleep only after read-only preflight, scoped to this single campaign.
 if [[ ${1:-} != --inhibited ]]; then
+    for prior in "$base"/attempt-*; do
+        if [[ -d $prior ]]; then
+            printf 'NOTICE: prior attempt exists (%s); policy forbids a second campaign without owner direction.\n' "$prior"
+            break
+        fi
+    done
     printf 'Close other user apps, keep the bench foreground, stay on AC.\n'
     read -r -p 'At Orion, apps closed, release binary built from this clean source? Type RUN: ' answer
     [[ $answer == RUN ]] || fail 'owner not ready'
@@ -39,6 +45,14 @@ finish() {
 trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+run_analysis() {
+    local input=$1 output=$2 analysis_code=0
+    python3 "$base/analyze.py" "$input" > "$output" 2>&1 || analysis_code=$?
+    if (( analysis_code != 0 )); then
+        printf 'analysis-error: %s (exit %s); campaign continues\n' "$input" "$analysis_code" >> "$attempt/analysis-errors.txt"
+        printf 'analysis-error: %s (exit %s); campaign continues\n' "$input" "$analysis_code"
+    fi
+}
 printf 'incomplete; diagnostic, not a gate verdict\n' > "$attempt/status.txt"
 cp "$base/run.sh" "$base/conditions.py" "$base/analyze.py" docs/measurements/T1.6/summarize.py "$attempt/"
 git rev-parse HEAD > "$attempt/source-commit.txt"
@@ -86,7 +100,7 @@ for tag in s100 s125; do
             printf '%s %s\n' "$tag" "$key"
             code=0
             OMNIA_BENCH_FULLSCREEN=1 OMNIA_BENCH_TRACE=1 WAYLAND_DEBUG=client \
-                timeout --signal=TERM --kill-after=15s 120s "$bench" "${args[@]}" --size "$size" --json "$json" \
+                timeout --foreground --signal=TERM --kill-after=15s 120s "$bench" "${args[@]}" --size "$size" --json "$json" \
                 > "$dir/$key.stdout.log" 2> "$dir/$key.wayland.log" || code=$?
             printf '%s\n' "$code" > "$dir/$key.exit.txt"
             python3 "$base/conditions.py" record "$dir" "$key" "$r" after "$code" > "$dir/$key.after.json"
@@ -94,19 +108,19 @@ for tag in s100 s125; do
             python3 "$base/conditions.py" check "$scale"
             python3 "$base/conditions.py" report "$json" "$scale"
             if [[ $c == pan || $c == zoom ]]; then
-                python3 "$base/analyze.py" "$json" > "$dir/$key.analysis.txt"
+                run_analysis "$json" "$dir/$key.analysis.txt"
             fi
         done
     done
 done
 [[ $(sha256sum "$bench") == "$binary_hash" && $(git rev-parse HEAD) == "$source_commit" ]] || fail 'binary/source changed'
 [[ -z $(git status --porcelain --untracked-files=no) ]] || fail 'tracked source changed'
-python3 "$base/analyze.py" "$attempt" > "$attempt/analysis.txt"
 # The copied gate summarizer resolves s100/s125 relative to itself. Only now,
 # with all 80 reports present, run it; its verdict is diagnostic under tracing.
 summary_code=0
 python3 "$attempt/summarize.py" > "$attempt/gate-summary-diagnostic.txt" || summary_code=$?
 printf 'Gate summarizer exit %s; traced data is diagnostic only.\n' "$summary_code" >> "$attempt/gate-summary-diagnostic.txt"
 (( summary_code <= 1 )) || fail 'summarizer crashed'
-printf 'complete; diagnostic, not a gate verdict; conditions require human review\n' > "$attempt/status.txt"
+printf 'complete\n' > "$attempt/status.txt"
 complete=1
+run_analysis "$attempt" "$attempt/analysis.txt"
