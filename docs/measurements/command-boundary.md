@@ -69,9 +69,14 @@ mirrored in [run.sh](command-boundary/run.sh); `summarize.py` asserts exactly
 this set. Frozen cases are defined against `AddWires` semantics at the freeze
 commit. If T6.1 or a later change alters what a case does, re-freeze the cases
 before any timed run; do not redefine them after seeing reference results.
-In particular, `doc_chain_20k_add` is intentionally defined against
-pre-T6.1 `AddWires`: its collinear join will become a merge under T6.1.
-Run it on a pre-T6.1 build or re-freeze it before the campaign. Add-count
+Two cases are known to change under T6.1 (checked by building this runner
+against the T6.1 branch, PR #43): `doc_chain_20k_add`, whose collinear join
+becomes a merge, and `doc_10k_wire_add`, because the generated `10k` sheet is
+not in T6.1 normal form (about 23 part pairs have coincident first pins, so
+their outgoing wires are duplicates) and T6.1's `AddWires` as first proposed
+renormalises the whole document. Run the campaign on a pre-T6.1 build, or
+re-freeze both cases once T6.1's `AddWires` scope and the generator question
+are settled. Add-count
 and removal assertions fail loudly if insertion becomes merge/split work.
 
 Connectivity-only cases, copied unchanged from the T2.8 runner for comparison
@@ -102,8 +107,9 @@ restored by untimed `undo()`):
 The perpendicular 1 nm leaf remains off-lattice but differs in attachment
 point and direction from `real_10k_leaf`; the routed bridge adds three wires
 rather than the comparison's one. These are component-vs-command comparisons,
-not identical geometry or operation counts. The new geometry avoids T6.1
-collinear merging, and no route crosses an existing end or pin.
+not identical geometry or operation counts. The new geometry is never
+collinear with an existing wire and no route crosses an existing end or pin;
+see the T6.1 note above for the two cases that still change.
 
 ## Acceptance statistic (unchanged)
 

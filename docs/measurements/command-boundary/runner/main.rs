@@ -268,7 +268,7 @@ fn main() {
                 println!("{i},{ns},{count}");
             }
         }
-        // INV2: perpendicular leaf at wire 0 far end; no T6.1 collinear merge.
+        // INV2: perpendicular leaf at wire 0 far end. Not stable under T6.1: see command-boundary.md.
         "doc_10k_wire_add" => {
             let reference = generate(StressSheet::Parts10k, 42);
             let mut doc = generate(StressSheet::Parts10k, 42);
