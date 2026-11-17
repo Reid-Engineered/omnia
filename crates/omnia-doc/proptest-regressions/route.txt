@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2f74bdb89497f8d5394ee8e80db3f077315de2ffc2a31a75bc018021a18eb0a8 # shrinks to parts = [((-6, 3, -4, 4), [])], batches = [[Wire { a: Pt { x: -4, y: 4 }, b: Pt { x: -4, y: 5 } }]], a = (-5, 0), b = (-8, 8), vertical = false
