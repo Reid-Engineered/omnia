@@ -1966,17 +1966,31 @@ mod tests {
                     doc.apply(cmd).unwrap();
                     prop_assert!(doc.content_eq(&reversed));
                 } else {
-                    // W2.2 refuses selected-wire interior contacts before editing.
-                    // Keep the same random range; prove refusal atomicity too.
+                    // W2.2 (WD3 capture rule): a moved wire is refused exactly
+                    // when an independent brute-force oracle finds a foreign pin
+                    // or end in its interior or a shared stretch; every other
+                    // command must succeed, as before. Refusals change nothing.
+                    let expect_capture = match &cmd {
+                        // A zero delta is an inert command (no validation, no edit).
+                        Command::Move { items, delta, .. } if *delta != Pt::ZERO => {
+                            let ItemId::Wire(id) = items[0] else { unreachable!() };
+                            moved_wire_captures(&doc, id, *delta)
+                        }
+                        _ => false,
+                    };
                     let mut bytes = Vec::new();
                     doc.save(&mut bytes).unwrap();
                     match doc.apply(cmd) {
-                        Err(crate::CommandError::Follow(_)) => {
+                        Err(crate::CommandError::Capture { .. }) => {
+                            prop_assert!(expect_capture, "refused without a capture");
                             let mut refused = Vec::new();
                             doc.save(&mut refused).unwrap();
                             prop_assert_eq!(refused, bytes);
                         }
-                        result => { result.unwrap(); }
+                        result => {
+                            prop_assert!(!expect_capture, "capture accepted: {:?}", result);
+                            result.unwrap();
+                        }
                     }
                 }
                 assert_inv10(&doc);
@@ -1992,6 +2006,57 @@ mod tests {
             while doc.undo().is_some() {}
             prop_assert!(doc.content_eq(&initial));
         }
+    }
+
+    /// Brute-force WD3 capture oracle for a single selected wire translated by
+    /// `delta`, independent of the command's indexed implementation.
+    fn moved_wire_captures(doc: &Doc, id: WireId, delta: Pt) -> bool {
+        let w = *doc.wire(id).unwrap();
+        let a = Pt {
+            x: w.a.x + delta.x,
+            y: w.a.y + delta.y,
+        };
+        let b = Pt {
+            x: w.b.x + delta.x,
+            y: w.b.y + delta.y,
+        };
+        let (lo, hi) = (
+            Pt {
+                x: a.x.min(b.x),
+                y: a.y.min(b.y),
+            },
+            Pt {
+                x: a.x.max(b.x),
+                y: a.y.max(b.y),
+            },
+        );
+        let interior = |p: Pt| {
+            p != a && p != b && (lo.x..=hi.x).contains(&p.x) && (lo.y..=hi.y).contains(&p.y)
+        };
+        let pins = doc
+            .parts()
+            .any(|(part, _)| doc.pins(part).unwrap().iter().any(|&p| interior(p)));
+        let wires = doc.wires().filter(|&(other, _)| other != id).any(|(_, o)| {
+            let (olo, ohi) = (
+                Pt {
+                    x: o.a.x.min(o.b.x),
+                    y: o.a.y.min(o.b.y),
+                },
+                Pt {
+                    x: o.a.x.max(o.b.x),
+                    y: o.a.y.max(o.b.y),
+                },
+            );
+            let stretch = if a.y == b.y && o.a.y == o.b.y && a.y == o.a.y {
+                lo.x.max(olo.x) < hi.x.min(ohi.x)
+            } else if a.x == b.x && o.a.x == o.b.x && a.x == o.a.x {
+                lo.y.max(olo.y) < hi.y.min(ohi.y)
+            } else {
+                false
+            };
+            interior(o.a) || interior(o.b) || stretch
+        });
+        pins || wires
     }
 
     // ---- W1.5: route candidates (WD4, WK5, WK6, WINV10) ----

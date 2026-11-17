@@ -747,3 +747,16 @@ owner prohibited Orion runs. Evidence: docs/measurements/W2.2.md. Independent
 review found selected-wire interior capture (including a replaced run's fixed
 far end) and benchmark fixture growth; these were fixed with regression coverage
 before PR creation.
+
+2026-11-17 W2.2 review fixes - needs-human (WB3 uncertified). Independent review findings
+addressed. Owner answers 2026-11-17: normal form wins over WINV2 at vacated points (WD3,
+WINV2 updated in wiring-plan.md); the route.rs mixed-edit and index_alloc.rs test changes
+are approved. Selected-wire capture now refuses with `CommandError::Capture` (plan
+signature updated) under every policy. Moved parts', wires' and labels' old points are
+merged after the move in both modes, and normal form is asserted in detach mode. The route
+property checks refusals against a brute-force capture oracle in both directions; the W2.2
+property adds random foreign obstacles, a direct WINV1 check and planner/command refusal
+agreement. Follow-ups for W2.1's owner (follow.rs, not changed here): `plan_follow` can
+refuse an identity transform that the command treats as inert, and it scales
+quadratically with selected wires (286 ms planning for 8000 wires, debug, Windows,
+diagnostic only). Evidence: docs/measurements/W2.2.md.
