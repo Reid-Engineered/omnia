@@ -504,6 +504,7 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
         cx.open_window(options, move |_window, cx| {
             #[cfg(not(target_os = "linux"))]
             _window.resize(size(px(config.size.0), px(config.size.1)));
+            let trace = tracing.then(|| crate::trace::FrameTrace::new(cx));
             cx.new(|_| RunView {
                 config,
                 cached: None,
@@ -516,7 +517,7 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
                 paint_time: Rc::new(Cell::new(None)),
                 started: Instant::now(),
                 outcome,
-                trace: tracing.then(crate::trace::FrameTrace::new),
+                trace,
             })
         })
         .map_err(|e| format!("open window: {e}"))?;
