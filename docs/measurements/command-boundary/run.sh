@@ -7,7 +7,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../../.."
 runner=docs/measurements/command-boundary/runner
 binary=$runner/target/release/command-boundary
-fail() { printf 'Preflight refused: %s\n' "$*" >&2; exit 1; }
+phase=Preflight
+fail() { printf '%s refused: %s\n' "$phase" "$*" >&2; exit 1; }
 # All refusal checks precede creation of any evidence directory.
 for tool in date cat ps uname lscpu free rustc cargo sha256sum git find sort xargs vulkaninfo timeout python3 tar mktemp mkdir; do
     command -v "$tool" >/dev/null || fail "missing tool: $tool"
@@ -39,11 +40,12 @@ vulkaninfo --summary >/dev/null 2>&1 || fail 'Vulkan inventory unavailable'
 base=docs/measurements/command-boundary
 attempt=$(mktemp -d "$base/attempt-XXXXXXXX")
 evidence=$attempt/raw
+complete=0
+phase=Campaign
+trap 'if (( complete == 0 )); then printf "Campaign incomplete; retained in %s\n" "$attempt" >&2; fi' EXIT
+trap 'exit 130' INT TERM
 mkdir "$evidence"
 printf 'incomplete\n' > "$attempt/status.txt"
-complete=0
-trap 'if (( complete == 0 )); then printf "Campaign incomplete; retained in %s\n" "$attempt" >&2; fi' EXIT
-trap 'printf "Campaign interrupted; retained in %s\n" "$attempt" >&2; exit 130' INT TERM
 conditions() {
     date -Is
     for supply in "${supplies[@]}"; do

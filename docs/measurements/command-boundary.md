@@ -52,7 +52,8 @@ The repeated loop has a warm-data bias: after the first observation, each
 apply immediately follows undo of the same data. The cold first sample can
 be much slower; it is retained among the 1,000 samples, with no warmup
 samples discarded. These results describe repeated edits on warm data, not
-cold command latency. `push_undo` clears the redo entry left by undo inside
+cold command latency. Untimed topology probes also touch connectivity data
+before and after each command. `push_undo` clears the redo entry left by undo inside
 the timed span, so that cleanup cost is included after the first sample.
 
 Timer overhead (`Instant::now`/`elapsed`, `black_box`) is inherent to every
@@ -139,12 +140,14 @@ This populates the dependency cache required by the offline check/build below.
 2. Prepare section 2.1 conditions: AC, performance governors, other user apps
    closed. The script checks tools (including `sha256sum`, `python3`, and
    `vulkaninfo`), built runner, AC and governors before creating any directory;
-   refusal explains what is missing. It records power/profile, governors,
+   refusal explains what is missing. A later AC/governor failure reports
+   "Campaign incomplete; retained in ..." through the EXIT trap. It records power/profile, governors,
    load and process inventory before and after each invocation.
 3. Run one command: `bash docs/measurements/command-boundary/run.sh`.
    It runs all twelve cases in ten rotating passes, archives the raw data,
    and invokes `summarize.py`, retaining `raw/`, `raw.tar.gz`, `summary.txt`,
    conditions, hashes, order and a status file in a unique `attempt-*` directory.
+   Git-status snapshots exclude these generated attempt directories.
 4. An aborted attempt remains labelled incomplete. A later invocation uses
    a new directory and cannot overwrite it; retain and report every attempt,
    with the reason for any new campaign. This is not authorization to retry
@@ -164,35 +167,37 @@ conditions.
 - Machine: development laptop, Core i7-14650HX, integrated UHD display
   adapter and discrete RTX 5060 Laptop GPU; Windows 11 Home version
   10.0.26200 (build 26200), 1920x1200, 60 Hz, 125% scaling.
-- Power: battery (`PowerOnline=false`), Silent power profile; CPU governor
+- Power: AC (`PowerOnline=true` before and after the run), Silent power profile; CPU governor
   unavailable on Windows. Other apps and concurrent workspace builds were
-  uncontrolled. Environment inventory was taken immediately after the run.
-- Release build, `rustc 1.98.1 (48a229cea 2026-09-01)`; updated runner source
-  and binary hashes, base commit and raw samples are retained in
+  uncontrolled. Power/profile snapshots were taken before and after the run.
+- Release build, `rustc 1.98.1 (48a229cea 2026-09-01)`; source commit,
+  SHA-256 hashes of committed source blobs (`git show <commit>:<path>`),
+  binary hash and raw samples are retained in
   [smoke-windows.tar.gz](command-boundary/smoke-windows.tar.gz).
 - One fixed pass, twelve cases, 1,000 samples each; all exited successfully,
-  including connectivity-effectiveness and full INV4 restoration assertions.
+  including public topology checks, add-count/removal guards and full INV4
+  restoration assertions.
   This is a functional smoke only, non-reference and not gate evidence.
 
 All times below are milliseconds; `>= 1 ms` is a diagnostic count.
 
 | Case/operation | p50 | p99 | max | >= 1 ms |
 | --- | ---: | ---: | ---: | ---: |
-| `chain_20k_middle/add` | 0.138100 | 0.624800 | 16.465600 | 6 |
-| `chain_20k_middle/remove` | 0.989700 | 7.203700 | 36.059000 | 468 |
-| `doc_10k_move_100/apply` | 0.237000 | 0.573600 | 2.336500 | 2 |
-| `doc_10k_move_100_connected/apply` | 0.445300 | 0.820100 | 3.194000 | 5 |
-| `doc_10k_wire_add/apply` | 0.000900 | 0.001400 | 0.020300 | 0 |
-| `doc_10k_wire_delete/apply` | 0.000900 | 0.001100 | 0.032600 | 0 |
-| `doc_chain_20k_add/apply` | 0.101800 | 0.220200 | 0.661100 | 0 |
-| `doc_chain_20k_delete/apply` | 0.870200 | 6.475900 | 59.510300 | 98 |
-| `doc_label_bridge_add/apply` | 0.015200 | 0.057200 | 16.970300 | 2 |
-| `doc_label_bridge_delete/apply` | 0.516300 | 12.304400 | 28.116800 | 23 |
-| `index_10k/query` | 0.019100 | 0.032200 | 0.260900 | 0 |
-| `label_5k_gnd_vcc_bridge/add` | 0.017300 | 0.053500 | 0.216200 | 0 |
-| `label_5k_gnd_vcc_bridge/remove` | 0.715200 | 17.603600 | 33.523200 | 76 |
-| `real_10k_leaf/add` | 0.000200 | 0.000300 | 0.003200 | 0 |
-| `real_10k_leaf/remove` | 0.000200 | 0.000200 | 0.010100 | 0 |
+| `real_10k_leaf/add` | 0.000100 | 0.000100 | 0.001700 | 0 |
+| `real_10k_leaf/remove` | 0.000100 | 0.000100 | 0.004200 | 0 |
+| `label_5k_gnd_vcc_bridge/add` | 0.007300 | 0.020700 | 0.066600 | 0 |
+| `label_5k_gnd_vcc_bridge/remove` | 0.257900 | 0.335100 | 0.402100 | 0 |
+| `chain_20k_middle/add` | 0.049200 | 0.084100 | 0.517400 | 0 |
+| `chain_20k_middle/remove` | 0.304500 | 0.457400 | 2.036300 | 1 |
+| `index_10k/query` | 0.006500 | 0.008400 | 0.012400 | 0 |
+| `doc_10k_wire_add/apply` | 0.000300 | 0.000500 | 0.007900 | 0 |
+| `doc_10k_wire_delete/apply` | 0.000300 | 0.000400 | 0.012500 | 0 |
+| `doc_10k_move_100/apply` | 0.076500 | 0.091600 | 0.154400 | 0 |
+| `doc_10k_move_100_connected/apply` | 0.156700 | 0.218600 | 0.360200 | 0 |
+| `doc_chain_20k_add/apply` | 0.042800 | 0.086800 | 0.338900 | 0 |
+| `doc_chain_20k_delete/apply` | 0.364800 | 0.613600 | 0.903100 | 0 |
+| `doc_label_bridge_add/apply` | 0.006800 | 0.022700 | 0.034300 | 0 |
+| `doc_label_bridge_delete/apply` | 0.182200 | 0.271800 | 0.450200 | 0 |
 
 Validation after review fixes: runner fmt, clippy (`-D warnings`), offline
 check and release build passed. Workspace fmt and clippy passed. Shell
@@ -205,3 +210,10 @@ Feature-enabled bench clippy and `cargo deny check` passed. Workspace tests
 initially failed with paging-file exhaustion while mapping GPUI metadata;
 `cargo test --workspace -j 1` then passed without changing any checks.
 No reference campaign ran and no budget or roadmap status changed.
+
+Re-review validation: all twelve smoke cases reran on AC. The phase-aware
+refusal and EXIT trap were exercised with unavailable AC, and the evidence
+pathspec was checked against a generated attempt marker. Workspace standard
+checks and runner fmt/clippy passed again. The prior paging-file failure
+above belongs to the earlier validation round; this round's single-job
+workspace test run passed directly.
