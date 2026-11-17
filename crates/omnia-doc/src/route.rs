@@ -1970,13 +1970,18 @@ mod tests {
                     // when an independent brute-force oracle finds a foreign pin
                     // or end in its interior or a shared stretch; every other
                     // command must succeed, as before. Refusals change nothing.
-                    let expect_capture = match &cmd {
+                    // WK1/WINV3: an on-lattice end may not land off the lattice
+                    // (checked after the capture rule). These sheets use raw nm.
+                    let (expect_capture, expect_off_lattice) = match &cmd {
                         // A zero delta is an inert command (no validation, no edit).
                         Command::Move { items, delta, .. } if *delta != Pt::ZERO => {
                             let ItemId::Wire(id) = items[0] else { unreachable!() };
-                            moved_wire_captures(&doc, id, *delta)
+                            let w = *doc.wire(id).unwrap();
+                            let lat = |p: Pt| p.x % crate::PIN_LATTICE_NM == 0 && p.y % crate::PIN_LATTICE_NM == 0;
+                            let off = [w.a, w.b].into_iter().any(|p| lat(p) && !lat(Pt { x: p.x + delta.x, y: p.y + delta.y }));
+                            (moved_wire_captures(&doc, id, *delta), off)
                         }
-                        _ => false,
+                        _ => (false, false),
                     };
                     let mut bytes = Vec::new();
                     doc.save(&mut bytes).unwrap();
@@ -1987,8 +1992,15 @@ mod tests {
                             doc.save(&mut refused).unwrap();
                             prop_assert_eq!(refused, bytes);
                         }
+                        Err(crate::CommandError::OffLattice(_)) => {
+                            prop_assert!(!expect_capture && expect_off_lattice, "refused off the lattice wrongly");
+                            let mut refused = Vec::new();
+                            doc.save(&mut refused).unwrap();
+                            prop_assert_eq!(refused, bytes);
+                        }
                         result => {
                             prop_assert!(!expect_capture, "capture accepted: {:?}", result);
+                            prop_assert!(!expect_off_lattice, "off-lattice end accepted: {:?}", result);
                             result.unwrap();
                         }
                     }

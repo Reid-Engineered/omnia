@@ -760,3 +760,16 @@ agreement. Follow-ups for W2.1's owner (follow.rs, not changed here): `plan_foll
 refuse an identity transform that the command treats as inert, and it scales
 quadratically with selected wires (286 ms planning for 8000 wires, debug, Windows,
 diagnostic only). Evidence: docs/measurements/W2.2.md.
+
+2026-11-17 W2.2 second review round - needs-human (WB3 uncertified). A second independent
+review found five items; all addressed in command.rs with plan updates (WD3, `CommandError`
+signature). Moved labels split the wire body they land on (WD9). New
+`CommandError::OffLattice` refuses taking an on-lattice end off the lattice or landing an
+off-lattice pin/label on a wire body (WK1, WINV3). Capture blockers rank from the wire's low
+corner (determinism). The W2.2 property moves one or two parts and generates direct pin
+contacts, exempting only those nets. Two fixtures kept legal under the lattice rule: the
+route mixed-edit oracle predicts `OffLattice` exactly, and index_alloc moves by one lattice
+step; assertions unchanged. Open for the owner: at a point holding a selected pin, a
+foreign pin and a wire end, the run follows the moved pin and the foreign pin loses its
+wired connection; WINV1 does not say which side keeps the wire. For the AddWires/T6.1
+owner: `AddWires` still accepts off-lattice ends. Evidence: docs/measurements/W2.2.md.

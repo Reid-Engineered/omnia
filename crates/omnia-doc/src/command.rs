@@ -72,11 +72,15 @@ pub enum CommandError {
     Follow(FollowError),
     /// WD3/WINV1: a selected wire, after `Move` or `Reorient`, would hold a
     /// foreign pin or end in its interior or share a stretch with a foreign
-    /// wire. Applies under every follow policy; nothing was routed.
+    /// wire. Applies under every follow policy; checked after `plan_follow`,
+    /// so a `Follow` refusal takes precedence.
     Capture {
         wire: WireId,
         blocker: Blocker,
     },
+    /// WK1/WINV3: `Move` or `Reorient` would take a wire end off the pin
+    /// lattice, or land an off-lattice pin or label on a wire body.
+    OffLattice(Pt),
 }
 
 impl fmt::Display for CommandError {
@@ -93,6 +97,9 @@ impl fmt::Display for CommandError {
             Self::Follow(error) => error.fmt(f),
             Self::Capture { wire, blocker } => {
                 write!(f, "moved wire {wire:?} would capture {blocker:?}")
+            }
+            Self::OffLattice(at) => {
+                write!(f, "move would put a wire point off the lattice at {at:?}")
             }
         }
     }
@@ -372,6 +379,7 @@ fn apply_isometry(
     let mut plan = FollowPlan::default();
     crate::plan_follow(doc, &items, transform, policy, &mut plan).map_err(CommandError::Follow)?;
     validate_moved_wires(doc, &items, transform, &plan)?;
+    validate_lattice(doc, &items, transform, &plan)?;
     // Every fallible operation precedes the first edit (WINV4).
     for &wire in &plan.add {
         Doc::validate_wire(wire)?;
@@ -430,14 +438,16 @@ fn apply_isometry(
         }
     };
     inverses.push(movement);
+    let mut landed = Vec::new();
     for (id, at) in plan.labels {
+        // WD9: a label riding the run is a labelled point wherever it lands.
+        landed.push(at);
         inverses.push(undo::apply_undo_op(doc, UndoOp::SetLabelAt { id, at }, acc));
     }
 
     // TC-move-14: including existing segments in AddWires' local input splits
     // them at landed pins/ends while retaining their first piece's identity.
     let mut additions = plan.add;
-    let mut landed = Vec::new();
     for &item in &items {
         match item {
             ItemId::Part(id) => landed.extend_from_slice(doc.pins(id).unwrap()),
@@ -446,7 +456,8 @@ fn apply_isometry(
                 landed.extend([wire.a, wire.b]);
                 additions.push(wire);
             }
-            ItemId::Label(_) => {}
+            // WD9: a moved label splits the wire body it lands on.
+            ItemId::Label(id) => landed.push(doc.label(id).unwrap().at),
         }
     }
     landed.sort_unstable_by_key(|p| (p.x, p.y));
@@ -531,13 +542,15 @@ fn validate_moved_wires(
     let mut best = None;
     for (order, &(wire_id, wire)) in wires.iter().enumerate() {
         let bounds = Rect::from_points(wire.a, wire.b).unwrap();
+        // Rank from the canonical low end so stored a/b order never decides.
+        let low = bounds.min;
         let interior = |p| p != wire.a && p != wire.b && bounds.contains(p);
         doc.query(bounds, &mut scratch);
         let mut consider = |rule, p, kind, id, pin, blocker| {
             let key = (
                 rule,
                 order,
-                wire.a.manhattan_distance(p),
+                low.manhattan_distance(p),
                 p.x,
                 p.y,
                 kind,
@@ -614,8 +627,8 @@ fn validate_moved_wires(
                                 < bounds.max.y.min(other_bounds.max.y))
                     {
                         let first = Pt {
-                            x: wire.a.x.clamp(other_bounds.min.x, other_bounds.max.x),
-                            y: wire.a.y.clamp(other_bounds.min.y, other_bounds.max.y),
+                            x: low.x.clamp(other_bounds.min.x, other_bounds.max.x),
+                            y: low.y.clamp(other_bounds.min.y, other_bounds.max.y),
                         };
                         consider(1, first, 1, id.0, 0, Blocker::Overlap(id));
                     }
@@ -629,6 +642,78 @@ fn validate_moved_wires(
     } else {
         Ok(())
     }
+}
+
+fn on_lattice(p: Pt) -> bool {
+    p.x % crate::PIN_LATTICE_NM == 0 && p.y % crate::PIN_LATTICE_NM == 0
+}
+
+// WINV3/WK1: a move never takes a wire end off the lattice, and never lands an
+// off-lattice pin or label on a wire body, where TC-move-14/WD9 would split it
+// off the lattice. Ends already off the lattice (legacy fixtures) are left alone.
+fn validate_lattice(
+    doc: &Doc,
+    items: &[ItemId],
+    t: Isometry,
+    plan: &FollowPlan,
+) -> Result<(), CommandError> {
+    let mut landed = Vec::new();
+    for &item in items {
+        match item {
+            ItemId::Wire(id) => {
+                let w = *doc.wire(id).unwrap();
+                for p in [w.a, w.b] {
+                    let at = t.apply(p)?;
+                    if on_lattice(p) && !on_lattice(at) {
+                        return Err(CommandError::OffLattice(at));
+                    }
+                }
+            }
+            ItemId::Part(id) => {
+                for &p in doc.pins(id).unwrap() {
+                    landed.push(t.apply(p)?);
+                }
+            }
+            ItemId::Label(id) => landed.push(t.apply(doc.label(id).unwrap().at)?),
+        }
+    }
+    landed.extend(plan.labels.iter().map(|&(_, at)| at));
+    landed.retain(|&p| !on_lattice(p));
+    if landed.is_empty() {
+        return Ok(());
+    }
+    landed.sort_unstable_by_key(|p| (p.x, p.y));
+    landed.dedup();
+    let mut removed: Vec<_> = plan.remove.iter().map(|id| id.0).collect();
+    removed.sort_unstable();
+    let mut selected: Vec<_> = items
+        .iter()
+        .filter_map(|item| match *item {
+            ItemId::Wire(id) => Some(id.0),
+            _ => None,
+        })
+        .collect();
+    selected.sort_unstable();
+    let interior = |w: Wire, p: Pt| {
+        p != w.a && p != w.b && Rect::from_points(w.a, w.b).is_ok_and(|r| r.contains(p))
+    };
+    let mut query = Vec::new();
+    for at in landed {
+        let mut hit = plan.add.iter().any(|&w| interior(w, at));
+        doc.query(Rect { min: at, max: at }, &mut query);
+        hit |= query.iter().any(|item| match *item {
+            ItemId::Wire(id) => {
+                removed.binary_search(&id.0).is_err()
+                    && selected.binary_search(&id.0).is_err()
+                    && interior(*doc.wire(id).unwrap(), at)
+            }
+            _ => false,
+        });
+        if hit {
+            return Err(CommandError::OffLattice(at));
+        }
+    }
+    Ok(())
 }
 
 fn apply_batch(
@@ -1332,6 +1417,138 @@ mod tests {
     }
 
     #[test]
+    fn w22_moved_label_landing_on_wire_body_splits_it_wd9() {
+        for on in [false, true] {
+            let mut doc = Doc::new();
+            doc.apply(Command::AddWires(vec![del_wire(
+                del_point(0, 0),
+                del_point(4, 0),
+            )]))
+            .unwrap();
+            let label = doc
+                .apply(Command::AddLabel(Label {
+                    at: del_point(2, 3),
+                    text: "N".into(),
+                }))
+                .unwrap()
+                .added[0];
+            follow_roundtrip(
+                &mut doc,
+                Command::Move {
+                    items: vec![label],
+                    delta: del_point(0, -3),
+                    follow: follow_policy(on),
+                },
+            )
+            .unwrap();
+            doc.assert_normal_form();
+            assert_eq!(doc.wires().count(), 2, "WD9: the labelled point splits");
+            let (wire, _) = doc.wires().next().unwrap();
+            assert_eq!(doc.net_at(del_point(2, 0)), doc.net_of(wire));
+        }
+    }
+
+    #[test]
+    fn w22_off_lattice_moves_refused_wk1_winv3() {
+        let mut doc = Doc::new();
+        let wire = doc
+            .apply(Command::AddWires(vec![del_wire(
+                del_point(0, 0),
+                del_point(4, 0),
+            )]))
+            .unwrap()
+            .added[0];
+        let part = del_part(&mut doc, del_point(2, 3));
+        let nudge = Pt { x: 1, y: 0 };
+        for on in [false, true] {
+            // An isolated wire may not leave the lattice.
+            assert_eq!(
+                follow_roundtrip(
+                    &mut doc,
+                    Command::Move {
+                        items: vec![wire],
+                        delta: nudge,
+                        follow: follow_policy(on),
+                    },
+                ),
+                Err(CommandError::OffLattice(Pt { x: 1, y: 0 }))
+            );
+            // An off-lattice pin may not land on a wire body (it would split there).
+            let landing = Pt {
+                x: del_point(2, 0).x + 1,
+                y: 0,
+            };
+            assert_eq!(
+                follow_roundtrip(
+                    &mut doc,
+                    Command::Move {
+                        items: vec![part],
+                        delta: Pt {
+                            x: 1,
+                            y: del_point(0, -3).y,
+                        },
+                        follow: follow_policy(on),
+                    },
+                ),
+                Err(CommandError::OffLattice(landing))
+            );
+        }
+        // An unconnected part may sit off the lattice where it touches nothing.
+        follow_roundtrip(
+            &mut doc,
+            Command::Move {
+                items: vec![part],
+                delta: nudge,
+                follow: follow_policy(true),
+            },
+        )
+        .unwrap();
+        doc.assert_normal_form();
+    }
+
+    #[test]
+    fn w22_capture_blocker_ignores_stored_end_order() {
+        // Determinism: the reported blocker depends on geometry, not on a/b order.
+        let errors: Vec<_> = [false, true]
+            .into_iter()
+            .map(|reversed| {
+                let mut doc = Doc::new();
+                del_part(&mut doc, del_point(1, 5));
+                del_part(&mut doc, del_point(3, 5));
+                let (a, b) = (del_point(0, 0), del_point(4, 0));
+                let wire = doc
+                    .apply(Command::AddWires(vec![if reversed {
+                        del_wire(b, a)
+                    } else {
+                        del_wire(a, b)
+                    }]))
+                    .unwrap()
+                    .added[0];
+                follow_roundtrip(
+                    &mut doc,
+                    Command::Move {
+                        items: vec![wire],
+                        delta: del_point(0, 5),
+                        follow: follow_policy(false),
+                    },
+                )
+                .unwrap_err()
+            })
+            .collect();
+        assert_eq!(errors[0], errors[1]);
+        assert!(matches!(
+            errors[0],
+            CommandError::Capture {
+                blocker: Blocker::Pin {
+                    part: PartId(0),
+                    pin: 0
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn w22_selected_wire_merge_and_mixed_rigid_label_restore_exact_ids() {
         let mut doc = Doc::new();
         // Insert the fixed wire first: merging consumes the selected wire's id.
@@ -1526,7 +1743,8 @@ mod tests {
             counts in prop::collection::vec(1usize..6, 1..6),
             pick in any::<usize>(), dx in -2i32..3, dy in -2i32..3,
             orientation in 0usize..8, rotate in any::<bool>(),
-            obstacles in prop::collection::vec((0u8..3, -14i32..5, -3i32..22), 0..8),
+            obstacles in prop::collection::vec((0u8..4, -14i32..5, -3i32..22), 0..8),
+            second in any::<Option<usize>>(),
         ) {
             let mut base = Doc::new();
             let mut movable = Vec::new();
@@ -1562,8 +1780,10 @@ mod tests {
                 if kind == 0 && !hits.is_empty() {
                     continue;
                 }
+                // Kind 3: a foreign pin directly on one of the selected part's pins (WQ6).
+                let at = if kind == 3 { del_point(ox, y.rem_euclid(counts[index] as i32) * 4) } else { at };
                 let _ = match kind {
-                    0 => base.apply(Command::PlacePart {
+                    0 | 3 => base.apply(Command::PlacePart {
                         part: make_part(at, Orient::IDENTITY, "Q", ""),
                         local_pins: vec![Pt::ZERO],
                         local_bounds: rect(0, 0, 0, 0),
@@ -1572,26 +1792,33 @@ mod tests {
                     _ => base.apply(Command::AddWires(vec![del_wire(at, del_point(ox + x, y + 1))])),
                 };
             }
-            // Pins of the selected part that sit on another pin connect directly;
-            // WQ6 lets those separate. Every other connection must survive (WINV1).
-            let ItemId::Part(selected_part) = movable[index] else { unreachable!() };
-            let all_pins: Vec<_> = base.parts().flat_map(|(id, _)| base.pins(id).unwrap().iter().map(move |&p| (id, p))).collect();
-            let direct = all_pins.iter().any(|&(a, p)| a == selected_part && all_pins.iter().any(|&(b, q)| b != a && q == p));
+            // Selections of one or two parts; both keep their relative geometry.
+            let mut selection = vec![movable[index]];
+            if let Some(other) = second.map(|s| s % movable.len()).filter(|&s| s != index) {
+                selection.push(movable[other]);
+            }
+            // A selected pin on an unselected pin connects directly; WQ6 lets that
+            // contact separate, so WINV1 is exempt only on the nets holding one.
+            let all_pins: Vec<_> = base.parts().flat_map(|(id, _)| base.pins(id).unwrap().iter().map(move |&p| (ItemId::Part(id), p))).collect();
+            let direct_nets: Vec<_> = all_pins.iter()
+                .filter(|&&(a, p)| selection.contains(&a) && all_pins.iter().any(|&(b, q)| !selection.contains(&b) && q == p))
+                .filter_map(|&(_, p)| base.net_at(p))
+                .collect();
             base.assert_normal_form();
             let before = pin_partition(&base);
             for follow in [false, true] {
                 let mut doc = del_snapshot(&base);
                 let command = if rotate {
-                    Command::Reorient { items: vec![movable[index]], pivot: del_point(index as i32 * 40, 0), by: Orient::ALL[orientation], follow: follow_policy(follow) }
+                    Command::Reorient { items: selection.clone(), pivot: del_point(index as i32 * 40, 0), by: Orient::ALL[orientation], follow: follow_policy(follow) }
                 } else {
-                    Command::Move { items: vec![movable[index]], delta: del_point(dx, dy), follow: follow_policy(follow) }
+                    Command::Move { items: selection.clone(), delta: del_point(dx, dy), follow: follow_policy(follow) }
                 };
                 let transform = if rotate {
                     Isometry::Reorient { pivot: del_point(index as i32 * 40, 0), by: Orient::ALL[orientation] }
                 } else { Isometry::Translate(del_point(dx, dy)) };
                 let mut preview = FollowPlan::default();
-                let expected = crate::plan_follow(&base, &[movable[index]], transform, follow_policy(follow), &mut preview)
-                    .ok().map(|()| expected_follow_partition(&base, movable[index], transform, follow));
+                let expected = crate::plan_follow(&base, &selection, transform, follow_policy(follow), &mut preview)
+                    .ok().map(|()| expected_follow_partition(&base, &selection, transform, follow));
                 let result = follow_roundtrip(&mut doc, command);
                 // An identity transform is an inert command (T5.1) even where the
                 // planner, asked to re-route in place, would refuse; logged for W2.1.
@@ -1605,30 +1832,44 @@ mod tests {
                 prop_assert_eq!(result.is_ok(), expected.is_some(), "{:?}", result);
                 if result.is_ok() {
                     let after = pin_partition(&doc);
-                    prop_assert_eq!(&after, expected.as_ref().unwrap());
+                    let n = all_pins.len();
+                    let exempt = |k: usize| [k / n, k % n].into_iter().any(|i| base.net_at(all_pins[i].1).is_some_and(|net| direct_nets.contains(&net)));
+                    // Exact partition, except on nets holding a WQ6 direct contact:
+                    // which side keeps a wire at a selected/foreign pin junction is
+                    // open (logged for the owner, 2026-11-17).
+                    let expected = expected.as_ref().unwrap();
+                    for k in 0..after.len() {
+                        if !exempt(k) {
+                            prop_assert_eq!(after[k], expected[k], "pin pair {}", k);
+                        }
+                    }
                     if follow {
-                        if !direct {
-                            for (k, &connected) in before.iter().enumerate() {
-                                prop_assert!(!connected || after[k], "WINV1: pin pair {} lost its connection", k);
+                        for (k, &connected) in before.iter().enumerate() {
+                            if connected && !exempt(k) {
+                                prop_assert!(after[k], "WINV1: pin pair {} lost its connection", k);
                             }
                         }
                         doc.assert_normal_form();
                     } else {
                         // WINV3 holds in detach mode too (owner decision 2026-11-17).
                         doc.assert_normal_form();
-                        let ItemId::Part(part) = movable[index] else { unreachable!() };
-                        let old_pins = base.pins(part).unwrap();
+                        let parts: Vec<_> = selection.iter().map(|&item| match item {
+                            ItemId::Part(part) => part,
+                            _ => unreachable!(),
+                        }).collect();
+                        let old_pins: Vec<Pt> = parts.iter().flat_map(|&p| base.pins(p).unwrap().iter().copied()).collect();
+                        let new_pins: Vec<Pt> = parts.iter().flat_map(|&p| doc.pins(p).unwrap().iter().copied()).collect();
                         for (id, &wire) in base.wires() {
-                            let landed = doc.pins(part).unwrap().iter().any(|&at| contains(wire, at));
+                            let landed = new_pins.iter().any(|&at| contains(wire, at));
                             let vacated = old_pins.contains(&wire.a) || old_pins.contains(&wire.b);
                             if !landed && !vacated {
                                 // WINV2 outside TC-move-14 splits and vacated-point merges.
                                 prop_assert_eq!(doc.wire(id), Some(&wire));
                             }
                         }
-                        // The only moving pins belong to the selected boundary part.
+                        // The only moving pins belong to the selected boundary parts.
                         for (id, _) in base.parts() {
-                            if ItemId::Part(id) != movable[index] {
+                            if !selection.contains(&ItemId::Part(id)) {
                                 prop_assert_eq!(doc.pins(id), base.pins(id));
                             }
                         }
@@ -1643,9 +1884,11 @@ mod tests {
     }
 
     // WINV1/WINV2: original nets plus the explicitly permitted WD3 landing contacts.
+    // Which wires are replaced comes from the planner's `remove` list: the oracle
+    // checks how the command applies a plan, not which runs the planner chose.
     fn expected_follow_partition(
         base: &Doc,
-        selected: ItemId,
+        selected: &[ItemId],
         t: Isometry,
         follow: bool,
     ) -> Vec<bool> {
@@ -1659,25 +1902,25 @@ mod tests {
             })
             .collect();
         let mut plan = FollowPlan::default();
-        crate::plan_follow(base, &[selected], t, follow_policy(follow), &mut plan).unwrap();
+        crate::plan_follow(base, selected, t, follow_policy(follow), &mut plan).unwrap();
         let n = pins.len();
         let mut expected = pin_partition(base);
         if !follow {
             for i in 0..n {
                 for j in 0..n {
-                    if i != j && (pins[i].0 == selected || pins[j].0 == selected) {
+                    if i != j && (selected.contains(&pins[i].0) || selected.contains(&pins[j].0)) {
                         expected[i * n + j] = false;
                     }
                 }
             }
         }
         for (i, &(part, old)) in pins.iter().enumerate() {
-            if part != selected {
+            if !selected.contains(&part) {
                 continue;
             }
             let at = t.apply(old).unwrap();
             for (j, &(other, p)) in pins.iter().enumerate() {
-                let p = if other == selected {
+                let p = if selected.contains(&other) {
                     t.apply(p).unwrap()
                 } else {
                     p
@@ -1687,7 +1930,7 @@ mod tests {
                         !plan.remove.contains(&id)
                             && contains(w, at)
                             && base.net_of(id) == base.net_at(pins[j].1)
-                            && (follow || other != selected)
+                            && (follow || !selected.contains(&other))
                     });
                 if contact {
                     expected[i * n + j] = true;

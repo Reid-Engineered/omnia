@@ -206,7 +206,12 @@ For each affected run, in a fixed order that does not depend on the order of `it
   share a stretch with a foreign wire. That includes the fixed far end of a run being
   re-routed. The command is refused with `CommandError::Capture { wire, blocker }` before
   anything changes (WINV4). The rule is geometric and applies under every policy, detach
-  included; nothing is routed. Its own ends may still land on foreign bodies (above).
+  included. It is checked after planning, so a `FollowError` takes precedence. Its own
+  ends may still land on foreign bodies (above).
+- A moved label that lands on a wire body splits it there, like a landed pin (WD9).
+- A move never takes an on-lattice wire end off the lattice, and never lands an
+  off-lattice pin or label on a wire body. Either is refused with
+  `CommandError::OffLattice(at)` before anything changes (WK1, WINV3, WINV4).
 - Normal form wins at the points the moved items leave (owner decision, 2026-11-17).
   Collinear wires that now meet at a vacated pin, end or label point with nothing else
   there are merged by T6.1's rule, under follow and detach alike (WINV3).
@@ -578,7 +583,8 @@ pub enum Command {
     /* the rest as in canvas-plan.md section 9 */
 }
 pub enum CommandError { /* T5.1's */ Follow(FollowError), Segment(Blocker),
-                        Capture { wire: WireId, blocker: Blocker } }      // WD3 capture rule
+                        Capture { wire: WireId, blocker: Blocker },       // WD3 capture rule
+                        OffLattice(Pt) }                                  // WD3, WK1
 
 // ---- snap.rs (refines the canvas plan's Snap) ----
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
