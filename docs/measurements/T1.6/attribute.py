@@ -9,12 +9,19 @@ the run's trace shows all of:
   (a) the previous present had ended before the late frame's signal;
   (b) the late frame's signal arrived more than one refresh after that present end;
   (c) the late frame's signal-to-present-end time is under one refresh;
+  (d) Omnia's main thread was idle for more than one refresh before the signal: the latest
+      end (clipped to the signal) of any main-thread work in the GPUI foreground journal
+      (`foreground`) that started before the signal, or the previous present end if later,
+      is more than one refresh before the signal;
+  (e) the signal is a native platform frame callback (`signal_source == "native"`), not a
+      timer, retry or other locally scheduled request;
 
-and, so that (a) to (c) describe one idle wait and one frame of work, the late present has
+and, so that these describe one idle wait and one frame of work, the late present has
 exactly one draw since the previous present, that draw has a signal, and its timestamps are
 ordered: signal <= draw start <= draw end <= present start <= present end. Every other
-interval over the limit counts. A run whose trace is missing or unusable fails closed, and
-so does a run whose bench count of intervals over the limit is below the traced count.
+interval over the limit counts. A run whose trace is missing or unusable fails closed
+(including a trace without the journal or with journal entries lost), and so does a run
+whose bench count of intervals over the limit is below the traced count.
 Bench-counted intervals the trace does not show (`aggregate - traced`) count: they lack a
 usable trace. Standard library only.
 """
@@ -64,6 +71,9 @@ def timeline(report):
     measured = [row for row in rows if 0 <= row[0] < frames]
     if ordinal + 1 != warmup + frames or len(measured) != frames:
         raise Unusable('trace truncated or unexpected draw/present count')
+    if not isinstance(trace.get('foreground'), list) or trace.get('journal_lost') != 0:
+        raise Unusable('foreground journal missing or incomplete '
+                       f"(journal_lost {trace.get('journal_lost')!r})")
     if len({row[1]['window'] for row in measured}) != 1:
         raise Unusable('measured frames span more than one window')
     for _, _, present, prev, _ in measured:
@@ -73,7 +83,15 @@ def timeline(report):
     return measured
 
 
-def classify(row, refresh_ns):
+def busy_until(foreground, after, signal):
+    """Latest end, clipped to `signal`, of journal work that started before `signal`.
+
+    Never earlier than `after` (the previous present end)."""
+    ends = [min(work['end_ns'], signal) for work in foreground if work['start_ns'] < signal]
+    return max([after] + ends)
+
+
+def classify(row, refresh_ns, foreground):
     """Classify one interval already known to be over its limit. Returns (verdict, reason)."""
     _, draw, present, prev, draws = row
     signal = draw.get('signal_ns')
@@ -91,7 +109,13 @@ def classify(row, refresh_ns):
         return COUNTED, '(b) fails: signal within one refresh of the previous present end'
     if not work < refresh_ns:
         return COUNTED, '(c) fails: signal to present end not under one refresh'
-    return COMPOSITOR, '(a), (b) and (c) hold'
+    idle = signal - busy_until(foreground, prev['end_ns'], signal)
+    if not idle > refresh_ns:
+        return COUNTED, f'(d) fails: main thread idle only {idle / 1e6:.3f} ms before the signal'
+    source = draw.get('signal_source')
+    if source != 'native':
+        return COUNTED, f'(e) fails: signal source {source!r}, not a native frame callback'
+    return COMPOSITOR, '(a) to (e) hold'
 
 
 def attribute(report, limit=1.5):
@@ -124,12 +148,16 @@ def attribute(report, limit=1.5):
         interval = present['animation_interval_ns']
         if not interval > limit * refresh_ns:
             continue
-        verdict, reason = classify(row, refresh_ns)
+        foreground = report['diagnostic_trace']['foreground']
+        verdict, reason = classify(row, refresh_ns, foreground)
         signal = draw.get('signal_ns')
+        busy = None if signal is None else busy_until(foreground, prev['end_ns'], signal)
         result['misses'].append(dict(
             index=index, interval_ms=interval / 1e6, verdict=verdict, reason=reason,
             gap_ms=None if signal is None else (signal - prev['end_ns']) / 1e6,
             work_ms=None if signal is None else (present['end_ns'] - signal) / 1e6,
+            idle_ms=None if signal is None else (signal - busy) / 1e6,
+            source=draw.get('signal_source'),
             timeline=[(prev['end_ns'], 'previous present end'),
                       (signal, 'signal'), (draw.get('dirty_ns'), 'dirty'),
                       (draw['start_ns'], 'draw start'), (draw['end_ns'], 'draw end'),
@@ -158,8 +186,10 @@ def describe(name, result):
     for m in result['misses']:
         gap = 'n/a' if m['gap_ms'] is None else f'{m["gap_ms"]:.3f}'
         work = 'n/a' if m['work_ms'] is None else f'{m["work_ms"]:.3f}'
-        lines.append(f'  frame {m["index"]}: interval {m["interval_ms"]:.3f} ms; idle gap {gap} ms; '
-                     f'signal to present end {work} ms; {m["verdict"]}: {m["reason"]}')
+        idle = 'n/a' if m['idle_ms'] is None else f'{m["idle_ms"]:.3f}'
+        lines.append(f'  frame {m["index"]}: interval {m["interval_ms"]:.3f} ms; present end to '
+                     f'signal {gap} ms; main thread idle before signal {idle} ms; signal to '
+                     f'present end {work} ms; source {m["source"]}; {m["verdict"]}: {m["reason"]}')
         base = m['timeline'][0][0]
         for ns, label in m['timeline']:
             stamp = 'n/a' if ns is None else f'{(ns - base) / 1e6:+10.3f} ms'

@@ -1514,13 +1514,18 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        criterion: an interval over the limit is compositor-side only if the
                        trace shows (a) previous present ended before the late signal, (b)
                        signal more than one refresh after it, (c) signal to present end
-                       under one refresh, with one draw since the previous present and
+                       under one refresh, (d) main thread idle (GPUI foreground journal)
+                       for more than one refresh before the signal, (e) a native frame
+                       callback as signal source, one draw since the previous present and
                        ordered timestamps; else it counts; no usable trace fails the run.
-                       gate.sh sets OMNIA_BENCH_TRACE=1 on pan/zoom only (no WAYLAND_DEBUG),
-                       same schedule, writes to a new attributed/ directory, records source
-                       and binary hashes, runs summarize.py. New attribute.py + 16 tests
-                       (real zoom-6 miss: compositor-side; slow draw, missing trace,
-                       (b)/(c) boundaries: counted). Trace cost: no `ours` allocation (GPUI
-                       records outside our scopes); Windows ABBA diagnostic, pan 125%, 5+5:
-                       frame p99 median 0.795 ms traced vs 0.848 ms untraced, ours 0 (i7-
-                       14650HX, UHD; certifies nothing). Awaiting the Orion rerun.
+                       omnia-bench trace.rs adds each draw's signal source and the journal's
+                       work spans, read once after the last measured frame (journal always
+                       on; no per-frame work added). gate.sh sets OMNIA_BENCH_TRACE=1 on
+                       pan/zoom only (no WAYLAND_DEBUG), same schedule, new attributed/
+                       directory, source and binary hashes, runs summarize.py. attribute.py
+                       + 22 tests (real zoom-6 timings: compositor-side; slow draw, stall,
+                       non-native source, missing trace, (a)-(d) boundaries: counted).
+                       Frame p99 and B10 are judged with the trace on. Windows ABBA
+                       diagnostic, pan 125%, 5+5: frame p99 median 0.795 ms traced vs
+                       0.848 ms untraced, ours 0 (i7-14650HX, UHD; certifies nothing).
+                       Awaiting the Orion rerun.

@@ -123,28 +123,37 @@ Omnia had presented frame 194 and waited 31.97 ms for its next frame signal, the
 1.2 ms from signal to present end.
 
 The exclusion is mechanical. Gate runs of B3 and B4 set `OMNIA_BENCH_TRACE=1` on the motion
-`run`s, so each report carries `diagnostic_trace` (per frame: signal, draw start and end,
-present start and end, on one CPU clock). Let R be one refresh interval, 1/`refresh_hz`, and
-take a present interval over the budget's limit (1.5 R for B3, 2.5 R for B4). It is
-**compositor-side**, and excluded, only if the trace shows all of:
+`run`s, so each report carries `diagnostic_trace`, on one CPU clock: per frame, the signal
+time and source, draw start and end, present start and end; and `foreground`, the
+main-thread work GPUI's foreground journal recorded (task polls of 100 µs or more, spans of
+folded shorter polls, actions, inputs, draws, presents and callbacks that drew nothing),
+with `journal_lost`. Let R be one refresh interval, 1/`refresh_hz`, and take a present
+interval over the budget's limit (1.5 R for B3, 2.5 R for B4). It is **compositor-side**,
+and excluded, only if the trace shows all of:
 
 - (a) the previous frame's present had ended before the late frame's signal;
 - (b) the late frame's signal arrived more than R after that present end (strictly);
 - (c) the late frame's signal-to-present-end time is under R (strictly);
-- and, so that (a) to (c) describe one idle wait and one frame of work: the late present
-  has exactly one draw since the previous present, that draw has a signal time, and
+- (d) Omnia's main thread was idle for more than R before the signal (strictly): take the
+  latest end, clipped to the signal, of any `foreground` work that started before the
+  signal, or the previous present end if later; the signal comes more than R after it;
+- (e) the signal's source is a native platform frame callback, not a locally scheduled
+  request (refresh timer, retry or other wakeup); a missing or unmatched source fails;
+- and, so that these describe one idle wait and one frame of work: the late present has
+  exactly one draw since the previous present, that draw has a signal time, and
   signal ≤ draw start ≤ draw end ≤ present start ≤ present end.
 
 Every other interval over the limit counts. A miss without a usable trace counts: the run
 fails closed when its trace is missing, truncated or inconsistent (a measured frame without
 its draw-present pair, or a traced interval that differs from the present-end difference),
-and when the bench count (`missed_refreshes`, `present_intervals_over_2_5_refreshes`) is
-below the traced count. Bench-counted intervals the trace does not show count. The limit
-stays zero counted misses in every run. The signal time is when Omnia's event loop
-dispatched the platform's frame callback, so a stall of Omnia's main thread before that
-dispatch would also look like (b). The bench does no work of its own between frames, but
-the trace cannot rule out other main-thread work there; this is a known limit. The
-criterion is implemented in `docs/measurements/T1.6/attribute.py`, with its tests.
+when the journal is absent or lost entries, and when the bench count (`missed_refreshes`,
+`present_intervals_over_2_5_refreshes`) is below the traced count. Bench-counted intervals
+the trace does not show count. The limit stays zero counted misses in every run. The
+journal is recorded whether or not tracing is on; the bench reads it once, after the last
+measured frame. (d) sees what the journal records; the platform event loop's own dispatch
+outside a foreground turn, and folded sub-100 µs polls that ended in true idle, are not
+recorded. Frame p99 and B10 in a gate run are judged with the trace on. The criterion
+is implemented in `docs/measurements/T1.6/attribute.py`, with its tests.
 
 ## 3. Constants
 
