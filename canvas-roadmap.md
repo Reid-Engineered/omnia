@@ -1496,3 +1496,13 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
 2026-11-17 T5.1 done — Same campaign: one Move of 100 items on 10k, median run p99 0.200 ms
                        (0.126 to 0.246); the 100 most-connected parts 0.495 ms. Code was
                        merged earlier (needs-human until this reference timing).
+2026-11-17 T1.6 blocked — Traced diagnostic campaign (attempt-LBKFmccq) on Orion at the desk,
+                       source f8f56b8 (main + PR #56 tty fix), AC, performance governor,
+                       other apps closed, 100% then 125%. Complete: 40/40 motion traces, 1
+                       missed refresh (125% zoom run 6, frame 195, 33.13 ms interval); all
+                       other gate lines pass under tracing. The trace is consistent with a
+                       compositor-side skip (temporal association only): Omnia had presented
+                       frame 194 and was waiting, two frame callbacks arrived 33 ms apart, and frame 195 took 1.2 ms from
+                       signal to present. Diagnostic only; B3, its threshold and the status
+                       are unchanged. Owner decides whether a compositor-skipped callback
+                       counts against B3. Report: docs/measurements/T1.6/traced/results-2026-11-17/.

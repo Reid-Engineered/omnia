@@ -1,0 +1,107 @@
+DIAGNOSTIC ONLY - not a gate verdict; no causal attribution
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-1.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-10.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-2.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-3.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-4.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-5.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-6.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-7.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-8.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/pan-9.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-1.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-10.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-2.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-3.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-4.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-5.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-6.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-7.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-8.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s100/zoom-9.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-1.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-10.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-2.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-3.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-4.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-5.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-6.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-7.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-8.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/pan-9.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-1.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-10.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-2.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-3.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-4.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-5.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-6.json: diagnostic motion run
+  raw misses=1; threshold=24.996667 ms; histogram count=1 (bucket upper bound)
+  measured_index=195; interval_ms=33.130447; platform_present_ms=0.673884
+          4295823941 ns  index 194 signal
+          4295831186 ns  index 194 dirty
+          4295835145 ns  index 194 draw start
+          4296276777 ns  index 194 draw end
+          4296281457 ns  index 194 present start
+          4296910551 ns  index 194 present end
+          4296910551 ns  previous present end
+          4328878585 ns  index 195 signal
+          4328887543 ns  index 195 dirty
+          4328891928 ns  index 195 draw start
+          4329362746 ns  index 195 draw end
+          4329367114 ns  index 195 present start
+          4330040998 ns  index 195 present end
+          4345749315 ns  index 196 signal
+          4345757330 ns  index 196 dirty
+          4345761578 ns  index 196 draw start
+          4346306750 ns  index 196 draw end
+          4346316007 ns  index 196 present start
+          4347008400 ns  index 196 present end
+  Candidate Wayland surface 31; log-minus-trace clock offset [60570925.416396, 60570925.900901] ms; temporal association only
+    zoom-6.wayland.log:7030: [16:49:35.221242] wl_callback#43.done(1168490)
+    zoom-6.wayland.log:7031: [16:49:35.221719]  -> wl_surface#31.frame(new id wl_callback#43)
+    zoom-6.wayland.log:7039: [16:49:35.254297] wl_callback#43.done(1168523)
+    zoom-6.wayland.log:7040: [16:49:35.254803]  -> wl_surface#31.frame(new id wl_callback#43)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-7.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-8.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+docs/measurements/T1.6/traced/attempt-LBKFmccq/s125/zoom-9.json: diagnostic motion run
+  raw misses=0; threshold=24.996667 ms; histogram count=0 (bucket upper bound)
+40 motion runs; 40 usable traces; 1 raw misses; 0 missing traces; 0 analysis errors; 0 aggregate/raw disagreements; absence of reproduction cannot be asserted for missing/incomplete traces

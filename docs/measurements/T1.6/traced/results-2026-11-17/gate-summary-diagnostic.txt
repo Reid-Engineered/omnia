@@ -1,0 +1,44 @@
+
+## s100: scale 1.0, 1920x1080 logical; governors ['performance']; power-profiles-daemon/platform_profile ['unavailable/unavailable']
+
+| Script | frame p99 ms, median [min, max] | draw p99 ms | present interval p50 ms | max frame ms | late frames | allocs ours max | allocs total mean |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| pan | 1.262 [0.940, 1.418] | 1.245 [0.931, 1.410] | 16.695 [16.687, 16.703] | 1.587 [1.271, 1.881] | 0.000 [0.000, 0.000] | 0 | 212.934 [212.823, 213.090] |
+| zoom | 1.049 [0.997, 1.280] | 1.034 [0.988, 1.269] | 16.691 [16.671, 16.695] | 1.542 [1.063, 1.949] | 0.000 [0.000, 0.000] | 0 | 206.985 [206.943, 207.075] |
+
+B1 start: per-run median 226.470 [222.178, 232.695] ms; per-run max 255.333 [239.258, 1023.281] ms; all 100 starts 178.4..1023.3 ms
+B8 idle: frames per run [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; renders [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; CPU % 0.000 [0.000, 0.100]; startup frames [5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+
+## s125: scale 1.25, 1536x864 logical; governors ['performance']; power-profiles-daemon/platform_profile ['unavailable/unavailable']
+
+| Script | frame p99 ms, median [min, max] | draw p99 ms | present interval p50 ms | max frame ms | late frames | allocs ours max | allocs total mean |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| pan | 0.804 [0.732, 0.914] | 0.795 [0.703, 0.905] | 16.687 [16.671, 16.695] | 1.143 [0.923, 1.278] | 0.000 [0.000, 0.000] | 0 | 211.974 [211.890, 212.008] |
+| zoom | 0.765 [0.727, 0.822] | 0.748 [0.718, 0.811] | 16.679 [16.671, 16.695] | 1.060 [0.844, 1.359] | 0.000 [0.000, 0.000] | 0 | 207.023 [206.967, 207.125] |
+
+B1 start: per-run median 233.185 [226.397, 244.323] ms; per-run max 262.636 [249.300, 691.495] ms; all 100 starts 190.7..691.5 ms
+B8 idle: frames per run [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; renders [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]; CPU % 0.000 [0.000, 0.100]; startup frames [5, 5, 5, 5, 5, 5, 5, 5, 5, 5]
+
+## Gate
+
+| Budget | Measured | Result |
+| --- | --- | --- |
+| B3 pan s100 frame p99 | median of run p99s 1.262 ms, limit < 16.7 | PASS |
+| B3 pan s100 missed refreshes | limit 0 per run (interval > 24.997 ms); 10/10 runs 0; max interval 22.659 [18.825, 22.954] ms | PASS |
+| B10 pan s100 | allocs_per_frame.ours max over 10 runs = 0 | PASS |
+| B3 zoom s100 frame p99 | median of run p99s 1.049 ms, limit < 16.7 | PASS |
+| B3 zoom s100 missed refreshes | limit 0 per run (interval > 24.997 ms); 10/10 runs 0; max interval 22.184 [17.990, 23.577] ms | PASS |
+| B10 zoom s100 | allocs_per_frame.ours max over 10 runs = 0 | PASS |
+| B1 start s100 | median of run medians 226.5 ms < 400 (slowest of 100 starts: 1023.3 ms) | PASS |
+| B8 idle s100 | frames in 10 s, every run: [0] | PASS |
+| B3 pan s125 frame p99 | median of run p99s 0.804 ms, limit < 16.7 | PASS |
+| B3 pan s125 missed refreshes | limit 0 per run (interval > 24.997 ms); 10/10 runs 0; max interval 21.995 [17.941, 22.741] ms | PASS |
+| B10 pan s125 | allocs_per_frame.ours max over 10 runs = 0 | PASS |
+| B3 zoom s125 frame p99 | median of run p99s 0.765 ms, limit < 16.7 | PASS |
+| B3 zoom s125 missed refreshes | limit 0 per run (interval > 24.997 ms); 9/10 runs 0; run 6: 1; max interval 22.069 [18.219, 33.145] ms | FAIL |
+| B10 zoom s125 | allocs_per_frame.ours max over 10 runs = 0 | PASS |
+| B1 start s125 | median of run medians 233.2 ms < 400 (slowest of 100 starts: 691.5 ms) | PASS |
+| B8 idle s125 | frames in 10 s, every run: [0] | PASS |
+
+Protocol checks: all passed
+Gate summarizer exit 1; traced data is diagnostic only.
