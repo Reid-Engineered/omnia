@@ -997,7 +997,10 @@ mod tests {
             .unwrap()
             .0;
         deleted
-            .apply(Command::Delete(vec![ItemId::Wire(branch)]))
+            .apply(Command::Delete {
+                items: vec![ItemId::Wire(branch)],
+                with_wires: false,
+            })
             .unwrap();
         assert_eq!(deleted.wires().count(), 1);
         assert_unrelated_add_preserves(&mut deleted);
@@ -1131,8 +1134,11 @@ mod tests {
             Err(Blocker::WireEnd(WireId(0)))
         );
         // Undo restore changes index insertion order but not the selected blocker.
-        doc.apply(Command::Delete(vec![ItemId::Wire(WireId(0))]))
-            .unwrap();
+        doc.apply(Command::Delete {
+            items: vec![ItemId::Wire(WireId(0))],
+            with_wires: false,
+        })
+        .unwrap();
         doc.undo().unwrap();
         assert_eq!(check(&doc), Err(Blocker::WireEnd(WireId(1))));
         let own = lattice(Pt { x: 2, y: 0 });
@@ -1179,9 +1185,16 @@ mod tests {
             .collect();
         let mut reversed = snapshot(&doc);
         reversed
-            .apply(Command::Delete(branches.iter().copied().rev().collect()))
+            .apply(Command::Delete {
+                items: branches.iter().copied().rev().collect(),
+                with_wires: false,
+            })
             .unwrap();
-        doc.apply(Command::Delete(branches)).unwrap();
+        doc.apply(Command::Delete {
+            items: branches,
+            with_wires: false,
+        })
+        .unwrap();
         doc.assert_normal_form();
         assert_inv10(&doc);
         assert_eq!(live_wires(&doc), vec![(WireId(0), lw(0, 0, 10, 0))]);
@@ -1201,7 +1214,10 @@ mod tests {
             .unwrap();
         let branch = labelled.wires().find(|(_, w)| w.a.x == w.b.x).unwrap().0;
         labelled
-            .apply(Command::Delete(vec![ItemId::Wire(branch)]))
+            .apply(Command::Delete {
+                items: vec![ItemId::Wire(branch)],
+                with_wires: false,
+            })
             .unwrap();
         labelled.assert_normal_form();
         assert_eq!(labelled.wires().count(), 2);
@@ -1210,7 +1226,10 @@ mod tests {
         let mut local =
             Doc::from_items([], [lw(0, 0, 5, 0), lw(5, 0, 10, 0), lw(20, 0, 21, 0)], []).unwrap();
         local
-            .apply(Command::Delete(vec![ItemId::Wire(WireId(2))]))
+            .apply(Command::Delete {
+                items: vec![ItemId::Wire(WireId(2))],
+                with_wires: false,
+            })
             .unwrap();
         assert_eq!(local.wire(WireId(0)), Some(&lw(0, 0, 5, 0)));
         assert_eq!(local.wire(WireId(1)), Some(&lw(5, 0, 10, 0)));
@@ -1229,7 +1248,7 @@ mod tests {
                 let before = snapshot(&doc);
                 let live = live_wires(&doc);
                 let cmd = if delete && !live.is_empty() {
-                    Command::Delete(vec![ItemId::Wire(live[pick % live.len()].0)])
+                    Command::Delete { items: vec![ItemId::Wire(live[pick % live.len()].0)], with_wires: false }
                 } else {
                     Command::AddWires(wires.into_iter().map(|w| Wire { a: lattice(w.a), b: lattice(w.b) }).collect())
                 };
@@ -1310,7 +1329,7 @@ mod tests {
                 let live = live_wires(&doc);
                 let cmd = match (kind, live.is_empty()) {
                     (1, false) => Command::Move { items: vec![ItemId::Wire(live[pick % live.len()].0)], delta },
-                    (2, false) => Command::Delete(vec![ItemId::Wire(live[pick % live.len()].0)]),
+                    (2, false) => Command::Delete { items: vec![ItemId::Wire(live[pick % live.len()].0)], with_wires: false },
                     _ => Command::AddWires(wires.clone()),
                 };
                 // Reversed input order must produce the same ids and geometry,

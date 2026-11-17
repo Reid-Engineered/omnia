@@ -392,7 +392,7 @@ fn main() {
             apply_case(
                 &mut doc,
                 &reference,
-                || Command::Delete(vec![ItemId::Wire(WireId(0))]),
+                || Command::Delete { items: vec![ItemId::Wire(WireId(0))], with_wires: false },
                 Expect::Delete(vec![WireId(0)]),
                 |doc, applied| {
                     if applied {
@@ -515,7 +515,7 @@ fn main() {
             apply_case(
                 &mut doc,
                 &reference,
-                || Command::Delete(vec![ItemId::Wire(WireId(10000))]),
+                || Command::Delete { items: vec![ItemId::Wire(WireId(10000))], with_wires: false },
                 Expect::Delete(vec![WireId(10000)]),
                 |doc, applied| joined(doc, Pt { x: 10000, y: 0 }, Pt { x: 10001, y: 0 }, !applied),
             );
@@ -566,7 +566,7 @@ fn main() {
             apply_case(
                 &mut doc,
                 &reference,
-                move || Command::Delete(vec![ItemId::Wire(bridge_id)]),
+                move || Command::Delete { items: vec![ItemId::Wire(bridge_id)], with_wires: false },
                 Expect::Delete(vec![bridge_id]),
                 |doc, applied| joined(doc, Pt { x: 0, y: 0 }, Pt { x: 10, y: 0 }, !applied),
             );

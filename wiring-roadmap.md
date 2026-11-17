@@ -298,7 +298,7 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 - Done when: TC-band-01 to TC-band-09 pass as simulated-input tests; a property test shows
   `query_within` equal to a brute-force scan; the INV11 test still passes.
 
-### W3.5 Delete with wires · todo
+### W3.5 Delete with wires · doing (doc half: Delete with_wires done; tool half waits T5.3)
 - Lane: doc, canvas · Depends: W1.2, T5.3 · Read: WD10, WQ4
 - Owns: `crates/schematic-doc/src/command.rs` (the `with_wires` flag), the Del and Cut handlers
   in `crates/schematic-canvas/src/tool.rs`
@@ -537,3 +537,40 @@ doc_label_bridge_delete. By fixture inspection none gains a merge: the 10k leaf 
 a pin at its anchor and no end at its free tip; chain deletion opens a gap with one end
 per side; bridge deletion leaves one end at each corner. Re-freeze those three cases on
 the final binary even though their resulting geometry does not change.
+
+2026-11-16 W3.5 doing (doc half: Delete with_wires done; tool half waits T5.3) -
+Command::Delete now carries { items, with_wires }, matching wiring-plan.md section 10
+and canvas-plan.md section 9 exactly (rule 16; no signature deviation). WD10 uses
+W1.2 Doc::runs_at at every selected part pin before any removal, deduplicating shared
+runs and explicitly selected wires. The expansion adds wire ids; unselected labels stay.
+The false policy preserves existing behavior (WQ4 owner answer: No, 2026-11-16).
+W1.4 plan_delete_merges and the existing inverse executor normalize only at the fixed
+endpoints of removed wires; no document-wide pass or traversal beyond far anchors.
+TC-del-01/02 cover bent runs ending at another pin and both flag values; TC-del-03
+covers a junction whose surviving collinear wires merge. Additional tests cover shared
+runs, explicit wire selection, and atomic rejection. A 128-case property generates
+sheets with bends, junctions, pins and labels plus random part/wire selections, runs
+both policies and reversed selection orders, and checks normal form, INV4 exact ids
+through undo/redo, and INV10 against a connectivity rebuild.
+Owner-authorized compile-only migrations use with_wires: false in run.rs (four sites)
+and route.rs (eight sites). The route.rs sites are:
+- unrelated_add_preserves_move_delete_and_duplicate_non_normal_states: branch delete;
+- wd4_blockers_rule_priority_direction_and_index_order: WireId(0) delete;
+- winv3_delete_merges_only_vacated_points_and_restores_exact_ids: reversed branches,
+  forward branches, labelled branch, and unrelated WireId(2) deletes (four sites);
+- winv3_inv4_inv10_add_delete_sequences: selected live wire delete;
+- local_add_with_features_and_mixed_edits: selected live wire delete.
+No other route.rs changes. There are no Delete construction sites in the current
+canvas or bench crates. The frozen command-boundary runner's three constructors
+(doc_10k_wire_delete, doc_chain_20k_delete, doc_label_bridge_delete) changed only to
+compile with with_wires: false; fixtures, schedule and timed operation are unchanged.
+No new dependencies, timing campaign or budget certification. Del/Cut integration
+remains for T5.3; W3.5 is not done. All five standard checks PASS locally on
+Windows: cargo fmt --all --check; workspace all-target clippy with -D warnings;
+bench all-target clippy with scene-counts,readback and -D warnings; cargo test
+--workspace (107 doc tests plus allocation and Windows rendering tests); cargo deny
+check (existing dependency warnings). The frozen runner also passes cargo check
+--locked with its own manifest and the worktree target directory; no timed run.
+Diff check passes. No thresholds, ranges, lints or budgets weakened.
+WD10 does not explicitly specify implicit corner-label deletion; unselected labels
+are retained, consistent with existing wire Delete behavior, for owner review.
