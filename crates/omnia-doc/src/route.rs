@@ -96,6 +96,16 @@ pub fn check_new_wires_in(
     own_ends: [Pt; 2],
     scratch: &mut Vec<ItemId>,
 ) -> Result<(), Blocker> {
+    check_new_wires_ignoring_in(doc, wires, &own_ends, &[], scratch)
+}
+
+fn check_new_wires_ignoring_in(
+    doc: &Doc,
+    wires: &[Wire],
+    own_ends: &[Pt],
+    ignore_wires: &[WireId],
+    scratch: &mut Vec<ItemId>,
+) -> Result<(), Blocker> {
     for &w in wires {
         if !on_lattice(w.a) || !on_lattice(w.b) || w.a == w.b || (w.a.x != w.b.x && w.a.y != w.b.y)
         {
@@ -121,6 +131,9 @@ pub fn check_new_wires_in(
                     }
                 }
                 ItemId::Wire(id) => {
+                    if ignore_wires.contains(&id) {
+                        continue;
+                    }
                     let other = *doc.wire(id).unwrap();
                     for p in [other.a, other.b] {
                         consider(p, 1, id.0, 0, Blocker::WireEnd(id));
@@ -143,6 +156,9 @@ pub fn check_new_wires_in(
         let mut best = None;
         for &item in scratch.iter() {
             if let ItemId::Wire(id) = item {
+                if ignore_wires.contains(&id) {
+                    continue;
+                }
                 let other = *doc.wire(id).unwrap();
                 if shared_stretch(w, other) {
                     let (lo, hi, _) = normalised(other);
@@ -625,17 +641,306 @@ fn touches(a: Wire, b: Wire) -> bool {
 /// Pre-existing non-normal geometry elsewhere is left unchanged (W2.2 owns
 /// normalising moved geometry; this is not a document-wide repair pass).
 pub(crate) fn plan_add_wires(doc: &Doc, added: &[Wire]) -> AddWiresPlan {
-    let mut selected = FxHashMap::default();
+    plan_wires_with_replacements(
+        doc,
+        &[],
+        &added.iter().map(|&w| (None, w)).collect::<Vec<_>>(),
+    )
+}
+
+/// WD7 preview and execution plan for dragging one wire segment.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SegmentDragPlan {
+    /// Existing wire ids removed or replaced by the drag, sorted by id.
+    pub remove: Vec<WireId>,
+    /// Final normalised wire segments after the drag, in geometry order.
+    pub add: Vec<Wire>,
+}
+
+/// WD7: pure planner for dragging `wire` by `offset` nm perpendicular to its axis.
+///
+/// Positive `offset` moves along `+y` for a horizontal segment and `+x` for a
+/// vertical segment. A corner neighbour (a perpendicular wire meeting at a
+/// 2-wire corner with no pin and no label) stretches or shrinks to stay
+/// attached; shrinking to or past zero length stops at zero and removes that
+/// neighbour (TC-seg-04). A pin, junction, or labelled corner stays fixed and
+/// inserts a perpendicular jog segment; a free end moves with the segment.
+/// Every changed segment is validated with [`check_new_wires`] (ignoring the
+/// replaced segments), and the result is locally normalised (WINV3).
+///
+/// Missing `wire` or `offset == 0` leaves `plan` empty and returns `Ok(())`.
+pub fn plan_segment_drag(
+    doc: &Doc,
+    wire: WireId,
+    offset: i32,
+    plan: &mut SegmentDragPlan,
+) -> Result<(), Blocker> {
+    plan.remove.clear();
+    plan.add.clear();
+    let Some(exec) = plan_segment_drag_inner(doc, wire, offset)? else {
+        return Ok(());
+    };
+    plan.remove.extend(exec.remove.iter().map(|&(id, _)| id));
+    plan.add.extend(exec.insert.iter().map(|&(_, w)| w));
+    Ok(())
+}
+
+pub(crate) fn plan_segment_drag_inner(
+    doc: &Doc,
+    wire: WireId,
+    offset: i32,
+) -> Result<Option<AddWiresPlan>, Blocker> {
+    let Some(&seg) = doc.wire(wire) else {
+        return Ok(None);
+    };
+    if offset == 0 {
+        return Ok(None);
+    }
+    let horizontal = seg.a.y == seg.b.y;
+    let shift = |p: Pt, delta: i32| -> Result<Pt, Blocker> {
+        let (x, y) = if horizontal {
+            (i64::from(p.x), i64::from(p.y) + i64::from(delta))
+        } else {
+            (i64::from(p.x) + i64::from(delta), i64::from(p.y))
+        };
+        let x = i32::try_from(x).map_err(|_| Blocker::Sheet)?;
+        let y = i32::try_from(y).map_err(|_| Blocker::Sheet)?;
+        let shifted = Pt { x, y };
+        if on_lattice(shifted) {
+            Ok(shifted)
+        } else {
+            Err(Blocker::Sheet)
+        }
+    };
+
+    #[derive(Clone, Copy)]
+    enum EndKind {
+        Free,
+        Anchor,
+        Corner {
+            id: WireId,
+            wire: Wire,
+            far: Pt,
+            has_label: bool,
+        },
+    }
+
+    let classify_end = |at: Pt| -> EndKind {
+        let ends = doc.points.at(at);
+        if ends.iter().any(|e| matches!(e, End::Pin { .. })) || ends.len() >= 3 {
+            return EndKind::Anchor;
+        }
+        let has_label = !doc.connectivity.labels_at(at).is_empty();
+        if let [End::Wire(x), End::Wire(y)] = *ends {
+            let other_id = if x == wire { y } else { x };
+            let other = *doc.wire(other_id).unwrap();
+            let other_horiz = other.a.y == other.b.y;
+            if other_horiz != horizontal {
+                let far = if other.a == at { other.b } else { other.a };
+                return EndKind::Corner {
+                    id: other_id,
+                    wire: other,
+                    far,
+                    has_label,
+                };
+            }
+            return EndKind::Anchor;
+        }
+        if has_label {
+            return EndKind::Anchor;
+        }
+        EndKind::Free
+    };
+
+    let end_a = classify_end(seg.a);
+    let end_b = classify_end(seg.b);
+
+    let signed_dist = |from: Pt, to: Pt| -> i64 {
+        if horizontal {
+            i64::from(to.y) - i64::from(from.y)
+        } else {
+            i64::from(to.x) - i64::from(from.x)
+        }
+    };
+
+    // WD7: a stretch that would shrink a neighbour past zero length stops at zero.
+    let mut effective = i64::from(offset);
+    for end in [end_a, end_b] {
+        if let EndKind::Corner { far, .. } = end {
+            let d = signed_dist(seg.a, far);
+            if effective > 0 && d > 0 && effective > d {
+                effective = d;
+            } else if effective < 0 && d < 0 && effective < d {
+                effective = d;
+            }
+        }
+    }
+    let effective = i32::try_from(effective).map_err(|_| Blocker::Sheet)?;
+
+    let new_a = shift(seg.a, effective)?;
+    let new_b = shift(seg.b, effective)?;
+
+    let mut replaced: Vec<(WireId, Wire)> = vec![(wire, seg)];
+    let mut ignore_ids: Vec<WireId> = vec![wire];
+    for end in [end_a, end_b] {
+        if let EndKind::Corner { id, wire: w, .. } = end
+            && !ignore_ids.contains(&id)
+        {
+            replaced.push((id, w));
+            ignore_ids.push(id);
+        }
+    }
+
+    // Build the changed segments in deterministic walk order from a's side to b's side.
+    let mut check_wires: Vec<Wire> = Vec::with_capacity(3);
+    let mut placed_wires: Vec<(Option<WireId>, Wire)> = Vec::with_capacity(3);
+    let mut own_ends: Vec<Pt> = Vec::with_capacity(2);
+
+    match end_a {
+        EndKind::Free => {}
+        EndKind::Anchor => {
+            own_ends.push(seg.a);
+            let jog = Wire { a: seg.a, b: new_a };
+            check_wires.push(jog);
+            placed_wires.push((None, jog));
+        }
+        EndKind::Corner {
+            id,
+            wire: w,
+            far,
+            has_label,
+        } => {
+            if has_label {
+                // Keep the labelled point connected along the perpendicular leg (WD9).
+                let anchor = if contains(Wire { a: far, b: new_a }, seg.a) {
+                    far
+                } else {
+                    seg.a
+                };
+                own_ends.push(anchor);
+                if anchor != new_a {
+                    check_wires.push(Wire {
+                        a: anchor,
+                        b: new_a,
+                    });
+                    let preserved = if w.a == seg.a {
+                        Wire {
+                            a: new_a,
+                            b: anchor,
+                        }
+                    } else {
+                        Wire {
+                            a: anchor,
+                            b: new_a,
+                        }
+                    };
+                    placed_wires.push((Some(id), preserved));
+                }
+            } else {
+                own_ends.push(far);
+                if far != new_a {
+                    check_wires.push(Wire { a: far, b: new_a });
+                    let preserved = if w.a == seg.a {
+                        Wire { a: new_a, b: far }
+                    } else {
+                        Wire { a: far, b: new_a }
+                    };
+                    placed_wires.push((Some(id), preserved));
+                }
+            }
+        }
+    }
+
+    let moved_seg = Wire { a: new_a, b: new_b };
+    check_wires.push(moved_seg);
+    placed_wires.push((Some(wire), moved_seg));
+
+    match end_b {
+        EndKind::Free => {}
+        EndKind::Anchor => {
+            own_ends.push(seg.b);
+            let jog = Wire { a: new_b, b: seg.b };
+            check_wires.push(jog);
+            placed_wires.push((None, jog));
+        }
+        EndKind::Corner {
+            id,
+            wire: w,
+            far,
+            has_label,
+        } => {
+            if has_label {
+                let anchor = if contains(Wire { a: far, b: new_b }, seg.b) {
+                    far
+                } else {
+                    seg.b
+                };
+                own_ends.push(anchor);
+                if anchor != new_b {
+                    check_wires.push(Wire {
+                        a: new_b,
+                        b: anchor,
+                    });
+                    let preserved = if w.a == seg.b {
+                        Wire {
+                            a: new_b,
+                            b: anchor,
+                        }
+                    } else {
+                        Wire {
+                            a: anchor,
+                            b: new_b,
+                        }
+                    };
+                    placed_wires.push((Some(id), preserved));
+                }
+            } else {
+                own_ends.push(far);
+                if far != new_b {
+                    check_wires.push(Wire { a: new_b, b: far });
+                    let preserved = if w.a == seg.b {
+                        Wire { a: new_b, b: far }
+                    } else {
+                        Wire { a: far, b: new_b }
+                    };
+                    placed_wires.push((Some(id), preserved));
+                }
+            }
+        }
+    }
+
+    let mut scratch = Vec::new();
+    check_new_wires_ignoring_in(doc, &check_wires, &own_ends, &ignore_ids, &mut scratch)?;
+
+    Ok(Some(plan_wires_with_replacements(
+        doc,
+        &replaced,
+        &placed_wires,
+    )))
+}
+
+fn plan_wires_with_replacements(
+    doc: &Doc,
+    replaced: &[(WireId, Wire)],
+    added: &[(Option<WireId>, Wire)],
+) -> AddWiresPlan {
+    let mut selected: FxHashMap<WireId, Wire> = replaced.iter().copied().collect();
     let mut pins = Vec::new();
     let mut labels = Vec::new();
     let mut scratch = Vec::new();
     let mut touched = FxHashSet::default();
-    for &wire in added {
+    for &(_, wire) in replaced {
+        touched.extend([wire.a, wire.b]);
+    }
+    for &(_, wire) in added {
         touched.extend([wire.a, wire.b]);
         doc.query(Rect::from_points(wire.a, wire.b).unwrap(), &mut scratch);
         for &item in &scratch {
             match item {
                 ItemId::Wire(id) => {
+                    if selected.contains_key(&id) {
+                        continue;
+                    }
                     let other = *doc.wire(id).unwrap();
                     if touches(wire, other) {
                         selected.insert(id, other);
@@ -661,7 +966,14 @@ pub(crate) fn plan_add_wires(doc: &Doc, added: &[Wire]) -> AddWiresPlan {
     // Only collinear neighbours can merge. Perpendicular untouched ends remain
     // blockers, without being copied or replanned.
     let mut endpoint_axes = FxHashSet::default();
-    for &wire in selected.values().chain(added) {
+    for (&id, &wire) in &selected {
+        if replaced.iter().any(|&(rid, _)| rid == id) {
+            continue;
+        }
+        let horizontal = wire.a.y == wire.b.y;
+        endpoint_axes.extend([(wire.a, horizontal), (wire.b, horizontal)]);
+    }
+    for &(_, wire) in added {
         let horizontal = wire.a.y == wire.b.y;
         endpoint_axes.extend([(wire.a, horizontal), (wire.b, horizontal)]);
     }
@@ -669,9 +981,35 @@ pub(crate) fn plan_add_wires(doc: &Doc, added: &[Wire]) -> AddWiresPlan {
     for &at in &touched {
         for end in doc.points.at(at) {
             if let End::Wire(id) = *end {
+                if selected.contains_key(&id) {
+                    continue;
+                }
                 let wire = *doc.wire(id).unwrap();
                 if endpoint_axes.contains(&(at, wire.a.y == wire.b.y)) {
                     neighbours.push((id, wire));
+                }
+            }
+        }
+        // Vacated points from removed/shrunk segments may leave two surviving
+        // collinear wires meeting with no pin or label (analogous to Delete).
+        if doc.connectivity.labels_at(at).is_empty()
+            && !doc
+                .points
+                .at(at)
+                .iter()
+                .any(|e| matches!(e, End::Pin { .. }))
+        {
+            let mut surviving = doc.points.at(at).iter().filter_map(|e| match *e {
+                End::Wire(id) if !replaced.iter().any(|&(rid, _)| rid == id) => Some(id),
+                _ => None,
+            });
+            if let (Some(a), Some(b), None) = (surviving.next(), surviving.next(), surviving.next())
+            {
+                let wa = *doc.wire(a).unwrap();
+                let wb = *doc.wire(b).unwrap();
+                if (wa.a.y == wa.b.y) == (wb.a.y == wb.b.y) && !shared_stretch(wa, wb) {
+                    neighbours.push((a, wa));
+                    neighbours.push((b, wb));
                 }
             }
         }
@@ -697,21 +1035,32 @@ pub(crate) fn plan_add_wires(doc: &Doc, added: &[Wire]) -> AddWiresPlan {
     }
     // Canonical added order: geometry first, so fresh ids do not depend on the
     // caller's wire order.
-    let mut added_sorted: Vec<Wire> = added.to_vec();
-    added_sorted.sort_by(|lhs, rhs| {
-        let (llo, lhi, _) = normalised(*lhs);
-        let (rlo, rhi, _) = normalised(*rhs);
-        (pt_key(llo), pt_key(lhi), pt_key(lhs.a), pt_key(lhs.b)).cmp(&(
-            pt_key(rlo),
-            pt_key(rhi),
-            pt_key(rhs.a),
-            pt_key(rhs.b),
-        ))
+    let mut added_sorted: Vec<(Option<WireId>, Wire)> = added.to_vec();
+    added_sorted.sort_by(|&(lid, lhs), &(rid, rhs)| {
+        let (llo, lhi, _) = normalised(lhs);
+        let (rlo, rhi, _) = normalised(rhs);
+        (
+            pt_key(llo),
+            pt_key(lhi),
+            pt_key(lhs.a),
+            pt_key(lhs.b),
+            lid.map(|id| id.0),
+        )
+            .cmp(&(
+                pt_key(rlo),
+                pt_key(rhi),
+                pt_key(rhs.a),
+                pt_key(rhs.b),
+                rid.map(|id| id.0),
+            ))
     });
 
     let mut sources: Vec<SourceSeg> =
         Vec::with_capacity(existing_sorted.len() + added_sorted.len());
     for &(id, wire) in &existing_sorted {
+        if replaced.iter().any(|&(rid, _)| rid == id) {
+            continue;
+        }
         let (lo, hi, horizontal) = normalised(wire);
         sources.push(SourceSeg {
             lo,
@@ -721,13 +1070,13 @@ pub(crate) fn plan_add_wires(doc: &Doc, added: &[Wire]) -> AddWiresPlan {
             descending: wire.a != lo,
         });
     }
-    for &wire in added_sorted.iter() {
+    for &(keep, wire) in added_sorted.iter() {
         let (lo, hi, horizontal) = normalised(wire);
         sources.push(SourceSeg {
             lo,
             hi,
             horizontal,
-            existing: None,
+            existing: keep,
             descending: wire.a != lo,
         });
     }
@@ -2271,6 +2620,319 @@ mod tests {
                         blocker_shape(&rebuilt, *y)
                     ),
                     _ => prop_assert!(false, "{fresh:?} vs rebuilt {other:?}"),
+                }
+            }
+        }
+    }
+
+    // ---- W3.2: segment drag planner and command (WD7, WINV3, WINV4) ----
+
+    fn pin_partition(doc: &Doc) -> Vec<Vec<bool>> {
+        let pins: Vec<Pt> = doc
+            .parts()
+            .flat_map(|(id, _)| doc.pins(id).unwrap().to_vec())
+            .collect();
+        same_net_matrix(doc, &pins, &[])
+    }
+
+    #[test]
+    fn tc_seg_01_drag_middle_of_z_run_stretches_neighbours() {
+        let mut doc = sheet(
+            &[
+                ((0, 0, 2, 2), vec![(2, 0)]),
+                ((10, 6, 12, 8), vec![(10, 6)]),
+            ],
+            &[],
+        );
+        doc.apply(Command::AddWires(chain(&[(2, 0), (6, 0), (6, 6), (10, 6)])))
+            .unwrap();
+        let middle = doc
+            .wires()
+            .find(|(_, w)| w.a.x == w.b.x && w.a.x == lp(6, 0).x)
+            .unwrap()
+            .0;
+        let before = snapshot(&doc);
+        let pins_before = pin_partition(&doc);
+
+        let mut plan = SegmentDragPlan::default();
+        plan_segment_drag(&doc, middle, 2 * crate::PIN_LATTICE_NM, &mut plan).unwrap();
+        assert_eq!(plan.remove.len(), 3);
+        assert_eq!(plan.add.len(), 3);
+
+        doc.apply(Command::DragSegment {
+            wire: middle,
+            offset: 2 * crate::PIN_LATTICE_NM,
+        })
+        .unwrap();
+        doc.assert_normal_form();
+        assert_inv10(&doc);
+        assert_eq!(pin_partition(&doc), pins_before);
+
+        let mut run = crate::Run::default();
+        doc.run_through(middle, &mut run);
+        assert_eq!(run.wires.len(), 3, "still one run");
+        assert_eq!(
+            doc.wire(middle),
+            Some(&lw(8, 0, 8, 6)),
+            "dragged segment moved perpendicular and kept its id"
+        );
+
+        let after = snapshot(&doc);
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&before));
+        doc.assert_normal_form();
+        assert_inv10(&doc);
+        doc.redo().unwrap();
+        assert!(doc.content_eq(&after));
+    }
+
+    #[test]
+    fn tc_seg_02_drag_segment_with_pin_end_inserts_jog() {
+        let mut doc = sheet(&[((0, 0, 2, 2), vec![(2, 0)])], &[]);
+        doc.apply(Command::AddWires(vec![lw(2, 0, 8, 0)])).unwrap();
+        let wire = WireId(0);
+        let before = snapshot(&doc);
+        let pins_before = pin_partition(&doc);
+
+        let mut plan = SegmentDragPlan::default();
+        plan_segment_drag(&doc, wire, 2 * crate::PIN_LATTICE_NM, &mut plan).unwrap();
+        assert_eq!(plan.remove, vec![wire]);
+        assert_eq!(plan.add, vec![lw(2, 0, 2, 2), lw(2, 2, 8, 2)]);
+
+        doc.apply(Command::DragSegment {
+            wire,
+            offset: 2 * crate::PIN_LATTICE_NM,
+        })
+        .unwrap();
+        doc.assert_normal_form();
+        assert_inv10(&doc);
+        assert_eq!(pin_partition(&doc), pins_before);
+        assert_eq!(doc.wires().count(), 2);
+        assert_eq!(doc.wire(wire), Some(&lw(2, 2, 8, 2)));
+
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&before));
+    }
+
+    #[test]
+    fn tc_seg_03_drag_segment_across_foreign_pin_is_refused() {
+        let mut doc = sheet(
+            &[((0, 0, 2, 2), vec![(2, 0)]), ((4, 2, 6, 4), vec![(4, 2)])],
+            &[],
+        );
+        doc.apply(Command::AddWires(vec![lw(2, 0, 8, 0)])).unwrap();
+        let wire = WireId(0);
+        let before = snapshot(&doc);
+        let rev = doc.revision();
+
+        let expected = Blocker::Pin {
+            part: crate::PartId(1),
+            pin: 0,
+        };
+        let mut plan = SegmentDragPlan::default();
+        assert_eq!(
+            plan_segment_drag(&doc, wire, 2 * crate::PIN_LATTICE_NM, &mut plan),
+            Err(expected)
+        );
+        assert!(plan.remove.is_empty() && plan.add.is_empty());
+
+        let err = doc.apply(Command::DragSegment {
+            wire,
+            offset: 2 * crate::PIN_LATTICE_NM,
+        });
+        assert_eq!(err, Err(crate::CommandError::Segment(expected)));
+        assert_eq!(doc.revision(), rev);
+        assert!(doc.content_eq(&before));
+        doc.assert_normal_form();
+        assert_inv10(&doc);
+    }
+
+    #[test]
+    fn tc_seg_04_drag_segment_shrinks_neighbour_to_zero_and_normalises() {
+        for steps in [4, 8] {
+            let mut doc = sheet(
+                &[
+                    ((0, 0, 2, 2), vec![(2, 0)]),
+                    ((12, 4, 14, 6), vec![(12, 4)]),
+                ],
+                &[],
+            );
+            doc.apply(Command::AddWires(chain(&[(2, 0), (6, 0), (6, 4), (12, 4)])))
+                .unwrap();
+            let top = doc
+                .wires()
+                .find(|(_, w)| w.a == lp(2, 0) || w.b == lp(2, 0))
+                .unwrap()
+                .0;
+            let before = snapshot(&doc);
+            let pins_before = pin_partition(&doc);
+
+            doc.apply(Command::DragSegment {
+                wire: top,
+                offset: steps * crate::PIN_LATTICE_NM,
+            })
+            .unwrap();
+            doc.assert_normal_form();
+            assert_inv10(&doc);
+            assert_eq!(pin_partition(&doc), pins_before);
+            // Vertical neighbour shrank to zero (stopped at y = 4), horizontal legs merged,
+            // and a jog connects the pin at (2, 0) to (2, 4).
+            let mut wires: Vec<Wire> = doc.wires().map(|(_, &w)| w).collect();
+            wires.sort_by_key(|w| (pt_key(w.a), pt_key(w.b)));
+            assert_eq!(wires, vec![lw(2, 0, 2, 4), lw(2, 4, 12, 4)]);
+
+            let after = snapshot(&doc);
+            doc.undo().unwrap();
+            assert!(doc.content_eq(&before));
+            doc.redo().unwrap();
+            assert!(doc.content_eq(&after));
+        }
+    }
+
+    #[test]
+    fn w32_junction_and_labelled_corner_insert_jogs_and_free_ends_move() {
+        // Junction end at (0, 0) (three wire ends meeting) stays put and gets a jog;
+        // free end at (6, 0) moves with the horizontal segment.
+        let mut doc = Doc::new();
+        doc.apply(Command::AddWires(vec![lw(-4, 0, 6, 0), lw(0, 0, 0, 4)]))
+            .unwrap();
+        let branch = doc
+            .wires()
+            .find(|(_, w)| w.a == lp(0, 0) && w.b == lp(6, 0))
+            .unwrap()
+            .0;
+        let before = snapshot(&doc);
+        // Dragging into the vertical stem (0, 0)-(0, 4) is refused by WD4.
+        assert!(
+            doc.apply(Command::DragSegment {
+                wire: branch,
+                offset: 2 * crate::PIN_LATTICE_NM,
+            })
+            .is_err()
+        );
+        assert!(doc.content_eq(&before));
+
+        // Dragging away from the vertical stem (-2) inserts a jog (0, -2)-(0, 0) and moves free end (6, 0) to (6, -2).
+        doc.apply(Command::DragSegment {
+            wire: branch,
+            offset: -2 * crate::PIN_LATTICE_NM,
+        })
+        .unwrap();
+        doc.assert_normal_form();
+        assert_inv10(&doc);
+        assert_eq!(doc.wire(branch), Some(&lw(0, -2, 6, -2)));
+        assert!(doc.wires().any(|(_, &w)| w == lw(0, 0, 0, -2)));
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&before));
+
+        // Labelled corner keeps the label at (4, 0) connected on both stretch (-2) and shrink (+2).
+        for step in [-2, 2] {
+            let mut labelled = with_features(vec![], vec![lp(4, 0)]);
+            labelled
+                .apply(Command::AddWires(vec![lw(0, 0, 4, 0), lw(4, 0, 4, 6)]))
+                .unwrap();
+            let horiz = labelled.wires().find(|(_, w)| w.a.y == w.b.y).unwrap().0;
+            labelled
+                .apply(Command::DragSegment {
+                    wire: horiz,
+                    offset: step * crate::PIN_LATTICE_NM,
+                })
+                .unwrap();
+            labelled.assert_normal_form();
+            assert_inv10(&labelled);
+            assert_eq!(labelled.wire(horiz), Some(&lw(0, step, 4, step)));
+            assert_eq!(
+                labelled.net_at(lp(4, 0)),
+                labelled.net_of(horiz),
+                "label at corner stays connected"
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        /// W3.2 (WD7, WINV3, WINV4, INV10): for random sheets and segment drags,
+        /// plan_segment_drag matches Command::DragSegment; refused drags return
+        /// Blocker and leave the document unchanged; accepted drags preserve the
+        /// partition of pins, leave the document in normal form (WINV3) and INV10,
+        /// and undo/redo restores exact ids and state (WINV4).
+        #[test]
+        fn w32_winv3_winv4_segment_drag_properties(
+            parts in prop::collection::vec(part_strategy(), 0..5),
+            batches in prop::collection::vec(prop::collection::vec(wire_strategy(), 1..4), 1..6),
+            drags in prop::collection::vec((any::<usize>(), -6i32..=6, any::<bool>()), 1..12),
+        ) {
+            let mut doc = random_sheet(&parts, batches);
+            for (pick, steps, off_lattice_fuzz) in drags {
+                let live: Vec<WireId> = doc.wires().map(|(id, _)| id).collect();
+                if live.is_empty() {
+                    continue;
+                }
+                let wire = live[pick % live.len()];
+                let offset = if off_lattice_fuzz {
+                    steps * crate::PIN_LATTICE_NM + 1
+                } else {
+                    steps * crate::PIN_LATTICE_NM
+                };
+                let before = snapshot(&doc);
+                let rev_before = doc.revision();
+                let pins_before = pin_partition(&doc);
+
+                let mut preview = SegmentDragPlan::default();
+                let planned = plan_segment_drag(&doc, wire, offset, &mut preview);
+                let applied = doc.apply(Command::DragSegment { wire, offset });
+
+                match (planned, applied) {
+                    (Err(b1), Err(crate::CommandError::Segment(b2))) => {
+                        prop_assert_eq!(b1, b2);
+                        prop_assert!(preview.remove.is_empty() && preview.add.is_empty());
+                        prop_assert_eq!(doc.revision(), rev_before);
+                        prop_assert!(doc.content_eq(&before));
+                        doc.assert_normal_form();
+                        assert_inv10(&doc);
+                    }
+                    (Ok(()), Ok(change)) => {
+                        doc.assert_normal_form();
+                        assert_inv10(&doc);
+                        prop_assert_eq!(pin_partition(&doc), pins_before);
+                        let after = snapshot(&doc);
+                        if change.dirty.is_none() {
+                            prop_assert!(preview.remove.is_empty() && preview.add.is_empty());
+                            prop_assert_eq!(doc.revision(), rev_before);
+                            prop_assert!(doc.content_eq(&before));
+                        } else {
+                            // Preview matches the committed wire set.
+                            let mut expected_wires: Vec<Wire> = before
+                                .wires()
+                                .filter(|(id, _)| !preview.remove.contains(id))
+                                .map(|(_, &w)| w)
+                                .chain(preview.add.iter().copied())
+                                .collect();
+                            let mut actual_wires: Vec<Wire> =
+                                doc.wires().map(|(_, &w)| w).collect();
+                            let norm_key = |w: &Wire| {
+                                let (lo, hi, h) = normalised(*w);
+                                (pt_key(lo), pt_key(hi), h)
+                            };
+                            expected_wires.sort_by_key(norm_key);
+                            actual_wires.sort_by_key(norm_key);
+                            prop_assert_eq!(
+                                actual_wires.into_iter().map(|w| norm_key(&w)).collect::<Vec<_>>(),
+                                expected_wires.into_iter().map(|w| norm_key(&w)).collect::<Vec<_>>(),
+                            );
+
+                            doc.undo().unwrap();
+                            prop_assert!(doc.content_eq(&before));
+                            doc.assert_normal_form();
+                            assert_inv10(&doc);
+
+                            doc.redo().unwrap();
+                            prop_assert!(doc.content_eq(&after));
+                            doc.assert_normal_form();
+                            assert_inv10(&doc);
+                        }
+                    }
+                    other => prop_assert!(false, "mismatch: {other:?}"),
                 }
             }
         }

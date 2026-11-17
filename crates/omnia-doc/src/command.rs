@@ -8,6 +8,7 @@ use crate::{
     Doc, GeomError, ItemId, Label, LabelId, Orient, Part, PartId, Pt, Rect, StoreError, Wire,
     WireId,
     points::End,
+    route::Blocker,
     undo::{self, UndoOp},
 };
 
@@ -36,6 +37,11 @@ pub enum Command {
         pivot: Pt,
         by: Orient,
     },
+    /// WD7: drag one wire segment perpendicular to its axis by `offset` nm.
+    DragSegment {
+        wire: WireId,
+        offset: i32,
+    },
     /// WD10: optionally remove runs from selected parts' pins to their far anchors.
     Delete {
         items: Vec<ItemId>,
@@ -56,6 +62,7 @@ pub enum CommandError {
     MissingItem(ItemId),
     DuplicateItem(ItemId),
     InvalidTextField { item: ItemId, field: TextField },
+    Segment(Blocker),
 }
 
 impl fmt::Display for CommandError {
@@ -68,6 +75,7 @@ impl fmt::Display for CommandError {
             Self::InvalidTextField { item, field } => {
                 write!(f, "text field {field:?} is invalid for item {item:?}")
             }
+            Self::Segment(blocker) => write!(f, "segment drag blocked by {blocker:?}"),
         }
     }
 }
@@ -214,6 +222,15 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
                 pivot,
                 by: by.inverse(),
             })
+        }
+        Command::DragSegment { wire, offset } => {
+            ensure_exists(doc, ItemId::Wire(wire))?;
+            let Some(plan) = crate::route::plan_segment_drag_inner(doc, wire, offset)
+                .map_err(CommandError::Segment)?
+            else {
+                return Ok(UndoOp::Batch(Vec::new()));
+            };
+            Ok(apply_wire_plan(doc, plan, acc))
         }
         Command::Delete {
             mut items,
@@ -953,6 +970,11 @@ mod tests {
             text: "GND".into(),
         };
         let mut doc = Doc::new();
+        doc.apply(Command::AddWires(vec![Wire {
+            a: Pt::ZERO,
+            b: Pt { x: 100, y: 0 },
+        }]))
+        .unwrap();
         doc.apply(Command::AddLabel(label.clone())).unwrap();
         doc.apply(Command::AddLabel(Label {
             at: Pt::ZERO,
@@ -988,6 +1010,10 @@ mod tests {
                 pivot: Pt::ZERO,
                 by: Orient::IDENTITY,
             },
+            Command::DragSegment {
+                wire: WireId(0),
+                offset: 0,
+            },
             Command::SetText {
                 item,
                 field: TextField::Label,
@@ -1013,6 +1039,7 @@ mod tests {
         assert_eq!(doc.labels().count(), 2);
         doc.undo().unwrap();
         doc.undo().unwrap();
+        doc.undo().unwrap();
         assert!(doc.undo().is_none(), "no-op must not add undo entries");
         // A semantically inert command still validates its target and field.
         assert!(matches!(
@@ -1022,6 +1049,13 @@ mod tests {
             }),
             Err(CommandError::MissingItem(_))
         ));
+        assert_eq!(
+            doc.apply(Command::DragSegment {
+                wire: WireId(0),
+                offset: 0,
+            }),
+            Err(CommandError::MissingItem(ItemId::Wire(WireId(0))))
+        );
     }
 
     #[test]
