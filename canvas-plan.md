@@ -446,6 +446,9 @@ pub enum Command {
 }
 pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
+// added/removed are membership deltas only: an item that keeps its id with new geometry
+// (moved, reoriented, merge survivor, first piece of a split) is in neither; `dirty` covers
+// its old and new bounds. Consumers invalidate from dirty/revision, not the id lists.
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
                 Junction { at: Pt }, WireBody { wire: WireId, at: Pt }, Grid(Pt) } // Junction added in W1.3 (WD5)
 pub struct Hit { pub item: ItemId, pub at: Pt }
@@ -465,8 +468,9 @@ impl Doc {
     pub fn part(&self, id: PartId) -> Option<&Part>;
     pub fn wire(&self, id: WireId) -> Option<&Wire>;
     pub fn label(&self, id: LabelId) -> Option<&Label>;
-    pub fn query(&self, area: Rect, out: &mut Vec<ItemId>);
-    pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>); // wiring-plan.md WD8 Enclosed (W3.4)
+    pub fn query(&self, area: Rect, out: &mut Vec<ItemId>); // index envelope (body+pins); used by hit_test and snap
+    pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>); // wiring-plan.md WD8 Enclosed (W3.4; symbol bounds)
+    pub fn query_touching(&self, area: Rect, out: &mut Vec<ItemId>); // wiring-plan.md WD8 Intersecting (W3.4; symbol bounds)
     pub fn junctions(&self, area: Rect, out: &mut Vec<Pt>);
     pub fn part_body(&self, id: PartId) -> Option<Rect>; // clamped world body
     pub fn pins(&self, id: PartId) -> Option<&[Pt]>; // world coordinates

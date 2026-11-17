@@ -171,7 +171,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
   the matching `Blocker`; a wire that only crosses a foreign wire's interior is accepted and
   the two stay in different nets (INV2).
 
-### W1.5 Route candidates · todo
+### W1.5 Route candidates · done
 - Lane: doc · Depends: W1.4 · Read: WD4, WK1, WK5, WK6, WINV10
 - Owns: `crates/schematic-doc/src/route.rs`
 - Do: `route(doc, a, b, first_leg, out)`: enumerate WD4's candidates in order, validate each,
@@ -289,12 +289,13 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 - Done when: simulated-input tests cover an accepted drag, a refused one, Esc, and undo;
   `SheetView` paints exactly twice per drag; a golden shows the refused state.
 
-### W3.4 Rubber-band modes · todo
+### W3.4 Rubber-band modes · doing (doc half: query_within done; tool half waits T4.3)
 - Lane: canvas (tool), doc (query) · Depends: T4.3 · Read: WD8, WQ3
-- Owns: `crates/schematic-canvas/src/selection.rs` (after T4.3), `Doc::query_within` in
-  `crates/schematic-doc/src/index.rs`
+- Owns: `crates/schematic-canvas/src/selection.rs` (after T4.3), `Doc::query_within` and
+  `Doc::query_touching` in `crates/schematic-doc/src/doc.rs` (via `SpatialIndex::query_filtered`
+  in `crates/schematic-doc/src/index.rs`)
 - Do: both modes from the preference; a normalised box; Shift adds. `query_within` filters
-  the index query to items wholly inside.
+  items wholly inside; `query_touching` filters items touched (symbol bounds for parts).
 - Done when: TC-band-01 to TC-band-09 pass as simulated-input tests; a property test shows
   `query_within` equal to a brute-force scan; the INV11 test still passes.
 
@@ -537,6 +538,74 @@ doc_label_bridge_delete. By fixture inspection none gains a merge: the 10k leaf 
 a pin at its anchor and no end at its free tip; chain deletion opens a gap with one end
 per side; bridge deletion leaves one end at each corner. Re-freeze those three cases on
 the final binary even though their resulting geometry does not change.
+
+2026-11-16 W1.5 done - route.rs: `route(doc, a, b, first_leg, scratch, out)` with a
+caller-owned `RouteScratch` (signature change from the sketch; section 10 updated), `Axis`,
+`DOGLEG_REACH_NM` (WK5), `DOGLEG_CAP` (WK6), and `check_new_wires_in`, which takes the query
+buffer so validation allocates nothing warm (`check_new_wires` delegates to it). Candidates
+in WD4 order (straight 0; L along first_leg 1, other L 2; doglegs 3..), each scored
+(body segments, bends, crossings, length, number), sorted in place, validated in score order
+through W1.4's validator; the first valid wins, else the blocker of the lowest-scoring
+candidate (the same comparison ranks the invalid ones, as WD4 says). WD4's "first rule that
+fails, walking its segments from a" and W1.4's "rule priority before segment order" agree
+under the reading that the rule is chosen first and the walk picks within it; W1.4's
+function is used unchanged in that respect. Deviation for owner review: WD4 rule 2 now
+covers the run's corners (vertices that are not own ends). Without it a corner on a foreign
+pin, wire end or wire body passed validation and AddWires would connect a third net, which
+breaks the done-when "connects exactly a and b" and TC-move-08's rigid check. Added
+`Blocker::WireBody(WireId)` for a corner on a foreign wire's interior; WD4 and section 10
+record it. One W1.4 test case changed accordingly (its chained corner sat on a foreign
+body); its rule-precedence intent is kept with unchained wires, and new cases cover a corner
+on a pin, end and body. Enumeration choices recorded in WD4: doglegs by grid steps from a,
+H-V-H before V-H-V, towards b first (lesser coordinate when level), within the ends' span
+widened by WK5, zero-length shapes skipped and not counted, doglegs also when the straight
+exists; body count uses open interiors (edges do not count). Tests: hand-built straight,
+each L, L blocked by a pin (and by a pin on its corner), both Ls blocked so a dogleg wins,
+level ends round a U, TC-move-12 body in the way, bends before crossings, refusal ranking
+(including a case where a dogleg outranks both invalid Ls), candidate order and the WK6 cap
+against an independent enumeration. Properties (256 cases each): every route matches an
+enumeration/scoring oracle (whole-sheet scan, no index; production validator reused)
+in result and blocker; is orthogonal, on the
+lattice, a chain from a to b, passes check_new_wires (WINV10); adding it keeps normal form
+and INV10 and joins exactly the nets at a and b; and the same route comes back with a fresh
+or warm scratch and on the sheet rebuilt in reverse id order. tests/route_alloc.rs (new
+integration test, needed for the counting allocator) shows zero allocations warm. Bench
+(crates/omnia-bench/benches/route.rs, diagnostic, non-reference Windows machine i7-14650HX,
+battery, power scheme Silent): `10k` mean 23.2 us, per-call p50 14.0 us, p99 274 us;
+`dense` mean 51.2 us, p50 42.3 us, p99 455 us (every dense case refused: the moved pin sits
+on its own rays, the worst case). docs/measurements/W1.5.md. For W2.1: callers remove the
+run being replaced from the document view before routing, as for check_new_wires; a lone
+label (not on a pin or end, which WD9 does not produce) is not a blocker.
+
+2026-11-16 W1.5 review fixes - WD4 scores off-sheet candidates using a sheet-clipped
+index query and the original segment geometry. Invalid candidates retain body and crossing
+penalties, preserving refusal ranking. A regression compares every candidate against the
+whole-sheet scoring oracle at all four sheet edges and asserts the specified pin blocker.
+Clarified that enumeration and scoring are independent but validity and blocker selection
+reuse check_new_wires; no independent-validator claim. No budget or default changed.
+All five standard checks pass locally on Windows after the review fixes: fmt, workspace clippy, feature bench clippy, workspace tests and cargo deny (existing warnings only). No check weakened; no measurements run.
+2026-11-16 W3.4 doing (doc half: query_within done; tool half waits T4.3) — implemented the
+doc half of WD8 in crates/omnia-doc/src/doc.rs (`Doc::query_within` and `Doc::query_touching`)
+and crates/omnia-doc/src/index.rs (`pub(crate) SpatialIndex::query_filtered`, sharing cell
+traversal and generation-stamp deduplication with `query` via `query_with`, pre-filtering
+candidates by `bounds.intersects(area)`). Removed `SpatialIndex::query_within` (unused
+outside `Doc`; an envelope-only `query_within` on `SpatialIndex` would invite misuse for
+selection). `Doc::query` remains unchanged (index envelope `body ∪ pins` for picking and
+snapping). Both `Doc::query_within` (WD8 Enclosed) and `Doc::query_touching` (WD8
+Intersecting) normalise `area` internally, clear `out` once, allocate nothing once `out` has
+capacity, use inclusive edges (`contains_rect` / `intersects`), and count parts by clamped
+world symbol bounds (`Doc::part_body`, pins excluded), wires by segment, and labels by
+anchor point. Updated `wiring-plan.md` section 10 and `canvas-plan.md` section 9 under rule
+16. Unit tests and independent brute-force property tests in `index.rs` and `doc.rs` cover
+varied `local_bounds`/`local_pins`, clamped near-limit parts, body-vs-pin-stub regressions,
+degenerate zero-area boxes, and all four drag directions; allocation tests in
+`crates/omnia-doc/tests/index_alloc.rs` prove zero allocation once warm for both methods
+with parts having external pins. For the tool half in `crates/omnia-canvas/src/selection.rs`
+(blocked on `T4.3`): call `Doc::query_touching` for `SelectMode::Intersecting` and
+`Doc::query_within` for `SelectMode::Enclosed`. Nothing measured. Standard checks passed
+locally: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
+`cargo test --workspace`, and `cargo deny check` (existing dependency warnings).
 
 2026-11-16 W3.5 doing (doc half: Delete with_wires done; tool half waits T5.3) -
 Command::Delete now carries { items, with_wires }, matching wiring-plan.md section 10

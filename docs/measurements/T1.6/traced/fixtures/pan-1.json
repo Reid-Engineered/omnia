@@ -1,0 +1,14 @@
+{
+  "kind": "run",
+  "config": {"script": "pan", "warmup": 1, "frames": 2},
+  "environment": {"refresh_hz": 60},
+  "metrics": {"missed_refreshes": 1},
+  "diagnostic_trace": {"events": [
+    {"event": "draw", "window": "0", "signal_ns": 1000000, "dirty_ns": 2000000, "start_ns": 3000000, "end_ns": 4000000},
+    {"event": "present", "window": "0", "start_ns": 5000000, "end_ns": 6000000, "animation_interval_ns": null},
+    {"event": "draw", "window": "0", "signal_ns": 50000000, "dirty_ns": 49000000, "start_ns": 51000000, "end_ns": 52000000},
+    {"event": "present", "window": "0", "start_ns": 55000000, "end_ns": 56000000, "animation_interval_ns": 50000000},
+    {"event": "draw", "window": "0", "signal_ns": null, "dirty_ns": 71000000, "start_ns": 72000000, "end_ns": 73000000},
+    {"event": "present", "window": "0", "start_ns": 74000000, "end_ns": 75000000, "animation_interval_ns": 19000000}
+  ]}
+}

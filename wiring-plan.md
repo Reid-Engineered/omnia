@@ -224,7 +224,10 @@ A candidate is **valid** when all of these hold:
 
 - Every vertex is on the wire lattice (WK1) and inside the sheet (K1).
 - No segment's interior contains a foreign wire end or a foreign pin. Foreign means not one
-  of the run's own two ends.
+  of the run's own two ends. The run's corners are part of its interior: a corner on a
+  foreign pin, a foreign wire end or a foreign wire's interior fails this rule too
+  (`Blocker::WireBody` for the last), because adding the run there would connect it
+  (clarified at W1.5, 2026-11-16, for review by the owner; it also gives TC-move-08).
 - No segment lies along a foreign wire with a shared stretch of non-zero length.
 
 `Blocker::Overlap` applies to router, follow and segment-drag output, not user
@@ -238,6 +241,16 @@ total length; candidate number. The last term makes the choice deterministic (WI
 When no candidate is valid, the same comparison ranks the invalid candidates, and the
 refusal reports the blocker of the lowest-scoring one: the first rule above that fails,
 walking its segments from `a` (clarified at W0.2, 2026-11-16).
+
+Enumeration details (W1.5, 2026-11-16): for `d = 1, 2, …` grid steps from `a`'s
+coordinate, H-V-H before V-H-V, and in each the side towards `b` before the other (the
+lesser coordinate first when `a` and `b` are level on that axis); `m` stays within the span
+of the two ends widened by WK5 on both sides. A shape with a zero-length segment (`m` equal
+to `b`'s coordinate, or a family with no middle segment) is not a candidate and does not
+count towards WK6. Doglegs are also tried when the straight exists. "Through the interior of
+a part's bounds" counts segments whose open interior meets a body's open interior, so a
+segment along a body's edge does not count; a crossing is a foreign wire met at a point
+interior to both. `a == b` routes to nothing.
 
 The result is normalised by T6.1's merge rule, with one addition: a point that carries a
 label is never merged away.
@@ -517,13 +530,24 @@ impl Doc {
     pub fn assert_normal_form(&self); // INV1, INV2, WINV3, WD9 local-query oracle
 }
 pub enum Axis { Horizontal, Vertical }
-pub enum Blocker { Pin { part: PartId, pin: usize }, WireEnd(WireId), Overlap(WireId), Sheet }
+pub enum Blocker { Pin { part: PartId, pin: usize }, WireEnd(WireId), WireBody(WireId),
+                   Overlap(WireId), Sheet }
 // Sheet also covers off-lattice/malformed candidates; pins use Doc::pins indices.
+// WireBody (W1.5): a corner (a vertex that is not an own end) in a foreign wire's interior.
 // Rules have priority across the whole candidate, then segment order from a.
 // Within a segment: nearest along traversal, geometry, then lowest item id;
-// coincident pins precede wire ends, then lowest pin index.
+// coincident pins precede wire ends, then wire bodies, then lowest pin index.
 pub fn check_new_wires(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(), Blocker>;
-pub fn route(doc: &Doc, a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Wire>) -> Result<(), Blocker>;
+pub fn check_new_wires_in(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2],
+                          scratch: &mut Vec<ItemId>) -> Result<(), Blocker>; // no allocation warm
+pub const DOGLEG_REACH_NM: i32;   // WK5
+pub const DOGLEG_CAP: usize;      // WK6
+pub struct RouteScratch { /* candidates, query buffer */ }  // caller-owned, reused (W1.5)
+impl RouteScratch { pub fn new() -> Self; }
+// Scores every candidate, validates in score order, returns the first valid one or the
+// blocker of the lowest-scoring candidate. No allocation once scratch and out are warm.
+pub fn route(doc: &Doc, a: Pt, b: Pt, first_leg: Axis, scratch: &mut RouteScratch,
+             out: &mut Vec<Wire>) -> Result<(), Blocker>;
 
 // ---- follow.rs ----
 pub enum Isometry { Translate(Pt), Reorient { pivot: Pt, by: Orient } }
@@ -547,7 +571,10 @@ pub enum CommandError { /* T5.1's */ Follow(FollowError), Segment(Blocker) }
 // ---- snap.rs (refines the canvas plan's Snap) ----
 pub enum Snap { Pin { part: PartId, pin: usize, at: Pt }, WireEnd { wire: WireId, at: Pt },
                 Junction { at: Pt }, WireBody { wire: WireId, at: Pt }, Grid(Pt) }
-impl Doc { pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>); }   // WD8 Enclosed
+impl Doc {
+    pub fn query_within(&self, area: Rect, out: &mut Vec<ItemId>);    // WD8 Enclosed (symbol bounds)
+    pub fn query_touching(&self, area: Rect, out: &mut Vec<ItemId>);  // WD8 Intersecting (symbol bounds)
+}
 ```
 
 `plan_follow` takes its output buffers from the caller so the move tool can reuse them

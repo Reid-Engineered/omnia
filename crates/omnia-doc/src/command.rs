@@ -90,6 +90,14 @@ impl From<GeomError> for CommandError {
     }
 }
 
+/// What one `apply`, `undo` or `redo` changed.
+///
+/// `added` and `removed` are membership deltas only. An item that keeps its id while its
+/// geometry changes is in neither list: a moved or reoriented item, the surviving wire of a
+/// merge (lowest id) and the first piece of a split wire (D2). `dirty` always covers the old
+/// and new bounds of every such item, and `revision` always advances on a real change, so
+/// consumers repaint and invalidate per-item caches from `dirty`/`revision`, not from the id
+/// lists. An empty pair of lists does not mean "nothing changed"; `dirty: None` does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
     pub revision: u64,
