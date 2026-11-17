@@ -1,0 +1,46 @@
+{
+  "before": {
+    "isolated_2k": {
+      "median_run_p99_ns": 12654100.0,
+      "min_run_p99_ns": 2718200,
+      "max_run_p99_ns": 31729400
+    },
+    "isolated_10k": {
+      "median_run_p99_ns": 187851550.0,
+      "min_run_p99_ns": 38412700,
+      "max_run_p99_ns": 354799700
+    },
+    "isolated_20k": {
+      "median_run_p99_ns": 676720700.0,
+      "min_run_p99_ns": 477033400,
+      "max_run_p99_ns": 2093539800
+    },
+    "bridge_5k": {
+      "median_run_p99_ns": 51500150.0,
+      "min_run_p99_ns": 20239600,
+      "max_run_p99_ns": 80040800
+    }
+  },
+  "after": {
+    "isolated_2k": {
+      "median_run_p99_ns": 16350.0,
+      "min_run_p99_ns": 12500,
+      "max_run_p99_ns": 44100
+    },
+    "isolated_10k": {
+      "median_run_p99_ns": 15750.0,
+      "min_run_p99_ns": 14000,
+      "max_run_p99_ns": 25500
+    },
+    "isolated_20k": {
+      "median_run_p99_ns": 17000.0,
+      "min_run_p99_ns": 15000,
+      "max_run_p99_ns": 25200
+    },
+    "bridge_5k": {
+      "median_run_p99_ns": 28050.0,
+      "min_run_p99_ns": 26200,
+      "max_run_p99_ns": 44800
+    }
+  }
+}

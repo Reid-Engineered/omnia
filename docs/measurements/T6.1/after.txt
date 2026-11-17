@@ -1,0 +1,50 @@
+   Compiling omnia-doc v0.1.0 (C:\Users\marcu\.t3\worktrees\omnia\t3-8b198261-1bd408fde8d4b6c2\crates\omnia-doc)
+    Finished `release` profile [optimized] target(s) in 32.47s
+     Running tests\add_wires_timing.rs (target\release\deps\add_wires_timing-34d175cb9aa9a8fe.exe)
+
+running 1 test
+T61,run,case,p99_ns,min_ns,max_ns
+T61,0,isolated_2k,44100,2300,44100
+T61,0,isolated_10k,14000,2300,14000
+T61,0,isolated_20k,15000,2100,15000
+T61,0,bridge_5k,44800,5100,44800
+T61,1,isolated_10k,15500,1900,15500
+T61,1,isolated_20k,16300,1900,16300
+T61,1,bridge_5k,26200,5000,26200
+T61,1,isolated_2k,20300,3300,20300
+T61,2,isolated_20k,15100,1900,15100
+T61,2,bridge_5k,27900,4900,27900
+T61,2,isolated_2k,21200,2900,21200
+T61,2,isolated_10k,15000,1900,15000
+T61,3,bridge_5k,26500,4800,26500
+T61,3,isolated_2k,12500,1800,12500
+T61,3,isolated_10k,15100,1900,15100
+T61,3,isolated_20k,19100,2000,19100
+T61,4,isolated_2k,15500,1900,15500
+T61,4,isolated_10k,15700,1900,15700
+T61,4,isolated_20k,25200,3100,25200
+T61,4,bridge_5k,26600,5100,26600
+T61,5,isolated_10k,17000,2000,17000
+T61,5,isolated_20k,17400,2000,17400
+T61,5,bridge_5k,38900,5400,38900
+T61,5,isolated_2k,16700,2000,16700
+T61,6,isolated_20k,16200,2000,16200
+T61,6,bridge_5k,26400,5300,26400
+T61,6,isolated_2k,12600,2000,12600
+T61,6,isolated_10k,15800,2100,15800
+T61,7,bridge_5k,41500,5300,41500
+T61,7,isolated_2k,16000,2000,16000
+T61,7,isolated_10k,16600,2000,16600
+T61,7,isolated_20k,16600,2100,16600
+T61,8,isolated_2k,23300,3300,23300
+T61,8,isolated_10k,25500,3300,25500
+T61,8,isolated_20k,22200,2100,22200
+T61,8,bridge_5k,39300,9000,39300
+T61,9,isolated_10k,18900,2100,18900
+T61,9,isolated_20k,18800,2100,18800
+T61,9,bridge_5k,28200,5600,28200
+T61,9,isolated_2k,13000,2100,13000
+test t61_add_wires_locality_timing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s
+

@@ -222,6 +222,21 @@ returns a `Change` that the views use to decide what to repaint.
 - A connection exists only where an end or pin lies. A wire ending on another wire's body
   splits that wire on commit. A crossing with no end there is not a connection.
 - Junction dots are derived, not stored: a dot is drawn where three or more ends or pins meet.
+- `AddWires` normalises locally: direct contacts are existing segments with an endpoint
+  on an added segment, or containing an added endpoint (inclusive, including collinear
+  overlap). Query each added segment's bounds through `Doc::query`; gather pins through
+  `Doc::pins` and labels on those segments. Pure interior crossings are excluded.
+- Fix the touched points before merging: ends of added segments and direct contacts,
+  plus pins and labels on added segments. Collinear existing neighbours incident at
+  those points may be included using the point store, but their far ends do not expand
+  the touched points. Split this local set at its feature points and unite collinear
+  overlaps. Merge only at touched points with exactly two resulting ends and no pin or
+  label, counting ends outside the local set as blockers. Junctions and labelled points
+  are retained. This preserves normal form for normal input, while leaving pre-existing
+  non-normal geometry outside this neighbourhood unchanged; Move normalisation is W2.2.
+- The lowest existing id survives a merge. The first piece in geometry order keeps a
+  split wire's id; fresh ids are assigned in geometry order. All other live ids and
+  geometry stay unchanged. Undo restores every replaced wire with its exact id (INV4).
 
 ### D3 Spatial index: hand-written uniform grid. DECIDED
 
@@ -521,7 +536,7 @@ impl Connectivity {                                        // D2, INV10 (T4.1)
     pub fn add_label(&mut self, id: LabelId, label: &Label);
     pub fn remove_label(&mut self, id: LabelId) -> Option<Label>;
 }
-pub fn l_route(a: Pt, b: Pt, flip: bool) -> Vec<Wire>;    // T6.1 (route.rs): the L-route;
+pub fn l_route(a: Pt, b: Pt, flip: bool) -> [Option<Wire>; 2];    // T6.1 (route.rs): the L-route;
                                                            // flip=false leaves a horizontally,
                                                            // flip=true vertically. AddWires splits
                                                            // and merges to the INV2 normal form

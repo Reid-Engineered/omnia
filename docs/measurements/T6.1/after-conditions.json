@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-16",
+  "role": "Windows development diagnostic; NOT reference / no budget certified",
+  "cpu": "i7-14650HX",
+  "gpu": [
+    "RTX 5060 Laptop GPU",
+    "UHD Graphics"
+  ],
+  "os": "Windows 11 Home 10.0.26200",
+  "resolution": "1920x1200",
+  "scale_percent": 125,
+  "refresh_hz": 165,
+  "power": "AC (BatteryStatus 2)",
+  "governor": "not applicable on Windows; active power scheme Silent",
+  "sample_schedule": "10 rotating repetitions; 20 samples per case per repetition; nearest-rank p99 is max of 20",
+  "timed_scope": "Doc::apply(AddWires); construction and undo excluded",
+  "viewport": "none (document-only test)",
+  "other_apps_closed": false,
+  "note": "Shared development session; baseline overlapped document test/build work. Diagnostic only, not a controlled reference comparison.",
+  "snapshot_note": "Hardware unchanged; active scheme and battery checked again after runs.",
+  "binary_sha256": "0FEABDB186E7B5BF2CE97F14F099DB6528F75DC059507E6571D09259F4FB1A2A"
+}

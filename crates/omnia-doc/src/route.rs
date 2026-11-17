@@ -1,7 +1,7 @@
 //! Wire routing rules: the L-route and the split/merge normal form applied by
 //! `Command::AddWires` (D2, INV2; wiring-plan WD4, WD9, M12, M18).
 //!
-//! Normal form after an `AddWires` command (WINV3 restricted to wires):
+//! Local normal form in the touched neighbourhood of `AddWires` (INV2):
 //! no wire end lies in another wire's interior; no two wires share a stretch of
 //! non-zero length; and no two collinear segments meet at a point that holds
 //! nothing else. A meeting point holds something else when a pin lies there, a
@@ -10,13 +10,15 @@
 //! connect (M18). The planner is pure and deterministic: its result depends
 //! only on the geometry and the existing ids, never on hash-map iteration order
 //! or on the order of the added wires. Ties are broken by geometry, then by the
-//! lowest existing id, which also survives a split or merge.
+//! lowest existing id on a merge; the first geometry-ordered split piece keeps
+//! its source id. Fresh ids follow geometry order. Unrelated pre-existing
+//! non-normal geometry is preserved; see `plan_add_wires` for the boundary.
 
 use std::collections::BTreeMap;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::{Pt, Wire, WireId};
+use crate::{Doc, ItemId, Pt, Rect, Wire, WireId, points::End};
 
 /// The L-route between `a` and `b`: zero, one, or two axis-aligned segments.
 ///
@@ -24,19 +26,19 @@ use crate::{Pt, Wire, WireId};
 /// Otherwise the route has one corner. `flip == false` leaves `a` horizontally
 /// (corner at `(b.x, a.y)`); `flip == true` leaves `a` vertically (corner at
 /// `(a.x, b.y)`). Segment direction follows `a` to corner to `b`.
-pub fn l_route(a: Pt, b: Pt, flip: bool) -> Vec<Wire> {
+pub fn l_route(a: Pt, b: Pt, flip: bool) -> [Option<Wire>; 2] {
     if a == b {
-        return Vec::new();
+        return [None, None];
     }
     if a.x == b.x || a.y == b.y {
-        return vec![Wire { a, b }];
+        return [Some(Wire { a, b }), None];
     }
     let corner = if flip {
         Pt { x: a.x, y: b.y }
     } else {
         Pt { x: b.x, y: a.y }
     };
-    vec![Wire { a, b: corner }, Wire { a: corner, b }]
+    [Some(Wire { a, b: corner }), Some(Wire { a: corner, b })]
 }
 
 fn pt_key(p: Pt) -> (i32, i32) {
@@ -96,26 +98,94 @@ pub(crate) struct AddWiresPlan {
     pub insert: Vec<(Option<WireId>, Wire)>,
 }
 
-/// Plans the split and merge normalisation for `AddWires`.
-///
-/// `existing` is the live wire set, `pins` every part pin point and `labels`
-/// every label point. All inputs are treated as sets: their order does not
-/// affect the plan.
-pub(crate) fn plan_add_wires(
-    existing: &[(WireId, Wire)],
-    pins: &[Pt],
-    labels: &[Pt],
-    added: &[Wire],
-) -> AddWiresPlan {
-    if added.is_empty() {
-        return AddWiresPlan {
-            remove: Vec::new(),
-            insert: Vec::new(),
-        };
-    }
+fn contains(wire: Wire, p: Pt) -> bool {
+    Rect::from_points(wire.a, wire.b).unwrap().contains(p)
+}
 
-    let mut existing_sorted: Vec<(WireId, Wire)> = existing.to_vec();
+fn touches(a: Wire, b: Wire) -> bool {
+    contains(a, b.a) || contains(a, b.b) || contains(b, a.a) || contains(b, a.b)
+}
+
+/// Plans only the added wires' local neighbourhood (D8, INV2).
+/// Direct contacts have an endpoint on the other segment (inclusive); a pure
+/// interior crossing is not a contact. Touched points are the ends of these
+/// direct contacts and the added wires, plus pins/labels on added wires.
+/// Collinear neighbours incident at those fixed points may join the plan, but
+/// their far ends do not expand the touched points. Normalisation never walks
+/// an unrelated chain. Ends outside the plan still count as merge blockers.
+/// Pre-existing non-normal geometry elsewhere is left unchanged (W2.2 owns
+/// normalising moved geometry; this is not a document-wide repair pass).
+pub(crate) fn plan_add_wires(doc: &Doc, added: &[Wire]) -> AddWiresPlan {
+    let mut selected = FxHashMap::default();
+    let mut pins = Vec::new();
+    let mut labels = Vec::new();
+    let mut scratch = Vec::new();
+    let mut touched = FxHashSet::default();
+    for &wire in added {
+        touched.extend([wire.a, wire.b]);
+        doc.query(Rect::from_points(wire.a, wire.b).unwrap(), &mut scratch);
+        for &item in &scratch {
+            match item {
+                ItemId::Wire(id) => {
+                    let other = *doc.wire(id).unwrap();
+                    if touches(wire, other) {
+                        selected.insert(id, other);
+                        touched.extend([other.a, other.b]);
+                    }
+                }
+                ItemId::Part(id) => {
+                    pins.extend(
+                        doc.pins(id)
+                            .unwrap()
+                            .iter()
+                            .copied()
+                            .filter(|&p| contains(wire, p)),
+                    );
+                }
+                ItemId::Label(id) => labels.push(doc.label(id).unwrap().at),
+            }
+        }
+    }
+    touched.extend(pins.iter().copied());
+    touched.extend(labels.iter().copied());
+    // One boundary expansion at fixed touched points, using the point store.
+    // Only collinear neighbours can merge. Perpendicular untouched ends remain
+    // blockers, without being copied or replanned.
+    let mut endpoint_axes = FxHashSet::default();
+    for &wire in selected.values().chain(added) {
+        let horizontal = wire.a.y == wire.b.y;
+        endpoint_axes.extend([(wire.a, horizontal), (wire.b, horizontal)]);
+    }
+    let mut neighbours = Vec::new();
+    for &at in &touched {
+        for end in doc.points.at(at) {
+            if let End::Wire(id) = *end {
+                let wire = *doc.wire(id).unwrap();
+                if endpoint_axes.contains(&(at, wire.a.y == wire.b.y)) {
+                    neighbours.push((id, wire));
+                }
+            }
+        }
+    }
+    selected.extend(neighbours);
+    let mut existing_sorted: Vec<_> = selected.iter().map(|(&id, &wire)| (id, wire)).collect();
     existing_sorted.sort_by_key(|(id, _)| id.0);
+    // Pins/labels at retained outer ends also prevent merging, even when those
+    // points lie outside the new segments. Query points, never the whole sheet.
+    for &at in &touched {
+        if doc
+            .points
+            .at(at)
+            .iter()
+            .any(|end| matches!(end, End::Pin { .. }))
+        {
+            pins.push(at);
+        }
+        doc.query(Rect { min: at, max: at }, &mut scratch);
+        if scratch.iter().any(|item| matches!(item, ItemId::Label(_))) {
+            labels.push(at);
+        }
+    }
     // Canonical added order: geometry first, so fresh ids do not depend on the
     // caller's wire order.
     let mut added_sorted: Vec<Wire> = added.to_vec();
@@ -160,8 +230,8 @@ pub(crate) fn plan_add_wires(
         feature.push(source.lo);
         feature.push(source.hi);
     }
-    feature.extend_from_slice(pins);
-    feature.extend_from_slice(labels);
+    feature.extend_from_slice(&pins);
+    feature.extend_from_slice(&labels);
     feature.sort_by_key(|&p| pt_key(p));
     feature.dedup();
 
@@ -186,36 +256,31 @@ pub(crate) fn plan_add_wires(
     let mut atomic_index: FxHashMap<(u8, i32, i32, i32), usize> = FxHashMap::default();
     let mut atomics: Vec<Atomic> = Vec::new();
     for source in &sources {
-        let mut cuts: Vec<i32> = Vec::new();
-        if source.horizontal {
-            if let Some(xs) = rows.get(&source.lo.y) {
-                let start = xs.partition_point(|&x| x <= source.lo.x);
-                let end = xs.partition_point(|&x| x < source.hi.x);
-                cuts.extend_from_slice(&xs[start..end]);
-            }
-        } else if let Some(ys) = cols.get(&source.lo.x) {
-            let start = ys.partition_point(|&y| y <= source.lo.y);
-            let end = ys.partition_point(|&y| y < source.hi.y);
-            cuts.extend_from_slice(&ys[start..end]);
-        }
-        let mut bounds: Vec<Pt> = Vec::with_capacity(cuts.len() + 2);
-        bounds.push(source.lo);
-        bounds.extend(cuts.iter().map(|&c| {
-            if source.horizontal {
+        let (coords, low, high) = if source.horizontal {
+            (rows.get(&source.lo.y), source.lo.x, source.hi.x)
+        } else {
+            (cols.get(&source.lo.x), source.lo.y, source.hi.y)
+        };
+        let coords = coords.map_or(&[][..], Vec::as_slice);
+        let start = coords.partition_point(|&c| c <= low);
+        let end = coords.partition_point(|&c| c < high);
+        let mut lo = source.lo;
+        for coordinate in coords[start..end]
+            .iter()
+            .copied()
+            .chain(std::iter::once(high))
+        {
+            let hi = if source.horizontal {
                 Pt {
-                    x: c,
+                    x: coordinate,
                     y: source.lo.y,
                 }
             } else {
                 Pt {
                     x: source.lo.x,
-                    y: c,
+                    y: coordinate,
                 }
-            }
-        }));
-        bounds.push(source.hi);
-        for pair in bounds.windows(2) {
-            let (lo, hi) = (pair[0], pair[1]);
+            };
             let key = (
                 u8::from(!source.horizontal),
                 if source.horizontal { lo.y } else { lo.x },
@@ -233,14 +298,13 @@ pub(crate) fn plan_add_wires(
                 atomics.len() - 1
             });
             let atomic = &mut atomics[idx];
-            if let Some(id) = source.existing
-                && !atomic.existing.contains(&id)
-            {
+            if let Some(id) = source.existing {
                 atomic.existing.push(id);
             }
             if atomic.descending != Some(source.descending) {
                 atomic.descending = None;
             }
+            lo = hi;
         }
     }
 
@@ -258,7 +322,15 @@ pub(crate) fn plan_add_wires(
     label_keys.sort_unstable();
     label_keys.dedup();
     let mergeable = |at: Pt| {
-        incidence.get(&pt_key(at)).copied().unwrap_or(0) == 2
+        touched.contains(&at)
+            && incidence.get(&pt_key(at)).copied().unwrap_or(0)
+                + doc
+                    .points
+                    .at(at)
+                    .iter()
+                    .filter(|end| matches!(end, End::Wire(id) if !selected.contains_key(id)))
+                    .count() as u32
+                == 2
             && pin_keys.binary_search(&pt_key(at)).is_err()
             && label_keys.binary_search(&pt_key(at)).is_err()
     };
@@ -292,16 +364,13 @@ pub(crate) fn plan_add_wires(
             let mut seg_existing: Vec<WireId> = Vec::new();
             let mut descending = atomics[run[0]].descending;
             for &idx in run.iter() {
-                for &id in &atomics[idx].existing {
-                    if !seg_existing.contains(&id) {
-                        seg_existing.push(id);
-                    }
-                }
+                seg_existing.extend_from_slice(&atomics[idx].existing);
                 if atomics[idx].descending != descending {
                     descending = None;
                 }
             }
             seg_existing.sort_by_key(|id| id.0);
+            seg_existing.dedup();
             finals.push(FinalSeg {
                 lo: first.lo,
                 hi: last.hi,
@@ -336,7 +405,7 @@ pub(crate) fn plan_add_wires(
         .iter()
         .map(|(id, wire)| (id.0, *wire))
         .collect();
-    let mut used: Vec<WireId> = Vec::new();
+    let mut used = FxHashSet::default();
     let mut remove: Vec<(WireId, Wire)> = Vec::new();
     let mut insert: Vec<(Option<WireId>, Wire)> = Vec::new();
     for seg in &finals {
@@ -354,7 +423,7 @@ pub(crate) fn plan_add_wires(
         let keep = seg.existing.iter().copied().find(|id| !used.contains(id));
         match keep {
             Some(id) => {
-                used.push(id);
+                used.insert(id);
                 let old = existing_wire[&id.0];
                 let (old_lo, old_hi, _) = normalised(old);
                 if old_lo != seg.lo || old_hi != seg.hi {
@@ -483,16 +552,19 @@ mod tests {
     fn l_route_corners_and_degenerate_cases() {
         let a = Pt { x: 0, y: 0 };
         let b = Pt { x: 10, y: 20 };
-        assert_eq!(l_route(a, a, false), Vec::new());
-        assert_eq!(l_route(a, Pt { x: 10, y: 0 }, true), vec![w(0, 0, 10, 0)]);
+        assert_eq!(l_route(a, a, false), [None, None]);
+        assert_eq!(
+            l_route(a, Pt { x: 10, y: 0 }, true),
+            [Some(w(0, 0, 10, 0)), None]
+        );
         assert_eq!(
             l_route(a, b, false),
-            vec![w(0, 0, 10, 0), w(10, 0, 10, 20)],
+            [Some(w(0, 0, 10, 0)), Some(w(10, 0, 10, 20))],
             "flip=false leaves a horizontally"
         );
         assert_eq!(
             l_route(a, b, true),
-            vec![w(0, 0, 0, 20), w(0, 20, 10, 20)],
+            [Some(w(0, 0, 0, 20)), Some(w(0, 20, 10, 20))],
             "flip=true leaves a vertically"
         );
     }
@@ -641,6 +713,125 @@ mod tests {
         assert_all(&first);
     }
 
+    fn snapshot(doc: &Doc) -> Doc {
+        let mut bytes = Vec::new();
+        doc.save(&mut bytes).unwrap();
+        Doc::load(bytes.as_slice()).unwrap()
+    }
+
+    fn net_members(doc: &Doc, id: WireId) -> Vec<WireId> {
+        let mut wires = Vec::new();
+        doc.net_wires(doc.net_of(id).unwrap(), &mut wires);
+        wires.sort_by_key(|id| id.0);
+        wires
+    }
+
+    // INV4 / INV10: unrelated AddWires must not repair legacy non-normal
+    // geometry, change its exact ids/directions, or change its net partition.
+    fn assert_unrelated_add_preserves(doc: &mut Doc) {
+        let before = snapshot(doc);
+        let wires = live_wires(doc);
+        let memberships: Vec<_> = wires.iter().map(|&(id, _)| net_members(doc, id)).collect();
+        let change = doc
+            .apply(Command::AddWires(vec![w(1000, 1000, 1010, 1000)]))
+            .unwrap();
+        assert!(change.removed.is_empty());
+        assert_eq!(change.added.len(), 1);
+        for (&(id, wire), members) in wires.iter().zip(memberships) {
+            assert_eq!(doc.wire(id), Some(&wire));
+            assert_eq!(net_members(doc, id), members);
+        }
+        assert_inv10(doc);
+        let after = snapshot(doc);
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&before), "INV4: exact undo including ids");
+        doc.redo().unwrap();
+        assert!(doc.content_eq(&after), "INV4: exact redo including ids");
+        doc.undo().unwrap();
+    }
+
+    #[test]
+    fn unrelated_add_preserves_move_delete_and_duplicate_non_normal_states() {
+        let mut moved = Doc::new();
+        moved
+            .apply(Command::AddWires(vec![w(0, 0, 10, 0), w(5, 5, 5, 10)]))
+            .unwrap();
+        let id = moved.wires().find(|(_, wire)| wire.a.x == 5).unwrap().0;
+        moved
+            .apply(Command::Move {
+                items: vec![ItemId::Wire(id)],
+                delta: Pt { x: 0, y: -5 },
+            })
+            .unwrap();
+        assert_unrelated_add_preserves(&mut moved);
+
+        let mut deleted = Doc::new();
+        deleted
+            .apply(Command::AddWires(vec![w(0, 0, 10, 0), w(5, 0, 5, 10)]))
+            .unwrap();
+        let branch = deleted
+            .wires()
+            .find(|(_, wire)| wire.a.x == wire.b.x)
+            .unwrap()
+            .0;
+        deleted
+            .apply(Command::Delete(vec![ItemId::Wire(branch)]))
+            .unwrap();
+        assert_eq!(deleted.wires().count(), 2);
+        assert_unrelated_add_preserves(&mut deleted);
+
+        let mut duplicate = Doc::from_items([], [w(0, 0, 10, 0), w(10, 0, 0, 0)], []).unwrap();
+        assert_unrelated_add_preserves(&mut duplicate);
+    }
+
+    #[test]
+    fn merge_expansion_stops_at_fixed_touched_points_and_keeps_external_junctions() {
+        // Only the first wire directly touches the new segment. Its far end is
+        // a touched point, so the second can merge; the third's far boundary
+        // was never touched and the pre-existing extra chain is left alone.
+        let mut doc =
+            Doc::from_items([], [w(0, 0, 10, 0), w(10, 0, 20, 0), w(20, 0, 30, 0)], []).unwrap();
+        doc.apply(Command::AddWires(vec![w(-10, 0, 0, 0)])).unwrap();
+        assert_eq!(
+            live_wires(&doc),
+            vec![(WireId(0), w(-10, 0, 20, 0)), (WireId(2), w(20, 0, 30, 0))]
+        );
+        assert_inv10(&doc);
+        let mut doc =
+            Doc::from_items([], [w(0, 0, 10, 0), w(10, 0, 20, 0), w(10, 0, 10, 10)], []).unwrap();
+        doc.apply(Command::AddWires(vec![w(-10, 0, 0, 0)])).unwrap();
+        assert_eq!(doc.wire(WireId(0)), Some(&w(-10, 0, 10, 0)));
+        assert_eq!(doc.wire(WireId(1)), Some(&w(10, 0, 20, 0)));
+        assert_eq!(doc.wire(WireId(2)), Some(&w(10, 0, 10, 10)));
+        assert_all(&doc);
+    }
+
+    fn with_features(pins: Vec<Pt>, labels: Vec<Pt>) -> Doc {
+        Doc::from_items(
+            [(
+                Part {
+                    symbol: SymbolId(0),
+                    at: Pt::ZERO,
+                    orient: Orient::IDENTITY,
+                    designator: "R1".into(),
+                    value: "1k".into(),
+                },
+                pins,
+                Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
+            )],
+            [],
+            labels.into_iter().map(|at| Label {
+                at,
+                text: "SIG".into(),
+            }),
+        )
+        .unwrap()
+    }
+
+    fn point_strategy() -> impl Strategy<Value = Pt> {
+        (-4i32..5, -4i32..5).prop_map(|(x, y)| Pt { x, y })
+    }
+
     fn wire_strategy() -> impl Strategy<Value = Wire> {
         (-4i32..5, -4i32..5, any::<bool>(), 1i32..5).prop_map(|(x, y, horiz, len)| {
             if horiz {
@@ -658,9 +849,11 @@ mod tests {
         #[test]
         fn inv2_inv10_and_undo_over_random_add_wires(
             batches in prop::collection::vec(prop::collection::vec(wire_strategy(), 1..4), 1..24),
+            pins in prop::collection::vec(point_strategy(), 0..8),
+            labels in prop::collection::vec(point_strategy(), 0..8),
         ) {
-            let mut doc = Doc::new();
-            let empty = Doc::new();
+            let mut doc = with_features(pins, labels);
+            let empty = snapshot(&doc);
             let mut applied = 0usize;
             for wires in &batches {
                 let before_bytes = {
@@ -671,10 +864,12 @@ mod tests {
                 let before = Doc::load(before_bytes.as_slice()).unwrap();
                 let change = doc.apply(Command::AddWires(wires.clone())).unwrap();
                 assert_all(&doc);
+                let after = snapshot(&doc);
                 if change.dirty.is_some() {
                     prop_assert!(doc.undo().is_some());
                     prop_assert!(doc.content_eq(&before), "INV4: undo restores pre-AddWires ids");
                     prop_assert!(doc.redo().is_some());
+                    prop_assert!(doc.content_eq(&after), "INV4: redo equals apply, ids included");
                     assert_all(&doc);
                     applied += 1;
                 } else {
@@ -689,6 +884,48 @@ mod tests {
             // Undo steps that were no-ops pushed nothing; drain any remainder.
             while doc.undo().is_some() {}
             prop_assert!(doc.content_eq(&empty), "undoing every AddWires restores the empty doc");
+        }
+
+        /// INV4 / INV10 through Move/Delete states; local AddWires must not
+        /// silently repair any of those states on the rest of the sheet.
+        #[test]
+        fn local_add_with_features_and_mixed_edits(
+            steps in prop::collection::vec((0u8..3, prop::collection::vec(wire_strategy(), 1..4), any::<usize>(), point_strategy()), 1..24),
+            pins in prop::collection::vec(point_strategy(), 0..8),
+            labels in prop::collection::vec(point_strategy(), 0..8),
+        ) {
+            let mut doc = with_features(pins, labels);
+            let initial = snapshot(&doc);
+            for (kind, wires, pick, delta) in steps {
+                let before = snapshot(&doc);
+                let live = live_wires(&doc);
+                let cmd = match (kind, live.is_empty()) {
+                    (1, false) => Command::Move { items: vec![ItemId::Wire(live[pick % live.len()].0)], delta },
+                    (2, false) => Command::Delete(vec![ItemId::Wire(live[pick % live.len()].0)]),
+                    _ => Command::AddWires(wires.clone()),
+                };
+                // Reversed input order must produce the same ids and geometry,
+                // even from a non-normal starting state (D2).
+                if matches!(&cmd, Command::AddWires(_)) {
+                    let mut reversed = snapshot(&doc);
+                    reversed.apply(Command::AddWires(wires.into_iter().rev().collect())).unwrap();
+                    doc.apply(cmd).unwrap();
+                    prop_assert!(doc.content_eq(&reversed));
+                } else {
+                    doc.apply(cmd).unwrap();
+                }
+                assert_inv10(&doc);
+                let after = snapshot(&doc);
+                if !doc.content_eq(&before) {
+                    doc.undo().unwrap();
+                    prop_assert!(doc.content_eq(&before));
+                    doc.redo().unwrap();
+                    prop_assert!(doc.content_eq(&after));
+                }
+                assert_unrelated_add_preserves(&mut doc);
+            }
+            while doc.undo().is_some() {}
+            prop_assert!(doc.content_eq(&initial));
         }
     }
 }

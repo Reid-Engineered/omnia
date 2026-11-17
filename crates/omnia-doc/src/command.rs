@@ -175,17 +175,12 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
             }
             // T6.1 (INV2): split and merge into normal form inside apply, with
             // index and connectivity updated by the raw wire edits below.
-            let existing: Vec<(WireId, Wire)> = doc.wires().map(|(id, &wire)| (id, wire)).collect();
-            let mut pins: Vec<Pt> = Vec::new();
-            for (id, _) in doc.parts() {
-                pins.extend_from_slice(doc.pins(id).expect("live part has pins"));
-            }
-            let labels: Vec<Pt> = doc.labels().map(|(_, label)| label.at).collect();
-            let plan = crate::route::plan_add_wires(&existing, &pins, &labels, &wires);
+            let plan = crate::route::plan_add_wires(doc, &wires);
             if plan.remove.is_empty() && plan.insert.is_empty() {
                 return Ok(UndoOp::Batch(Vec::new()));
             }
-            let kept: Vec<WireId> = plan.insert.iter().filter_map(|(keep, _)| *keep).collect();
+            let kept: rustc_hash::FxHashSet<WireId> =
+                plan.insert.iter().filter_map(|(keep, _)| *keep).collect();
             let mut removed: Vec<(WireId, Wire)> = Vec::with_capacity(plan.remove.len());
             for (id, _) in &plan.remove {
                 let (wire, bounds) = doc.remove_wire_raw(*id).expect("planned wire must exist");
