@@ -174,7 +174,7 @@ foreign wire (WD4).
   Each is found once, even when both of its ends are boundary points (WINV8).
 - Wires in `S` are moved by `T` like any other selected item and are not re-planned.
 
-### WD3 Wires follow moved parts. GATED on HW1 (Q6 answered yes)
+### WD3 Wires follow moved parts. DECIDED (HW1, 2026-11-16: Q6/WQ1 answered yes)
 
 For each affected run, in a fixed order that does not depend on the order of `items`:
 
@@ -277,7 +277,7 @@ label is never merged away.
   then removed and the merge rule applies.
 - One `Command::DragSegment`, one undo step. Undo restores the original wires and ids.
 
-### WD8 Rubber-band selection. DEFAULT (WQ3)
+### WD8 Rubber-band selection. DECIDED (WQ3 answered 2026-11-16: Intersecting)
 
 - The box is normalised: drag direction never changes the result (M14).
 - Two modes, a preference: **Enclosed** selects items wholly inside the box; **Intersecting**
@@ -301,7 +301,7 @@ label is never merged away.
 - A label on a moved part's pin moves with the pin.
 - Label position locking is out of scope.
 
-### WD10 Deleting a part's wires. DEFAULT (WQ4)
+### WD10 Deleting a part's wires. DECIDED (WQ4 answered 2026-11-16: No)
 
 - Preference `delete_wires_with_part`. When on, deleting a part also deletes every run that
   starts at one of its pins, up to that run's far anchor. Runs beyond a junction stay.

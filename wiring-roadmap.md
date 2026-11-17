@@ -182,7 +182,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 
 ## Milestone W2: wires follow moved parts
 
-Blocked until HW1 answers WQ1 "yes".
+HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 
 ### W2.1 The follow planner · todo
 - Lane: doc · Depends: W1.1, W1.2, W1.5, T5.1, HW1 · Read: WD2, WD3, WINV6, WINV8
