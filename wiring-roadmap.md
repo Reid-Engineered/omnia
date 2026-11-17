@@ -658,8 +658,9 @@ exempting them from `WD4` pin/end/body checks. Every changed segment is validate
 in walk order from `a`'s side to `b`'s side via `check_new_wires` (ignoring the
 replaced segments), locally normalised (`WINV3`, including vacated corner points),
 and applied through the shared `apply_wire_plan` / `UndoOp::ReplaceWires` inverse
-machinery so undo/redo restores exact `WireId`s (`WINV4`, `INV4`) and a zero or
-missing-wire drag is a history-preserving no-op. Unit tests cover `TC-seg-01` to
+machinery so undo/redo restores exact `WireId`s (`WINV4`, `INV4`). A zero-offset
+drag is a history-preserving no-op; the planner returns an empty plan for a missing
+wire, while the command rejects it with `MissingItem`. Unit tests cover `TC-seg-01` to
 `TC-seg-04`, T-junction jogs/refusals, labelled corners, and no-op history
 preservation; a 128-case `proptest` checks `plan_segment_drag` vs
 `Command::DragSegment`, refusal atomicity, unchanged pin net partition, normal form
@@ -668,3 +669,14 @@ All five standard checks pass locally on Windows (`cargo fmt --all --check`,
 workspace clippy, `scene-counts,readback` bench clippy, `cargo test --workspace`,
 and `cargo deny check`). Nothing measured; `W3.3` can call `plan_segment_drag`
 directly for overlay previews.
+
+2026-11-17 W3.2 independent review fixes - labelled-corner shrink now retains the
+shortened far leg under its existing id and adds a separate jog to the old label,
+instead of dropping the far leg (WD7/WD9). Both pieces pass WD4 validation. Tests
+cover a real far pin, both stored endpoint orders, both axes, stretch/shrink and
+exact undo/redo (WINV4). Reject off-lattice offsets before zero-length clamping,
+with an atomic-refusal regression. Combined the clamp conditions to fix
+if_same_then_else without suppressing the lint. Corrected planner versus command
+missing-wire behavior above. The earlier five-check claim was contradicted by
+independent review at the original head; this entry records the correction.
+Review-fix validation on Windows: all five standard checks passed; after preserving the original b-side validation traversal direction, both clippy commands and all W3.2/TC-seg scenarios passed again. No measurements or budget verdicts.

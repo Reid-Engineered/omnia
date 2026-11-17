@@ -696,6 +696,10 @@ pub(crate) fn plan_segment_drag_inner(
     if offset == 0 {
         return Ok(None);
     }
+    // Validate the requested displacement before zero-length clamping can change it.
+    if offset % crate::PIN_LATTICE_NM != 0 {
+        return Err(Blocker::Sheet);
+    }
     let horizontal = seg.a.y == seg.b.y;
     let shift = |p: Pt, delta: i32| -> Result<Pt, Blocker> {
         let (x, y) = if horizontal {
@@ -768,9 +772,9 @@ pub(crate) fn plan_segment_drag_inner(
     for end in [end_a, end_b] {
         if let EndKind::Corner { far, .. } = end {
             let d = signed_dist(seg.a, far);
-            if effective > 0 && d > 0 && effective > d {
-                effective = d;
-            } else if effective < 0 && d < 0 && effective < d {
+            if (effective > 0 && d > 0 && effective > d)
+                || (effective < 0 && d < 0 && effective < d)
+            {
                 effective = d;
             }
         }
@@ -810,43 +814,22 @@ pub(crate) fn plan_segment_drag_inner(
             far,
             has_label,
         } => {
-            if has_label {
-                // Keep the labelled point connected along the perpendicular leg (WD9).
-                let anchor = if contains(Wire { a: far, b: new_a }, seg.a) {
-                    far
+            own_ends.push(far);
+            if far != new_a {
+                check_wires.push(Wire { a: far, b: new_a });
+                let preserved = if w.a == seg.a {
+                    Wire { a: new_a, b: far }
                 } else {
-                    seg.a
+                    Wire { a: far, b: new_a }
                 };
-                own_ends.push(anchor);
-                if anchor != new_a {
-                    check_wires.push(Wire {
-                        a: anchor,
-                        b: new_a,
-                    });
-                    let preserved = if w.a == seg.a {
-                        Wire {
-                            a: new_a,
-                            b: anchor,
-                        }
-                    } else {
-                        Wire {
-                            a: anchor,
-                            b: new_a,
-                        }
-                    };
-                    placed_wires.push((Some(id), preserved));
-                }
-            } else {
-                own_ends.push(far);
-                if far != new_a {
-                    check_wires.push(Wire { a: far, b: new_a });
-                    let preserved = if w.a == seg.a {
-                        Wire { a: new_a, b: far }
-                    } else {
-                        Wire { a: far, b: new_a }
-                    };
-                    placed_wires.push((Some(id), preserved));
-                }
+                placed_wires.push((Some(id), preserved));
+            }
+            if has_label && !contains(Wire { a: far, b: new_a }, seg.a) {
+                // Shrinking leaves the old label beyond the shortened neighbour.
+                // Keep both the far leg and a new jog back to that label (WD7/WD9).
+                let jog = Wire { a: new_a, b: seg.a };
+                check_wires.push(jog);
+                placed_wires.push((None, jog));
             }
         }
     }
@@ -869,42 +852,22 @@ pub(crate) fn plan_segment_drag_inner(
             far,
             has_label,
         } => {
-            if has_label {
-                let anchor = if contains(Wire { a: far, b: new_b }, seg.b) {
-                    far
+            own_ends.push(far);
+            if far != new_b {
+                check_wires.push(Wire { a: new_b, b: far });
+                let preserved = if w.a == seg.b {
+                    Wire { a: new_b, b: far }
                 } else {
-                    seg.b
+                    Wire { a: far, b: new_b }
                 };
-                own_ends.push(anchor);
-                if anchor != new_b {
-                    check_wires.push(Wire {
-                        a: new_b,
-                        b: anchor,
-                    });
-                    let preserved = if w.a == seg.b {
-                        Wire {
-                            a: new_b,
-                            b: anchor,
-                        }
-                    } else {
-                        Wire {
-                            a: anchor,
-                            b: new_b,
-                        }
-                    };
-                    placed_wires.push((Some(id), preserved));
-                }
-            } else {
-                own_ends.push(far);
-                if far != new_b {
-                    check_wires.push(Wire { a: new_b, b: far });
-                    let preserved = if w.a == seg.b {
-                        Wire { a: new_b, b: far }
-                    } else {
-                        Wire { a: far, b: new_b }
-                    };
-                    placed_wires.push((Some(id), preserved));
-                }
+                placed_wires.push((Some(id), preserved));
+            }
+            if has_label && !contains(Wire { a: far, b: new_b }, seg.b) {
+                // Shrinking leaves the old label beyond the shortened neighbour.
+                // Keep both the far leg and a new jog back to that label (WD7/WD9).
+                let jog = Wire { a: new_b, b: seg.b };
+                check_wires.push(jog);
+                placed_wires.push((None, jog));
             }
         }
     }
@@ -2827,11 +2790,12 @@ mod tests {
 
         // Labelled corner keeps the label at (4, 0) connected on both stretch (-2) and shrink (+2).
         for step in [-2, 2] {
-            let mut labelled = with_features(vec![], vec![lp(4, 0)]);
+            let mut labelled = with_features(vec![lp(4, 6)], vec![lp(4, 0)]);
             labelled
                 .apply(Command::AddWires(vec![lw(0, 0, 4, 0), lw(4, 0, 4, 6)]))
                 .unwrap();
             let horiz = labelled.wires().find(|(_, w)| w.a.y == w.b.y).unwrap().0;
+            let before = snapshot(&labelled);
             labelled
                 .apply(Command::DragSegment {
                     wire: horiz,
@@ -2846,7 +2810,96 @@ mod tests {
                 labelled.net_of(horiz),
                 "label at corner stays connected"
             );
+            assert_eq!(
+                labelled.net_at(lp(4, 6)),
+                labelled.net_of(horiz),
+                "WD7: far pin stays connected through the neighbour"
+            );
+            assert!(
+                labelled
+                    .wires()
+                    .any(|(_, w)| w.a == lp(4, 6) || w.b == lp(4, 6))
+            );
+            let after = snapshot(&labelled);
+            labelled.undo().unwrap();
+            assert!(labelled.content_eq(&before));
+            labelled.redo().unwrap();
+            assert!(labelled.content_eq(&after));
         }
+    }
+
+    #[test]
+    fn w32_labelled_shrink_both_endpoint_orders_and_axes() {
+        for vertical in [false, true] {
+            for reversed in [false, true] {
+                let transform = |p: Pt| if vertical { Pt { x: p.y, y: p.x } } else { p };
+                let old = transform(lp(4, 0));
+                let far = transform(lp(4, 6));
+                let mut doc = with_features(vec![far], vec![old]);
+                let start = transform(lp(0, 0));
+                doc.apply(Command::AddWires(vec![
+                    Wire { a: start, b: old },
+                    Wire { a: old, b: far },
+                ]))
+                .unwrap();
+                let id = doc
+                    .wires()
+                    .find(|(_, w)| w.a == start && w.b == old)
+                    .unwrap()
+                    .0;
+                if reversed {
+                    // Same geometry, opposite stored endpoint orientation.
+                    doc.remove_wire_raw(id).unwrap();
+                    doc.restore_wire_raw(id, Wire { a: old, b: start }).unwrap();
+                }
+                let before = snapshot(&doc);
+                doc.apply(Command::DragSegment {
+                    wire: id,
+                    offset: 2 * crate::PIN_LATTICE_NM,
+                })
+                .unwrap();
+                doc.assert_normal_form();
+                assert_inv10(&doc);
+                assert_eq!(
+                    doc.net_at(far),
+                    doc.net_of(id),
+                    "WD7: far anchor remains attached"
+                );
+                assert_eq!(
+                    doc.net_at(old),
+                    doc.net_of(id),
+                    "WD9: label remains attached"
+                );
+                let after = snapshot(&doc);
+                doc.undo().unwrap();
+                assert!(doc.content_eq(&before));
+                doc.redo().unwrap();
+                assert!(doc.content_eq(&after));
+            }
+        }
+    }
+
+    #[test]
+    fn w32_off_lattice_offset_is_refused_before_zero_clamp() {
+        let mut doc = Doc::new();
+        doc.apply(Command::AddWires(vec![lw(0, 0, 4, 0), lw(4, 0, 4, 2)]))
+            .unwrap();
+        let wire = doc.wires().find(|(_, w)| w.a.y == w.b.y).unwrap().0;
+        let before = snapshot(&doc);
+        let offset = 3 * crate::PIN_LATTICE_NM + 1;
+        let mut plan = SegmentDragPlan::default();
+        assert_eq!(
+            plan_segment_drag(&doc, wire, offset, &mut plan),
+            Err(Blocker::Sheet)
+        );
+        assert!(plan.remove.is_empty() && plan.add.is_empty());
+        assert_eq!(
+            doc.apply(Command::DragSegment { wire, offset }),
+            Err(crate::CommandError::Segment(Blocker::Sheet))
+        );
+        assert!(doc.content_eq(&before));
+        doc.assert_normal_form();
+        assert_inv10(&doc);
     }
 
     proptest! {
