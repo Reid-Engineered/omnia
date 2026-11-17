@@ -152,7 +152,7 @@ the trace does not show count. The limit stays zero counted misses in every run.
 journal is recorded whether or not tracing is on; the bench reads it once, after the last
 measured frame. (d) sees what the journal records; the platform event loop's own dispatch
 outside a foreground turn, and folded sub-100 µs polls that ended in true idle, are not
-recorded. Frame p99 and B10 in a gate run are judged with the trace on. The criterion
+recorded; the owner accepted this limit on 2026-11-17. Frame p99 and B10 in a gate run are judged with the trace on. The criterion
 is implemented in `docs/measurements/T1.6/attribute.py`, with its tests.
 
 ## 3. Constants
