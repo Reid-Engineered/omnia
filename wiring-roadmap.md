@@ -96,7 +96,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 
 ## Milestone W0: references and decisions
 
-### W0.1 Check the reference · todo
+### W0.1 Check the reference · done
 - Lane: bench · Depends: none · Read: wiring-plan.md section 1 (implementation rule), WQ8
 - Do: check that the wiring plan contains the information needed to implement its rules.
 - Done when: the plan is self-contained and the implementation rule is recorded.
@@ -122,7 +122,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 ## Milestone W1: document-side foundations
 
 ### W1.1 Wiring preferences · todo
-- Lane: doc · Depends: T2.1 · Read: WD12, WK2, WK10
+- Lane: doc · Depends: T2.1 · Read: WD3, WD12, WK2, WK3, WK10
 - Owns: `crates/schematic-doc/src/prefs.rs`
 - Do: `SelectMode`, `WiringPrefs` with the WK10 defaults, `FollowPolicy`, and the function
   that turns preferences plus the modifier state into a policy. A threshold below 1 is
@@ -132,7 +132,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
   modifier up/down (assert all 12 rows).
 
 ### W1.2 Runs · todo
-- Lane: doc · Depends: T2.1 · Read: WD1, WD2, D2
+- Lane: doc · Depends: T2.1 · Read: WD1, WD2, WD3, D2
 - Owns: `crates/schematic-doc/src/run.rs`, and a label-by-point lookup in `points.rs` or `doc.rs`
 - Do: `Anchor`, `Run`, `Doc::run_through`, `Doc::runs_at`, `Doc::connected_pins`, and
   boundary-point discovery for a set of selected items. A label's point must be findable
@@ -378,3 +378,24 @@ Append one entry per finished or blocked task. Newest last.
 2026-11-16 plan — wiring-plan.md and wiring-roadmap.md record the design decisions and
 scenarios for wiring. Nothing measured; WB1 to WB3 and WB7 are chosen figures. The canvas
 files are not yet changed (W0.3). Milestone W2 waits on HW1.
+
+2026-11-16 W0.1 done — every WD, WK, WINV, WB, TC, WQ and M id is defined exactly once in
+wiring-plan.md and every reference in either wiring file resolves, including the references
+into canvas-plan.md and canvas-roadmap.md (B, K, D, INV, Q, T, HW ids); no dangling or
+ambiguous references found. The Read lists of W1.1 to W4.5 were checked against what each
+task must build and test: types, signatures and constants are in wiring-plan.md sections 3,
+6, 7, 8 and 10, and the expected TC results are in section 8. Two Read lists were missing
+the section that defines what the task implements, fixed here: W1.1 now also reads WD3 and
+WK3 (the follow-policy rule and the modifier its 12-row truth table asserts) and W1.2 now
+also reads WD3 (where `connected_pins` is defined). A note near the top of wiring-plan.md
+now states that `schematic-doc`/`schematic-canvas`/`schematic-bench` mean this repo's
+`omnia-doc`/`omnia-canvas`/`omnia-bench` crates. The implementation rule (wiring-plan.md
+section 1, WQ8) is recorded, so the plan is self-contained. Open items for the owner, not
+decided here: (a) wiring-plan.md section 1 says commands, connectivity, the spatial index
+and routing do not exist in the doc crate, but canvas-roadmap.md marks T2.2 and T4.1 done
+and T5.1 needs-human, and crates/omnia-doc/src already holds command.rs, undo.rs,
+connectivity.rs, index.rs and snap.rs — the sentence needs rewording, wording left to the
+owner; (b) W3.2 names a pure `plan_segment_drag` for the tool preview but section 10 of the
+plan sketches no signature for it; (c) W1.5 says to return the blocker of the best-scoring
+invalid candidate, but WD4 defines the score comparison only for valid candidates — applying
+the same order to invalid ones is assumed, not stated. Nothing measured; docs only.

@@ -26,6 +26,10 @@ map exist (T1.1, T2.1); commands, connectivity, the spatial index and routing do
 | `TC` | Scenario with its expected result | 8 |
 | `WQ` | Open question for the owner, each with a default | 12 |
 
+Crate names: this plan writes `schematic-doc`, `schematic-canvas` and `schematic-bench`. In
+this repository those crates are `omnia-doc`, `omnia-canvas` and `omnia-bench` (see `crates/`);
+read every `schematic-*` name as the matching `omnia-*` crate.
+
 Status words are the canvas plan's: **DECIDED**, **DEFAULT** (the owner has not answered; build
 the stated default and do not ask again), and one more:
 
