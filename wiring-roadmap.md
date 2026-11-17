@@ -145,7 +145,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
   (WINV8); a criterion bench records `runs_at` on `10k` once T2.4's generator exists (log
   "not measured" until then).
 
-### W1.3 Snap rules · todo
+### W1.3 Snap rules · done
 - Lane: doc · Depends: T4.2 · Read: WD5, WK4, WINV7
 - Owns: `crates/schematic-doc/src/snap.rs` (after T4.2)
 - Do: bring `snap` to WD5: the class ranking, inclusive radius, `i64` distance ties then
@@ -378,3 +378,19 @@ Append one entry per finished or blocked task. Newest last.
 2026-11-16 plan — wiring-plan.md and wiring-roadmap.md record the design decisions and
 scenarios for wiring. Nothing measured; WB1 to WB3 and WB7 are chosen figures. The canvas
 files are not yet changed (W0.3). Milestone W2 waits on HW1.
+
+2026-11-16 W1.3 done — brought `crates/omnia-doc/src/snap.rs` to WD5 (`Pin` > `WireEnd`/`Junction`
+> `WireBody` > `Grid`, inclusive `i64` Euclidean radius, `(distance_sq, min_id, coords)`
+tie-breaking, `WireBody` along-segment grid snapping, and `Snap::Junction { at }`), kept T4.2
+tests passing unchanged, added `TC-snap-01`..`TC-snap-08` and `WINV7` (including reverse-insertion
+sheet equivalence), and added `bench hit --snap`. Non-reference Windows figure (Windows x86_64,
+Intel Core i7-14650HX, 31.6 GB RAM): `bench hit --sheet 10k --snap` p50 0.0003 ms, p99 0.0008 ms,
+max 0.0516 ms (WB5 gate < 0.2 ms remains for the reference machine); `dense`: p50 0.0005 ms, p99
+0.0013 ms. Kept `Snap::Pin::pin: usize` (matching `Doc` storage and `canvas-plan.md` section 9;
+updated `wiring-plan.md` section 10). `WireEnd` and `Junction` share tier 1 ranked by `(distance_sq,
+min_wire_id, x, y)`. `WireBody` moves along the segment axis to the nearest `grid` multiple still on
+the segment (returning no body target if none lies on it), preserving half-grid (`PIN_LATTICE_NM`)
+wires. Standard checks (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D
+warnings`, `cargo test --workspace`, `cargo deny check`) all passed.
+
