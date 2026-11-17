@@ -200,7 +200,7 @@ without being drawn.
 - Done when: the UINV1 test passes and fails when a literal is planted; `xtask tokens` twice gives
   no diff; `omnia-app --frames 60` exits 0.
 
-### U1.2 Icons and assets · todo
+### U1.2 Icons and assets · done
 - Lane: shell, assets · Depends: U1.1 · Read: UD17, UG14, `THIRD_PARTY.md`
 - Owns: `crates/omnia-app/src/assets.rs`, `widgets/icon.rs`, `vendor/tabler-icons/outline/` (the
   UD17 additions), `THIRD_PARTY.md`
@@ -580,3 +580,22 @@ regenerated with `cargo xtask tokens` (twice, no diff). UINV1 source test over
 machine (certifies no reference budget). Deviations: `crates/omnia-app/tests/fonts.rs` and
 `crates/omnia-theme/tests/tokens.rs` updated only to follow the removed constants and the
 new token count. `System` resolves to Graphite until U3.2 follows window appearance.
+
+2026-11-17 U1.2 done — Vendored the 13 UD17 Tabler Icons v3.19.0 outline SVGs into
+`vendor/tabler-icons/outline/` and listed the additions in `THIRD_PARTY.md`. Implemented
+`Assets` (`gpui::AssetSource` over `include_bytes!` for all 61 vendored icons, with
+`icon_asset_path` and `icon_bytes`) in `crates/omnia-app/src/assets.rs`, and `Icon`
+(`RenderOnce` over `svg()` at a logical size tinted with `omnia_theme::Rgba` via
+`theme::color`) in `crates/omnia-app/src/widgets/icon.rs`. Added `omnia_app::application()`
+calling `.with_assets(assets::Assets)` in `crates/omnia-app/src/lib.rs` and wired
+`crates/omnia-app/src/main.rs` to use it. Verified all 61 mockup and registry icons via
+`SvgRenderer` rasterization, `HeadlessAppContext` element drawing, and real hidden-window
+`render_to_image` (`crates/omnia-app/tests/icons.rs`, skipping window readback when
+`OMNIA_HEADLESS_CI` is set). On a Windows development machine (certifies no reference budget):
+`cargo fmt --all --check`, `cargo deny check`, `cargo test -p omnia-app` (12 unit, `fonts`,
+`icons` headless + `render_to_image`, 6 `navigation`), `OMNIA_HEADLESS_CI=1 cargo test -p
+omnia-app --test icons`, and `cargo run -p omnia-app -- --frames 60` all pass. `cargo clippy`
+matrix and full `cargo test --workspace` left to CI because C: dropped to ~0.6 GB free.
+Deviations: added `crates/omnia-app/src/widgets/mod.rs`, updated `crates/omnia-app/src/main.rs`
+for entry-point hookup, and added `crates/omnia-app/tests/icons.rs` (`[[test]]` in `Cargo.toml`)
+for real-window readback mirroring `tests/fonts.rs`.

@@ -38,7 +38,7 @@ fn main() -> ExitCode {
             std::process::exit(3);
         });
     }
-    gpui_platform::application().run(move |cx: &mut App| {
+    omnia_app::application().run(move |cx: &mut App| {
         omnia_app::open_workspace(cx, frames_remaining).expect("open Omnia workspace window");
     });
     ExitCode::SUCCESS
