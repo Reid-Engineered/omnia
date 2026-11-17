@@ -101,7 +101,7 @@ UI framework dependency and can run ahead of the `canvas` lane.
 - Do: check that the wiring plan contains the information needed to implement its rules.
 - Done when: the plan is self-contained and the implementation rule is recorded.
 
-### W0.2 Owner decisions · todo → HW1
+### W0.2 Owner decisions · done → HW1
 - Lane: any · Depends: W0.1 · Read: wiring-plan.md sections 6 and 12
 - Owns: wiring-plan.md section 12
 - Do: set this task to `needs-human`. The owner answers WQ1 to WQ8. Record each answer in
@@ -399,3 +399,12 @@ owner; (b) W3.2 names a pure `plan_segment_drag` for the tool preview but sectio
 plan sketches no signature for it; (c) W1.5 says to return the blocker of the best-scoring
 invalid candidate, but WD4 defines the score comparison only for valid candidates — applying
 the same order to invalid ones is assumed, not stated. Nothing measured; docs only.
+
+2026-11-16 W0.2 done — HW1: the owner answered WQ1 yes (wires follow, milestone W2
+unblocked), WQ3 Intersecting (Enclosed as the option), WQ4 no, WQ7 refuse, and kept the
+defaults for WQ2 (Alt), WQ5 (no; revisit after W2.3), WQ6 (no) and WQ8 (no). Recorded in
+wiring-plan.md section 12. WK10 now states the answered defaults; `WiringPrefs::default()`
+in crates/omnia-doc/src/prefs.rs follows it. W0.1 open item (c) resolved in WD4: with no
+valid candidate, the same comparison ranks the invalid ones and the refusal reports the
+lowest-scoring one's first failed rule, walking from `a`. Items (a) and (b) go to W0.3 and
+W3.2. Canvas Q6, section 9 and the canvas roadmap are W0.3's.

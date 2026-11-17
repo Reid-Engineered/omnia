@@ -93,7 +93,7 @@ small share of a 16.7 ms frame because the overlay still has to paint the result
 | WK7 | Preview cap (chosen) | The follow preview is drawn live for up to 256 affected runs. Above that the preview shows ghosts only and the plan is computed at commit. |
 | WK8 | Router trigger (chosen) | WB7's 2%. |
 | WK9 | Router costs, if built (chosen; see M11) | Step 2, bend 30, crossing a foreign wire 20. |
-| WK10 | Preference defaults | `follow_on_move` true once Q6 is answered yes; `follow_pin_threshold` 10; `select_mode` Enclosed (WQ3); `delete_wires_with_part` false (WQ4). |
+| WK10 | Preference defaults | `follow_on_move` true (WQ1 yes); `follow_pin_threshold` 10; `select_mode` Intersecting (WQ3); `delete_wires_with_part` false (WQ4). |
 
 ## 4. Design considerations
 
@@ -230,6 +230,9 @@ Crossing a foreign wire's interior at one point is valid: by INV2 it is not a co
 Among valid candidates the lowest score wins, comparing in order: segments passing through
 the interior of any part's bounds (fewer is better); bends; crossings of foreign wires;
 total length; candidate number. The last term makes the choice deterministic (WINV6).
+When no candidate is valid, the same comparison ranks the invalid candidates, and the
+refusal reports the blocker of the lowest-scoring one: the first rule above that fails,
+walking its segments from `a` (clarified at W0.2, 2026-11-16).
 
 The result is normalised by T6.1's merge rule, with one addition: a point that carries a
 label is never merged away.
@@ -522,20 +525,19 @@ No new dependency. `smallvec` is already in canvas plan section 10.
 
 ## 12. Open questions
 
-Each has a default. Build to the default; the owner's answer replaces it here. WQ1 is the
-exception: it has no buildable default, because the canvas plan's Q6 default is "No" and
-T6.3 is blocked on it.
+Each had a default. The owner answered all eight at HW1 on 2026-11-16 (task W0.2); the
+answer column below is binding. WQ5 stays open for review after W2.3, as recommended.
 
-| ID | Question | Default until answered | Recommended |
+| ID | Question | Answer | Recommended |
 | --- | --- | --- | --- |
-| WQ1 | Canvas Q6: do attached wires follow a moved part, by the WD3 rules? | No. Milestone W2 stays blocked (HW1). | Yes |
-| WQ2 | Which modifier inverts follow and detach? | Alt (WK3) | Alt |
-| WQ3 | Rubber-band default: Enclosed (T4.3 as written) or Intersecting (the alternative in M14)? | Enclosed | Intersecting, with Enclosed as the option |
-| WQ4 | Does deleting a part delete its wires by default? | No (T5.3 as written) | Owner's preference; WD10 supports either choice (M16) |
-| WQ5 | Should follow keep the old run's shape when only its last segment needs to change length? | No: re-route the whole run (M1) | Decide after using W2.3; it is a candidate 0 in WD4 if wanted |
-| WQ6 | When a moved pin touched another pin directly, should follow insert a wire to keep them connected? | No | No |
-| WQ7 | When a run must follow and has no valid route: refuse the move, or detach that run? | Refuse | Refuse, and revisit with WB7's number |
-| WQ8 | Should this documentation change include implementation or other supporting artifacts? | No. Include only the two wiring Markdown files. | No |
+| WQ1 | Canvas Q6: do attached wires follow a moved part, by the WD3 rules? | **Answered 2026-11-16: Yes.** Milestone W2 is unblocked. | Yes |
+| WQ2 | Which modifier inverts follow and detach? | **Answered 2026-11-16: Alt** (default kept, WK3). | Alt |
+| WQ3 | Rubber-band default: Enclosed (T4.3 as written) or Intersecting (the alternative in M14)? | **Answered 2026-11-16: Intersecting**, with Enclosed as the option. | Intersecting, with Enclosed as the option |
+| WQ4 | Does deleting a part delete its wires by default? | **Answered 2026-11-16: No** (T5.3 as written). | Owner's preference; WD10 supports either choice (M16) |
+| WQ5 | Should follow keep the old run's shape when only its last segment needs to change length? | **Answered 2026-11-16: No for now** (default kept: re-route the whole run, M1). Revisit after W2.3. | Decide after using W2.3; it is a candidate 0 in WD4 if wanted |
+| WQ6 | When a moved pin touched another pin directly, should follow insert a wire to keep them connected? | **Answered 2026-11-16: No** (default kept). | No |
+| WQ7 | When a run must follow and has no valid route: refuse the move, or detach that run? | **Answered 2026-11-16: Refuse.** Revisit with WB7's number (W4.3). | Refuse, and revisit with WB7's number |
+| WQ8 | Should this documentation change include implementation or other supporting artifacts? | **Answered 2026-11-16: No** (default kept). | No |
 
 ## 13. Changes to the canvas plan and roadmap
 
