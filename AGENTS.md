@@ -23,20 +23,16 @@ Those are this repository's `omnia-doc`, `omnia-canvas` and `omnia-bench`.
 
 ## Hard rules
 
-1. **Clean provenance.** Nothing decompiled or reverse-engineered goes into this repository:
-   no decompiled code, decompiler output, binary or library names, function inventories, or
-   constants and rules derived from them. Hiding the source while keeping the derived value
-   does not make it acceptable. If you are unsure where something came from, stop and ask.
-2. **No other companies.** Do not name other companies or their products beyond a brief nod
+1. **No other companies.** Do not name other companies or their products beyond a brief nod
    to a feature. Scan every plan, doc and pull request for this before you commit it.
-3. **Never make a check pass by weakening it.** No loosened thresholds, tolerances, budgets,
+2. **Never make a check pass by weakening it.** No loosened thresholds, tolerances, budgets,
    property-test ranges, lints or `#[allow]` added to get green. If you cannot fix the
    cause, set the task to `blocked (reason)` and log what you measured.
-4. **Only the reference machine certifies a budget.** That is the Orion laptop (Linux,
+3. **Only the reference machine certifies a budget.** That is the Orion laptop (Linux,
    Wayland, wgpu/Vulkan), run under canvas plan section 2.1. Numbers from any other machine
    are recorded and labelled, and never mark a budget met.
-5. **Stop at human checkpoints** (`H*`, `HW*`). Do not work past one or answer it yourself.
-6. **Open questions have defaults.** Build to the default in the plan's open-questions
+4. **Stop at human checkpoints** (`H*`, `HW*`). Do not work past one or answer it yourself.
+5. **Open questions have defaults.** Build to the default in the plan's open-questions
    section until the owner's dated answer replaces it. Do not pick a different answer.
 
 ## How a task runs
