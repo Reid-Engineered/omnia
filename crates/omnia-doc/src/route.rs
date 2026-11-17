@@ -1580,6 +1580,7 @@ mod tests {
         let id = moved.wires().find(|(_, wire)| wire.a.x == 5).unwrap().0;
         moved
             .apply(Command::Move {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: vec![ItemId::Wire(id)],
                 delta: Pt { x: 0, y: -5 },
             })
@@ -1953,7 +1954,7 @@ mod tests {
                 let before = snapshot(&doc);
                 let live = live_wires(&doc);
                 let cmd = match (kind, live.is_empty()) {
-                    (1, false) => Command::Move { items: vec![ItemId::Wire(live[pick % live.len()].0)], delta },
+                    (1, false) => Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(), items: vec![ItemId::Wire(live[pick % live.len()].0)], delta },
                     (2, false) => Command::Delete { items: vec![ItemId::Wire(live[pick % live.len()].0)], with_wires: false },
                     _ => Command::AddWires(wires.clone()),
                 };
@@ -1965,7 +1966,18 @@ mod tests {
                     doc.apply(cmd).unwrap();
                     prop_assert!(doc.content_eq(&reversed));
                 } else {
-                    doc.apply(cmd).unwrap();
+                    // W2.2 refuses selected-wire interior contacts before editing.
+                    // Keep the same random range; prove refusal atomicity too.
+                    let mut bytes = Vec::new();
+                    doc.save(&mut bytes).unwrap();
+                    match doc.apply(cmd) {
+                        Err(crate::CommandError::Follow(_)) => {
+                            let mut refused = Vec::new();
+                            doc.save(&mut refused).unwrap();
+                            prop_assert_eq!(refused, bytes);
+                        }
+                        result => { result.unwrap(); }
+                    }
                 }
                 assert_inv10(&doc);
                 let after = snapshot(&doc);

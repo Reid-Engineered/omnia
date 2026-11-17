@@ -5,9 +5,10 @@ use std::{fmt, sync::Arc};
 use smallvec::SmallVec;
 
 use crate::{
-    Doc, GeomError, ItemId, Label, LabelId, Orient, Part, PartId, Pt, Rect, StoreError, Wire,
-    WireId,
+    Doc, FollowError, FollowPlan, GeomError, Isometry, ItemId, Label, LabelId, Orient, Part,
+    PartId, Pt, Rect, StoreError, Wire, WireId,
     points::End,
+    prefs::FollowPolicy,
     route::Blocker,
     undo::{self, UndoOp},
 };
@@ -31,11 +32,13 @@ pub enum Command {
     Move {
         items: Vec<ItemId>,
         delta: Pt,
+        follow: FollowPolicy,
     },
     Reorient {
         items: Vec<ItemId>,
         pivot: Pt,
         by: Orient,
+        follow: FollowPolicy,
     },
     /// WD7: drag one wire segment perpendicular to its axis by `offset` nm.
     DragSegment {
@@ -63,6 +66,7 @@ pub enum CommandError {
     DuplicateItem(ItemId),
     InvalidTextField { item: ItemId, field: TextField },
     Segment(Blocker),
+    Follow(FollowError),
 }
 
 impl fmt::Display for CommandError {
@@ -76,6 +80,7 @@ impl fmt::Display for CommandError {
                 write!(f, "text field {field:?} is invalid for item {item:?}")
             }
             Self::Segment(blocker) => write!(f, "segment drag blocked by {blocker:?}"),
+            Self::Follow(error) => error.fmt(f),
         }
     }
 }
@@ -205,23 +210,22 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
             acc.nets_changed = true;
             Ok(UndoOp::RemoveLabel(id))
         }
-        Command::Move { items, delta } => {
+        Command::Move {
+            items,
+            delta,
+            follow,
+        } => {
             validate_move(doc, &items, delta)?;
-            apply_move_raw(doc, &items, delta, acc);
-            let inv_delta = if items.is_empty() { Pt::ZERO } else { -delta };
-            Ok(UndoOp::Move {
-                items,
-                delta: inv_delta,
-            })
+            apply_isometry(doc, items, Isometry::Translate(delta), follow, acc)
         }
-        Command::Reorient { items, pivot, by } => {
+        Command::Reorient {
+            items,
+            pivot,
+            by,
+            follow,
+        } => {
             validate_reorient(doc, &items, pivot, by)?;
-            apply_reorient_raw(doc, &items, pivot, by, acc);
-            Ok(UndoOp::Reorient {
-                items,
-                pivot,
-                by: by.inverse(),
-            })
+            apply_isometry(doc, items, Isometry::Reorient { pivot, by }, follow, acc)
         }
         Command::DragSegment { wire, offset } => {
             ensure_exists(doc, ItemId::Wire(wire))?;
@@ -328,6 +332,253 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
             })
         }
         Command::Batch(cmds) => apply_batch(doc, cmds, acc),
+    }
+}
+
+/// W2.2: plan against the untouched sheet, then commit geometry and wires as one
+/// history entry. Redo replays the stored geometry; it never plans again (INV4).
+fn apply_isometry(
+    doc: &mut Doc,
+    items: Vec<ItemId>,
+    transform: Isometry,
+    policy: FollowPolicy,
+    acc: &mut ChangeAcc,
+) -> Result<UndoOp, CommandError> {
+    if items.is_empty()
+        || transform == Isometry::Translate(Pt::ZERO)
+        || matches!(
+            transform,
+            Isometry::Reorient {
+                by: Orient::IDENTITY,
+                ..
+            }
+        )
+    {
+        return Ok(UndoOp::Batch(Vec::new()));
+    }
+    let mut plan = FollowPlan::default();
+    crate::plan_follow(doc, &items, transform, policy, &mut plan).map_err(CommandError::Follow)?;
+    validate_moved_wires(doc, &items, transform, &plan)?;
+    // Every fallible operation precedes the first edit (WINV4).
+    for &wire in &plan.add {
+        Doc::validate_wire(wire)?;
+    }
+    let mut vacated = Vec::new();
+    let remove = plan
+        .remove
+        .iter()
+        .map(|&id| {
+            let wire = *doc.wire(id).expect("planned wire exists");
+            vacated.extend([wire.a, wire.b]);
+            (id, wire)
+        })
+        .collect();
+    let mut inverses = vec![apply_wire_plan(
+        doc,
+        crate::route::AddWiresPlan {
+            remove,
+            insert: Vec::new(),
+        },
+        acc,
+    )];
+    for &item in &items {
+        if let ItemId::Wire(id) = item {
+            let wire = doc
+                .wire(id)
+                .expect("selected wires are outside affected runs");
+            vacated.extend([wire.a, wire.b]);
+        }
+    }
+    let movement = match transform {
+        Isometry::Translate(delta) => {
+            apply_move_raw(doc, &items, delta, acc);
+            UndoOp::Move {
+                items: items.clone(),
+                delta: -delta,
+            }
+        }
+        Isometry::Reorient { pivot, by } => {
+            apply_reorient_raw(doc, &items, pivot, by, acc);
+            UndoOp::Reorient {
+                items: items.clone(),
+                pivot,
+                by: by.inverse(),
+            }
+        }
+    };
+    inverses.push(movement);
+    for (id, at) in plan.labels {
+        inverses.push(undo::apply_undo_op(doc, UndoOp::SetLabelAt { id, at }, acc));
+    }
+
+    // TC-move-14: including existing segments in AddWires' local input splits
+    // them at landed pins/ends while retaining their first piece's identity.
+    let mut additions = plan.add;
+    let mut landed = Vec::new();
+    for &item in &items {
+        match item {
+            ItemId::Part(id) => landed.extend_from_slice(doc.pins(id).unwrap()),
+            ItemId::Wire(id) => {
+                let wire = *doc.wire(id).unwrap();
+                landed.extend([wire.a, wire.b]);
+                additions.push(wire);
+            }
+            ItemId::Label(_) => {}
+        }
+    }
+    landed.sort_unstable_by_key(|p| (p.x, p.y));
+    landed.dedup();
+    let mut query = Vec::new();
+    let mut touched = Vec::new();
+    for at in landed {
+        doc.query(Rect { min: at, max: at }, &mut query);
+        for &item in &query {
+            if let ItemId::Wire(id) = item {
+                touched.push(id);
+            }
+        }
+    }
+    touched.sort_unstable_by_key(|id| id.0);
+    touched.dedup();
+    additions.extend(touched.into_iter().map(|id| *doc.wire(id).unwrap()));
+    let normal = crate::route::plan_add_wires(doc, &additions);
+    inverses.push(apply_wire_plan(doc, normal, acc));
+    let merges = crate::route::plan_delete_merges(doc, &mut vacated);
+    inverses.push(apply_wire_plan(doc, merges, acc));
+    // Undo batches run backwards: undo normalisation, labels and the selected
+    // geometry before restoring the old affected runs under their exact ids.
+    Ok(UndoOp::Batch(inverses))
+}
+
+// WD3/WINV1: a foreign pin/end cannot be captured by a selected wire's
+// interior. Its own ends may land on foreign bodies (TC-move-14). Selected
+// geometry shares the same isometry, so its existing contacts are preserved.
+fn validate_moved_wires(
+    doc: &Doc,
+    items: &[ItemId],
+    t: Isometry,
+    plan: &FollowPlan,
+) -> Result<(), CommandError> {
+    let mut wires: Vec<_> = items
+        .iter()
+        .filter_map(|item| match *item {
+            ItemId::Wire(id) => {
+                let w = *doc.wire(id).unwrap();
+                Some((
+                    id,
+                    Wire {
+                        a: t.apply(w.a).unwrap(),
+                        b: t.apply(w.b).unwrap(),
+                    },
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    wires.sort_unstable_by_key(|(id, w)| {
+        (
+            w.a.x.min(w.b.x),
+            w.a.y.min(w.b.y),
+            w.a.x.max(w.b.x),
+            w.a.y.max(w.b.y),
+            id.0,
+        )
+    });
+    let mut scratch = Vec::new();
+    let mut best = None;
+    for (order, (_, wire)) in wires.iter().enumerate() {
+        let bounds = Rect::from_points(wire.a, wire.b).unwrap();
+        let interior = |p| p != wire.a && p != wire.b && bounds.contains(p);
+        doc.query(bounds, &mut scratch);
+        let mut consider = |rule, p, kind, id, pin, blocker| {
+            let key = (
+                rule,
+                order,
+                wire.a.manhattan_distance(p),
+                p.x,
+                p.y,
+                kind,
+                id,
+                pin,
+            );
+            if best.as_ref().is_none_or(|&(old, _)| key < old) {
+                best = Some((
+                    key,
+                    FollowError::NoRoute {
+                        from: wire.a,
+                        to: wire.b,
+                        blocker,
+                    },
+                ));
+            }
+        };
+        // A replaced run's fixed far end still exists in the final geometry.
+        // The router permits its own endpoint on a moved wire body; that does
+        // not authorize the selected wire to capture it (WINV1).
+        for replacement in &plan.add {
+            for p in [replacement.a, replacement.b] {
+                if interior(p) {
+                    let source = plan
+                        .remove
+                        .iter()
+                        .copied()
+                        .filter(|&id| {
+                            let old = doc.wire(id).unwrap();
+                            old.a == p || old.b == p
+                        })
+                        .min_by_key(|id| id.0)
+                        .or_else(|| plan.remove.iter().copied().min_by_key(|id| id.0))
+                        .expect("replacement wires have an original run");
+                    consider(0, p, 1, source.0, 0, Blocker::WireEnd(source));
+                }
+            }
+        }
+        for &item in &scratch {
+            if items.contains(&item) {
+                continue;
+            }
+            match item {
+                ItemId::Part(part) => {
+                    for (pin, &p) in doc.pins(part).unwrap().iter().enumerate() {
+                        if interior(p) {
+                            consider(0, p, 0, part.0, pin, Blocker::Pin { part, pin });
+                        }
+                    }
+                }
+                ItemId::Wire(id) if !plan.remove.contains(&id) => {
+                    let other = *doc.wire(id).unwrap();
+                    for p in [other.a, other.b] {
+                        if interior(p) {
+                            consider(0, p, 1, id.0, 0, Blocker::WireEnd(id));
+                        }
+                    }
+                    let other_bounds = Rect::from_points(other.a, other.b).unwrap();
+                    if (wire.a.y == wire.b.y
+                        && other.a.y == other.b.y
+                        && wire.a.y == other.a.y
+                        && bounds.min.x.max(other_bounds.min.x)
+                            < bounds.max.x.min(other_bounds.max.x))
+                        || (wire.a.x == wire.b.x
+                            && other.a.x == other.b.x
+                            && wire.a.x == other.a.x
+                            && bounds.min.y.max(other_bounds.min.y)
+                                < bounds.max.y.min(other_bounds.max.y))
+                    {
+                        let first = Pt {
+                            x: wire.a.x.clamp(other_bounds.min.x, other_bounds.max.x),
+                            y: wire.a.y.clamp(other_bounds.min.y, other_bounds.max.y),
+                        };
+                        consider(1, first, 1, id.0, 0, Blocker::Overlap(id));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if let Some((_, error)) = best {
+        Err(CommandError::Follow(error))
+    } else {
+        Ok(())
     }
 }
 
@@ -842,6 +1093,470 @@ mod tests {
         Doc::load(doc.save_to_vec_for_test().as_slice()).unwrap()
     }
 
+    fn follow_policy(on: bool) -> FollowPolicy {
+        FollowPolicy::new(on, 10, false).unwrap()
+    }
+
+    fn pin_partition(doc: &Doc) -> Vec<bool> {
+        let pins: Vec<_> = doc
+            .parts()
+            .flat_map(|(id, _)| doc.pins(id).unwrap())
+            .collect();
+        pins.iter()
+            .flat_map(|&&a| {
+                pins.iter()
+                    .map(move |&&b| doc.net_at(a).is_some() && doc.net_at(a) == doc.net_at(b))
+            })
+            .collect()
+    }
+
+    fn follow_roundtrip(doc: &mut Doc, command: Command) -> Result<Change, CommandError> {
+        let before = del_snapshot(doc);
+        let bytes = doc.save_to_vec_for_test();
+        let result = doc.apply(command);
+        match &result {
+            Err(_) => {
+                assert_eq!(doc.save_to_vec_for_test(), bytes); // WINV4 includes revision/reservations.
+            }
+            Ok(change) if change.dirty.is_some() => {
+                assert_eq!(doc.revision(), before.revision() + 1);
+                assert_doc_consistent(doc); // INV10 independent rebuild, point map and index.
+                let after = del_snapshot(doc);
+                doc.undo().unwrap();
+                assert!(doc.content_eq(&before)); // INV4: every live id and stored geometry.
+                assert_doc_consistent(doc);
+                doc.redo().unwrap();
+                assert!(doc.content_eq(&after));
+            }
+            Ok(_) => assert_eq!(doc.save_to_vec_for_test(), bytes),
+        }
+        assert_doc_consistent(doc);
+        result
+    }
+
+    #[test]
+    fn tc_move_14_landed_pin_and_wire_end_split_body_inv4_inv10() {
+        for wire_end in [false, true] {
+            let mut doc = Doc::new();
+            let selected = if wire_end {
+                doc.apply(Command::AddWires(vec![del_wire(
+                    del_point(-2, 0),
+                    del_point(0, 0),
+                )]))
+                .unwrap()
+                .added[0]
+            } else {
+                del_part(&mut doc, del_point(0, 0))
+            };
+            let target = doc
+                .apply(Command::AddWires(vec![del_wire(
+                    del_point(2, -2),
+                    del_point(2, 4),
+                )]))
+                .unwrap()
+                .added[0];
+            follow_roundtrip(
+                &mut doc,
+                Command::Move {
+                    items: vec![selected],
+                    delta: del_point(2, 0),
+                    follow: follow_policy(true),
+                },
+            )
+            .unwrap();
+            doc.assert_normal_form();
+            assert_eq!(doc.net_at(del_point(2, 0)), doc.net_at(del_point(2, -2)));
+            if let ItemId::Wire(id) = target {
+                assert!(doc.wire(id).is_some()); // D2 first piece retains the existing id.
+            }
+        }
+    }
+
+    #[test]
+    fn w22_selected_wire_interior_contacts_refused_crossings_allowed() {
+        for rotate in [false, true] {
+            for kind in 0..4 {
+                let mut doc = Doc::new();
+                let original = if rotate {
+                    del_wire(del_point(2, 2), del_point(2, -2))
+                } else {
+                    del_wire(del_point(-2, -2), del_point(2, -2))
+                };
+                let selected = doc.apply(Command::AddWires(vec![original])).unwrap().added[0];
+                match kind {
+                    0 => {
+                        del_part(&mut doc, del_point(0, 2));
+                    }
+                    1 => {
+                        doc.apply(Command::AddWires(vec![del_wire(
+                            del_point(0, 2),
+                            del_point(0, 3),
+                        )]))
+                        .unwrap();
+                    }
+                    2 => {
+                        doc.apply(Command::AddWires(vec![del_wire(
+                            del_point(-1, 2),
+                            del_point(1, 2),
+                        )]))
+                        .unwrap();
+                    }
+                    _ => {
+                        doc.apply(Command::AddWires(vec![del_wire(
+                            del_point(0, 1),
+                            del_point(0, 3),
+                        )]))
+                        .unwrap();
+                    }
+                }
+                let command = if rotate {
+                    Command::Reorient {
+                        items: vec![selected],
+                        pivot: Pt::ZERO,
+                        by: Orient::ROT_90,
+                        follow: follow_policy(true),
+                    }
+                } else {
+                    Command::Move {
+                        items: vec![selected],
+                        delta: del_point(0, 4),
+                        follow: follow_policy(true),
+                    }
+                };
+                let result = follow_roundtrip(&mut doc, command);
+                if kind < 3 {
+                    assert!(matches!(result, Err(CommandError::Follow(_))));
+                } else {
+                    result.unwrap();
+                    doc.assert_normal_form();
+                    assert_eq!(doc.wires().count(), 2);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn w22_selected_wire_merge_and_mixed_rigid_label_restore_exact_ids() {
+        let mut doc = Doc::new();
+        // Insert the fixed wire first: merging consumes the selected wire's id.
+        doc.apply(Command::AddWires(vec![del_wire(
+            del_point(0, 0),
+            del_point(2, 0),
+        )]))
+        .unwrap();
+        let selected = doc
+            .apply(Command::AddWires(vec![del_wire(
+                del_point(-2, -2),
+                del_point(0, -2),
+            )]))
+            .unwrap()
+            .added[0];
+        follow_roundtrip(
+            &mut doc,
+            Command::Move {
+                items: vec![selected],
+                delta: del_point(0, 2),
+                follow: follow_policy(true),
+            },
+        )
+        .unwrap();
+        let ItemId::Wire(id) = selected else {
+            unreachable!()
+        };
+        assert!(doc.wire(id).is_none());
+        assert_eq!(doc.wires().count(), 1);
+        doc.assert_normal_form();
+
+        let mut doc = Doc::new();
+        let a = del_part(&mut doc, del_point(0, 0));
+        let b = del_part(&mut doc, del_point(4, 0));
+        let wire = doc
+            .apply(Command::AddWires(vec![del_wire(
+                del_point(0, 0),
+                del_point(4, 0),
+            )]))
+            .unwrap()
+            .added[0];
+        let label = doc
+            .apply(Command::AddLabel(Label {
+                at: del_point(0, 0),
+                text: "selected".into(),
+            }))
+            .unwrap()
+            .added[0];
+        follow_roundtrip(
+            &mut doc,
+            Command::Reorient {
+                items: vec![label, b, wire, a],
+                pivot: Pt::ZERO,
+                by: Orient::ROT_90,
+                follow: follow_policy(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.labels().next().unwrap().1.at, Pt::ZERO);
+        doc.assert_normal_form();
+    }
+
+    #[test]
+    fn w22_selected_wire_cannot_capture_replaced_runs_fixed_far_end() {
+        let mut doc = Doc::new();
+        let selected = doc
+            .apply(Command::AddWires(vec![del_wire(
+                del_point(0, 0),
+                del_point(4, 0),
+            )]))
+            .unwrap()
+            .added[0];
+        let part = del_part(&mut doc, del_point(2, 6));
+        doc.apply(Command::AddWires(vec![del_wire(
+            del_point(2, 2),
+            del_point(2, 6),
+        )]))
+        .unwrap();
+        let error = follow_roundtrip(
+            &mut doc,
+            Command::Move {
+                items: vec![selected, part],
+                delta: del_point(0, 2),
+                follow: follow_policy(true),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            CommandError::Follow(FollowError::NoRoute {
+                blocker: Blocker::WireEnd(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn tc_move_13_follow_refusal_preserves_redo_and_batch_allocations() {
+        let mut doc = Doc::new();
+        let moved = del_part(&mut doc, del_point(0, 0));
+        del_part(&mut doc, del_point(-6, 0));
+        doc.apply(Command::AddWires(vec![del_wire(
+            del_point(0, 0),
+            del_point(-6, 0),
+        )]))
+        .unwrap();
+        // No valid first leg from the final point (WD4).
+        for at in [
+            del_point(2, 0),
+            del_point(0, 0),
+            del_point(1, 1),
+            del_point(1, -1),
+        ] {
+            del_part(&mut doc, at);
+        }
+        doc.apply(Command::AddLabel(Label {
+            at: del_point(20, 20),
+            text: "redo".into(),
+        }))
+        .unwrap();
+        doc.undo().unwrap();
+        let command = Command::Move {
+            items: vec![moved],
+            delta: del_point(1, 0),
+            follow: follow_policy(true),
+        };
+        assert!(matches!(
+            follow_roundtrip(&mut doc, command.clone()),
+            Err(CommandError::Follow(_))
+        ));
+        let batch = Command::Batch(vec![
+            Command::AddWires(vec![del_wire(del_point(20, 0), del_point(21, 0))]),
+            command,
+        ]);
+        assert!(matches!(
+            follow_roundtrip(&mut doc, batch),
+            Err(CommandError::Follow(_))
+        ));
+        doc.redo().unwrap();
+        assert_eq!(doc.labels().next().unwrap().1.text.as_ref(), "redo");
+    }
+
+    #[test]
+    fn tc_move_06_07_rigid_labels_once_and_16_direct_pin_contact() {
+        for invert in [false, true] {
+            let mut doc = Doc::new();
+            let a = del_part(&mut doc, del_point(0, 0));
+            let b = del_part(&mut doc, del_point(4, 0));
+            doc.apply(Command::AddWires(vec![
+                del_wire(del_point(0, 0), del_point(0, 2)),
+                del_wire(del_point(0, 2), del_point(4, 2)),
+                del_wire(del_point(4, 2), del_point(4, 0)),
+            ]))
+            .unwrap();
+            doc.apply(Command::AddLabel(Label {
+                at: del_point(0, 2),
+                text: "rigid".into(),
+            }))
+            .unwrap();
+            follow_roundtrip(
+                &mut doc,
+                Command::Move {
+                    items: vec![b, a],
+                    delta: del_point(1, 0),
+                    follow: FollowPolicy::new(true, 10, invert).unwrap(),
+                },
+            )
+            .unwrap();
+            assert_eq!(doc.labels().next().unwrap().1.at, del_point(1, 2));
+            assert_eq!(doc.wires().count(), 3);
+            doc.assert_normal_form();
+        }
+        let mut doc = Doc::new();
+        let a = del_part(&mut doc, Pt::ZERO);
+        del_part(&mut doc, Pt::ZERO);
+        follow_roundtrip(
+            &mut doc,
+            Command::Move {
+                items: vec![a],
+                delta: del_point(1, 0),
+                follow: follow_policy(true),
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.wires().count(), 0);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn w22_winv1_winv2_winv4_inv10_random_sheets_moves_and_reorientations(
+            counts in prop::collection::vec(1usize..6, 1..6),
+            pick in any::<usize>(), dx in -2i32..3, dy in -2i32..3,
+            orientation in 0usize..8, rotate in any::<bool>(),
+        ) {
+            let mut base = Doc::new();
+            let mut movable = Vec::new();
+            for (i, &count) in counts.iter().enumerate() {
+                let x = i as i32 * 40;
+                let change = base.apply(Command::PlacePart {
+                    part: make_part(del_point(x, 0), Orient::IDENTITY, "P", ""),
+                    local_pins: (0..count).map(|j| del_point(0, j as i32 * 4)).collect(),
+                    local_bounds: rect(0, 0, 0, 0),
+                }).unwrap();
+                movable.push(change.added[0]);
+                for j in 0..count {
+                    let y = j as i32 * 4;
+                    del_part(&mut base, del_point(x - 12, y));
+                    base.apply(Command::AddWires(vec![
+                        del_wire(del_point(x, y), del_point(x - 6, y)),
+                        del_wire(del_point(x - 6, y), del_point(x - 6, y + 2)),
+                        del_wire(del_point(x - 6, y + 2), del_point(x - 12, y + 2)),
+                        del_wire(del_point(x - 12, y + 2), del_point(x - 12, y)),
+                    ])).unwrap();
+                }
+            }
+            let index = pick % movable.len();
+            for follow in [false, true] {
+                let mut doc = del_snapshot(&base);
+                let command = if rotate {
+                    Command::Reorient { items: vec![movable[index]], pivot: del_point(index as i32 * 40, 0), by: Orient::ALL[orientation], follow: follow_policy(follow) }
+                } else {
+                    Command::Move { items: vec![movable[index]], delta: del_point(dx, dy), follow: follow_policy(follow) }
+                };
+                let transform = if rotate {
+                    Isometry::Reorient { pivot: del_point(index as i32 * 40, 0), by: Orient::ALL[orientation] }
+                } else { Isometry::Translate(del_point(dx, dy)) };
+                let mut preview = FollowPlan::default();
+                let expected = crate::plan_follow(&base, &[movable[index]], transform, follow_policy(follow), &mut preview)
+                    .ok().map(|()| expected_follow_partition(&base, movable[index], transform, follow));
+                if follow_roundtrip(&mut doc, command).is_ok() {
+                    prop_assert_eq!(pin_partition(&doc), expected.unwrap());
+                    if follow {
+                        doc.assert_normal_form();
+                    } else {
+                        let ItemId::Part(part) = movable[index] else { unreachable!() };
+                        for (id, &wire) in base.wires() {
+                            let landed = doc.pins(part).unwrap().iter().any(|&at| contains(wire, at));
+                            if !landed {
+                                prop_assert_eq!(doc.wire(id), Some(&wire)); // WINV2 outside TC-move-14 splits.
+                            }
+                        }
+                        // The only moving pins belong to the selected boundary part.
+                        for (id, _) in base.parts() {
+                            if ItemId::Part(id) != movable[index] {
+                                prop_assert_eq!(doc.pins(id), base.pins(id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn contains(wire: Wire, at: Pt) -> bool {
+        Rect::from_points(wire.a, wire.b).unwrap().contains(at)
+    }
+
+    // WINV1/WINV2: original nets plus the explicitly permitted WD3 landing contacts.
+    fn expected_follow_partition(
+        base: &Doc,
+        selected: ItemId,
+        t: Isometry,
+        follow: bool,
+    ) -> Vec<bool> {
+        let pins: Vec<_> = base
+            .parts()
+            .flat_map(|(id, _)| {
+                base.pins(id)
+                    .unwrap()
+                    .iter()
+                    .map(move |&p| (ItemId::Part(id), p))
+            })
+            .collect();
+        let mut plan = FollowPlan::default();
+        crate::plan_follow(base, &[selected], t, follow_policy(follow), &mut plan).unwrap();
+        let n = pins.len();
+        let mut expected = pin_partition(base);
+        if !follow {
+            for i in 0..n {
+                for j in 0..n {
+                    if i != j && (pins[i].0 == selected || pins[j].0 == selected) {
+                        expected[i * n + j] = false;
+                    }
+                }
+            }
+        }
+        for (i, &(part, old)) in pins.iter().enumerate() {
+            if part != selected {
+                continue;
+            }
+            let at = t.apply(old).unwrap();
+            for (j, &(other, p)) in pins.iter().enumerate() {
+                let p = if other == selected {
+                    t.apply(p).unwrap()
+                } else {
+                    p
+                };
+                let contact = at == p
+                    || base.wires().any(|(id, &w)| {
+                        !plan.remove.contains(&id)
+                            && contains(w, at)
+                            && base.net_of(id) == base.net_at(pins[j].1)
+                            && (follow || other != selected)
+                    });
+                if contact {
+                    expected[i * n + j] = true;
+                    expected[j * n + i] = true;
+                }
+            }
+        }
+        for k in 0..n {
+            for i in 0..n {
+                for j in 0..n {
+                    expected[i * n + j] |= expected[i * n + k] && expected[k * n + j];
+                }
+            }
+        }
+        expected
+    }
+
     fn assert_delete_roundtrip(doc: &mut Doc, items: Vec<ItemId>, with_wires: bool) {
         let before = del_snapshot(doc);
         let change = doc.apply(Command::Delete { items, with_wires }).unwrap();
@@ -993,19 +1708,23 @@ mod tests {
                 with_wires: false,
             },
             Command::Move {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: vec![],
                 delta: Pt { x: 1, y: 0 },
             },
             Command::Reorient {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: vec![],
                 pivot: Pt::ZERO,
                 by: Orient::ROT_90,
             },
             Command::Move {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: vec![item],
                 delta: Pt::ZERO,
             },
             Command::Reorient {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: vec![item],
                 pivot: Pt::ZERO,
                 by: Orient::IDENTITY,
@@ -1044,6 +1763,7 @@ mod tests {
         // A semantically inert command still validates its target and field.
         assert!(matches!(
             doc.apply(Command::Move {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: vec![item],
                 delta: Pt::ZERO
             }),
@@ -1132,6 +1852,7 @@ mod tests {
         let rev_snap = doc.revision();
 
         let err = doc.apply(Command::Move {
+            follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
             items: items_with_edge.clone(),
             delta: Pt { x: 10, y: 0 },
         });
@@ -1145,6 +1866,7 @@ mod tests {
         dup_items.push(items[0]);
         assert_eq!(
             doc.apply(Command::Move {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: dup_items,
                 delta: Pt { x: 10, y: 0 },
             }),
@@ -1159,6 +1881,7 @@ mod tests {
         missing_items.push(missing);
         assert_eq!(
             doc.apply(Command::Move {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: missing_items,
                 delta: Pt { x: 10, y: 0 },
             }),
@@ -1176,6 +1899,7 @@ mod tests {
         let pre_move_rev = doc.revision();
         let ch = doc
             .apply(Command::Move {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: items_with_edge.clone(),
                 delta: Pt { x: -50, y: 25 },
             })
@@ -1335,6 +2059,7 @@ mod tests {
             let before_orient = doc.save_to_vec_for_test();
             let ch = doc
                 .apply(Command::Reorient {
+                    follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                     items: group.clone(),
                     pivot,
                     by,
@@ -1432,6 +2157,7 @@ mod tests {
                     text: "TEMP".into(),
                 }),
                 Command::Move {
+                    follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                     items: vec![ItemId::Part(p0)],
                     delta: Pt { x: 50, y: 50 },
                 },
@@ -1463,6 +2189,7 @@ mod tests {
         assert_eq!(p0.dirty, Some(rect(-120, -50, 120, 50)));
         let mv = doc
             .apply(Command::Move {
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                 items: p0.added.clone(),
                 delta: Pt { x: GRID_NM, y: 0 },
             })
@@ -1518,6 +2245,7 @@ mod tests {
             rect(SHEET_LIMIT_NM - 110, -50, SHEET_LIMIT_NM, 50)
         );
         doc.apply(Command::Reorient {
+            follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
             items: vec![p0],
             pivot: Pt {
                 x: SHEET_LIMIT_NM - 10,
@@ -1738,7 +2466,7 @@ mod tests {
                                 if missing {
                                     items.push(ItemId::Part(PartId(99_999)));
                                 }
-                                Command::Move {
+                                Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                                     items,
                                     delta: Pt { x: dx, y: dy },
                                 }
@@ -1752,7 +2480,7 @@ mod tests {
                                 if dup && !items.is_empty() {
                                     items.push(items[0]);
                                 }
-                                Command::Reorient {
+                                Command::Reorient { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                                     items,
                                     pivot: Pt { x: px, y: py },
                                     by: Orient::ALL[orient as usize],
@@ -1800,7 +2528,7 @@ mod tests {
                                     local_bounds,
                                 }];
                                 if !live.is_empty() {
-                                    cmds.push(Command::Move {
+                                    cmds.push(Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                                         items: vec![live[pick % live.len()]],
                                         delta: Pt { x: dx, y: 0 },
                                     });

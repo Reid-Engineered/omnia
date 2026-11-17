@@ -853,10 +853,10 @@ mod tests {
                         let _ = doc.apply(Command::AddLabel(Label { at, text: "N".into() }));
                     }
                     Edit::Move { mask, delta } => {
-                        let _ = doc.apply(Command::Move { items: pick(&mask), delta });
+                        let _ = doc.apply(Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(), items: pick(&mask), delta });
                     }
                     Edit::Reorient { mask, pivot, by } => {
-                        let _ = doc.apply(Command::Reorient {
+                        let _ = doc.apply(Command::Reorient { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                             items: pick(&mask),
                             pivot,
                             by: Orient::ALL[by as usize],
@@ -983,6 +983,7 @@ mod tests {
         assert_wires_once(&run);
         assert_eq!(run.labels.as_slice(), &[corner]);
         doc.apply(Command::Move {
+            follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
             items: vec![ItemId::Label(corner)],
             delta: pt(2, 2),
         })

@@ -201,16 +201,20 @@ fn doc_query_and_net_wires_allocate_nothing_after_commands() {
     );
     assert_eq!(doc.net_at(Pt::ZERO), doc.net_of(first_wire));
     let mut moved = p_ch.added.clone();
-    moved.extend_from_slice(&w_ch.added[..16]);
+    // Move the complete connected workload; partial translation used to overlap
+    // the untouched staircase and depended on non-normal geometry to keep 64 wires.
+    moved.extend_from_slice(&w_ch.added);
     moved.extend_from_slice(&l_ch.added);
     doc.apply(Command::Move {
+        follow: omnia_doc::prefs::FollowPolicy::new(false, 10, false).unwrap(),
         items: moved.clone(),
-        delta: Pt { x: 100, y: 100 },
+        delta: Pt { x: 1000, y: 1000 },
     })
     .unwrap();
     doc.apply(Command::Reorient {
+        follow: omnia_doc::prefs::FollowPolicy::new(false, 10, false).unwrap(),
         items: moved,
-        pivot: Pt { x: 100, y: 100 },
+        pivot: Pt { x: 1000, y: 1000 },
         by: Orient::ROT_90,
     })
     .unwrap();

@@ -54,3 +54,7 @@ harness = false
 [[bench]]
 name = "route"
 harness = false
+
+[[bench]]
+name = "follow_command"
+harness = false

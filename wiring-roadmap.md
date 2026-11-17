@@ -200,9 +200,13 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   command yet); `plan_follow` on a selection with no boundary points returns an empty plan
   and allocates nothing.
 
-### W2.2 Move and Reorient with follow · todo
+### W2.2 Move and Reorient with follow · needs-human
 - Lane: doc · Depends: W2.1 · Read: WD3, WINV1, WINV2, WINV4, INV4, INV10
 - Owns: `crates/schematic-doc/src/command.rs`, `undo.rs` (after T5.1)
+- Scope approved 2026-11-17: mechanical caller migrations in document tests and the
+  command benchmark, plus the WB3 benchmark. Windows checks only; no Orion runs.
+- Implementation and Windows checks complete; WB3 remains uncertified. See
+  `docs/measurements/W2.2.md`. No reference-machine run is authorized this session.
 - Do: `Move` and `Reorient` carry a `FollowPolicy`; `apply` calls `plan_follow`, applies the
   plan and the move as one change, splits wires under landed pins and ends (TC-move-14),
   normalises, and pushes one inverse that restores every removed wire under its old id. A
@@ -720,3 +724,26 @@ if_same_then_else without suppressing the lint. Corrected planner versus command
 missing-wire behavior above. The earlier five-check claim was contradicted by
 independent review at the original head; this entry records the correction.
 Review-fix validation on Windows: all five standard checks passed; after preserving the original b-side validation traversal direction, both clippy commands and all W3.2/TC-seg scenarios passed again. No measurements or budget verdicts.
+
+
+2026-11-17 W2.2 - needs-human (WB3 uncertified). `Move` and `Reorient`
+carry `FollowPolicy` and run WD3 planning before editing. Follow refusal preserves
+serialized state, revision, reserved ids and redo; a failed batch rolls back prior
+edits and allocations. Apply combines selected geometry, rigid labels, affected
+runs, landed-pin/end splits (TC-move-14) and local normalisation into one inverse
+batch restoring exact wire ids (WINV4, INV4). Selected-wire interior pin/end
+contacts and overlaps are refused; ordinary interior crossings remain disconnected
+(WINV1). Rerouted label placement remains W3.6. Added 128-case generated sheet,
+move and reorientation tests for WINV1/WINV2/WINV4/INV10, plus refusal, landing,
+rigid-label and mixed-selection/consumed-wire-id roundtrips. Caller and benchmark
+scope expansion was approved by the owner. The allocation fixture retains the
+64-wire and zero-allocation workload without depending on overlapping moved
+geometry; the mixed-edit property retains its ranges and checks atomic refusals.
+All five standard checks pass locally on Windows: fmt, both clippy configurations,
+workspace tests and deny (existing advisory warnings only). The WB3 benchmark
+reloads a pristine seed-42 10k sheet outside each apply timer to prevent reserved-id
+growth; its Windows smoke check passes. No timed campaign or budget verdict;
+owner prohibited Orion runs. Evidence: docs/measurements/W2.2.md. Independent
+review found selected-wire interior capture (including a replaced run's fixed
+far end) and benchmark fixture growth; these were fixed with regression coverage
+before PR creation.
