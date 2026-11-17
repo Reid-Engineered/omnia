@@ -58,3 +58,7 @@ harness = false
 [[bench]]
 name = "follow_command"
 harness = false
+
+[[bench]]
+name = "doc_io"
+harness = false
