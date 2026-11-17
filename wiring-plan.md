@@ -26,6 +26,10 @@ map exist (T1.1, T2.1); commands, connectivity, the spatial index and routing do
 | `TC` | Scenario with its expected result | 8 |
 | `WQ` | Open question for the owner, each with a default | 12 |
 
+Crate names: this plan writes `schematic-doc`, `schematic-canvas` and `schematic-bench`. In
+this repository those crates are `omnia-doc`, `omnia-canvas` and `omnia-bench` (see `crates/`);
+read every `schematic-*` name as the matching `omnia-*` crate.
+
 Status words are the canvas plan's: **DECIDED**, **DEFAULT** (the owner has not answered; build
 the stated default and do not ask again), and one more:
 
@@ -323,6 +327,15 @@ label is never merged away.
   one. Nothing is persisted and there is no settings window; both are out of scope.
 - A command carries the policy it was built with (`FollowPolicy`), so redo replays the same
   decision even if a preference changed in between.
+- W1.1 clarification (2026-11-16): when W1.1 was built, W0.2 had not yet recorded the
+  owner's HW1 answers, so `Default` follows WK10 as then written: `follow_on_move` false,
+  `select_mode` Enclosed, `delete_wires_with_part` false. W0.2/W0.3 update WK10 and
+  `Default` to the recorded answers. Threshold fields are private `u16`s with
+  read accessors; checked constructors return `InvalidFollowThreshold` for zero, so
+  struct literals cannot bypass WK2. Types live in `omnia_doc::prefs` in this repository.
+  `follow_policy` captures the supplied Alt state; `part_follows` inverts the entire
+  conjunction in WD3, including the threshold result, and `wire_follows` implements
+  its moved-wire case. Counts use `usize` to avoid narrowing a document pin count.
 
 ## 7. Invariants
 
@@ -441,9 +454,24 @@ Signatures are a sketch: names and shapes to build toward, not a frozen interfac
 ```rust
 // ---- schematic-doc: prefs.rs ----
 pub enum SelectMode { Enclosed, Intersecting }
-pub struct WiringPrefs { pub follow_on_move: bool, pub follow_pin_threshold: u16,
+pub struct WiringPrefs { pub follow_on_move: bool, follow_pin_threshold: u16,
                          pub select_mode: SelectMode, pub delete_wires_with_part: bool }
-pub struct FollowPolicy { pub follow_on_move: bool, pub pin_threshold: u16, pub invert: bool }
+pub struct FollowPolicy { pub follow_on_move: bool, pin_threshold: u16, pub invert: bool }
+
+impl WiringPrefs {
+    pub const fn new(follow_on_move: bool, follow_pin_threshold: u16,
+                     select_mode: SelectMode, delete_wires_with_part: bool)
+        -> Result<Self, InvalidFollowThreshold>;
+    pub const fn follow_pin_threshold(&self) -> u16;
+    pub const fn follow_policy(&self, modifier_held: bool) -> FollowPolicy;
+}
+impl FollowPolicy {
+    pub const fn new(follow_on_move: bool, pin_threshold: u16, invert: bool)
+        -> Result<Self, InvalidFollowThreshold>;
+    pub const fn pin_threshold(&self) -> u16;
+    pub const fn part_follows(&self, connected_pins: usize) -> bool;
+    pub const fn wire_follows(&self) -> bool;
+}
 
 // ---- run.rs (as built by W1.2) ----
 // One kind per point, in this order: Boundary, Pin, Junction, FreeEnd. `Closed` marks a
