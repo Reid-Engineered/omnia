@@ -12,6 +12,7 @@ fn bench_move(c: &mut Criterion, name: &str, doc: &mut Doc, items: &[ItemId], de
     let mut undos = Vec::with_capacity(1000);
     for _ in 0..1000 {
         let cmd = Command::Move {
+            follow: omnia_doc::prefs::FollowPolicy::new(false, 10, false).unwrap(),
             items: items.to_vec(),
             delta,
         };
@@ -42,6 +43,7 @@ fn bench_move(c: &mut Criterion, name: &str, doc: &mut Doc, items: &[ItemId], de
             let mut total = Duration::ZERO;
             for _ in 0..n {
                 let cmd = Command::Move {
+                    follow: omnia_doc::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                     items: items.to_vec(),
                     delta,
                 };
@@ -59,6 +61,7 @@ fn bench_move(c: &mut Criterion, name: &str, doc: &mut Doc, items: &[ItemId], de
             let mut total = Duration::ZERO;
             for _ in 0..n {
                 let cmd = Command::Move {
+                    follow: omnia_doc::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                     items: items.to_vec(),
                     delta,
                 };
