@@ -227,6 +227,9 @@ A candidate is **valid** when all of these hold:
   of the run's own two ends.
 - No segment lies along a foreign wire with a shared stretch of non-zero length.
 
+`Blocker::Overlap` applies to router, follow and segment-drag output, not user
+`AddWires`, which unites collinear overlaps locally (T6.1, canvas-plan.md D2).
+
 Crossing a foreign wire's interior at one point is valid: by INV2 it is not a connection.
 
 Among valid candidates the lowest score wins, comparing in order: segments passing through

@@ -516,7 +516,7 @@ of the `canvas` lane.
 
 ## Milestone 6: wiring
 
-### T6.1 Wire routing rules · todo
+### T6.1 Wire routing rules · done
 - Lane: doc · Depends: T5.1 · Read: D2, INV2, wiring-plan.md WD4, WD9
 - Owns: `crates/omnia-doc/src/route.rs`
 - Do: the L-route between two points with a `flip` flag for the corner; `AddWires` splits
@@ -1405,3 +1405,82 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        T4.2 (`done`) and T5.1 (`needs-human`, code merged) unchanged in
                        substance with pointer notes to W1.3 (PR #41 open) and W2.2.
                        Docs only; nothing measured.
+
+2026-11-16 T6.1 done — added crates/omnia-doc/src/route.rs with `l_route(a, b, flip)`
+                       (flip=false leaves `a` horizontally, flip=true vertically; plan
+                       section 9 sketch updated) and a pure, deterministic split/merge
+                       planner for `AddWires`. `Doc::apply` now splits any wire whose
+                       interior an added end lands on, splits an added wire where it
+                       passes over an existing end, pin or label point, deduplicates
+                       overlapping stretches, and merges collinear segments joined at a
+                       point holding nothing else; crossing interiors never split or
+                       connect (INV2, M18). One `UndoOp::ReplaceWires` inverse restores
+                       the pre-split wires under their old ids (INV4); a split keeps the
+                       original id on its first piece and a merge keeps the lowest id,
+                       with fresh ids assigned in geometry order, so the result does not
+                       depend on the caller's wire order or hash-map order. The merge
+                       predicate already keeps a point that carries a net label (WD4,
+                       WD9), so W1.4's "make T6.1's merge keep a labelled point" part is
+                       done here and W1.4 only needs to verify it. Dependency note: the
+                       owner approved starting T6.1 on 2026-11-16 although T5.1 is
+                       `needs-human`, because only its Move-of-100-items timing check on
+                       the Orion reference machine is outstanding; the commands/undo code
+                       is merged. T6.1 changes AddWires timing (Move and Reorient paths
+                       are untouched); PR #40's `doc_10k_wire_add` and
+                       `doc_chain_20k_add` cases must be re-frozen. Tests: 8 new route
+                       tests including a
+                       128-case proptest over random AddWires batches asserting INV2, the
+                       wire normal form and INV10 against a from-scratch rebuild after
+                       every step, plus INV4 undo/redo with exact ids; the existing
+                       INV4+INV10 command proptest also passes. All standard checks pass
+                       on this Windows development machine (fmt, both clippy gates,
+                       cargo test --workspace, cargo deny check); no budget is certified
+                       here. Files outside route.rs: command.rs (AddWires only), undo.rs
+                       (the ReplaceWires variant), lib.rs (the `route` module line) and
+                       canvas-plan.md section 9. No new dependencies. One existing
+                       fixture updated: `crates/omnia-doc/tests/index_alloc.rs` built 64
+                       contiguous collinear wires and sliced the added ids, which the
+                       new merge rule correctly reduces to two wires. Those wires
+                       were initially given gaps; this weakened the connected-net
+                       workload and is corrected by the T6.1 rework entry below.
+
+2026-11-16 T6.1 rework done — merged origin/main through W0.3/W1.2, retaining
+                       main's T6.1 Read/Do wording and all roadmap log entries.
+                       AddWires now plans only spatial-query contacts with added
+                       segments; fixed touched points permit one boundary extension
+                       into collinear neighbours without walking unrelated chains.
+                       Point-store ends outside the plan block junction merges.
+                       D2 documents this boundary, overlap union and the reviewed id
+                       rules: lowest id on merge, first geometry piece on split,
+                       fresh ids in geometry order. Labelled points remain (WD4/WD9).
+                       Replaced quadratic id membership with hash sets and streamed
+                       split coordinates without per-wire cuts/bounds allocations.
+                       INV4/INV10 tests preserve ids, geometry and net membership on
+                       unrelated Move/Delete/duplicate non-normal states; 128-case
+                       properties now generate pins/labels, mix Move/Delete, reverse
+                       AddWires inputs and compare redo directly with post-apply ids.
+                       Restored the allocation test's connected 64-wire net using
+                       an alternating-axis staircase, keeping its allocation checks
+                       and asserting all 64 wires are enumerated. l_route now returns
+                       [Option<Wire>; 2] without allocation; section 9 updated.
+                       WD4 distinguishes Blocker::Overlap for router/follow/segment
+                       drag from overlap-unifying user AddWires. No new dependencies.
+                       Windows diagnostic (i7-14650HX, UHD Graphics / RTX 5060 Laptop
+                       GPU, 1920x1200, 125%, 165 Hz, AC, Silent): median run p99 before
+                       -> after: isolated 2k 12.6541 ms -> 16.35 us; isolated 10k
+                       187.85155 ms -> 15.75 us; isolated 20k 676.7207 ms -> 17.0 us;
+                       bridge 5k 51.50015 ms -> 28.05 us. Ten rotating repetitions,
+                       20 samples each; raw data, full ranges, binary hashes, order,
+                       condition records and script: docs/measurements/T6.1.md and
+                       T6.1/. Shared development session; baseline overlapped builds
+                       and tests. Initial out-of-bounds fixture campaign retained as
+                       incomplete. Diagnostic only: no reference budget certified.
+                       AddWires timing changed; PR #40's doc_10k_wire_add and
+                       doc_chain_20k_add must be re-frozen. Follow-up only: T2.4's
+                       generator emits non-normal sheets (review report: about 23
+                       duplicate wire pairs on 10k and coincident first pins); no
+                       generator change here. Changes outside route.rs are the
+                       authorized command.rs integration, regression/timing fixtures,
+                       plans and measurement records. All five standard checks pass
+                       locally: fmt, workspace clippy, feature-enabled bench clippy,
+                       workspace tests (including Windows goldens), cargo deny.

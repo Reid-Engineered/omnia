@@ -156,15 +156,28 @@ fn doc_query_and_net_wires_allocate_nothing_after_commands() {
             local_bounds: rect(-10, -10, 30, 10),
         })
         .unwrap();
+    // A connected 64-wire staircase preserves the original net workload.
+    // Alternating axes make every meeting a real corner (T6.1 / WD1).
     let w_ch = doc
         .apply(Command::AddWires(
             (0..64)
-                .map(|i| Wire {
-                    a: Pt { x: i * 10, y: 0 },
-                    b: Pt {
-                        x: (i + 1) * 10,
-                        y: 0,
-                    },
+                .map(|i| {
+                    let a = Pt {
+                        x: ((i + 1) / 2) * 10,
+                        y: (i / 2) * 10,
+                    };
+                    let b = if i % 2 == 0 {
+                        Pt {
+                            x: a.x + 10,
+                            y: a.y,
+                        }
+                    } else {
+                        Pt {
+                            x: a.x,
+                            y: a.y + 10,
+                        }
+                    };
+                    Wire { a, b }
                 })
                 .collect(),
         ))
@@ -175,6 +188,18 @@ fn doc_query_and_net_wires_allocate_nothing_after_commands() {
             text: "BUS".into(),
         }))
         .unwrap();
+    let first_wire = match w_ch.added[0] {
+        ItemId::Wire(id) => id,
+        _ => unreachable!(),
+    };
+    let mut original_net = Vec::new();
+    doc.net_wires(doc.net_of(first_wire).unwrap(), &mut original_net);
+    assert_eq!(
+        original_net.len(),
+        64,
+        "the allocation workload is a connected 64-wire net"
+    );
+    assert_eq!(doc.net_at(Pt::ZERO), doc.net_of(first_wire));
     let mut moved = p_ch.added.clone();
     moved.extend_from_slice(&w_ch.added[..16]);
     moved.extend_from_slice(&l_ch.added);
@@ -215,6 +240,6 @@ fn doc_query_and_net_wires_allocate_nothing_after_commands() {
 
         let (_, net_allocs) = count_allocs(|| doc.net_wires(net, &mut wires_out));
         assert_eq!(net_allocs, 0);
-        assert!(!wires_out.is_empty());
+        assert_eq!(wires_out.len(), 64);
     }
 }

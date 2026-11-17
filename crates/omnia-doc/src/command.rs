@@ -170,17 +170,47 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
             for &wire in &wires {
                 Doc::validate_wire(wire)?;
             }
-            let mut ids = Vec::with_capacity(wires.len());
-            for wire in wires {
-                let (id, bounds) = doc
-                    .insert_wire_raw(wire)
-                    .expect("pre-validated wire insert must succeed");
-                acc.record_dirty(bounds);
-                acc.record_added(ItemId::Wire(id));
-                acc.nets_changed = true;
-                ids.push(id);
+            if wires.is_empty() {
+                return Ok(UndoOp::Batch(Vec::new()));
             }
-            Ok(UndoOp::RemoveWires(ids))
+            // T6.1 (INV2): split and merge into normal form inside apply, with
+            // index and connectivity updated by the raw wire edits below.
+            let plan = crate::route::plan_add_wires(doc, &wires);
+            if plan.remove.is_empty() && plan.insert.is_empty() {
+                return Ok(UndoOp::Batch(Vec::new()));
+            }
+            let kept: rustc_hash::FxHashSet<WireId> =
+                plan.insert.iter().filter_map(|(keep, _)| *keep).collect();
+            let mut removed: Vec<(WireId, Wire)> = Vec::with_capacity(plan.remove.len());
+            for (id, _) in &plan.remove {
+                let (wire, bounds) = doc.remove_wire_raw(*id).expect("planned wire must exist");
+                acc.record_dirty(bounds);
+                if !kept.contains(id) {
+                    acc.record_removed(ItemId::Wire(*id));
+                }
+                removed.push((*id, wire));
+            }
+            let mut added: Vec<WireId> = Vec::with_capacity(plan.insert.len());
+            for (keep, wire) in plan.insert {
+                let (id, bounds) = match keep {
+                    Some(id) => {
+                        let bounds = doc
+                            .restore_wire_raw(id, wire)
+                            .expect("planned restore must target reserved empty slot");
+                        (id, bounds)
+                    }
+                    None => doc
+                        .insert_wire_raw(wire)
+                        .expect("pre-validated wire insert must succeed"),
+                };
+                acc.record_dirty(bounds);
+                if keep.is_none() {
+                    acc.record_added(ItemId::Wire(id));
+                }
+                acc.nets_changed = true;
+                added.push(id);
+            }
+            Ok(UndoOp::ReplaceWires { removed, added })
         }
         Command::AddLabel(label) => {
             let (id, bounds) = doc.insert_label_raw(label)?;
