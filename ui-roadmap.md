@@ -171,7 +171,7 @@ without being drawn.
 - Done when: the file states sheet paints during the hover (expected 0), whether the popover
   occludes the sheet's hitbox, and allocations per frame of our code in the readout path.
 
-### U0.5 Spike US4: save and load timing · todo
+### U0.5 Spike US4: save and load timing · needs-human
 - Lane: bench · Depends: none · Read: UB10, D8, T2.4
 - Owns: `crates/omnia-bench/benches/doc_io.rs`, `docs/measurements/U0.5.md`
 - Do: criterion benches of `Doc::save` into a `Vec<u8>` and `Doc::load` from bytes for `1k` and
@@ -580,3 +580,15 @@ regenerated with `cargo xtask tokens` (twice, no diff). UINV1 source test over
 machine (certifies no reference budget). Deviations: `crates/omnia-app/tests/fonts.rs` and
 `crates/omnia-theme/tests/tokens.rs` updated only to follow the removed constants and the
 new token count. `System` resolves to Graphite until U3.2 follows window appearance.
+
+2026-11-17 U0.5 needs-human — added Criterion bench `crates/omnia-bench/benches/doc_io.rs` (`save_1k`,
+`load_1k`, `save_10k`, `load_10k` over T2.4 `generate(..., 42)`), registered `doc_io` in
+`crates/omnia-bench/Cargo.toml`, and prepared the frozen one-command Orion campaign
+(`docs/measurements/U0.5/run.sh`, `summarize.py`) under canvas-plan section 2.1 CPU-only rules.
+File sizes (RON v2): `1k` 505,548 B (`0.4821 MiB`), `10k` 5,079,273 B (`4.8440 MiB`).
+Windows 10-pass non-reference diagnostic (i7-14650HX, 32 GB, Windows 11 Home 10.0.26200, AC,
+Silent power scheme, shared session, certifies nothing): median of 10 run `p50`/`p99` (`n=100`
+per pass) `save_1k` `1.330`/`1.480` ms, `load_1k` `4.771`/`5.211` ms, `save_10k` `13.724`/`15.082` ms
+(range `13.863–50.079` ms), `load_10k` `50.710`/`52.954` ms. Nothing run on Orion; `needs-human`
+until the owner runs `bash docs/measurements/U0.5/run.sh` on Orion to decide US4 / `UB10`
+(`save_10k` < 33.3 ms p99 vs `DocSnapshot`).

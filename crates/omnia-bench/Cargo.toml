@@ -54,3 +54,7 @@ harness = false
 [[bench]]
 name = "route"
 harness = false
+
+[[bench]]
+name = "doc_io"
+harness = false
