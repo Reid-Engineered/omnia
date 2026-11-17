@@ -1,0 +1,225 @@
+# Command-boundary timing cases for T2.8/T5.1
+
+Preparation only. This change adds the public command-boundary cases that the
+[gate-blocker audit](gate-blocker-audit.md) lists as next task (1) (audit
+sections 3.4, 4.2 and 5). It marks no gate or budget as met and changes no
+roadmap task status: T2.8 and T5.1 keep their current status until a complete
+campaign runs on the reference machine under canvas-plan section 2.1 and a
+separate gate decision records it.
+
+## What is timed
+
+The new cases time exactly one public `Doc::apply` call per observation on
+`crates/omnia-doc` (D8: incremental connectivity inline with the command,
+target under 1 ms per command at 10,000 parts; INV4/INV10: the document
+changes only through `apply`/`undo`/`redo`, with connectivity equal to a
+from-scratch rebuild). Only public APIs are used (`Doc::apply`, `Doc::undo`,
+`Doc::from_items`, `Command`, and the read-only accessors). The crate-private
+`Doc::insert_wire`/`remove_wire` helpers are never called and their visibility
+is unchanged; no public API was missing, so none was added.
+
+Inside the measured span (one `Instant` pair around `Doc::apply`):
+
+- command validation: K1 bounds, INV1 axis/distinct checks, item
+  existence/uniqueness;
+- arena insert/remove or in-place move, `SpatialIndex` maintenance and
+  point-incidence maintenance;
+- incremental `Connectivity` maintenance, including the split search on delete
+  and the logical re-flood on bridge delete;
+- `Change`/dirty-rectangle computation, inverse construction, undo-history
+  push (including redo clear) and the monotonic revision bump.
+
+Outside the measured span:
+
+- workload construction (`generate(StressSheet::Parts10k, 42)` or
+  `Doc::from_items`) and any setup command (for example adding the bridge
+  before `doc_label_bridge_delete`, whose issued ID is read back from the
+  public `Change`);
+- all `Command`, `Vec<Wire>` and `Vec<ItemId>` construction and cloning;
+- the `Doc::undo()` that restores the starting workload after each timed
+  `apply` (undo restores exact IDs, INV4), plus the post-loop assertions that
+  `doc.content_eq(&reference)` with an independently built reference, including
+  exact live IDs (INV4);
+- public `net_at`/`net_of` topology assertions before apply, after apply and
+  after undo: bridge/chain probe nets join on add and separate on delete;
+  the leaf endpoint appears/disappears; each moved part's first pin leaves
+  its outgoing wire's net. `nets_changed` is not used as proof;
+- for every add, assertions that no items were removed and exactly the
+  submitted number of wires was added; all CSV output is buffered until
+  after the loop.
+
+The repeated loop has a warm-data bias: after the first observation, each
+apply immediately follows undo of the same data. The cold first sample can
+be much slower; it is retained among the 1,000 samples, with no warmup
+samples discarded. These results describe repeated edits on warm data, not
+cold command latency. Untimed topology probes also touch connectivity data
+before and after each command. `push_undo` clears the redo entry left by undo inside
+the timed span, so that cleanup cost is included after the first sample.
+
+Timer overhead (`Instant::now`/`elapsed`, `black_box`) is inherent to every
+observation, as in the existing T2.8 runner. Repeated `AddWires` observations
+allocate a fresh wire ID each time (IDs are never reused, D2); undo removes
+the wire and retains the reserved slot, so arena capacity grows amortized
+while live content returns to the starting workload each iteration.
+
+## Frozen cases
+
+The case list is frozen in [the runner](command-boundary/runner/main.rs) and
+mirrored in [run.sh](command-boundary/run.sh); `summarize.py` asserts exactly
+this set. Frozen cases are defined against `AddWires` semantics at the freeze
+commit. If T6.1 or a later change alters what a case does, re-freeze the cases
+before any timed run; do not redefine them after seeing reference results.
+Two cases are known to change under T6.1 (checked by building this runner
+against the T6.1 branch, PR #43): `doc_chain_20k_add`, whose collinear join
+becomes a merge, and `doc_10k_wire_add`, because the generated `10k` sheet is
+not in T6.1 normal form (about 23 part pairs have coincident first pins, so
+their outgoing wires are duplicates) and T6.1's `AddWires` as first proposed
+renormalises the whole document. Run the campaign on a pre-T6.1 build, or
+re-freeze both cases once T6.1's `AddWires` scope and the generator question
+are settled. Add-count
+and removal assertions fail loudly if insertion becomes merge/split work.
+
+Connectivity-only cases, copied unchanged from the T2.8 runner for comparison
+(CSV `sample,add_ns,remove_ns`, except `index_10k` with
+`sample,query_ns,count`):
+
+| Case | Workload |
+| --- | --- |
+| `real_10k_leaf` | `Connectivity` rebuilt from T2.4 `10k` (seed 42); leaf wire at the first wire's start point |
+| `label_5k_gnd_vcc_bridge` | 5,000 one-wire components labelled alternately GND/VCC; bridge wire |
+| `chain_20k_middle` | 20,000-segment chain; middle segment |
+| `index_10k` | `Doc::query` of a 4K-viewport rectangle on `10k` (no 1 ms target) |
+
+New public `Doc::apply` cases (CSV `sample,apply_ns`, one operation per row,
+restored by untimed `undo()`):
+
+| Case | Command and starting workload |
+| --- | --- |
+| `doc_10k_wire_add` | `AddWires` extending `WireId(0)` from its far end by 1 nm perpendicularly, without overlap or crossed ends (INV2), on actual `10k` (10,000 parts, 20,000 wires) |
+| `doc_10k_wire_delete` | `Delete` of `WireId(0)`, a leaf from part 0's first pin, on actual `10k` |
+| `doc_10k_move_100` | `Move` of the first 100 parts (`PartId(0)..PartId(100)`) by `(GRID_NM, GRID_NM)` on actual `10k`; the T5.1 done-when case |
+| `doc_10k_move_100_connected` | Pin-count worst-case `Move` on actual `10k`: select the 100 parts with most pins, ties by lowest ID, and move by `(GRID_NM, GRID_NM)`; every selected part has a pin at a wire end that it leaves |
+| `doc_chain_20k_add` | `AddWires` with the missing middle segment, on the 20k chain with that segment absent |
+| `doc_chain_20k_delete` | `Delete` of the middle segment (`WireId(10000)`), splitting the 20k chain; the T2.8 split worst case |
+| `doc_label_bridge_add` | `AddWires` with the non-collinear three-segment route `(1,0)-(1,5)-(10,5)-(10,0)` (INV2), shorting the GND/VCC nets over 5,000 components |
+| `doc_label_bridge_delete` | `Delete` of the middle segment of that route (starting with 5,003 wires), forcing the logical re-flood |
+
+The perpendicular 1 nm leaf remains off-lattice but differs in attachment
+point and direction from `real_10k_leaf`; the routed bridge adds three wires
+rather than the comparison's one. These are component-vs-command comparisons,
+not identical geometry or operation counts. The new geometry is never
+collinear with an existing wire and no route crosses an existing end or pin;
+see the T6.1 note above for the two cases that still change.
+
+## Acceptance statistic (unchanged)
+
+Each case runs ten interleaved passes with rotating order (pass order rotates
+by case index), 1,000 observations per operation per pass, and the existing
+30 s timeout with TERM then KILL after 5 s per invocation. The statistic is
+the median of the ten run p99s (nearest-rank p99, sample 990 of 1,000),
+reported with its range by [summarize.py](command-boundary/summarize.py),
+against the unchanged strict under-1 ms target. The `>= 1 ms` counts are
+diagnostics only; there is no new all-samples gate. `index_10k/query` carries
+no 1 ms target and is reported without a verdict. Complete all ten passes
+before computing the median; an interim p99 is not a verdict. A timeout,
+crash or invalid sample aborts the campaign and is reported as incomplete,
+never retried until green and never with cases dropped or replaced.
+
+## Full campaign on the reference machine (Orion, Linux)
+
+Only the reference machine (the Orion laptop on Linux) under section 2.1 can
+certify the target; numbers from any other machine, or from Orion outside
+that protocol, gate nothing. The CPU-only scope question in audit section 3.2
+is still open: this preparation adopts no protocol exception, so record the
+conditions and let the gate decision weigh them.
+
+One-time setup on Orion, while online:
+`cargo fetch --manifest-path docs/measurements/command-boundary/runner/Cargo.toml`.
+This populates the dependency cache required by the offline check/build below.
+
+1. Freeze source and case list before the first reference observation. Build
+   only the standalone runner:
+   `cargo build --manifest-path docs/measurements/command-boundary/runner/Cargo.toml --release --offline -j 2`.
+   At freeze, `run.sh` also runs
+   `cargo check --manifest-path docs/measurements/command-boundary/runner/Cargo.toml --offline`
+   to verify current `omnia-doc` APIs. No `omnia-bench` binary is used or required.
+2. Prepare section 2.1 conditions: AC, performance governors, other user apps
+   closed. The script checks tools (including `sha256sum`, `python3`, and
+   `vulkaninfo`), built runner, AC and governors before creating any directory;
+   refusal explains what is missing. A later AC/governor failure reports
+   "Campaign incomplete; retained in ..." through the EXIT trap. It records power/profile, governors,
+   load and process inventory before and after each invocation.
+3. Run one command: `bash docs/measurements/command-boundary/run.sh`.
+   It runs all twelve cases in ten rotating passes, archives the raw data,
+   and invokes `summarize.py`, retaining `raw/`, `raw.tar.gz`, `summary.txt`,
+   conditions, hashes, order and a status file in a unique `attempt-*` directory.
+   Git-status snapshots exclude these generated attempt directories.
+4. An aborted attempt remains labelled incomplete. A later invocation uses
+   a new directory and cannot overwrite it; retain and report every attempt,
+   with the reason for any new campaign. This is not authorization to retry
+   until green. Summarize a retained complete archive with
+   `python3 docs/measurements/command-boundary/summarize.py <attempt>/raw.tar.gz`.
+5. Run the functional checks separately: `cargo test --workspace`
+   (`load(save(doc)) == doc`, the INV10 property and consistency checks, and
+   the alloc-free `Doc::query` check).
+
+## Windows smoke run (non-reference, not evidence)
+
+A single-pass smoke run on the Windows development machine only shows the
+runner works. It is **not** reference evidence and certifies nothing: one
+pass instead of ten, an uncontrolled Windows machine, no section 2.1
+conditions.
+
+- Machine: development laptop, Core i7-14650HX, integrated UHD display
+  adapter and discrete RTX 5060 Laptop GPU; Windows 11 Home version
+  10.0.26200 (build 26200), 1920x1200, 60 Hz, 125% scaling.
+- Power: AC (`PowerOnline=true` before and after the run), Silent power profile; CPU governor
+  unavailable on Windows. Other apps and concurrent workspace builds were
+  uncontrolled. Power/profile snapshots were taken before and after the run.
+- Release build, `rustc 1.98.1 (48a229cea 2026-09-01)`; source commit,
+  SHA-256 hashes of committed source blobs (`git show <commit>:<path>`),
+  binary hash and raw samples are retained in
+  [smoke-windows.tar.gz](command-boundary/smoke-windows.tar.gz).
+- One fixed pass, twelve cases, 1,000 samples each; all exited successfully,
+  including public topology checks, add-count/removal guards and full INV4
+  restoration assertions.
+  This is a functional smoke only, non-reference and not gate evidence.
+
+All times below are milliseconds; `>= 1 ms` is a diagnostic count.
+
+| Case/operation | p50 | p99 | max | >= 1 ms |
+| --- | ---: | ---: | ---: | ---: |
+| `real_10k_leaf/add` | 0.000100 | 0.000100 | 0.001700 | 0 |
+| `real_10k_leaf/remove` | 0.000100 | 0.000100 | 0.004200 | 0 |
+| `label_5k_gnd_vcc_bridge/add` | 0.007300 | 0.020700 | 0.066600 | 0 |
+| `label_5k_gnd_vcc_bridge/remove` | 0.257900 | 0.335100 | 0.402100 | 0 |
+| `chain_20k_middle/add` | 0.049200 | 0.084100 | 0.517400 | 0 |
+| `chain_20k_middle/remove` | 0.304500 | 0.457400 | 2.036300 | 1 |
+| `index_10k/query` | 0.006500 | 0.008400 | 0.012400 | 0 |
+| `doc_10k_wire_add/apply` | 0.000300 | 0.000500 | 0.007900 | 0 |
+| `doc_10k_wire_delete/apply` | 0.000300 | 0.000400 | 0.012500 | 0 |
+| `doc_10k_move_100/apply` | 0.076500 | 0.091600 | 0.154400 | 0 |
+| `doc_10k_move_100_connected/apply` | 0.156700 | 0.218600 | 0.360200 | 0 |
+| `doc_chain_20k_add/apply` | 0.042800 | 0.086800 | 0.338900 | 0 |
+| `doc_chain_20k_delete/apply` | 0.364800 | 0.613600 | 0.903100 | 0 |
+| `doc_label_bridge_add/apply` | 0.006800 | 0.022700 | 0.034300 | 0 |
+| `doc_label_bridge_delete/apply` | 0.182200 | 0.271800 | 0.450200 | 0 |
+
+Validation after review fixes: runner fmt, clippy (`-D warnings`), offline
+check and release build passed. Workspace fmt and clippy passed. Shell
+syntax and refusal before evidence creation were checked on the development
+machine. Synthetic archives verified summary acceptance for exactly 01-10
+and rejection of missing, duplicate and out-of-range passes; synthetic data
+is script validation only.
+
+Feature-enabled bench clippy and `cargo deny check` passed. Workspace tests
+initially failed with paging-file exhaustion while mapping GPUI metadata;
+`cargo test --workspace -j 1` then passed without changing any checks.
+No reference campaign ran and no budget or roadmap status changed.
+
+Re-review validation: all twelve smoke cases reran on AC. The phase-aware
+refusal and EXIT trap were exercised with unavailable AC, and the evidence
+pathspec was checked against a generated attempt marker. Workspace standard
+checks and runner fmt/clippy passed again. The prior paging-file failure
+above belongs to the earlier validation round; this round's single-job
+workspace test run passed directly.
