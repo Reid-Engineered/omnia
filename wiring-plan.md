@@ -476,14 +476,23 @@ impl FollowPolicy {
     pub const fn wire_follows(&self) -> bool;
 }
 
-// ---- run.rs ----
-pub enum Anchor { Pin { part: PartId, pin: u16 }, Junction, FreeEnd, Boundary }
+// ---- run.rs (as built by W1.2) ----
+// One kind per point, in this order: Boundary, Pin, Junction, FreeEnd. `Closed` marks a
+// closed loop of corners with no anchor (both ends at its least point); only run_through
+// reports it. `pin` is a usize, as in Doc::pins and Snap::Pin. runs_at and affected_runs
+// sort their runs by a, then b, then the point the first wire leads to (each by (x, y)), then
+// the first wire's id, so incidence order (changed by undo or load) never shows.
+pub enum Anchor { Pin { part: PartId, pin: usize }, Junction, FreeEnd, Boundary, Closed }
 pub struct Run { pub wires: SmallVec<[WireId; 4]>, pub a: (Pt, Anchor), pub b: (Pt, Anchor),
-                 pub labels: SmallVec<[LabelId; 1]> }
+                 pub labels: SmallVec<[LabelId; 1]> }                 // labels on corners only
+pub struct Boundary { /* boundary points sorted by (x, y); the selected wires */ }
 impl Doc {
     pub fn connected_pins(&self, part: PartId) -> u16;
     pub fn run_through(&self, wire: WireId, out: &mut Run);           // the run a segment is in
     pub fn runs_at(&self, at: Pt, out: &mut Vec<Run>);                // runs starting at a point
+    pub fn boundary_points(&self, items: &[ItemId], out: &mut Boundary);   // WD2
+    pub fn affected_runs(&self, boundary: &Boundary, out: &mut Vec<Run>);  // WD2, WINV8
+    pub fn labels_at(&self, at: Pt, out: &mut Vec<LabelId>);          // doc.rs; ascending ids
 }
 
 // ---- route.rs ----
