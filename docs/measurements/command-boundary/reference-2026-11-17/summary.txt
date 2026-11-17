@@ -1,0 +1,168 @@
+01-chain_20k_middle/add: p99_ms=0.159197 max_ms=0.285625 >=1ms=0
+01-chain_20k_middle/remove: p99_ms=0.908359 max_ms=1.152670 >=1ms=3
+01-doc_10k_move_100/apply: p99_ms=0.215286 max_ms=0.298853 >=1ms=0
+01-doc_10k_move_100_connected/apply: p99_ms=0.403787 max_ms=0.537967 >=1ms=0
+01-doc_10k_wire_add/apply: p99_ms=0.007678 max_ms=0.021586 >=1ms=0
+01-doc_10k_wire_delete/apply: p99_ms=0.001267 max_ms=0.011547 >=1ms=0
+01-doc_chain_20k_add/apply: p99_ms=0.764677 max_ms=0.947689 >=1ms=0
+01-doc_chain_20k_delete/apply: p99_ms=1.046180 max_ms=1.512783 >=1ms=12
+01-doc_label_bridge_add/apply: p99_ms=0.405715 max_ms=0.432150 >=1ms=0
+01-doc_label_bridge_delete/apply: p99_ms=0.583360 max_ms=1.074936 >=1ms=1
+01-index_10k/query: p99_ms=0.010271 max_ms=0.016195 >=1ms=0
+01-label_5k_gnd_vcc_bridge/add: p99_ms=0.008943 max_ms=0.027137 >=1ms=0
+01-label_5k_gnd_vcc_bridge/remove: p99_ms=0.248575 max_ms=0.408664 >=1ms=0
+01-real_10k_leaf/add: p99_ms=0.000083 max_ms=0.001289 >=1ms=0
+01-real_10k_leaf/remove: p99_ms=0.000086 max_ms=0.000855 >=1ms=0
+02-chain_20k_middle/add: p99_ms=0.173076 max_ms=0.305774 >=1ms=0
+02-chain_20k_middle/remove: p99_ms=0.833732 max_ms=1.158281 >=1ms=4
+02-doc_10k_move_100/apply: p99_ms=0.246450 max_ms=0.415728 >=1ms=0
+02-doc_10k_move_100_connected/apply: p99_ms=0.511214 max_ms=0.761013 >=1ms=0
+02-doc_10k_wire_add/apply: p99_ms=0.004274 max_ms=0.038809 >=1ms=0
+02-doc_10k_wire_delete/apply: p99_ms=0.000714 max_ms=0.010532 >=1ms=0
+02-doc_chain_20k_add/apply: p99_ms=0.729837 max_ms=1.030685 >=1ms=1
+02-doc_chain_20k_delete/apply: p99_ms=0.904579 max_ms=1.194356 >=1ms=5
+02-doc_label_bridge_add/apply: p99_ms=0.423429 max_ms=0.984116 >=1ms=0
+02-doc_label_bridge_delete/apply: p99_ms=0.366696 max_ms=0.421935 >=1ms=0
+02-index_10k/query: p99_ms=0.010658 max_ms=0.018808 >=1ms=0
+02-label_5k_gnd_vcc_bridge/add: p99_ms=0.009743 max_ms=0.040819 >=1ms=0
+02-label_5k_gnd_vcc_bridge/remove: p99_ms=0.258661 max_ms=0.396849 >=1ms=0
+02-real_10k_leaf/add: p99_ms=0.000083 max_ms=0.002318 >=1ms=0
+02-real_10k_leaf/remove: p99_ms=0.000086 max_ms=0.001174 >=1ms=0
+03-chain_20k_middle/add: p99_ms=0.142015 max_ms=0.327324 >=1ms=0
+03-chain_20k_middle/remove: p99_ms=0.823270 max_ms=1.132098 >=1ms=2
+03-doc_10k_move_100/apply: p99_ms=0.128327 max_ms=0.736992 >=1ms=0
+03-doc_10k_move_100_connected/apply: p99_ms=0.530802 max_ms=0.782579 >=1ms=0
+03-doc_10k_wire_add/apply: p99_ms=0.004548 max_ms=0.021250 >=1ms=0
+03-doc_10k_wire_delete/apply: p99_ms=0.001775 max_ms=0.009078 >=1ms=0
+03-doc_chain_20k_add/apply: p99_ms=0.731089 max_ms=1.021053 >=1ms=1
+03-doc_chain_20k_delete/apply: p99_ms=0.919699 max_ms=1.151930 >=1ms=5
+03-doc_label_bridge_add/apply: p99_ms=0.386296 max_ms=0.478688 >=1ms=0
+03-doc_label_bridge_delete/apply: p99_ms=0.298401 max_ms=0.425999 >=1ms=0
+03-index_10k/query: p99_ms=0.012452 max_ms=0.016286 >=1ms=0
+03-label_5k_gnd_vcc_bridge/add: p99_ms=0.017511 max_ms=0.045788 >=1ms=0
+03-label_5k_gnd_vcc_bridge/remove: p99_ms=0.386270 max_ms=0.658200 >=1ms=0
+03-real_10k_leaf/add: p99_ms=0.000083 max_ms=0.001235 >=1ms=0
+03-real_10k_leaf/remove: p99_ms=0.000086 max_ms=0.018375 >=1ms=0
+04-chain_20k_middle/add: p99_ms=0.176132 max_ms=0.319451 >=1ms=0
+04-chain_20k_middle/remove: p99_ms=0.875011 max_ms=1.137956 >=1ms=2
+04-doc_10k_move_100/apply: p99_ms=0.206151 max_ms=0.276235 >=1ms=0
+04-doc_10k_move_100_connected/apply: p99_ms=0.464793 max_ms=0.708478 >=1ms=0
+04-doc_10k_wire_add/apply: p99_ms=0.004136 max_ms=0.015021 >=1ms=0
+04-doc_10k_wire_delete/apply: p99_ms=0.000700 max_ms=0.007926 >=1ms=0
+04-doc_chain_20k_add/apply: p99_ms=0.776927 max_ms=0.989875 >=1ms=0
+04-doc_chain_20k_delete/apply: p99_ms=0.871739 max_ms=1.045150 >=1ms=2
+04-doc_label_bridge_add/apply: p99_ms=0.402771 max_ms=0.436191 >=1ms=0
+04-doc_label_bridge_delete/apply: p99_ms=0.557285 max_ms=1.168413 >=1ms=1
+04-index_10k/query: p99_ms=0.009896 max_ms=0.018424 >=1ms=0
+04-label_5k_gnd_vcc_bridge/add: p99_ms=0.010018 max_ms=0.024009 >=1ms=0
+04-label_5k_gnd_vcc_bridge/remove: p99_ms=0.254320 max_ms=0.405438 >=1ms=0
+04-real_10k_leaf/add: p99_ms=0.000083 max_ms=0.001268 >=1ms=0
+04-real_10k_leaf/remove: p99_ms=0.000086 max_ms=0.001016 >=1ms=0
+05-chain_20k_middle/add: p99_ms=0.105127 max_ms=0.151526 >=1ms=0
+05-chain_20k_middle/remove: p99_ms=0.788150 max_ms=0.905445 >=1ms=0
+05-doc_10k_move_100/apply: p99_ms=0.197549 max_ms=0.304897 >=1ms=0
+05-doc_10k_move_100_connected/apply: p99_ms=0.363295 max_ms=0.699959 >=1ms=0
+05-doc_10k_wire_add/apply: p99_ms=0.004116 max_ms=0.015045 >=1ms=0
+05-doc_10k_wire_delete/apply: p99_ms=0.000653 max_ms=0.010466 >=1ms=0
+05-doc_chain_20k_add/apply: p99_ms=0.751712 max_ms=1.018751 >=1ms=1
+05-doc_chain_20k_delete/apply: p99_ms=0.928960 max_ms=1.212481 >=1ms=6
+05-doc_label_bridge_add/apply: p99_ms=0.437737 max_ms=0.467807 >=1ms=0
+05-doc_label_bridge_delete/apply: p99_ms=0.292654 max_ms=0.610495 >=1ms=0
+05-index_10k/query: p99_ms=0.010432 max_ms=0.021198 >=1ms=0
+05-label_5k_gnd_vcc_bridge/add: p99_ms=0.018132 max_ms=0.042818 >=1ms=0
+05-label_5k_gnd_vcc_bridge/remove: p99_ms=0.461594 max_ms=0.930044 >=1ms=0
+05-real_10k_leaf/add: p99_ms=0.000084 max_ms=0.001788 >=1ms=0
+05-real_10k_leaf/remove: p99_ms=0.000086 max_ms=0.001067 >=1ms=0
+06-chain_20k_middle/add: p99_ms=0.183086 max_ms=0.283796 >=1ms=0
+06-chain_20k_middle/remove: p99_ms=0.888528 max_ms=1.097394 >=1ms=3
+06-doc_10k_move_100/apply: p99_ms=0.125729 max_ms=0.175810 >=1ms=0
+06-doc_10k_move_100_connected/apply: p99_ms=0.538382 max_ms=0.878093 >=1ms=0
+06-doc_10k_wire_add/apply: p99_ms=0.005646 max_ms=0.033196 >=1ms=0
+06-doc_10k_wire_delete/apply: p99_ms=0.001410 max_ms=0.008008 >=1ms=0
+06-doc_chain_20k_add/apply: p99_ms=0.777676 max_ms=0.982187 >=1ms=0
+06-doc_chain_20k_delete/apply: p99_ms=0.919445 max_ms=1.165456 >=1ms=5
+06-doc_label_bridge_add/apply: p99_ms=0.278133 max_ms=0.444926 >=1ms=0
+06-doc_label_bridge_delete/apply: p99_ms=0.553235 max_ms=0.985464 >=1ms=0
+06-index_10k/query: p99_ms=0.010752 max_ms=0.021907 >=1ms=0
+06-label_5k_gnd_vcc_bridge/add: p99_ms=0.014376 max_ms=0.043280 >=1ms=0
+06-label_5k_gnd_vcc_bridge/remove: p99_ms=0.422712 max_ms=0.681019 >=1ms=0
+06-real_10k_leaf/add: p99_ms=0.000096 max_ms=0.001464 >=1ms=0
+06-real_10k_leaf/remove: p99_ms=0.000089 max_ms=0.001088 >=1ms=0
+07-chain_20k_middle/add: p99_ms=0.192618 max_ms=0.341430 >=1ms=0
+07-chain_20k_middle/remove: p99_ms=0.911578 max_ms=1.161786 >=1ms=6
+07-doc_10k_move_100/apply: p99_ms=0.238425 max_ms=0.301244 >=1ms=0
+07-doc_10k_move_100_connected/apply: p99_ms=0.479762 max_ms=0.826270 >=1ms=0
+07-doc_10k_wire_add/apply: p99_ms=0.004511 max_ms=0.014882 >=1ms=0
+07-doc_10k_wire_delete/apply: p99_ms=0.001502 max_ms=0.010687 >=1ms=0
+07-doc_chain_20k_add/apply: p99_ms=0.764402 max_ms=0.935594 >=1ms=0
+07-doc_chain_20k_delete/apply: p99_ms=0.914442 max_ms=1.041798 >=1ms=3
+07-doc_label_bridge_add/apply: p99_ms=0.300999 max_ms=0.466008 >=1ms=0
+07-doc_label_bridge_delete/apply: p99_ms=0.643512 max_ms=0.943683 >=1ms=0
+07-index_10k/query: p99_ms=0.010275 max_ms=0.016848 >=1ms=0
+07-label_5k_gnd_vcc_bridge/add: p99_ms=0.011193 max_ms=0.023138 >=1ms=0
+07-label_5k_gnd_vcc_bridge/remove: p99_ms=0.296907 max_ms=0.393051 >=1ms=0
+07-real_10k_leaf/add: p99_ms=0.000083 max_ms=0.001229 >=1ms=0
+07-real_10k_leaf/remove: p99_ms=0.000088 max_ms=0.005008 >=1ms=0
+08-chain_20k_middle/add: p99_ms=0.146924 max_ms=0.329686 >=1ms=0
+08-chain_20k_middle/remove: p99_ms=0.838526 max_ms=1.459329 >=1ms=2
+08-doc_10k_move_100/apply: p99_ms=0.132230 max_ms=0.192355 >=1ms=0
+08-doc_10k_move_100_connected/apply: p99_ms=0.529612 max_ms=0.888345 >=1ms=0
+08-doc_10k_wire_add/apply: p99_ms=0.010736 max_ms=0.018628 >=1ms=0
+08-doc_10k_wire_delete/apply: p99_ms=0.000637 max_ms=0.011149 >=1ms=0
+08-doc_chain_20k_add/apply: p99_ms=1.355787 max_ms=2.575554 >=1ms=44
+08-doc_chain_20k_delete/apply: p99_ms=1.051295 max_ms=1.390896 >=1ms=15
+08-doc_label_bridge_add/apply: p99_ms=0.441246 max_ms=0.731364 >=1ms=0
+08-doc_label_bridge_delete/apply: p99_ms=1.279691 max_ms=2.981653 >=1ms=14
+08-index_10k/query: p99_ms=0.011018 max_ms=0.029897 >=1ms=0
+08-label_5k_gnd_vcc_bridge/add: p99_ms=0.019221 max_ms=0.171078 >=1ms=0
+08-label_5k_gnd_vcc_bridge/remove: p99_ms=0.531536 max_ms=0.982395 >=1ms=0
+08-real_10k_leaf/add: p99_ms=0.000085 max_ms=0.002749 >=1ms=0
+08-real_10k_leaf/remove: p99_ms=0.000088 max_ms=0.016696 >=1ms=0
+09-chain_20k_middle/add: p99_ms=0.169360 max_ms=0.249714 >=1ms=0
+09-chain_20k_middle/remove: p99_ms=0.854557 max_ms=0.998036 >=1ms=0
+09-doc_10k_move_100/apply: p99_ms=0.202758 max_ms=0.240345 >=1ms=0
+09-doc_10k_move_100_connected/apply: p99_ms=0.459300 max_ms=0.657844 >=1ms=0
+09-doc_10k_wire_add/apply: p99_ms=0.004499 max_ms=0.016206 >=1ms=0
+09-doc_10k_wire_delete/apply: p99_ms=0.001001 max_ms=0.006853 >=1ms=0
+09-doc_chain_20k_add/apply: p99_ms=0.747749 max_ms=1.025646 >=1ms=1
+09-doc_chain_20k_delete/apply: p99_ms=1.040124 max_ms=2.169242 >=1ms=12
+09-doc_label_bridge_add/apply: p99_ms=0.330061 max_ms=0.505905 >=1ms=0
+09-doc_label_bridge_delete/apply: p99_ms=0.507421 max_ms=0.818801 >=1ms=0
+09-index_10k/query: p99_ms=0.014500 max_ms=0.018356 >=1ms=0
+09-label_5k_gnd_vcc_bridge/add: p99_ms=0.015793 max_ms=0.058981 >=1ms=0
+09-label_5k_gnd_vcc_bridge/remove: p99_ms=0.457978 max_ms=1.278747 >=1ms=1
+09-real_10k_leaf/add: p99_ms=0.000082 max_ms=0.001552 >=1ms=0
+09-real_10k_leaf/remove: p99_ms=0.000085 max_ms=0.001060 >=1ms=0
+10-chain_20k_middle/add: p99_ms=0.119365 max_ms=0.289594 >=1ms=0
+10-chain_20k_middle/remove: p99_ms=0.771775 max_ms=1.223263 >=1ms=1
+10-doc_10k_move_100/apply: p99_ms=0.134981 max_ms=0.199988 >=1ms=0
+10-doc_10k_move_100_connected/apply: p99_ms=0.575261 max_ms=1.175124 >=1ms=1
+10-doc_10k_wire_add/apply: p99_ms=0.004776 max_ms=0.027487 >=1ms=0
+10-doc_10k_wire_delete/apply: p99_ms=0.000674 max_ms=0.012083 >=1ms=0
+10-doc_chain_20k_add/apply: p99_ms=0.757972 max_ms=0.823845 >=1ms=0
+10-doc_chain_20k_delete/apply: p99_ms=0.954199 max_ms=1.716103 >=1ms=8
+10-doc_label_bridge_add/apply: p99_ms=0.430097 max_ms=0.466613 >=1ms=0
+10-doc_label_bridge_delete/apply: p99_ms=0.278724 max_ms=0.425529 >=1ms=0
+10-index_10k/query: p99_ms=0.013132 max_ms=0.023126 >=1ms=0
+10-label_5k_gnd_vcc_bridge/add: p99_ms=0.019638 max_ms=0.085463 >=1ms=0
+10-label_5k_gnd_vcc_bridge/remove: p99_ms=0.477767 max_ms=1.151822 >=1ms=1
+10-real_10k_leaf/add: p99_ms=0.000083 max_ms=0.001363 >=1ms=0
+10-real_10k_leaf/remove: p99_ms=0.000086 max_ms=0.001226 >=1ms=0
+
+Median of 10 run p99s; range; all-observation mean/max/misses (diagnostic):
+Target: median_p99_ms < 1.0 ms (strict, unchanged). >=1ms counts are diagnostics, not an all-samples gate.
+chain_20k_middle/add: median_p99_ms=0.164278 range_ms=0.105127..0.192618 mean_ms=0.058268 max_ms=0.341430 >=1ms=0/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+chain_20k_middle/remove: median_p99_ms=0.846542 range_ms=0.771775..0.911578 mean_ms=0.504140 max_ms=1.459329 >=1ms=23/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+doc_10k_move_100/apply: median_p99_ms=0.200153 range_ms=0.125729..0.246450 mean_ms=0.115351 max_ms=0.736992 >=1ms=0/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+doc_10k_move_100_connected/apply: median_p99_ms=0.495488 range_ms=0.363295..0.575261 mean_ms=0.273969 max_ms=1.175124 >=1ms=1/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+doc_10k_wire_add/apply: median_p99_ms=0.004530 range_ms=0.004116..0.010736 mean_ms=0.002564 max_ms=0.038809 >=1ms=0/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+doc_10k_wire_delete/apply: median_p99_ms=0.000857 range_ms=0.000637..0.001775 mean_ms=0.000652 max_ms=0.012083 >=1ms=0/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+doc_chain_20k_add/apply: median_p99_ms=0.761187 range_ms=0.729837..1.355787 mean_ms=0.421604 max_ms=2.575554 >=1ms=48/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+doc_chain_20k_delete/apply: median_p99_ms=0.924330 range_ms=0.871739..1.051295 mean_ms=0.545022 max_ms=2.169242 >=1ms=73/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+doc_label_bridge_add/apply: median_p99_ms=0.404243 range_ms=0.278133..0.441246 mean_ms=0.219068 max_ms=0.984116 >=1ms=0/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+doc_label_bridge_delete/apply: median_p99_ms=0.530328 range_ms=0.278724..1.279691 mean_ms=0.283620 max_ms=2.981653 >=1ms=16/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+index_10k/query: median_p99_ms=0.010705 range_ms=0.009896..0.014500 mean_ms=0.008050 max_ms=0.029897 >=1ms=0/10000 comparison=n/a (no 1 ms target) (not a gate verdict; reference conditions not verified)
+label_5k_gnd_vcc_bridge/add: median_p99_ms=0.015085 range_ms=0.008943..0.019638 mean_ms=0.009047 max_ms=0.171078 >=1ms=0/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+label_5k_gnd_vcc_bridge/remove: median_p99_ms=0.404491 range_ms=0.248575..0.531536 mean_ms=0.256619 max_ms=1.278747 >=1ms=2/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+real_10k_leaf/add: median_p99_ms=0.000083 range_ms=0.000082..0.000096 mean_ms=0.000082 max_ms=0.002749 >=1ms=0/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
+real_10k_leaf/remove: median_p99_ms=0.000086 range_ms=0.000085..0.000089 mean_ms=0.000075 max_ms=0.018375 >=1ms=0/10000 comparison=median_p99 < 1 ms (not a gate verdict; reference conditions not verified)
