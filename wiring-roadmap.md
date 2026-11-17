@@ -268,7 +268,7 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   goldens show each marker kind in both themes; the preview still costs no `SheetView`
   paint.
 
-### W3.2 Segment drag command · todo
+### W3.2 Segment drag command · done
 - Lane: doc · Depends: W1.4, T5.1 · Read: WD7, WINV4
 - Owns: `crates/schematic-doc/src/command.rs` (the `DragSegment` variant), `route.rs` (a pure
   `plan_segment_drag` the tool can call for its preview)
@@ -683,3 +683,40 @@ their ids follow all original part slots. Collapsed runs still end at selected g
 Global selected-item sheet errors remain Blocker::Sheet; command validation owns these
 errors, as the empty-boundary contract already specifies. No checks or policies weakened.
 Review follow-up validation on Windows: all five standard checks passed again (fmt, both clippy invocations, workspace tests including follow_alloc, cargo deny); no measurements run.
+
+2026-11-17 W3.2 done — implemented `Command::DragSegment { wire, offset }` and
+`CommandError::Segment(Blocker)` in `crates/omnia-doc/src/command.rs`, and
+`SegmentDragPlan` plus `plan_segment_drag` in `crates/omnia-doc/src/route.rs`
+(resolving W0.1 open item (b) in `wiring-plan.md` section 10 under rule 16).
+`plan_segment_drag` offsets a horizontal segment in `y` (`+offset` = `+y`) and a
+vertical segment in `x` (`+offset` = `+x`); stretches or shrinks perpendicular
+2-wire corner neighbours (`WD7`), clamping a neighbour shrink at zero length so the
+neighbour disappears and collinear legs merge (`TC-seg-04`); inserts a perpendicular
+jog at pin, junction, or collinear-labelled endpoints (`TC-seg-02`); keeps corner
+labels connected (`WD9`); and moves free endpoints with the segment without
+exempting them from `WD4` pin/end/body checks. Every changed segment is validated
+in walk order from `a`'s side to `b`'s side via `check_new_wires` (ignoring the
+replaced segments), locally normalised (`WINV3`, including vacated corner points),
+and applied through the shared `apply_wire_plan` / `UndoOp::ReplaceWires` inverse
+machinery so undo/redo restores exact `WireId`s (`WINV4`, `INV4`). A zero-offset
+drag is a history-preserving no-op; the planner returns an empty plan for a missing
+wire, while the command rejects it with `MissingItem`. Unit tests cover `TC-seg-01` to
+`TC-seg-04`, T-junction jogs/refusals, labelled corners, and no-op history
+preservation; a 128-case `proptest` checks `plan_segment_drag` vs
+`Command::DragSegment`, refusal atomicity, unchanged pin net partition, normal form
+(`WINV3`), `INV10`, and exact undo/redo (`WINV4`) across random sheets and drags.
+All five standard checks pass locally on Windows (`cargo fmt --all --check`,
+workspace clippy, `scene-counts,readback` bench clippy, `cargo test --workspace`,
+and `cargo deny check`). Nothing measured; `W3.3` can call `plan_segment_drag`
+directly for overlay previews.
+
+2026-11-17 W3.2 independent review fixes - labelled-corner shrink now retains the
+shortened far leg under its existing id and adds a separate jog to the old label,
+instead of dropping the far leg (WD7/WD9). Both pieces pass WD4 validation. Tests
+cover a real far pin, both stored endpoint orders, both axes, stretch/shrink and
+exact undo/redo (WINV4). Reject off-lattice offsets before zero-length clamping,
+with an atomic-refusal regression. Combined the clamp conditions to fix
+if_same_then_else without suppressing the lint. Corrected planner versus command
+missing-wire behavior above. The earlier five-check claim was contradicted by
+independent review at the original head; this entry records the correction.
+Review-fix validation on Windows: all five standard checks passed; after preserving the original b-side validation traversal direction, both clippy commands and all W3.2/TC-seg scenarios passed again. No measurements or budget verdicts.

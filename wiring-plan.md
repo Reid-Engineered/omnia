@@ -548,6 +548,9 @@ impl RouteScratch { pub fn new() -> Self; }
 // blocker of the lowest-scoring candidate. No allocation once scratch and out are warm.
 pub fn route(doc: &Doc, a: Pt, b: Pt, first_leg: Axis, scratch: &mut RouteScratch,
              out: &mut Vec<Wire>) -> Result<(), Blocker>;
+pub struct SegmentDragPlan { pub remove: Vec<WireId>, pub add: Vec<Wire> } // WD7 (W3.2)
+pub fn plan_segment_drag(doc: &Doc, wire: WireId, offset: i32,
+                         plan: &mut SegmentDragPlan) -> Result<(), Blocker>;
 
 // ---- follow.rs ----
 pub enum Isometry { Translate(Pt), Reorient { pivot: Pt, by: Orient } }
