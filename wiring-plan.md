@@ -26,6 +26,10 @@ map exist (T1.1, T2.1); commands, connectivity, the spatial index and routing do
 | `TC` | Scenario with its expected result | 8 |
 | `WQ` | Open question for the owner, each with a default | 12 |
 
+Crate names: this plan writes `schematic-doc`, `schematic-canvas` and `schematic-bench`. In
+this repository those crates are `omnia-doc`, `omnia-canvas` and `omnia-bench` (see `crates/`);
+read every `schematic-*` name as the matching `omnia-*` crate.
+
 Status words are the canvas plan's: **DECIDED**, **DEFAULT** (the owner has not answered; build
 the stated default and do not ask again), and one more:
 
@@ -89,7 +93,7 @@ small share of a 16.7 ms frame because the overlay still has to paint the result
 | WK7 | Preview cap (chosen) | The follow preview is drawn live for up to 256 affected runs. Above that the preview shows ghosts only and the plan is computed at commit. |
 | WK8 | Router trigger (chosen) | WB7's 2%. |
 | WK9 | Router costs, if built (chosen; see M11) | Step 2, bend 30, crossing a foreign wire 20. |
-| WK10 | Preference defaults | `follow_on_move` true once Q6 is answered yes; `follow_pin_threshold` 10; `select_mode` Enclosed (WQ3); `delete_wires_with_part` false (WQ4). |
+| WK10 | Preference defaults | `follow_on_move` true (WQ1 yes); `follow_pin_threshold` 10; `select_mode` Intersecting (WQ3); `delete_wires_with_part` false (WQ4). |
 
 ## 4. Design considerations
 
@@ -170,7 +174,7 @@ foreign wire (WD4).
   Each is found once, even when both of its ends are boundary points (WINV8).
 - Wires in `S` are moved by `T` like any other selected item and are not re-planned.
 
-### WD3 Wires follow moved parts. GATED on HW1 (Q6 answered yes)
+### WD3 Wires follow moved parts. DECIDED (HW1, 2026-11-16: Q6/WQ1 answered yes)
 
 For each affected run, in a fixed order that does not depend on the order of `items`:
 
@@ -226,6 +230,9 @@ Crossing a foreign wire's interior at one point is valid: by INV2 it is not a co
 Among valid candidates the lowest score wins, comparing in order: segments passing through
 the interior of any part's bounds (fewer is better); bends; crossings of foreign wires;
 total length; candidate number. The last term makes the choice deterministic (WINV6).
+When no candidate is valid, the same comparison ranks the invalid candidates, and the
+refusal reports the blocker of the lowest-scoring one: the first rule above that fails,
+walking its segments from `a` (clarified at W0.2, 2026-11-16).
 
 The result is normalised by T6.1's merge rule, with one addition: a point that carries a
 label is never merged away.
@@ -270,7 +277,7 @@ label is never merged away.
   then removed and the merge rule applies.
 - One `Command::DragSegment`, one undo step. Undo restores the original wires and ids.
 
-### WD8 Rubber-band selection. DEFAULT (WQ3)
+### WD8 Rubber-band selection. DECIDED (WQ3 answered 2026-11-16: Intersecting)
 
 - The box is normalised: drag direction never changes the result (M14).
 - Two modes, a preference: **Enclosed** selects items wholly inside the box; **Intersecting**
@@ -294,7 +301,7 @@ label is never merged away.
 - A label on a moved part's pin moves with the pin.
 - Label position locking is out of scope.
 
-### WD10 Deleting a part's wires. DEFAULT (WQ4)
+### WD10 Deleting a part's wires. DECIDED (WQ4 answered 2026-11-16: No)
 
 - Preference `delete_wires_with_part`. When on, deleting a part also deletes every run that
   starts at one of its pins, up to that run's far anchor. Runs beyond a junction stay.
@@ -323,6 +330,13 @@ label is never merged away.
   one. Nothing is persisted and there is no settings window; both are out of scope.
 - A command carries the policy it was built with (`FollowPolicy`), so redo replays the same
   decision even if a preference changed in between.
+- W1.1 clarification (2026-11-16): `Default` follows WK10 as answered at HW1 (W0.2):
+  `follow_on_move` true, `select_mode` Intersecting, `delete_wires_with_part` false. Threshold fields are private `u16`s with
+  read accessors; checked constructors return `InvalidFollowThreshold` for zero, so
+  struct literals cannot bypass WK2. Types live in `omnia_doc::prefs` in this repository.
+  `follow_policy` captures the supplied Alt state; `part_follows` inverts the entire
+  conjunction in WD3, including the threshold result, and `wire_follows` implements
+  its moved-wire case. Counts use `usize` to avoid narrowing a document pin count.
 
 ## 7. Invariants
 
@@ -441,9 +455,24 @@ Signatures are a sketch: names and shapes to build toward, not a frozen interfac
 ```rust
 // ---- schematic-doc: prefs.rs ----
 pub enum SelectMode { Enclosed, Intersecting }
-pub struct WiringPrefs { pub follow_on_move: bool, pub follow_pin_threshold: u16,
+pub struct WiringPrefs { pub follow_on_move: bool, follow_pin_threshold: u16,
                          pub select_mode: SelectMode, pub delete_wires_with_part: bool }
-pub struct FollowPolicy { pub follow_on_move: bool, pub pin_threshold: u16, pub invert: bool }
+pub struct FollowPolicy { pub follow_on_move: bool, pin_threshold: u16, pub invert: bool }
+
+impl WiringPrefs {
+    pub const fn new(follow_on_move: bool, follow_pin_threshold: u16,
+                     select_mode: SelectMode, delete_wires_with_part: bool)
+        -> Result<Self, InvalidFollowThreshold>;
+    pub const fn follow_pin_threshold(&self) -> u16;
+    pub const fn follow_policy(&self, modifier_held: bool) -> FollowPolicy;
+}
+impl FollowPolicy {
+    pub const fn new(follow_on_move: bool, pin_threshold: u16, invert: bool)
+        -> Result<Self, InvalidFollowThreshold>;
+    pub const fn pin_threshold(&self) -> u16;
+    pub const fn part_follows(&self, connected_pins: usize) -> bool;
+    pub const fn wire_follows(&self) -> bool;
+}
 
 // ---- run.rs ----
 pub enum Anchor { Pin { part: PartId, pin: u16 }, Junction, FreeEnd, Boundary }
@@ -518,20 +547,19 @@ No new dependency. `smallvec` is already in canvas plan section 10.
 
 ## 12. Open questions
 
-Each has a default. Build to the default; the owner's answer replaces it here. WQ1 is the
-exception: it has no buildable default, because the canvas plan's Q6 default is "No" and
-T6.3 is blocked on it.
+Each had a default. The owner answered all eight at HW1 on 2026-11-16 (task W0.2); the
+answer column below is binding. WQ5 stays open for review after W2.3, as recommended.
 
-| ID | Question | Default until answered | Recommended |
+| ID | Question | Answer | Recommended |
 | --- | --- | --- | --- |
-| WQ1 | Canvas Q6: do attached wires follow a moved part, by the WD3 rules? | No. Milestone W2 stays blocked (HW1). | Yes |
-| WQ2 | Which modifier inverts follow and detach? | Alt (WK3) | Alt |
-| WQ3 | Rubber-band default: Enclosed (T4.3 as written) or Intersecting (the alternative in M14)? | Enclosed | Intersecting, with Enclosed as the option |
-| WQ4 | Does deleting a part delete its wires by default? | No (T5.3 as written) | Owner's preference; WD10 supports either choice (M16) |
-| WQ5 | Should follow keep the old run's shape when only its last segment needs to change length? | No: re-route the whole run (M1) | Decide after using W2.3; it is a candidate 0 in WD4 if wanted |
-| WQ6 | When a moved pin touched another pin directly, should follow insert a wire to keep them connected? | No | No |
-| WQ7 | When a run must follow and has no valid route: refuse the move, or detach that run? | Refuse | Refuse, and revisit with WB7's number |
-| WQ8 | Should this documentation change include implementation or other supporting artifacts? | No. Include only the two wiring Markdown files. | No |
+| WQ1 | Canvas Q6: do attached wires follow a moved part, by the WD3 rules? | **Answered 2026-11-16: Yes.** Milestone W2 is unblocked. | Yes |
+| WQ2 | Which modifier inverts follow and detach? | **Answered 2026-11-16: Alt** (default kept, WK3). | Alt |
+| WQ3 | Rubber-band default: Enclosed (T4.3 as written) or Intersecting (the alternative in M14)? | **Answered 2026-11-16: Intersecting**, with Enclosed as the option. | Intersecting, with Enclosed as the option |
+| WQ4 | Does deleting a part delete its wires by default? | **Answered 2026-11-16: No** (T5.3 as written). | Owner's preference; WD10 supports either choice (M16) |
+| WQ5 | Should follow keep the old run's shape when only its last segment needs to change length? | **Answered 2026-11-16: No for now** (default kept: re-route the whole run, M1). Revisit after W2.3. | Decide after using W2.3; it is a candidate 0 in WD4 if wanted |
+| WQ6 | When a moved pin touched another pin directly, should follow insert a wire to keep them connected? | **Answered 2026-11-16: No** (default kept). | No |
+| WQ7 | When a run must follow and has no valid route: refuse the move, or detach that run? | **Answered 2026-11-16: Refuse.** Revisit with WB7's number (W4.3). | Refuse, and revisit with WB7's number |
+| WQ8 | Should this documentation change include implementation or other supporting artifacts? | **Answered 2026-11-16: No** (default kept). | No |
 
 ## 13. Changes to the canvas plan and roadmap
 
