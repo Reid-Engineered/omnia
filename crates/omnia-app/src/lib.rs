@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod assets;
+pub mod chrome;
 pub mod keymap;
 pub mod status_bar;
 pub mod theme;
