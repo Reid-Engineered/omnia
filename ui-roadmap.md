@@ -238,7 +238,7 @@ without being drawn.
 - Done when: UTC-menu-keys and UTC-menu-mouse pass headless; the menu's paint count on `SheetView`
   is 0; `debug_bounds` of the bar matches UK2.
 
-### U1.6 Toolbar · todo
+### U1.6 Toolbar · done
 - Lane: shell · Depends: U1.3, U1.4 · Read: UD3, UD19, UK3
 - Owns: `crates/omnia-app/src/chrome/toolbar.rs`
 - Do: the groups in UK3 order, generated from the registry; the place strip showing the twelve
@@ -669,3 +669,23 @@ All five standard checks (`cargo fmt --all --check`, `cargo clippy --workspace -
 `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
 `cargo test --workspace`, and `cargo deny check`) pass on a Windows development machine
 (certifies no reference budget).
+
+2026-11-17 U1.6 done — Implemented the workspace Toolbar in `crates/omnia-app/src/chrome/toolbar.rs` (new
+`chrome` module, wired in `lib.rs`; UD3, UD19, UK3). File/edit/zoom groups and the run controls are
+generated from the U1.4 registry via `toolbar_actions` (labels, icons, shortcut tooltips and
+enabled/checked all come from `ACTIONS`; clicks dispatch the registry action, disabled buttons
+dispatch nothing per UINV5). The place strip shows the twelve mockup category buttons, all disabled
+until U4.2, with nearest vendored Tabler glyphs (real symbol glyphs/popovers are U4.2/T2.3); the
+"In use" picker is present at 158 px, disabled until U4.2, its count supplied through
+`Toolbar::set_in_use_count` (notifies only on change). The analysis picker shows greyed "Transient"
+and opens a popover with one disabled entry; Run (60x28 primary), Pause and Stop are disabled with
+the UD19 "Simulation is not available in this build" tooltip while `SimState::Unavailable`, and the
+74x24 time pill shows the UD19 placeholder with no dot. `Toolbar` observes the per-window
+`CommandState` entity and re-renders only when its `ShownState` projection (enabled/checked of every
+toolbar action, analysis enabled, sim state) changes. Headless tests flip every `CommandState` field
+and assert exactly one render for shown values and zero for `tab_count`, dock toggles, `theme`,
+`canvas_edits.delete` and `canvas_edits.place` (plus a same-value notify), `debug_bounds` asserts UK3
+sizes/gaps/order at 1440x900, and click tests cover dispatch, disabled no-ops and analysis popover
+Esc close. All five standard checks pass on a Windows development machine (certifies no reference
+budget); `cargo run -p omnia-app -- --frames 60` exits 0. Deviations: the toolbar is not yet embedded
+in the window (workspace layout is U1.7, as with U1.3/U1.4); U4.3 owns overflow at small sizes.
