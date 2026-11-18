@@ -6,8 +6,9 @@ baseline plus 4 ms. The baseline is the median paint wall of the 10 measured fra
 side (the zoom sweep's normal paint ranges from about 3 to 7.5 ms). Its excess (wall minus
 the baseline) is split by the probe:
 
-- preempted: wall - cpu >= half the excess, and run-queue wait >= half of (wall - cpu);
-- blocked: wall - cpu >= half the excess otherwise (asleep, not runnable);
+- preempted: wall - cpu >= half the excess, and an involuntary context switch or run-queue
+  wait >= half of (wall - cpu);
+- blocked: wall - cpu >= half the excess otherwise (a voluntary switch: asleep, not runnable);
 - slow, faulting: cpu carries the excess and minor + major faults >= 10x the run's median;
 - slow, no faults: cpu carries the excess without that, so execution itself was slow
   (clocks, SMT sibling or memory contention); the end CPU's cur freq is shown against the
@@ -28,7 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "T1.6"))
 from attribute import timeline
 
 COLUMNS = ["wall_ns", "cpu_ns", "runqueue_wait_ns", "timeslices", "minor_faults",
-           "major_faults", "cpu_start", "cpu_end", "end_cpu_cur_freq_khz"]
+           "major_faults", "voluntary_switches", "involuntary_switches", "cpu_start", "cpu_end",
+           "end_cpu_cur_freq_khz"]
 
 
 def local_wall(measured, index):
@@ -41,7 +43,7 @@ def classify(row, local, base):
     off_cpu = row["wall_ns"] - row["cpu_ns"]
     faults = row["minor_faults"] + row["major_faults"]
     if off_cpu >= excess / 2:
-        if row["runqueue_wait_ns"] >= off_cpu / 2:
+        if row["involuntary_switches"] or row["runqueue_wait_ns"] >= off_cpu / 2:
             return "preempted"
         return "blocked"
     if faults >= 10 * max(base["faults"], 1):
@@ -95,7 +97,7 @@ def main():
                 f"  {name} frame {index}: {kind}; wall {r['wall_ns'] / 1e6:.2f} ms (local "
                 f"{local / 1e6:.2f}), cpu "
                 f"{r['cpu_ns'] / 1e6:.2f}, run-queue wait {r['runqueue_wait_ns'] / 1e6:.2f}, "
-                f"slices {r['timeslices']}, faults {r['minor_faults']}+{r['major_faults']}, cpu "
+                f"switches {r['voluntary_switches']}v/{r['involuntary_switches']}i, faults {r['minor_faults']}+{r['major_faults']}, cpu "
                 f"{r['cpu_start']}->{r['cpu_end']}, freq {r['end_cpu_cur_freq_khz'] / 1e3:.0f} MHz"
                 + (f"; present interval {interval / 1e6:.2f} ms" if interval else ""))
     print("\nStalls")

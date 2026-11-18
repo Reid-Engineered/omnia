@@ -1,9 +1,10 @@
 //! Diagnostic only (T2.7 paint-stall investigation): per-paint thread scheduling counters.
 //!
-//! With `OMNIA_BENCH_PAINT_PROBE=1` on Linux, every `SceneElement` paint records, from
-//! `/proc/thread-self`: wall time, thread CPU time, run-queue wait and timeslices
-//! (`schedstat`), minor and major page faults and the CPU the thread was on (`stat`), and the
-//! end CPU's `scaling_cur_freq`. Wall time well above CPU time means the thread was not
+//! With `OMNIA_BENCH_PAINT_PROBE=1` on Linux, every `SceneElement` paint records: wall time,
+//! thread CPU time (`CLOCK_THREAD_CPUTIME_ID`), page faults and voluntary and involuntary
+//! context switches (`getrusage(RUSAGE_THREAD)`), run-queue wait and timeslices
+//! (`/proc/thread-self/schedstat`), the CPU at start and end (`sched_getcpu`), and the end
+//! CPU's `scaling_cur_freq`. Wall time well above CPU time means the thread was not
 //! running (run-queue wait says whether it was runnable); CPU time well above the usual
 //! paint, with no faults or waits, means it ran slowly. Files are opened once and re-read with
 //! `pread` into stack buffers, and samples go into a vector reserved up front, so a paint
@@ -22,6 +23,8 @@ mod linux {
         slices: u64,
         minflt: u64,
         majflt: u64,
+        voluntary: u64,
+        involuntary: u64,
         cpu: u32,
     }
 
@@ -35,7 +38,6 @@ mod linux {
 
     struct Files {
         schedstat: std::fs::File,
-        stat: std::fs::File,
         freq: Vec<Option<std::fs::File>>,
     }
 
@@ -58,10 +60,7 @@ mod linux {
         }
         {
             use std::fs::File;
-            let (Ok(schedstat), Ok(stat)) = (
-                File::open("/proc/thread-self/schedstat"),
-                File::open("/proc/thread-self/stat"),
-            ) else {
+            let Ok(schedstat) = File::open("/proc/thread-self/schedstat") else {
                 return false;
             };
             let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
@@ -75,11 +74,7 @@ mod linux {
                 .collect();
             PROBE.with_borrow_mut(|probe| {
                 *probe = Some(Probe {
-                    files: Files {
-                        schedstat,
-                        stat,
-                        freq,
-                    },
+                    files: Files { schedstat, freq },
                     samples: Vec::with_capacity(capacity),
                     dropped: 0,
                     open: None,
@@ -135,6 +130,8 @@ mod linux {
                         s.end.slices.saturating_sub(s.start.slices),
                         s.end.minflt.saturating_sub(s.start.minflt),
                         s.end.majflt.saturating_sub(s.start.majflt),
+                        s.end.voluntary.saturating_sub(s.start.voluntary),
+                        s.end.involuntary.saturating_sub(s.start.involuntary),
                         s.start.cpu,
                         s.end.cpu,
                         s.freq_khz,
@@ -143,7 +140,8 @@ mod linux {
                 .collect();
             Some(json!({
                 "columns": ["wall_ns", "cpu_ns", "runqueue_wait_ns", "timeslices", "minor_faults",
-                            "major_faults", "cpu_start", "cpu_end", "end_cpu_cur_freq_khz"],
+                            "major_faults", "voluntary_switches", "involuntary_switches",
+                            "cpu_start", "cpu_end", "end_cpu_cur_freq_khz"],
                 "scope": "every SceneElement paint, warm-up included, one per draw",
                 "dropped": probe.dropped,
                 "rows": rows,
@@ -154,36 +152,30 @@ mod linux {
     impl Probe {
         fn read(&self) -> Counters {
             use std::os::unix::fs::FileExt;
-            let mut buf = [0u8; 1024];
             let mut counters = Counters::default();
+            // SAFETY: plain syscalls writing into locals we own.
+            unsafe {
+                let mut ts = std::mem::zeroed::<libc::timespec>();
+                if libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) == 0 {
+                    counters.cpu_ns = ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64;
+                }
+                let mut usage = std::mem::zeroed::<libc::rusage>();
+                if libc::getrusage(libc::RUSAGE_THREAD, &mut usage) == 0 {
+                    counters.minflt = usage.ru_minflt as u64;
+                    counters.majflt = usage.ru_majflt as u64;
+                    counters.voluntary = usage.ru_nvcsw as u64;
+                    counters.involuntary = usage.ru_nivcsw as u64;
+                }
+                counters.cpu = libc::sched_getcpu().max(0) as u32;
+            }
+            // Run-queue wait is accounted when the thread is next scheduled, so a wait that
+            // ended inside the paint is already counted when the paint ends.
+            let mut buf = [0u8; 128];
             if let Ok(n) = self.files.schedstat.read_at(&mut buf, 0) {
                 let mut fields = fields(&buf[..n]);
-                counters.cpu_ns = fields.next().unwrap_or(0);
+                let _cpu_ns_at_last_switch = fields.next();
                 counters.wait_ns = fields.next().unwrap_or(0);
                 counters.slices = fields.next().unwrap_or(0);
-            }
-            if let Ok(n) = self.files.stat.read_at(&mut buf, 0) {
-                // Fields after the `)` closing comm start at field 3 (state).
-                let text = &buf[..n];
-                if let Some(close) = text.iter().rposition(|&b| b == b')') {
-                    let rest = &text[close + 1..];
-                    for (index, value) in rest
-                        .split(|b| *b == b' ')
-                        .filter(|f| !f.is_empty())
-                        .enumerate()
-                    {
-                        let field = index + 3;
-                        match field {
-                            10 => counters.minflt = number(value),
-                            12 => counters.majflt = number(value),
-                            39 => {
-                                counters.cpu = number(value) as u32;
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
             }
             counters
         }

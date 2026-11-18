@@ -766,6 +766,7 @@ Build-time steps:
 | `profiling`, `tracy-client` (feature `tracy`) | Spans, on the same timeline as GPUI's | MIT or Apache-2.0 |
 | `hdrhistogram` | Bench percentiles | MIT or Apache-2.0 |
 | `serde_json` | Bench JSON reports; the agent wire schema in `omnia-agent` and `omnia-cli` ([mcp-plan.md](mcp-plan.md) section 15) | MIT or Apache-2.0 |
+| `libc` 0.2 (`omnia-bench` on Linux only; already in the graph through GPUI) | Diagnostic paint probe: thread CPU clock, `getrusage(RUSAGE_THREAD)`, `sched_getcpu` (T2.7 paint-stall investigation, logged 2026-11-18) | MIT OR Apache-2.0 |
 | `resvg` 0.46 (`omnia-bench` feature `readback` only, never default; GPUI already depends on it) | S3/S8 readback reference renders | Apache-2.0 OR MIT |
 | GPUI's Linux `wayland` feature, enabled by `omnia-bench` and `omnia-app` on Linux (transitive, listed below) | Wayland window backend | MIT, MIT OR Apache-2.0, or MIT OR Apache-2.0 OR Zlib |
 | `usvg`, `zip`, `serde_json`, `toml` (xtask only) | Codegen | Apache-2.0 or MIT; `zip` MIT |
