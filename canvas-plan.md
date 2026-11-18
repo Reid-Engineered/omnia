@@ -697,7 +697,7 @@ Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 | Command | Reports |
 | --- | --- |
 | `bench run --sheet S --script pan\|zoom\|drag-part\|drag-wire\|hover [--frames 600]` | Frame, draw and dirty-to-present ms (p50, p95, p99, max); `allocs_per_frame` (ours, total); `memory_mb`; primitive counts by kind (build with `--features scene-counts`, which needs GPUI's `bench-support`) |
-| `bench run --headless --sheet S --script pan\|zoom` | Peak primitive counts by kind and Omnia allocations per frame over the script on the test platform (build with `--features headless`). No frame-time metrics. |
+| `bench run --headless --sheet S --script pan\|zoom` | Peak and sweep-wide primitive counts and Omnia allocations per frame over the script on the test platform (build with `--features headless`). No frame-time metrics. |
 | `bench start [--sheet S] [--runs 10]` | Process start to first interactive frame, median and max |
 | `bench idle --seconds N` | Frames drawn; CPU percent |
 | `bench hit --sheet S` | Hit-test time, p50 and p99 |
@@ -789,9 +789,9 @@ Upgrade routine, run about monthly or when a needed fix lands, as its own task:
 T2.6 uses the seeded T2.4 stress sheets (seed 42). Hosted CI checks the `1k` and `10k`
 pan and zoom scripts at 1280×800 logical pixels and the test platform's fixed 200% scale,
 with 600 warm-up frames and 600 measured frames. The gate checks the Omnia allocation summary
-and peak counts per primitive kind. The manual workflow compares the median of ten run p99s per
-case from two completed Orion campaigns and prints the ranges. Collect those reports on Orion
-under section 2.1, consistent with Q4.
+and peak and sweep-wide primitive counts. The manual workflow compares median run p99s and
+prints the ranges. Collect the reports by hand on Orion under section 2.1, consistent with Q4.
+The local runner interleaves both revisions and retains the order, binary hashes and conditions.
 
 ## 12. Open questions
 

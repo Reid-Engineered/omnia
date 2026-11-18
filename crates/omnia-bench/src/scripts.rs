@@ -34,7 +34,7 @@ impl Render for ScriptView {
     }
 }
 
-/// Draw a fixed script and report the peak primitive count of each kind and per-frame allocations.
+/// Draw a fixed script and report peak and sweep-wide primitive counts and per-frame allocations.
 pub fn run_headless(config: RunConfig) -> Result<Value, String> {
     if !matches!(config.sheet, Sheet::Stress(_)) {
         return Err("--headless needs a generated document (100, 1k, 10k, dense, or text)".into());
@@ -67,6 +67,7 @@ pub fn run_headless(config: RunConfig) -> Result<Value, String> {
     let scale_factor = window.update(|_, window, _| window.scale_factor());
     let mut ours_per_frame = Vec::with_capacity(config.frames as usize);
     let mut peak_primitives = BTreeMap::<String, u64>::new();
+    let mut sweep_primitives = BTreeMap::<String, u64>::new();
     for frame_index in 0..end {
         frame.set(frame_index);
         paint_time.set(None);
@@ -79,11 +80,16 @@ pub fn run_headless(config: RunConfig) -> Result<Value, String> {
             ours_per_frame.push(AllocCounts::now().since(before).ours_allocs as f64);
             let counts = window.update(|_, window, _| primitive_counts(window));
             for (name, count) in counts.as_object().expect("primitive counts are an object") {
+                let count = count.as_u64().expect("primitive count is an integer");
+                if name != "batches" && name != "paint_operations" {
+                    *sweep_primitives.entry(name.clone()).or_default() += count;
+                }
                 let peak = peak_primitives.entry(name.clone()).or_default();
-                *peak = (*peak).max(count.as_u64().expect("primitive count is an integer"));
+                *peak = (*peak).max(count);
             }
         }
     }
+    let sweep_total: u64 = sweep_primitives.values().sum();
     Ok(json!({
         "schema": SCHEMA,
         "kind": "headless-run",
@@ -99,7 +105,11 @@ pub fn run_headless(config: RunConfig) -> Result<Value, String> {
         "scene_details": scene_details,
         "metrics": {
             "allocs_per_frame": { "ours": Summary::from_samples(&mut ours_per_frame).unwrap().to_json() },
-            "primitives": peak_primitives,
+            "primitives": {
+                "peak": peak_primitives,
+                "sweep": sweep_primitives,
+                "sweep_total": sweep_total,
+            },
         },
     }))
 }

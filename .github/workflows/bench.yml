@@ -80,7 +80,7 @@ jobs:
               if ($baselineReport.metrics.allocs_per_frame.ours.max -ne 0) {
                 throw "Baseline for $case does not have zero Omnia allocations"
               }
-              if ($candidateReport.metrics.primitives.monochrome_sprites -le 0) {
+              if ($candidateReport.metrics.primitives.sweep.monochrome_sprites -le 0) {
                 throw "No document sprites were emitted for $case"
               }
               & $bench compare $baseline $candidate --max-regression 10 --metrics allocs_per_frame.ours,primitives

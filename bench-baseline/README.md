@@ -4,7 +4,8 @@ The four JSON reports are the T2.6 hosted CI baselines. The fixed cases use the 
 `1k` and `10k` sheets, pan and zoom, a 1280×800 logical viewport at the test
 platform's fixed 200% scale, 600 warm-up frames and 600 measured frames. The headless GPUI
 platform builds the same scene that the live sheet renderer submits. Reports contain peak
-primitives by kind and Omnia allocations per frame (B10, Q5). No timing metrics are reported.
+and sweep-wide primitive counts by kind, a sweep-wide total, and Omnia allocations per frame
+(B10, Q5). Batches and paint operations are reported as peaks only.
 
 To reproduce one case on the Windows development machine, run these commands from the
 repository root and substitute the sheet and script for the other cases.
@@ -19,17 +20,25 @@ Pull requests use the baseline files from their base commit after T2.6 lands.
 
 ## Orion frame timing
 
-Collect both campaigns on Orion under canvas plan section 2.1. Keep the raw reports,
-binary identity, case order and condition snapshots with each campaign. In each campaign
-directory, place the pan and zoom reports in `s100/` (100%) and `s125/` (125%).
-Use `<sheet>-<script>-<repetition>.json` or `.json.gz`, with repetitions 1 through 10.
-For example, `s125/10k-zoom-4.json` is the fourth 10k zoom run at 125%.
+On Orion, connect AC power and close other apps. Build both release bench executables
+before the campaign. Both revisions must support native pan and zoom on real sheets.
+From the candidate repository root, pass a new output directory to the runner.
+
+```sh
+kde-inhibit --power --screenSaver python3 bench-baseline/reference.py /path/to/baseline/omnia-bench \
+  /path/to/candidate/omnia-bench docs/measurements/T2.6-orion
+```
+
+The runner interleaves ten rotating repetitions per case and scale. It restores the panel
+scale and records raw reports, binary hashes, case order and before/after conditions
+under the output directory. Its `baseline/` and `candidate/` directories each contain
+`s100/` (100%) and `s125/` (125%) with `<sheet>-<script>-<repetition>.json` reports.
 
 Run the **Bench regression gate** workflow manually with the two campaign directories
 in the selected ref, or run the comparator on Orion from the repository root.
 
 ```sh
-python3 bench-baseline/compare-orion.py docs/measurements/orion-baseline docs/measurements/orion-candidate
+python3 bench-baseline/compare-orion.py docs/measurements/T2.6-orion/baseline docs/measurements/T2.6-orion/candidate
 ```
 
 The comparator prints each case's median of run p99s and range. It fails for a

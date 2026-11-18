@@ -32,16 +32,29 @@
       }
     },
     "primitives": {
-      "batches": 8,
-      "monochrome_sprites": 166,
-      "paint_operations": 2986,
-      "paths": 0,
-      "polychrome_sprites": 0,
-      "quads": 2812,
-      "shadows": 0,
-      "subpixel_sprites": 0,
-      "surfaces": 0,
-      "underlines": 0
+      "peak": {
+        "batches": 8,
+        "monochrome_sprites": 166,
+        "paint_operations": 2986,
+        "paths": 0,
+        "polychrome_sprites": 0,
+        "quads": 2812,
+        "shadows": 0,
+        "subpixel_sprites": 0,
+        "surfaces": 0,
+        "underlines": 0
+      },
+      "sweep": {
+        "monochrome_sprites": 95715,
+        "paths": 0,
+        "polychrome_sprites": 0,
+        "quads": 1657435,
+        "shadows": 0,
+        "subpixel_sprites": 0,
+        "surfaces": 0,
+        "underlines": 0
+      },
+      "sweep_total": 1753150
     }
   }
 }

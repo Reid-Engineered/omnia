@@ -1553,9 +1553,14 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
 2026-11-17 T2.6 done — Real T2.4 sheets in the pan and zoom bench (D4, B10, Q5).
                        Bench scenes reuse T2.5's renderer and attribute Omnia and GPUI
                        allocations separately. The Windows headless gate checks four
-                       committed cases (1k/10k × pan/zoom). All reproduced zero Omnia
-                       allocations per frame with unchanged counts. The workflow script
+                       committed cases (1k/10k × pan/zoom) against the PR base.
+                       All reproduced zero Omnia allocations with unchanged primitive
+                       peaks and sweep totals. The workflow script
                        rejected one planted allocation per frame and 311 extra quads
                        (2820 to 3131, +11%). Temporary probes were removed. Standard
-                       checks passed. The manual workflow compares recorded Orion
-                       campaigns under Q4; no reference timing was run.
+                       checks passed. The gate also detects growth in the sweep total
+                       with unchanged peaks. The local Orion runner records two
+                       interleaved revisions, fixed order, binary hashes and conditions.
+                       The manual workflow compares recorded campaigns under Q4.
+                       Runner and comparator were checked with fixtures; no reference
+                       timing was run.
