@@ -8,9 +8,8 @@ import subprocess
 import sys
 import time
 
+from compare_orion import FRAMES, REPETITIONS, SCALES, check_conditions, check_report
 
-REPEATS = 10
-FRAMES = 600
 PANEL = "eDP-1"
 
 
@@ -38,11 +37,16 @@ def snapshot():
     def read(pattern):
         return {str(p): p.read_text().strip() for p in sorted(Path("/sys").glob(pattern))}
 
+    mains = {
+        str(supply): (supply / "online").read_text().strip()
+        for supply in sorted(Path("/sys/class/power_supply").iterdir())
+        if (supply / "type").read_text().strip() == "Mains"
+    }
     profile = subprocess.run(["powerprofilesctl", "get"], capture_output=True, text=True) \
         if Path("/usr/bin/powerprofilesctl").exists() else None
     return {
         "panel": panel(),
-        "power_online": read("class/power_supply/*/online"),
+        "mains_online": mains,
         "governor": read("devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor"),
         "power_profile": profile.stdout.strip() if profile and profile.returncode == 0 else None,
         "platform_profile": read("firmware/acpi/platform_profile"),
@@ -50,49 +54,22 @@ def snapshot():
     }
 
 
-def check_conditions(state, scale):
-    screen = state["panel"]
-    if (screen["scale"] != scale or screen["size"] != {"width": 1920, "height": 1080}
-            or not 59.9 <= screen["refreshRate"] <= 60.1):
-        raise ValueError(f"expected the 1920x1080 60 Hz panel at scale {scale}: {screen}")
-    if "1" not in state["power_online"].values():
-        raise ValueError("reference runs require AC power")
-
-
-def check_report(report, scale, size):
-    env = report["environment"]
-    gpu = env.get("gpu") or {}
-    if (env["os"] != "linux" or not env["fullscreen"] or env["scale_factor"] != scale
-            or env["viewport_logical"] != list(size) or env["viewport_device"] != [1920, 1080]
-            or not 59.9 <= (env["refresh_hz"] or 0) <= 60.1):
-        raise ValueError(f"invalid reference window: {env}")
-    gpu_names = f"{gpu.get('device_name', '')} {gpu.get('driver_name', '')}".lower()
-    if gpu.get("is_software_emulated") is not False or not all(
-        name in gpu_names for name in ("intel", "620", "mesa")
-    ):
-        raise ValueError(f"expected the Intel HD 620 Mesa Vulkan adapter: {gpu}")
-    if (report["frames"]["drawn"] != FRAMES or report["frames"]["unmeasured"] != 0
-            or report["warnings"]):
-        raise ValueError(f"incomplete frame sample: {report['frames']}, {report['warnings']}")
-
-
 def campaign(binaries, output, env):
     cases = [(revision, sheet, script) for sheet in ("1k", "10k")
              for script in ("pan", "zoom") for revision in binaries]
-    sizes = {1.0: (1920, 1080), 1.25: (1536, 864)}
-    order = [(scale, rep + 1, *case) for scale in sizes for rep in range(REPEATS)
+    order = [(label, rep + 1, *case) for label in SCALES for rep in range(REPETITIONS)
              for case in cases[rep % len(cases):] + cases[:rep % len(cases)]]
     dump(output / "order.json", order)
     previous_scale = None
-    for scale, rep, revision, sheet, script in order:
+    for label, rep, revision, sheet, script in order:
+        scale, size = SCALES[label]
         if scale != previous_scale:
             set_scale(scale)
         previous_scale = scale
-        case_dir = output / revision / ("s100" if scale == 1.0 else "s125")
+        case_dir = output / revision / label
         case_dir.mkdir(parents=True, exist_ok=True)
         key = f"{sheet}-{script}-{rep}"
         print(f"{scale} {revision} {key}", flush=True)
-        size = sizes[scale]
         path = case_dir / f"{key}.json"
         before = snapshot()
         dump(case_dir / f"{key}.before.json", before)
@@ -108,7 +85,10 @@ def campaign(binaries, output, env):
         result.check_returncode()
         check_conditions(after, scale)
         report = json.loads(path.read_text(encoding="utf-8"))
-        check_report(report, scale, size)
+        try:
+            check_report(report, (label, sheet, script))
+        except (ValueError, KeyError, TypeError) as error:
+            raise ValueError(f"{path}: {error}") from error
 
 
 def main():
@@ -152,7 +132,7 @@ def main():
         dump(args.output / "binaries-after.json", after)
     if before != after:
         raise ValueError("bench binary changed during the campaign")
-    comparator = Path(__file__).with_name("compare-orion.py")
+    comparator = Path(__file__).with_name("compare_orion.py")
     comparison = subprocess.run([
         sys.executable, comparator, args.output / "baseline", args.output / "candidate"
     ])

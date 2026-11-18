@@ -11,12 +11,13 @@ from statistics import median
 SCALES = {"s100": (1.0, [1920, 1080]), "s125": (1.25, [1536, 864])}
 CASES = tuple(itertools.product(SCALES, ("1k", "10k"), ("pan", "zoom")))
 REPETITIONS = 10
+FRAMES = 600
 MAX_REGRESSION = 0.10
 
 
 def read_report(stem):
-    plain = stem.with_suffix(".json")
-    compressed = stem.with_suffix(".json.gz")
+    plain = stem.with_name(f"{stem.name}.json")
+    compressed = stem.with_name(f"{stem.name}.json.gz")
     if plain.is_file() == compressed.is_file():
         raise ValueError(f"expected exactly one report for {stem}")
     if compressed.is_file():
@@ -25,41 +26,72 @@ def read_report(stem):
     return json.loads(plain.read_text(encoding="utf-8"))
 
 
-def load_case(directory, case):
+def check_conditions(state, scale):
+    screen = state["panel"]
+    if (
+        screen["scale"] != scale
+        or screen["size"] != {"width": 1920, "height": 1080}
+        or not 59.9 <= screen["refreshRate"] <= 60.1
+    ):
+        raise ValueError(f"expected the 1920x1080 60 Hz panel at scale {scale}: {screen}")
+    if "1" not in state["mains_online"].values():
+        raise ValueError("reference runs require AC power")
+    if not state["governor"] or not all(state["governor"].values()):
+        raise ValueError("reference runs require recorded CPU governors")
+
+
+def check_report(report, case):
     scale_label, sheet, script = case
     scale, viewport = SCALES[scale_label]
+    config = report["config"]
+    environment = report["environment"]
+    gpu = environment["gpu"] or {}
+    gpu_names = f"{gpu.get('device_name', '')} {gpu.get('driver_name', '')}".lower()
+    if (
+        report["schema"] != 1
+        or report["kind"] != "run"
+        or config["sheet"] != sheet
+        or config["script"] != script
+        or config["window_logical"] != viewport
+        or config["frames"] != FRAMES
+        or config["warmup"] != FRAMES
+        or config.get("diagnostic_trace")
+        or report.get("diagnostic_trace") is not None
+        or report["frames"]["drawn"] != FRAMES
+        or report["frames"]["unmeasured"] != 0
+        or report["warnings"] != []
+        or environment["os"] != "linux"
+        or not environment["fullscreen"]
+        or environment["scale_factor"] != scale
+        or environment["viewport_logical"] != viewport
+        or environment["viewport_device"] != [1920, 1080]
+        or not 59.9 <= (environment["refresh_hz"] or 0) <= 60.1
+        or gpu.get("is_software_emulated") is not False
+        or not all(name in gpu_names for name in ("intel", "620", "mesa"))
+    ):
+        raise ValueError("unexpected run configuration or Orion conditions")
+    value = report["metrics"]["frame_ms"]["p99"]
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("invalid frame p99")
+    return value
+
+
+def load_case(directory, case):
+    scale_label, sheet, script = case
+    scale, _ = SCALES[scale_label]
     samples = []
     configurations = []
     for repetition in range(1, REPETITIONS + 1):
         stem = directory / scale_label / f"{sheet}-{script}-{repetition}"
         report = read_report(stem)
-        config = report["config"]
-        environment = report["environment"]
-        gpu = environment["gpu"]
-        if (
-            report["schema"] != 1
-            or report["kind"] != "run"
-            or config["sheet"] != sheet
-            or config["script"] != script
-            or config["window_logical"] != viewport
-            or config["frames"] < 1
-            or config["warmup"] < 1
-            or report["frames"]["drawn"] != config["frames"]
-            or environment["os"] != "linux"
-            or not environment["fullscreen"]
-            or environment["scale_factor"] != scale
-            or environment["viewport_logical"] != viewport
-            or environment["viewport_device"] != [1920, 1080]
-            or not 59 <= environment["refresh_hz"] <= 61
-            or gpu["is_software_emulated"]
-            or "HD Graphics 620" not in gpu["device_name"]
-        ):
-            raise ValueError(f"unexpected run configuration or Orion conditions in {stem}")
-        value = report["metrics"]["frame_ms"]["p99"]
-        if not math.isfinite(value) or value <= 0:
-            raise ValueError(f"invalid frame p99 in {stem}")
-        samples.append(value)
-        configurations.append(config)
+        try:
+            for phase in ("before", "after"):
+                conditions = read_report(stem.with_name(f"{stem.name}.{phase}"))
+                check_conditions(conditions, scale)
+            samples.append(check_report(report, case))
+        except (ValueError, KeyError, TypeError) as error:
+            raise ValueError(f"{stem}: {error}") from error
+        configurations.append(report["config"])
     if any(config != configurations[0] for config in configurations):
         raise ValueError(f"inconsistent configurations for {' '.join(case)}")
     return configurations[0], samples

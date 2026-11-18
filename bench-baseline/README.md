@@ -38,9 +38,9 @@ Run the **Bench regression gate** workflow manually with the two campaign direct
 in the selected ref, or run the comparator on Orion from the repository root.
 
 ```sh
-python3 bench-baseline/compare-orion.py docs/measurements/T2.6-orion/baseline docs/measurements/T2.6-orion/candidate
+python3 bench-baseline/compare_orion.py docs/measurements/T2.6-orion/baseline docs/measurements/T2.6-orion/candidate
 ```
 
-The comparator prints each case's median of run p99s and range. It fails for a
-regression greater than 10% or an incomplete or mismatched campaign. Absolute budget
-certification is the T2.7 gate.
+The comparator validates the run reports and the paired condition snapshots, then prints
+each case's median of run p99s and range. It fails for a regression greater than 10% or an
+incomplete or mismatched campaign. Absolute budget certification is the T2.7 gate.

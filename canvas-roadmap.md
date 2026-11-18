@@ -1562,5 +1562,6 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        with unchanged peaks. The local Orion runner records two
                        interleaved revisions, fixed order, binary hashes and conditions.
                        The manual workflow compares recorded campaigns under Q4.
-                       Runner and comparator were checked with fixtures; no reference
-                       timing was run.
+                       Both paths validate full untraced samples, AC power and governor
+                       evidence. Runner and comparator were checked with fixtures; no
+                       reference timing was run.

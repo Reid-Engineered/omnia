@@ -104,4 +104,4 @@ jobs:
         env:
           ORION_BASELINE: ${{ inputs.orion_baseline }}
           ORION_CANDIDATE: ${{ inputs.orion_candidate }}
-        run: python3 bench-baseline/compare-orion.py "$ORION_BASELINE" "$ORION_CANDIDATE"
+        run: python3 bench-baseline/compare_orion.py "$ORION_BASELINE" "$ORION_CANDIDATE"
