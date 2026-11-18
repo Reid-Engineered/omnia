@@ -1565,3 +1565,12 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        feature. Q4 timing comparison uses ten rotating runs per case
                        and scale (plan 2.1). Orion has no registered runner. The manual
                        job and the at-desk command are documented in bench-baseline/.
+                       Review fixes: measured frames continue the camera path past
+                       warm-up (frames 600..1199), as the windowed harness does, so an
+                       allocation only at an undrawn pan offset is caught (planted and
+                       reverted: both pan cases failed, ours 0 -> 1); pan baselines
+                       recaptured (primitive totals -0.08% 1k, -0.26% 10k; ours still 0).
+                       bench.yml also lints the headless bench and lints/tests
+                       omnia-canvas and omnia-app alone, so the feature-off side of
+                       sheet.rs is compiled in CI. paint_mark builds GPUI call arguments
+                       before entering the not-ours scope.
