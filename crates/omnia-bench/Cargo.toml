@@ -11,6 +11,7 @@ publish.workspace = true
 # dependencies, so it is opt-in: `cargo run --release -p omnia-bench --features scene-counts`.
 scene-counts = ["gpui/bench-support"]
 readback = ["gpui/test-support", "gpui_platform/test-support", "dep:resvg"]
+headless = ["scene-counts", "gpui/test-support"]
 
 [dependencies]
 omnia-doc = { path = "../omnia-doc" }

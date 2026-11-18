@@ -1,13 +1,13 @@
-//! What the bench window draws: the real empty sheet (`omnia-canvas`'s `SheetView`, T1.4),
-//! the T0.1 paper window, or a placeholder scene painted from a custom `Element` until T2.5
-//! renders real sheets.
+//! Scenes for the bench window, including generated documents drawn by the T2.5 sheet renderer.
 
 use crate::alloc::{not_ours, ours};
 use crate::driver::Camera;
+use crate::generate::{StressSheet, generate};
 use gpui::{
-    App, Bounds, Element, ElementId, GlobalElementId, Hsla, InspectorElementId, LayoutId, Pixels,
-    Style, Window, fill, point, px, relative, rgb, rgba, size,
+    App, AppContext, Bounds, Element, ElementId, GlobalElementId, Hsla, InspectorElementId,
+    LayoutId, Pixels, Style, Window, fill, point, px, relative, rgb, rgba, size,
 };
+use omnia_canvas::sheet::{SheetDocument, SheetPaintScope};
 use omnia_canvas::{Camera as SheetCamera, SheetView};
 use omnia_doc::Pt;
 use std::cell::{Cell, RefCell};
@@ -36,20 +36,35 @@ pub enum Sheet {
     T01,
     /// Paper, a dot grid and orthogonal wire quads that follow the camera.
     Placeholder,
+    Stress(StressSheet),
     Spike(crate::spike::Config),
 }
 
 impl Sheet {
+    const NAMES: [&str; 8] = [
+        "empty",
+        "t01",
+        "placeholder",
+        "100",
+        "1k",
+        "10k",
+        "dense",
+        "text",
+    ];
+
     pub fn parse(name: &str) -> Result<Self, String> {
         match name {
             "empty" => Ok(Self::Empty),
             "t01" => Ok(Self::T01),
             "placeholder" => Ok(Self::Placeholder),
-            "100" | "1k" | "10k" | "dense" | "text" => Err(format!(
-                "sheet `{name}` needs the T2.4 generators and T2.5 sheet rendering"
-            )),
+            "100" => Ok(Self::Stress(StressSheet::Parts100)),
+            "1k" => Ok(Self::Stress(StressSheet::Parts1k)),
+            "10k" => Ok(Self::Stress(StressSheet::Parts10k)),
+            "dense" => Ok(Self::Stress(StressSheet::DenseWiring)),
+            "text" => Ok(Self::Stress(StressSheet::TextHeavy)),
             _ => Err(format!(
-                "unknown sheet `{name}` (available: empty, t01, placeholder)"
+                "unknown sheet `{name}` (available: {})",
+                Self::NAMES.join(", ")
             )),
         }
     }
@@ -59,8 +74,17 @@ impl Sheet {
             Self::Empty => "empty",
             Self::T01 => "t01",
             Self::Placeholder => "placeholder",
+            Self::Stress(StressSheet::Parts100) => "100",
+            Self::Stress(StressSheet::Parts1k) => "1k",
+            Self::Stress(StressSheet::Parts10k) => "10k",
+            Self::Stress(StressSheet::DenseWiring) => "dense",
+            Self::Stress(StressSheet::TextHeavy) => "text",
             Self::Spike(_) => "spike",
         }
+    }
+
+    pub fn supports_zoom(self) -> bool {
+        matches!(self, Self::Empty | Self::Stress(_))
     }
 
     /// The scene painted by a [`SceneElement`], or `None` for the T0.1 window.
@@ -70,6 +94,10 @@ impl Sheet {
             Self::Empty => Some(Rc::new(RefCell::new(EmptySheet))),
             Self::Spike(config) => Some(Rc::new(RefCell::new(crate::spike::Scene::new(config)))),
             Self::Placeholder => Some(Rc::new(RefCell::new(Placeholder::new(0x0A11_CE5E)))),
+            Self::Stress(kind) => Some(Rc::new(RefCell::new(StressScene {
+                kind,
+                document: None,
+            }))),
         }
     }
 }
@@ -165,11 +193,53 @@ impl BenchScene for EmptySheet {
         _cx: &mut App,
     ) {
         let scale = window.scale_factor();
-        let (dx, dy) = camera.logical(scale);
-        let mut view = SheetCamera::new(Pt::ZERO, camera.zoom, bounds);
-        view.pan_by(point(-f64::from(dx), -f64::from(dy)));
+        let view = sheet_camera(camera, bounds, scale);
         SheetView::new(view, &omnia_theme::GRAPHITE)
             .paint_quads(bounds, scale, |quad| not_ours(|| window.paint_quad(quad)));
+    }
+}
+
+fn sheet_camera(camera: Camera, bounds: Bounds<Pixels>, scale: f32) -> SheetCamera {
+    let (dx, dy) = camera.logical(scale);
+    let mut view = SheetCamera::new(Pt::ZERO, camera.zoom, bounds);
+    view.pan_by(point(-f64::from(dx), -f64::from(dy)));
+    view
+}
+
+const STRESS_SEED: u64 = 42;
+
+struct StressScene {
+    kind: StressSheet,
+    document: Option<SheetDocument>,
+}
+
+struct BenchPaintScope;
+
+impl SheetPaintScope for BenchPaintScope {
+    fn omnia(&self, paint: impl FnOnce()) {
+        ours(paint);
+    }
+
+    fn gpui(&self, paint: impl FnOnce()) {
+        not_ours(paint);
+    }
+}
+
+impl BenchScene for StressScene {
+    fn details(&self) -> serde_json::Value {
+        let (parts, wires) = self.kind.counts();
+        serde_json::json!({ "seed": STRESS_SEED, "parts": parts, "wires": wires })
+    }
+
+    fn paint(&mut self, bounds: Bounds<Pixels>, camera: Camera, window: &mut Window, cx: &mut App) {
+        let document = self.document.get_or_insert_with(|| {
+            let doc = generate(self.kind, STRESS_SEED);
+            let entity = not_ours(|| cx.new(|_| doc));
+            SheetDocument::new(entity)
+        });
+        let camera = sheet_camera(camera, bounds, window.scale_factor());
+        SheetView::with_document(camera, &omnia_theme::GRAPHITE, document.clone())
+            .paint_with_scope(bounds, window, cx, &BenchPaintScope);
     }
 }
 
@@ -315,7 +385,15 @@ mod tests {
         assert_eq!(Sheet::parse("empty"), Ok(Sheet::Empty));
         assert_eq!(Sheet::parse("t01"), Ok(Sheet::T01));
         assert_eq!(Sheet::parse("placeholder"), Ok(Sheet::Placeholder));
-        assert!(Sheet::parse("10k").unwrap_err().contains("T2.5"));
+        for name in Sheet::NAMES {
+            assert_eq!(Sheet::parse(name).unwrap().name(), name);
+        }
+        assert_eq!(
+            Sheet::parse("10k"),
+            Ok(Sheet::Stress(StressSheet::Parts10k))
+        );
+        assert!(Sheet::parse("1k").unwrap().supports_zoom());
+        assert!(!Sheet::Placeholder.supports_zoom());
         assert!(Sheet::parse("nope").is_err());
         assert!(Sheet::T01.scene().is_none() && Sheet::Placeholder.scene().is_some());
         assert!(Sheet::Empty.scene().is_some());

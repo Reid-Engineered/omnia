@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "kind": "headless-run",
+  "config": {
+    "sheet": "10k",
+    "script": "pan",
+    "frames": 600,
+    "warmup": 600,
+    "window_logical": [
+      1280.0,
+      800.0
+    ],
+    "scale_factor": 2.0
+  },
+  "environment": {
+    "platform": "gpui-test",
+    "os": "windows"
+  },
+  "scene_details": {
+    "seed": 42,
+    "parts": 10000,
+    "wires": 20000
+  },
+  "metrics": {
+    "allocs_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      }
+    },
+    "primitives": {
+      "peak": {
+        "batches": 8,
+        "monochrome_sprites": 166,
+        "paint_operations": 2986,
+        "paths": 0,
+        "polychrome_sprites": 0,
+        "quads": 2812,
+        "shadows": 0,
+        "subpixel_sprites": 0,
+        "surfaces": 0,
+        "underlines": 0
+      },
+      "sweep": {
+        "monochrome_sprites": 95715,
+        "paths": 0,
+        "polychrome_sprites": 0,
+        "quads": 1657435,
+        "shadows": 0,
+        "subpixel_sprites": 0,
+        "surfaces": 0,
+        "underlines": 0
+      },
+      "sweep_total": 1753150
+    }
+  }
+}

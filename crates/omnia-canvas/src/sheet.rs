@@ -155,21 +155,42 @@ enum Mark<'a> {
     Sprite(symbols::Shape<'a>),
 }
 
-fn paint_mark(window: &mut Window, cx: &App, mark: Mark<'_>, sf: f32, ink: Hsla) {
+/// Lets a caller attribute paint work separately from GPUI work (B10, Q5).
+pub trait SheetPaintScope {
+    fn omnia(&self, paint: impl FnOnce()) {
+        paint();
+    }
+
+    fn gpui(&self, paint: impl FnOnce()) {
+        paint();
+    }
+}
+
+impl SheetPaintScope for () {}
+
+fn paint_mark(
+    window: &mut Window,
+    cx: &App,
+    mark: Mark<'_>,
+    sf: f32,
+    ink: Hsla,
+    scope: &impl SheetPaintScope,
+) {
     match mark {
-        Mark::Quad(bounds) => window.paint_quad(fill(bounds, ink)),
+        Mark::Quad(bounds) => {
+            let quad = fill(bounds, ink);
+            scope.gpui(|| window.paint_quad(quad));
+        }
         Mark::Sprite(shape) => {
             let (bounds, transform) = shape.sprite(sf);
-            if let Err(error) = window.paint_svg(
-                bounds,
-                shape.mask.key.clone(),
-                Some(&shape.mask.svg),
-                transform,
-                ink,
-                cx,
-            ) {
-                eprintln!("sheet mask: {error}");
-            }
+            let key = shape.mask.key.clone();
+            scope.gpui(|| {
+                if let Err(error) =
+                    window.paint_svg(bounds, key, Some(&shape.mask.svg), transform, ink, cx)
+                {
+                    eprintln!("sheet mask: {error}");
+                }
+            });
         }
     }
 }
@@ -312,6 +333,72 @@ impl SheetView {
         &self.camera
     }
 
+    /// Paints the same sheet as the element, with accounting scopes around canvas and GPUI work.
+    pub fn paint_with_scope(
+        &self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &App,
+        scope: &impl SheetPaintScope,
+    ) {
+        let scale_factor = window.scale_factor();
+        scope.gpui(|| {
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                window.paint_layer(|window| {
+                    scope.omnia(|| {
+                        self.draw_background(bounds, scale_factor, |bounds, color, dot| {
+                            let mark = if let (Some(document), Some(side)) = (&self.document, dot)
+                                && side >= 3
+                            {
+                                let center = bounds.center();
+                                let diameter = f64::from(side) / f64::from(scale_factor);
+                                Mark::Sprite(document.cache.masks.dot(
+                                    f64::from(center.x),
+                                    f64::from(center.y),
+                                    diameter,
+                                    scale_factor,
+                                ))
+                            } else {
+                                Mark::Quad(bounds)
+                            };
+                            paint_mark(window, cx, mark, scale_factor, color, scope);
+                        });
+                    });
+                });
+                if let Some(document) = &self.document {
+                    scope.omnia(|| {
+                        let mut camera = self.camera.clone();
+                        camera.set_viewport(bounds);
+                        let ink = gpui_color(self.theme.stage_ink);
+                        document.cache.draw(
+                            document.doc.read(cx),
+                            &camera,
+                            scale_factor,
+                            |_, emit| {
+                                scope.gpui(|| {
+                                    window.paint_layer(|window| {
+                                        scope.omnia(|| {
+                                            emit(&mut |mark| {
+                                                paint_mark(
+                                                    window,
+                                                    cx,
+                                                    mark,
+                                                    scale_factor,
+                                                    ink,
+                                                    scope,
+                                                );
+                                            });
+                                        });
+                                    });
+                                });
+                            },
+                        );
+                    });
+                }
+            });
+        });
+    }
+
     /// The background paint body, with the GPUI call left to `sink`, so benches and tests can
     /// separate our allocations from GPUI's (Q5). [`Element::paint`] passes
     /// `Window::paint_quad`. Emits the paper first, then one quad per visible dot.
@@ -439,40 +526,7 @@ impl Element for SheetView {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let scale_factor = window.scale_factor();
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            window.paint_layer(|window| {
-                self.draw_background(bounds, scale_factor, |bounds, color, dot| {
-                    let mark = if let (Some(document), Some(side)) = (&self.document, dot)
-                        && side >= 3
-                    {
-                        let center = bounds.center();
-                        let diameter = f64::from(side) / f64::from(scale_factor);
-                        Mark::Sprite(document.cache.masks.dot(
-                            f64::from(center.x),
-                            f64::from(center.y),
-                            diameter,
-                            scale_factor,
-                        ))
-                    } else {
-                        Mark::Quad(bounds)
-                    };
-                    paint_mark(window, cx, mark, scale_factor, color);
-                });
-            });
-            if let Some(document) = &self.document {
-                let mut camera = self.camera.clone();
-                camera.set_viewport(bounds);
-                let ink = gpui_color(self.theme.stage_ink);
-                document
-                    .cache
-                    .draw(document.doc.read(cx), &camera, scale_factor, |_, emit| {
-                        window.paint_layer(|window| {
-                            emit(&mut |mark| paint_mark(window, cx, mark, scale_factor, ink))
-                        });
-                    });
-            }
-        });
+        self.paint_with_scope(bounds, window, cx, &());
     }
 }
 
