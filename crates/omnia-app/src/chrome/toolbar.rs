@@ -24,11 +24,14 @@ use crate::actions::{
 };
 use crate::keymap;
 use crate::theme;
-use crate::widgets::{ButtonGroup, Icon, IconButton, Popover, TextButton};
-use gpui::{
-    Context, Entity, FocusHandle, IntoElement, OperatingSystem, Render, Role, Subscription, Window,
-    div, prelude::*, px,
+use crate::widgets::{
+    ButtonGroup, Icon, IconButton, Popover, PopoverCloseEvent, PopoverCloseReason, TextButton,
 };
+use gpui::{
+    Context, Entity, FocusHandle, IntoElement, KeyDownEvent, MouseButton, OperatingSystem, Render,
+    Role, Subscription, Window, div, prelude::*, px,
+};
+use std::time::Duration;
 
 /// Toolbar height (UK3).
 pub const TOOLBAR_HEIGHT: f32 = 50.0;
@@ -154,8 +157,11 @@ struct ShownState {
     buttons: Vec<(bool, bool)>,
     /// Whether the analysis picker entry (`simulate.transient`) is enabled.
     analysis_enabled: bool,
-    /// Simulation state behind the analysis picker and time pill (UD19).
-    sim: SimState,
+    /// Whether simulation is unavailable, greying the analysis picker (UD19).
+    /// The time pill shows the same placeholder in every other state too, and
+    /// Run/Pause checked and enabled already ride in `buttons`, so sub-state
+    /// flips that change nothing shown (Idle to Failed) must not render.
+    sim_unavailable: bool,
 }
 
 impl ShownState {
@@ -174,7 +180,7 @@ impl ShownState {
             buttons,
             analysis_enabled: action_spec("simulate.transient")
                 .is_some_and(|spec| (spec.enabled)(state)),
-            sim: state.sim,
+            sim_unavailable: state.sim == SimState::Unavailable,
         }
     }
 }
@@ -185,6 +191,10 @@ pub struct Toolbar {
     shown: ShownState,
     in_use_count: usize,
     open_picker: Option<ToolbarPicker>,
+    /// Set when the popover closed on this very press (click-outside fires on
+    /// mouse-down before the trigger's own handler); the trigger press that
+    /// closed it must not reopen it. Cleared on the next executor tick.
+    suppress_analysis_press: bool,
     analysis_focus: FocusHandle,
     analysis_popover_focus: FocusHandle,
     renders: u64,
@@ -207,6 +217,7 @@ impl Toolbar {
             shown,
             in_use_count: 0,
             open_picker: None,
+            suppress_analysis_press: false,
             analysis_focus: cx.focus_handle(),
             analysis_popover_focus: cx.focus_handle(),
             renders: 0,
@@ -235,6 +246,17 @@ impl Toolbar {
     /// Which picker popover is open, if any.
     pub fn open_picker(&self) -> Option<ToolbarPicker> {
         self.open_picker
+    }
+
+    /// Toggles the analysis popover, focusing it on open (UD19, UD4).
+    fn toggle_analysis(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_picker = if self.open_picker == Some(ToolbarPicker::Analysis) {
+            None
+        } else {
+            window.focus(&self.analysis_popover_focus, cx);
+            Some(ToolbarPicker::Analysis)
+        };
+        cx.notify();
     }
 
     /// How many times this view has rendered (tests check the shown-value rule).
@@ -278,8 +300,13 @@ fn registry_icon_button(spec: &'static ActionSpec, state: &CommandState) -> Icon
         spec.icon.unwrap_or_default(),
     )
     .aria_label(spec.label)
-    .active((spec.checked)(state))
     .disabled(!enabled);
+    // A checked toggle (Full Screen) exposes its pressed state (UD20).
+    let button = if (spec.checked)(state) {
+        button.toggled(true)
+    } else {
+        button
+    };
     let button = match shortcut_for(spec) {
         Some(shortcut) => button.tooltip_with_shortcut(spec.label, Some(shortcut)),
         None => button.tooltip(spec.label),
@@ -352,6 +379,7 @@ impl Render for Toolbar {
                         .width(px(RUN_BUTTON_WIDTH))
                         .height(px(RUN_BUTTON_HEIGHT))
                         .aria_label(spec.label)
+                        .active((spec.checked)(&state))
                         .disabled(!enabled);
                     let button = if sim_unavailable {
                         button.tooltip(SIM_UNAVAILABLE_TOOLTIP)
@@ -367,8 +395,13 @@ impl Render for Toolbar {
                         spec.icon.unwrap_or_default(),
                     )
                     .aria_label(spec.label)
-                    .active((spec.checked)(&state))
                     .disabled(!enabled);
+                    // Pause exposes its pressed state while paused (UD20).
+                    let button = if (spec.checked)(&state) {
+                        button.toggled(true)
+                    } else {
+                        button
+                    };
                     let button = if sim_unavailable {
                         button.tooltip(SIM_UNAVAILABLE_TOOLTIP)
                     } else {
@@ -477,52 +510,107 @@ impl Render for Toolbar {
             .child(div().flex_1().min_w_0())
             .child(
                 div()
-                    .id("toolbar-analysis")
-                    .debug_selector(|| "toolbar-analysis".to_owned())
-                    .role(Role::Button)
-                    .aria_label("Analysis: Transient")
-                    .flex()
-                    .flex_row()
+                    .relative()
                     .flex_none()
-                    .items_center()
-                    .justify_between()
-                    .w(px(ANALYSIS_PICKER_WIDTH))
-                    .h(px(PICKER_HEIGHT))
-                    .px(px(12.0))
-                    .rounded(px(9.0))
-                    .bg(theme::color(active.bg_inset))
-                    .border_1()
-                    .border_color(theme::color(active.rule))
-                    .track_focus(&self.analysis_focus)
-                    .tab_stop(true)
-                    .cursor_pointer()
-                    .focus_visible(|style| style.border_color(theme::color(active.focus_ring)))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_picker = if this.open_picker == Some(ToolbarPicker::Analysis) {
-                            None
-                        } else {
-                            window.focus(&this.analysis_popover_focus, cx);
-                            Some(ToolbarPicker::Analysis)
-                        };
-                        cx.notify();
-                    }))
                     .child(
                         div()
-                            .font_family("Inter")
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_size(px(12.0))
-                            .text_color(theme::color(if sim_unavailable {
-                                active.text_muted
-                            } else {
-                                active.text_primary
+                            .id("toolbar-analysis")
+                            .debug_selector(|| "toolbar-analysis".to_owned())
+                            .role(Role::Button)
+                            .aria_label("Analysis: Transient")
+                            .flex()
+                            .flex_row()
+                            .flex_none()
+                            .items_center()
+                            .justify_between()
+                            .w(px(ANALYSIS_PICKER_WIDTH))
+                            .h(px(PICKER_HEIGHT))
+                            .px(px(12.0))
+                            .rounded(px(9.0))
+                            .bg(theme::color(active.bg_inset))
+                            .border_1()
+                            .border_color(theme::color(active.rule))
+                            .track_focus(&self.analysis_focus)
+                            .tab_stop(true)
+                            .cursor_pointer()
+                            .focus_visible(|style| {
+                                style.border_color(theme::color(active.focus_ring))
+                            })
+                            // Toggle on mouse-down, not click: the open popover's
+                            // click-outside close fires on mouse-down, so a click
+                            // toggle would see the closed state and reopen it.
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    if this.suppress_analysis_press {
+                                        this.suppress_analysis_press = false;
+                                        return;
+                                    }
+                                    this.toggle_analysis(window, cx);
+                                }),
+                            )
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                let key = event.keystroke.key.as_str();
+                                if (key == "enter" || key == "space")
+                                    && !event.keystroke.modifiers.modified()
+                                {
+                                    this.toggle_analysis(window, cx);
+                                }
                             }))
-                            .child("Transient"),
+                            .child(
+                                div()
+                                    .font_family("Inter")
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_size(px(12.0))
+                                    .text_color(theme::color(if sim_unavailable {
+                                        active.text_muted
+                                    } else {
+                                        active.text_primary
+                                    }))
+                                    .child("Transient"),
+                            )
+                            .child(
+                                Icon::new("chevron-down")
+                                    .size(px(16.0))
+                                    .color(active.text_secondary),
+                            ),
                     )
-                    .child(
-                        Icon::new("chevron-down")
-                            .size(px(16.0))
-                            .color(active.text_secondary),
-                    ),
+                    .when(analysis_open, |this| {
+                        this.child(
+                            Popover::new("toolbar-analysis-popover")
+                                .aria_label("Analysis")
+                                .role(Role::Menu)
+                                .width(px(ANALYSIS_PICKER_WIDTH))
+                                .focus_handle(&self.analysis_popover_focus)
+                                .offset(gpui::point(px(0.0), px(4.0)))
+                                .on_close(cx.listener(
+                                    |this, event: &PopoverCloseEvent, window, cx| {
+                                        if event.reason == PopoverCloseReason::ClickOutside {
+                                            this.suppress_analysis_press = true;
+                                            cx.spawn(async move |this, cx| {
+                                                cx.background_executor()
+                                                    .timer(Duration::ZERO)
+                                                    .await;
+                                                let _ = this.update(cx, |this, _| {
+                                                    this.suppress_analysis_press = false;
+                                                });
+                                            })
+                                            .detach();
+                                        }
+                                        this.open_picker = None;
+                                        window.focus(&this.analysis_focus, cx);
+                                        cx.notify();
+                                    },
+                                ))
+                                .child(
+                                    TextButton::new("toolbar-analysis-transient", "Transient")
+                                        .full_width()
+                                        .disabled(!analysis_enabled)
+                                        .aria_label("Transient"),
+                                ),
+                        )
+                    }),
             )
             .child(div().w(px(TOOLBAR_GROUP_GAP)).flex_none())
             .child(run_controls)
@@ -552,27 +640,6 @@ impl Render for Toolbar {
                             .child(SIM_TIME_PLACEHOLDER),
                     ),
             )
-            .when(analysis_open, |this| {
-                this.child(
-                    Popover::new("toolbar-analysis-popover")
-                        .aria_label("Analysis")
-                        .role(Role::Menu)
-                        .width(px(ANALYSIS_PICKER_WIDTH))
-                        .focus_handle(&self.analysis_popover_focus)
-                        .offset(gpui::point(px(0.0), px(TOOLBAR_HEIGHT)))
-                        .on_close(cx.listener(|this, _, window, cx| {
-                            this.open_picker = None;
-                            window.focus(&this.analysis_focus, cx);
-                            cx.notify();
-                        }))
-                        .child(
-                            TextButton::new("toolbar-analysis-transient", "Transient")
-                                .full_width()
-                                .disabled(!analysis_enabled)
-                                .aria_label("Transient"),
-                        ),
-                )
-            })
     }
 }
 
@@ -855,6 +922,17 @@ mod tests {
             ("sim running", Box::new(|s| s.sim = SimState::Running), 1),
             ("sim paused", Box::new(|s| s.sim = SimState::Paused), 1),
             ("sim failed", Box::new(|s| s.sim = SimState::Failed), 1),
+            // Nothing shown changes between Failed and Idle (UD3).
+            (
+                "sim failed to idle",
+                Box::new(|s| s.sim = SimState::Idle),
+                0,
+            ),
+            (
+                "sim idle to failed",
+                Box::new(|s| s.sim = SimState::Failed),
+                0,
+            ),
             (
                 "sim unavailable",
                 Box::new(|s| s.sim = SimState::Unavailable),
@@ -1026,9 +1104,32 @@ mod tests {
             cx.update(|_, cx| h.toolbar.read(cx).open_picker()),
             Some(ToolbarPicker::Analysis)
         );
+        let popover = cx
+            .debug_bounds("toolbar-analysis-popover")
+            .expect("analysis popover should be visible");
+        let analysis = cx.debug_bounds("toolbar-analysis").unwrap();
+        assert_eq!(popover.origin.x, analysis.origin.x, "popover under picker");
         assert!(
-            cx.debug_bounds("toolbar-analysis-popover").is_some(),
-            "analysis popover should be visible"
+            popover.origin.y >= analysis.origin.y + analysis.size.height,
+            "popover below picker: popover y {} vs picker bottom {}",
+            popover.origin.y,
+            analysis.origin.y + analysis.size.height
+        );
+        // Clicking the trigger again closes it (no reopen from click-outside).
+        cx.simulate_click(analysis_center, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| h.toolbar.read(cx).open_picker()),
+            None,
+            "second trigger click should close the analysis popover"
+        );
+        assert!(cx.debug_bounds("toolbar-analysis-popover").is_none());
+        // Reopen for the Escape check below.
+        cx.simulate_click(analysis_center, Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| h.toolbar.read(cx).open_picker()),
+            Some(ToolbarPicker::Analysis)
         );
         let keystroke = gpui::Keystroke::parse("escape").unwrap();
         cx.simulate_event(gpui::KeyDownEvent {
