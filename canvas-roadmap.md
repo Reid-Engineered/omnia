@@ -355,7 +355,7 @@ of the `canvas` lane.
 - Done when: CI fails on a pull request that adds one allocation per frame or 11% more
   primitives, and passes on a no-op pull request.
 
-### T2.7 Gate: milestone 2 · needs-human (fresh Orion gate run under the scoped B4, plan 2.1)
+### T2.7 Gate: milestone 2 · blocked (B3: one 1k-pan missed refresh from a paint stall, 2026-11-18 scoped campaign)
 - Lane: bench · Depends: T2.6
 - Do: run and record:
 
@@ -1655,3 +1655,18 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        passes (4 + 1 known), but it is not a verdict: the rule was written
                        after the results, so T2.7 closes on a fresh Orion run of the scoped
                        gate. D4 records the planned stub rule; T2.9 added.
+2026-11-18 T2.7 blocked — Fresh Orion campaign under the scoped B4 (source eda6643, binary
+                       235daecc…, 00:15 to 00:45, AC, powersave, same protocol): status fail.
+                       B4 passed at both scales: 10k zoom 10/10 with 4 (100%) + 1 (125%)
+                       known-limit far-zoom intervals, 41.9 to 52.0 ms at 6.0% to 9.6% zoom;
+                       p99 8.704 / 8.544 ms; B5 max 24.183 ms; B9 max 113.008 MB. B2, B5,
+                       B9, B10 passed. B3 failed: 100% 1k pan run 9, frame 236, interval
+                       26.886 ms (limit 25.0), clause (b); its draw took 12.55 ms against
+                       3.5 to 3.8 ms around it, with a normal present (1.92 ms). This is the
+                       same one-frame paint stall as the far-zoom misses, at 1k load, so
+                       it is not explained by primitive count; c80be1c's campaign had one
+                       1k-pan B3 miss too. Not re-run (measurement rules). Next: a diagnostic
+                       Orion run that records per-frame main-thread CPU time against wall
+                       time around paint, plus scheduler or frequency tracing, to tell
+                       preemption from clock changes. Then decide the fix with the owner.
+                       Evidence: docs/measurements/T2.7-wire/orion-2026-11-18-scoped/.
