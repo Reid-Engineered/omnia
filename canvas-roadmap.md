@@ -354,7 +354,7 @@ of the `canvas` lane.
 - Done when: CI fails on a pull request that adds one allocation per frame or 11% more
   primitives, and passes on a no-op pull request.
 
-### T2.7 Gate: milestone 2 · todo
+### T2.7 Gate: milestone 2 · needs-human
 - Lane: bench · Depends: T2.6
 - Do: run and record:
 
@@ -1606,3 +1606,8 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        needed for the cargo xtask golden command); the workspace Cargo.toml
                        gains the tests/golden member; canvas-plan.md section 10 now lists
                        image as a normal dependency of the test-only omnia-golden crate.
+
+2026-11-17 T2.7 needs-human — Prepared the Q4 Orion campaign for B2, B3, B4, B5, B9 and
+B10 (Q5), with ten paired startup and interleaved motion repetitions at each scale. Reuses
+T1.6 attribution and records the frozen order and run conditions. Windows replay tests
+passed. No timed campaign ran. Reference evidence and the budget verdict are pending.
