@@ -6,6 +6,7 @@ from collections import defaultdict
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
 import hashlib
+import io
 import json
 import math
 import os
@@ -19,7 +20,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "bench-baseline"))
 from compare_orion import FRAMES, REPETITIONS, SCALES, check_conditions, read_report
-from reference import command, dump, panel, set_scale, snapshot
+from reference import PANEL, command, dump, set_scale, snapshot
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "T1.6"))
 from attribute import attribute, describe
@@ -58,7 +59,16 @@ def fingerprint(binary):
     }
 
 
+def active_panel():
+    outputs = json.loads(command("kscreen-doctor", "--json"))["outputs"]
+    native = next((output for output in outputs if output["name"] == PANEL), None)
+    if native is None or not native["enabled"]:
+        raise ValueError(f"expected the native {PANEL} panel to be enabled")
+    return native
+
+
 def capture():
+    active_panel()
     conditions = snapshot()
     conditions["time_utc"] = datetime.now(timezone.utc).isoformat()
     conditions["dpms"] = command("kscreen-doctor", "--dpms", "show")
@@ -86,7 +96,7 @@ def collect(binary, output):
     source_status = command("git", "-C", ROOT, "status", "--porcelain")
     if source_status:
         raise ValueError("run from a clean source checkout")
-    original_scale = panel()["scale"]
+    original_scale = active_panel()["scale"]
     order = schedule()
     output.mkdir(parents=True)
     (output / "status.txt").write_text("incomplete\n", encoding="utf-8")
@@ -215,7 +225,7 @@ def summarize(output):
     order = schedule()
     if load(output / "order.json") != order:
         raise ValueError("recorded order does not match the frozen schedule")
-    records = [json.loads(line) for line in (output / "runs.jsonl").read_text().splitlines()]
+    records = [json.loads(line) for line in (output / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
     expected_records = [(case, phase) for case in order for phase in ("before", "after")]
     if [(record["case"], record["phase"]) for record in records] != expected_records:
         raise ValueError("incomplete campaign or run journal out of order")
@@ -305,9 +315,10 @@ def main():
         if args.action == "run":
             signal.signal(signal.SIGTERM, interrupted)
             collect(args.bench.resolve(), output)
-            with (output / "summary.txt").open("x", encoding="utf-8") as summary:
-                with redirect_stdout(summary):
-                    passed = summarize(output)
+            summary = io.StringIO()
+            with redirect_stdout(summary):
+                passed = summarize(output)
+            (output / "summary.txt").write_text(summary.getvalue(), encoding="utf-8")
             (output / "status.txt").write_text("pass\n" if passed else "fail\n", encoding="utf-8")
             print(f"{'pass' if passed else 'fail'}: {output / 'summary.txt'}")
         else:
@@ -316,6 +327,9 @@ def main():
     except KeyboardInterrupt:
         print("campaign interrupted", file=sys.stderr)
         return 130
+    except StopIteration:
+        print("incomplete: could not identify the reference CPU or panel mode", file=sys.stderr)
+        return 2
     except (OSError, subprocess.CalledProcessError, KeyError, TypeError, ValueError) as error:
         print(f"incomplete: {error}", file=sys.stderr)
         return 2
