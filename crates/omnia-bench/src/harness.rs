@@ -439,12 +439,16 @@ impl RunView {
         }
 
         let diagnostic_trace = self.trace.as_mut().map(|trace| trace.collect());
+        let paint_probe = crate::paint_probe::collect();
         let mut config = self.config.to_json();
         if diagnostic_trace.is_some() {
             // compare requires matching config: traced costs must not be compared to gates.
             config["diagnostic_trace"] = json!(true);
         }
-        Ok(json!({
+        if paint_probe.is_some() {
+            config["paint_probe"] = json!(true);
+        }
+        let mut report = json!({
             "schema": SCHEMA,
             "kind": "run",
             "config": config,
@@ -461,7 +465,11 @@ impl RunView {
             "warnings": warnings,
             "metrics": metrics,
             "diagnostic_trace": diagnostic_trace,
-        }))
+        });
+        if let Some(paint_probe) = paint_probe {
+            report["paint_probe"] = paint_probe;
+        }
+        Ok(report)
     }
 }
 
@@ -505,6 +513,8 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
             #[cfg(not(target_os = "linux"))]
             _window.resize(size(px(config.size.0), px(config.size.1)));
             let trace = tracing.then(|| crate::trace::FrameTrace::new(cx));
+            // Diagnostic only; one sample per paint, warm-up included (paint_probe.rs).
+            crate::paint_probe::enable((config.warmup + config.frames) as usize + 64);
             cx.new(|_| RunView {
                 config,
                 cached: None,
