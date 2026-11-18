@@ -93,6 +93,7 @@ T0.0 -> T0.1 -+-> T0.2 (assets)
               +-> T1.3 --------+-> T1.4 -> T1.5 -> T1.6
 T0.6 + T1.6 + T2.1 + T2.2 + T2.3 + T2.4 + T2.8 -> T2.5 -> T2.6 -> T2.7
 T2.7 -> T3.1 -+-> T3.3 [H2] -> T3.4
+T2.7 -> T2.9 (removes the B4 known limit)
 T2.5 -> T3.2 -+
 T2.2 -> T4.1, T4.2 (doc)    T3.4 + T4.2 -> T4.3 -> T4.4, T4.5 -> T4.6
 T2.2 + T2.4 + T4.1 + T4.2 -> T2.8 (doc) -> T2.5
@@ -354,7 +355,7 @@ of the `canvas` lane.
 - Done when: CI fails on a pull request that adds one allocation per frame or 11% more
   primitives, and passes on a no-op pull request.
 
-### T2.7 Gate: milestone 2 · todo
+### T2.7 Gate: milestone 2 · needs-human (fresh Orion gate run under the scoped B4, plan 2.1)
 - Lane: bench · Depends: T2.6
 - Do: run and record:
 
@@ -362,13 +363,41 @@ of the `canvas` lane.
   | --- | --- | --- |
   | B2 | `bench start --sheet 1k` minus `bench start` | < 300 ms |
   | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes, compositor-side ones excluded per plan 2.1), max ≤ 33.3 ms |
-  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes (compositor-side ones excluded per plan 2.1), max ≤ 50 ms |
+  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes (compositor-side ones excluded per plan 2.1; 10k zoom far-zoom intervals reported as the known limit until T2.9), max ≤ 50 ms |
   | B9 | `memory_mb` in the `10k` run | < 300 |
   | B10 | all reports | `allocs_per_frame.ours == 0` |
 
 - Done when: all pass on the reference machine at 100% and 125%. On another machine:
   record and set `needs-human`. If B4 misses, apply the "fails at 70k" row of the outcome
   table before reporting.
+
+### T2.9 Far-zoom wire stubs · todo
+- Lane: canvas · Depends: T2.7 · Read: D4, D5, K9, plan 2.1 "B4 known limit",
+  `docs/measurements/T2.7-wire.md`, G3, G12
+- Owns: `crates/omnia-canvas/src/sheet.rs`, `crates/omnia-canvas/src/sheet/lod.rs`,
+  `crates/omnia-canvas/src/sheet/wires.rs`
+- Do: build D4's far-zoom wire-stub rule (owner decision 2026-11-18).
+  1. In `lod.rs`, add the stub threshold to K9 (default 2.5 logical px) and
+     `lod::wire_run(length_px) -> bool`.
+  2. In the far-zoom branch of `DocumentCache::draw` (junctions hidden), filter the merged
+     runs from `MergedSegments::visible` by on-screen length `(end - start) × scale`, after
+     merging and before `Segment::bounds`. Keep `MergedSegments` and its cache as they are:
+     the filter depends on the camera and runs every frame, without allocating.
+  3. Leave the near-zoom path, the junction and box rules, and the sprite layer unchanged.
+  4. Record primitive counts with `--features scene-counts` on the 10k zoom script at frames
+     376, 420, 461, 500 and 545 at 100% and 125%, before and after, in
+     `docs/measurements/T2.9.md`. The T2.7 investigation measured 28,278 quads before and
+     8,324 with all 1 to 2 device-px runs removed at 125%.
+  5. Remove the B4 known limit: delete it from plan 2.1, the B4 row and T2.7's table, and
+     delete `far_zoom`/`scope_known_limit` from `docs/measurements/T2.7-wire/gate.py`
+     (or freeze a T2.9 copy of the gate without them) before the timed run.
+- Done when: a unit test (D4, K9) shows a far-zoom run below the threshold is not drawn,
+  one at or above it is, and a long wire made of short collinear segments still draws;
+  B10 holds on 10k zoom (`allocs_per_frame.ours == 0`); goldens unchanged (the T3.2
+  fixture is not at far zoom; if a far-zoom fixture exists by then, update it on Windows
+  and say so); and the full T2.7 table with **no** B4 known limit passes on Orion at 100%
+  and 125%. On another machine: record counts and set `needs-human`. If B4 still misses,
+  stop and ask the owner about Plan B (D4).
 
 ## Milestone 3: text and goldens
 
@@ -1606,3 +1635,23 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        needed for the cargo xtask golden command); the workspace Cargo.toml
                        gains the tests/golden member; canvas-plan.md section 10 now lists
                        image as a normal dependency of the test-only omnia-golden crate.
+2026-11-18 T2.7 needs-human — Owner decision: scope B4 so 10k far zoom is a known limit,
+                       and plan option B (T2.9). Investigation of the 2026-11-17 wire-cache
+                       campaign: all five counted B4 intervals (49.6 to 54.8 ms) fall in
+                       frames 432 to 487 of the 10k zoom sweep, zoom 5.3% to 9.3%. There the
+                       whole sheet is in view, 28,279 quads + 1,676 sprites (scene-counts,
+                       Windows dev machine, 125%), against 2k to 13k at mid zoom; Orion's
+                       present rises from ~1.8 to ~6 ms and frames alternate 20/30 ms
+                       (mean interval 24 to 25 ms in frames 440 to 479). Each miss is one paint
+                       of 24 to 31 ms (normally ~7.5 ms) at a varying frame (spikes over 15 ms
+                       at frames 408 to 519 in 12 of 20 runs); paint max tracks draw max within
+                       0.7 ms; Omnia allocations 0. Wire merging joins 46 of 20,000 wires:
+                       every far-zoom run is 1 to 2 device px. Row/column rect coalescing
+                       removed 1%; an exact pixel-coverage decomposition would leave ~20k to
+                       22k quads; dropping runs under 3 device px leaves 8,324. Plan 2.1 now
+                       reports 10k-zoom far-zoom (zoom < 31.25%, frames 376 to 545) B4
+                       intervals as KNOWN until T2.9; everything else still gates. gate.py
+                       implements it. Replaying the archived campaign under the scoped gate
+                       passes (4 + 1 known), but it is not a verdict: the rule was written
+                       after the results, so T2.7 closes on a fresh Orion run of the scoped
+                       gate. D4 records the planned stub rule; T2.9 added.

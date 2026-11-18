@@ -30,6 +30,53 @@ MOTION = ("1k-pan", "1k-zoom", "10k-pan", "10k-zoom")
 START_SAMPLES = 10
 CPU = "i5-7300U"
 
+# Owner decision 2026-11-18 (canvas plan 2.1, B4 known limit): on the 10k zoom script, a
+# counted B4 interval whose late frame is at D4 far zoom is reported as a known limit, not a
+# failure, until T2.9 lands. Far zoom is where K9 hides junction dots: diameter
+# JUNCTION_DIAMETER_NM * BASE_SCALE * zoom < 2.5 logical px, i.e. zoom < 31.25%. Mirrors
+# crates/omnia-canvas/src/sheet/lod.rs, camera.rs and crates/omnia-bench/src/driver.rs.
+GRID_NM = 2_540_000
+BASE_SCALE = 20 / GRID_NM
+JUNCTION_DIAMETER_NM = 1_016_000
+MIN_JUNCTION_PX = 2.5
+MIN_ZOOM, MAX_ZOOM, ZOOM_PERIOD = 0.05, 32.0, 600
+KNOWN_LIMIT_CASE = "10k-zoom"
+
+
+def zoom_at(frame):
+    """The zoom script's camera zoom at rendered frame `frame` (driver.rs `zoom_at`)."""
+    hi, lo = math.log2(MAX_ZOOM), math.log2(MIN_ZOOM)
+    t = (frame % ZOOM_PERIOD) / ZOOM_PERIOD * 2 * (hi - lo)
+    if t < hi:
+        log = t
+    elif t < hi + (hi - lo):
+        log = hi - (t - hi)
+    else:
+        log = lo + (t - hi - (hi - lo))
+    return min(max(2 ** log, MIN_ZOOM), MAX_ZOOM)
+
+
+def far_zoom(frame):
+    return JUNCTION_DIAMETER_NM * BASE_SCALE * zoom_at(frame) < MIN_JUNCTION_PX
+
+
+def scope_known_limit(result):
+    """Move counted, traced 10k-zoom far-zoom intervals out of `counted` into `known`.
+
+    Untraced intervals have no frame and stay counted (fail closed). An unusable trace
+    stays a failure."""
+    result["known"] = 0
+    if not result["usable"]:
+        return result
+    for miss in result["misses"]:
+        if miss["verdict"] == "counted" and far_zoom(FRAMES + miss["index"]):
+            miss["verdict"] = "known limit"
+            miss["reason"] += f"; far zoom {zoom_at(FRAMES + miss['index']):.1%} (B4 known limit, T2.9)"
+            result["known"] += 1
+    result["counted"] -= result["known"]
+    result["passed"] = result["counted"] == 0
+    return result
+
 
 def schedule():
     # Rotate the startup pair as one case, reversing it each repetition to balance B2.
@@ -214,7 +261,10 @@ def motion(report, sheet, script, scale, viewport):
         memory = metric(metrics["memory_mb"])
         if memory == 0:
             raise ValueError("expected positive private memory")
-    return p99, maximum, ours, memory, attribute(report, 1.5 if sheet == "1k" else 2.5)
+    traced = attribute(report, 1.5 if sheet == "1k" else 2.5)
+    if f"{sheet}-{script}" == KNOWN_LIMIT_CASE:
+        traced = scope_known_limit(traced)
+    return p99, maximum, ours, memory, traced
 
 
 def med_range(values):
@@ -288,6 +338,11 @@ def summarize(output):
             verdict(median(p99s) < p99_limit, f"{budget} {case} frame p99 {med_range(p99s)} ms (< {p99_limit})")
             passed = sum(result["passed"] for result in traced)
             verdict(passed == REPETITIONS, f"{budget} {case} attribution {passed}/{REPETITIONS} passed")
+            known = sum(result.get("known", 0) for result in traced)
+            if case == KNOWN_LIMIT_CASE:
+                print(f"KNOWN B4 {case} far-zoom intervals over 2.5 refreshes: {known} "
+                      f"in {sum(bool(result.get('known')) for result in traced)}/{REPETITIONS} runs "
+                      "(owner decision 2026-11-18; not gated until T2.9)")
             verdict(max(maxes) <= max_limit, f"B5 {case} worst frame {max(maxes):.3f} ms (<= {max_limit})")
             verdict(max(allocs) == 0, f"B10 {case} max Omnia allocations/frame {max(allocs):g} (= 0)")
             if budget == "B4":
