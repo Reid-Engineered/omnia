@@ -100,8 +100,10 @@ def main():
         name = f"{sheet}-{script}-{rep}"
         report = json.loads((output / f"{name}.json").read_text())
         probe = report["paint_probe"]
-        assert probe["columns"] == COLUMNS and probe["dropped"] == 0, name
-        rows = [dict(zip(COLUMNS, values)) for values in probe["rows"]]
+        # Campaign 1 (2026-11-18) predates the hardware-counter columns.
+        columns = probe["columns"]
+        assert columns in (COLUMNS, COLUMNS[:11]) and probe["dropped"] == 0, name
+        rows = [dict(zip(columns, values)) for values in probe["rows"]]
         frames = timeline(report)
         warmup = report["config"]["warmup"]
         if len(rows) != warmup + report["config"]["frames"]:
