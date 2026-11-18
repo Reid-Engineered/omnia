@@ -1562,8 +1562,9 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        six symbols, FLIP_X and ROT_90, six junctions, a rail across the
                        view; made once from the symbol library through Doc::from_items and
                        Doc::save) and compares 6 PNGs: GRAPHITE and GRAY at 1.0/1.25/1.5.
-                       Both themes give byte-identical images: every stage/* token is equal
-                       in the two themes today. cargo xtask golden [--update] runs each
+                       Both themes give byte-identical images: the tokens this fixture
+                       paints (stage/paper, stage/grid, stage/ink) are equal in the two
+                       themes today (stage/snap differs but is not painted here). cargo xtask golden [--update] runs each
                        suite in xtask/src/golden.rs SUITES with OMNIA_GOLDEN_UPDATE=1 or
                        with it removed. Failures leave .actual.png and .diff.png in
                        target/tmp/golden-sheet. Skips under OMNIA_HEADLESS_CI and on
@@ -1583,3 +1584,8 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        shell view and Suite::new("tests/golden/shell", ...), and adds its
                        (package, test) line to SUITES. T3.1's labels will change these
                        goldens; rerun --update there. T3.3 adds a FIXTURES line.
+                       Deviations from Owns: xtask/src/main.rs gains the `golden` and
+                       `golden --update` dispatch arms and usage text (beyond the mod line,
+                       needed for the cargo xtask golden command); the workspace Cargo.toml
+                       gains the tests/golden member; canvas-plan.md section 10 now lists
+                       image as a normal dependency of the test-only omnia-golden crate.
