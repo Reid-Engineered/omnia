@@ -342,7 +342,7 @@ of the `canvas` lane.
   of device pixels wide with constant width along its length; the INV7 test passes (no
   `paint_path` or `canvas(` in `sheet*`; zero allocations per frame once warm on `1k`).
 
-### T2.6 Bench scripts and CI gate · todo
+### T2.6 Bench scripts and CI gate · done
 - Lane: bench · Depends: T2.5 · Read: plan section 11 (CI noise)
 - Owns: `crates/omnia-bench/src/scripts.rs`, `.github/workflows/bench.yml`, `bench-baseline/`
 - Do: `pan` and `zoom` scripts over real sheets; primitive counts by kind in the report. In
@@ -1548,3 +1548,20 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        allocations. T2.6 picks up the renderer for real-sheet benchmarks.
                        U2.2 supplies the live document and invalidation to SheetCanvas
                        through SheetDocument and SheetView::with_document.
+2026-11-17 T2.6 done — Reused T1.6 pan and K4 zoom on the T2.4 generated documents through
+                       T2.5 paint. Hosted Windows compares allocations (Q5), per-kind
+                       primitives and their totals at the existing 10% limit. Fixed
+                       headless sweeps (seed 42, 1280×800, scale 1, 600 measured frames)
+                       on i7-14650HX / Windows 11 25H2, AC, no GPU rendering: unchanged
+                       comparisons all exit 0. Omnia allocation max was zero in each case.
+                       Primitive totals: 1k pan 1,722,710, 1k zoom 1,408,316, 10k pan
+                       1,714,920, 10k zoom 3,538,389. Separate 1k pan source plants, one
+                       allocation per frame and 189,499 extra quads (+11.0% total), each
+                       made compare exit 1. Both plants removed. Standard checks and
+                       headless Clippy pass. No reference budget certified.
+                       Owner-approved Owns deviations (2026-11-17): minimal CLI and
+                       scene wiring in main.rs and scene.rs, plus the canvas-lane sheet.rs
+                       allocation hook behind the off-by-default bench-paint-scopes
+                       feature. Q4 timing comparison uses ten rotating runs per case
+                       and scale (plan 2.1). Orion has no registered runner. The manual
+                       job and the at-desk command are documented in bench-baseline/.

@@ -1,9 +1,9 @@
 //! What the bench window draws: the real empty sheet (`omnia-canvas`'s `SheetView`, T1.4),
-//! the T0.1 paper window, or a placeholder scene painted from a custom `Element` until T2.5
-//! renders real sheets.
+//! a generated document, the T0.1 paper window, or the original placeholder scene.
 
 use crate::alloc::{not_ours, ours};
 use crate::driver::Camera;
+use crate::generate::StressSheet;
 use gpui::{
     App, Bounds, Element, ElementId, GlobalElementId, Hsla, InspectorElementId, LayoutId, Pixels,
     Style, Window, fill, point, px, relative, rgb, rgba, size,
@@ -32,6 +32,7 @@ pub enum Sheet {
     /// The milestone-1 empty sheet: `SheetView`'s paper and K10 dot grid in the Graphite
     /// theme, under the script's camera.
     Empty,
+    Document(StressSheet),
     /// The T0.1 window: one `stage/paper` rectangle, as `omnia-app` drew it at T0.1.
     T01,
     /// Paper, a dot grid and orthogonal wire quads that follow the camera.
@@ -45,11 +46,13 @@ impl Sheet {
             "empty" => Ok(Self::Empty),
             "t01" => Ok(Self::T01),
             "placeholder" => Ok(Self::Placeholder),
-            "100" | "1k" | "10k" | "dense" | "text" => Err(format!(
-                "sheet `{name}` needs the T2.4 generators and T2.5 sheet rendering"
-            )),
+            "100" => Ok(Self::Document(StressSheet::Parts100)),
+            "1k" => Ok(Self::Document(StressSheet::Parts1k)),
+            "10k" => Ok(Self::Document(StressSheet::Parts10k)),
+            "dense" => Ok(Self::Document(StressSheet::DenseWiring)),
+            "text" => Ok(Self::Document(StressSheet::TextHeavy)),
             _ => Err(format!(
-                "unknown sheet `{name}` (available: empty, t01, placeholder)"
+                "unknown sheet `{name}` (available: empty, 100, 1k, 10k, dense, text, t01, placeholder)"
             )),
         }
     }
@@ -57,6 +60,11 @@ impl Sheet {
     pub fn name(self) -> &'static str {
         match self {
             Self::Empty => "empty",
+            Self::Document(StressSheet::Parts100) => "100",
+            Self::Document(StressSheet::Parts1k) => "1k",
+            Self::Document(StressSheet::Parts10k) => "10k",
+            Self::Document(StressSheet::DenseWiring) => "dense",
+            Self::Document(StressSheet::TextHeavy) => "text",
             Self::T01 => "t01",
             Self::Placeholder => "placeholder",
             Self::Spike(_) => "spike",
@@ -68,6 +76,9 @@ impl Sheet {
         match self {
             Self::T01 => None,
             Self::Empty => Some(Rc::new(RefCell::new(EmptySheet))),
+            Self::Document(sheet) => Some(Rc::new(RefCell::new(
+                crate::scripts::DocumentScene::new(sheet),
+            ))),
             Self::Spike(config) => Some(Rc::new(RefCell::new(crate::spike::Scene::new(config)))),
             Self::Placeholder => Some(Rc::new(RefCell::new(Placeholder::new(0x0A11_CE5E)))),
         }
@@ -315,7 +326,15 @@ mod tests {
         assert_eq!(Sheet::parse("empty"), Ok(Sheet::Empty));
         assert_eq!(Sheet::parse("t01"), Ok(Sheet::T01));
         assert_eq!(Sheet::parse("placeholder"), Ok(Sheet::Placeholder));
-        assert!(Sheet::parse("10k").unwrap_err().contains("T2.5"));
+        for (name, workload) in ["100", "1k", "10k", "dense", "text"]
+            .into_iter()
+            .zip(StressSheet::ALL)
+        {
+            let sheet = Sheet::parse(name).unwrap();
+            assert_eq!(sheet, Sheet::Document(workload));
+            assert_eq!(sheet.name(), name);
+            assert!(sheet.scene().is_some());
+        }
         assert!(Sheet::parse("nope").is_err());
         assert!(Sheet::T01.scene().is_none() && Sheet::Placeholder.scene().is_some());
         assert!(Sheet::Empty.scene().is_some());

@@ -155,25 +155,6 @@ enum Mark<'a> {
     Sprite(symbols::Shape<'a>),
 }
 
-fn paint_mark(window: &mut Window, cx: &App, mark: Mark<'_>, sf: f32, ink: Hsla) {
-    match mark {
-        Mark::Quad(bounds) => window.paint_quad(fill(bounds, ink)),
-        Mark::Sprite(shape) => {
-            let (bounds, transform) = shape.sprite(sf);
-            if let Err(error) = window.paint_svg(
-                bounds,
-                shape.mask.key.clone(),
-                Some(&shape.mask.svg),
-                transform,
-                ink,
-                cx,
-            ) {
-                eprintln!("sheet mask: {error}");
-            }
-        }
-    }
-}
-
 type EmitMarks<'sprite, 'emit> = dyn FnMut(&mut dyn FnMut(Mark<'sprite>)) + 'emit;
 
 impl DocumentCache {
@@ -287,6 +268,65 @@ pub struct SheetView {
     camera: Camera,
     theme: &'static Theme,
     document: Option<SheetDocument>,
+    #[cfg(feature = "bench-paint-scopes")]
+    paint_scopes: Option<PaintScopes>,
+}
+
+#[cfg(feature = "bench-paint-scopes")]
+type PaintScope = fn(&mut dyn FnMut());
+
+#[cfg(feature = "bench-paint-scopes")]
+#[derive(Clone, Copy, Debug)]
+struct PaintScopes {
+    canvas: PaintScope,
+    platform: PaintScope,
+}
+
+// In regular canvas builds the wrapper disappears, including its closure.
+macro_rules! paint_scope {
+    ($sheet:ident, $scope:ident, $body:block) => {{
+        #[cfg(feature = "bench-paint-scopes")]
+        {
+            let mut paint = || $body;
+            if let Some(scopes) = $sheet.paint_scopes {
+                (scopes.$scope)(&mut paint);
+            } else {
+                paint();
+            }
+        }
+        #[cfg(not(feature = "bench-paint-scopes"))]
+        $body
+    }};
+}
+
+fn paint_mark(
+    window: &mut Window,
+    cx: &App,
+    mark: Mark<'_>,
+    sf: f32,
+    ink: Hsla,
+    #[cfg(feature = "bench-paint-scopes")] sheet: &SheetView,
+) {
+    match mark {
+        Mark::Quad(bounds) => {
+            paint_scope!(sheet, platform, { window.paint_quad(fill(bounds, ink)) })
+        }
+        Mark::Sprite(shape) => {
+            let (bounds, transform) = shape.sprite(sf);
+            paint_scope!(sheet, platform, {
+                if let Err(error) = window.paint_svg(
+                    bounds,
+                    shape.mask.key.clone(),
+                    Some(&shape.mask.svg),
+                    transform,
+                    ink,
+                    cx,
+                ) {
+                    eprintln!("sheet mask: {error}");
+                }
+            });
+        }
+    }
 }
 
 impl SheetView {
@@ -296,6 +336,8 @@ impl SheetView {
             camera,
             theme,
             document: None,
+            #[cfg(feature = "bench-paint-scopes")]
+            paint_scopes: None,
         }
     }
 
@@ -305,7 +347,16 @@ impl SheetView {
             camera,
             theme,
             document: Some(document),
+            #[cfg(feature = "bench-paint-scopes")]
+            paint_scopes: None,
         }
+    }
+
+    /// Q5 instrumentation for the benchmark. Each scope must call its body exactly once.
+    #[cfg(feature = "bench-paint-scopes")]
+    pub fn with_paint_scopes(mut self, canvas: PaintScope, platform: PaintScope) -> Self {
+        self.paint_scopes = Some(PaintScopes { canvas, platform });
+        self
     }
 
     pub fn camera(&self) -> &Camera {
@@ -440,38 +491,69 @@ impl Element for SheetView {
         cx: &mut App,
     ) {
         let scale_factor = window.scale_factor();
-        window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            window.paint_layer(|window| {
-                self.draw_background(bounds, scale_factor, |bounds, color, dot| {
-                    let mark = if let (Some(document), Some(side)) = (&self.document, dot)
-                        && side >= 3
-                    {
-                        let center = bounds.center();
-                        let diameter = f64::from(side) / f64::from(scale_factor);
-                        Mark::Sprite(document.cache.masks.dot(
-                            f64::from(center.x),
-                            f64::from(center.y),
-                            diameter,
-                            scale_factor,
-                        ))
-                    } else {
-                        Mark::Quad(bounds)
-                    };
-                    paint_mark(window, cx, mark, scale_factor, color);
-                });
-            });
-            if let Some(document) = &self.document {
-                let mut camera = self.camera.clone();
-                camera.set_viewport(bounds);
-                let ink = gpui_color(self.theme.stage_ink);
-                document
-                    .cache
-                    .draw(document.doc.read(cx), &camera, scale_factor, |_, emit| {
-                        window.paint_layer(|window| {
-                            emit(&mut |mark| paint_mark(window, cx, mark, scale_factor, ink))
+        paint_scope!(self, platform, {
+            window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                window.paint_layer(|window| {
+                    paint_scope!(self, canvas, {
+                        self.draw_background(bounds, scale_factor, |bounds, color, dot| {
+                            let mark = if let (Some(document), Some(side)) = (&self.document, dot)
+                                && side >= 3
+                            {
+                                let center = bounds.center();
+                                let diameter = f64::from(side) / f64::from(scale_factor);
+                                Mark::Sprite(document.cache.masks.dot(
+                                    f64::from(center.x),
+                                    f64::from(center.y),
+                                    diameter,
+                                    scale_factor,
+                                ))
+                            } else {
+                                Mark::Quad(bounds)
+                            };
+                            paint_mark(
+                                window,
+                                cx,
+                                mark,
+                                scale_factor,
+                                color,
+                                #[cfg(feature = "bench-paint-scopes")]
+                                self,
+                            );
                         });
                     });
-            }
+                });
+                if let Some(document) = &self.document {
+                    paint_scope!(self, canvas, {
+                        let mut camera = self.camera.clone();
+                        camera.set_viewport(bounds);
+                        let ink = gpui_color(self.theme.stage_ink);
+                        document.cache.draw(
+                            document.doc.read(cx),
+                            &camera,
+                            scale_factor,
+                            |_, emit| {
+                                paint_scope!(self, platform, {
+                                    window.paint_layer(|window| {
+                                        paint_scope!(self, canvas, {
+                                            emit(&mut |mark| {
+                                                paint_mark(
+                                                    window,
+                                                    cx,
+                                                    mark,
+                                                    scale_factor,
+                                                    ink,
+                                                    #[cfg(feature = "bench-paint-scopes")]
+                                                    self,
+                                                )
+                                            });
+                                        });
+                                    });
+                                });
+                            },
+                        );
+                    });
+                }
+            });
         });
     }
 }

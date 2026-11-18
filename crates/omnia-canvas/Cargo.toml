@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+bench-paint-scopes = []
+
 [dependencies]
 gpui.workspace = true
 omnia-doc = { path = "../omnia-doc" }

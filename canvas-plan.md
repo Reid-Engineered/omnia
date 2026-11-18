@@ -691,11 +691,17 @@ Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 | Command | Reports |
 | --- | --- |
 | `bench run --sheet S --script pan\|zoom\|drag-part\|drag-wire\|hover [--frames 600]` | Frame, draw and dirty-to-present ms (p50, p95, p99, max); `allocs_per_frame` (ours, total); `memory_mb`; primitive counts by kind (build with `--features scene-counts`, which needs GPUI's `bench-support`) |
+| `bench run --headless --sheet S --script pan\|zoom` | Omnia allocations per frame and primitive counts by kind summed over the measured sweep. Requires the bench's `headless` feature, which enables `scene-counts` and GPUI's in-memory test platform. |
 | `bench start [--sheet S] [--runs 10]` | Process start to first interactive frame, median and max |
 | `bench idle --seconds N` | Frames drawn; CPU percent |
 | `bench hit --sheet S` | Hit-test time, p50 and p99 |
 | `bench compare base.json new.json --max-regression 10` | Non-zero exit on a regression over the limit |
 | `bench spike s1..s8` | Section 8 |
+
+For Q5, the bench alone enables the canvas's opt-in `bench-paint-scopes` feature to
+attribute sheet paint allocations at the boundary between Omnia and GPUI. T2.6 compares
+the hosted counts to the committed reports in `bench-baseline/`. Windowed frame-time
+comparisons use the Q4 reference protocol.
 
 `omnia-app --frames N` exits after N presented frames, so the app can be run unattended.
 

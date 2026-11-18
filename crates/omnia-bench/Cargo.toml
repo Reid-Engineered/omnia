@@ -11,6 +11,8 @@ publish.workspace = true
 # dependencies, so it is opt-in: `cargo run --release -p omnia-bench --features scene-counts`.
 scene-counts = ["gpui/bench-support"]
 readback = ["gpui/test-support", "gpui_platform/test-support", "dep:resvg"]
+# Build scenes without opening a desktop window or creating a GPU renderer.
+headless = ["scene-counts", "gpui/test-support"]
 
 [dependencies]
 omnia-doc = { path = "../omnia-doc" }
@@ -21,8 +23,8 @@ gpui_platform.workspace = true
 # Same major version and features as GPUI's, so FrameDurationSnapshot's histograms are this type.
 hdrhistogram = { version = "7", default-features = false }
 serde_json = "1"
-# The real sheet element for `--sheet empty` (T1.6).
-omnia-canvas = { path = "../omnia-canvas" }
+# Count Omnia's paint allocations separately on all real-sheet runs (Q5).
+omnia-canvas = { path = "../omnia-canvas", features = ["bench-paint-scopes"] }
 omnia-theme = { path = "../omnia-theme" }
 
 # resvg 0.46 (Apache-2.0 OR MIT), opt-in readback/reference only; never default.

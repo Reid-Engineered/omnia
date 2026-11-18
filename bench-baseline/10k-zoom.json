@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "kind": "run",
+  "config": {
+    "backend": "headless",
+    "sheet": "10k",
+    "seed": 42,
+    "script": "zoom",
+    "frames": 600,
+    "warmup": 600,
+    "window_logical": [
+      1280.0,
+      800.0
+    ],
+    "scale_factor": 1.0
+  },
+  "metrics": {
+    "allocs_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      }
+    },
+    "primitives": {
+      "monochrome_sprites": 435315,
+      "paths": 0,
+      "polychrome_sprites": 0,
+      "quads": 3103074,
+      "shadows": 0,
+      "subpixel_sprites": 0,
+      "surfaces": 0,
+      "total": 3538389,
+      "underlines": 0
+    }
+  }
+}
