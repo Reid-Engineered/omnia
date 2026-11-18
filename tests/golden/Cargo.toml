@@ -1,0 +1,30 @@
+[package]
+name = "omnia-golden"
+description = "Golden-image harness: render with render_to_image and compare with committed PNGs (T3.2)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Test support only: no product crate depends on this one. The library uses GPUI without
+# `test-support`, so building the workspace does not switch that feature on for the app or the
+# bench; callers pass the two test-support calls in through `Hooks` (see src/lib.rs).
+[dependencies]
+gpui.workspace = true
+gpui_platform.workspace = true
+# Plan section 10 (`image`, golden comparison; MIT OR Apache-2.0). The same 0.25 crate GPUI
+# returns from render_to_image, with PNG only.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+# Window::render_to_image and Window::set_scale_factor (G12).
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+omnia-canvas = { path = "../../crates/omnia-canvas" }
+omnia-doc = { path = "../../crates/omnia-doc" }
+omnia-theme = { path = "../../crates/omnia-theme" }
+
+# GPUI must own the main thread, so the render test supplies its own main.
+[[test]]
+name = "sheet"
+harness = false
