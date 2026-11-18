@@ -738,7 +738,7 @@ Build-time steps:
 | `resvg` 0.46 (`omnia-bench` feature `readback` only, never default; GPUI already depends on it) | S3/S8 readback reference renders | Apache-2.0 OR MIT |
 | GPUI's Linux `wayland` feature, enabled by `omnia-bench` and `omnia-app` on Linux (transitive, listed below) | Wayland window backend | MIT, MIT OR Apache-2.0, or MIT OR Apache-2.0 OR Zlib |
 | `usvg`, `zip`, `serde_json`, `toml` (xtask only) | Codegen | Apache-2.0 or MIT; `zip` MIT |
-| `proptest`, `criterion`, `image` (dev only) | Property tests, micro-benchmarks, golden comparison | MIT or Apache-2.0 |
+| `proptest`, `criterion`, `image` (dev only, except `image` is a normal dependency of the test-only `omnia-golden` crate, which no product crate depends on) | Property tests, micro-benchmarks, golden comparison | MIT or Apache-2.0 |
 | electronic-symbols, Tabler Icons | Symbols, icons | MIT |
 | Inter, Source Code Pro | Fonts | SIL OFL 1.1 |
 

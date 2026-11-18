@@ -380,7 +380,7 @@ of the `canvas` lane.
 - Done when: zero allocations per frame once warm on `text` at a fixed zoom; a zoom sweep
   run twice leaves the atlas the same size after the second pass as after the first.
 
-### T3.2 Golden-image harness · todo
+### T3.2 Golden-image harness · done
 - Lane: bench · Depends: T2.5 · Read: G12, T0.4's S8 result
 - Owns: `tests/golden/`, `xtask/src/golden.rs`
 - Do: a test that loads a sheet, renders it with `render_to_image` in both themes at scale
@@ -1565,3 +1565,44 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        Both paths validate full untraced samples, AC power and governor
                        evidence. Runner and comparator were checked with fixtures; no
                        reference timing was run.
+2026-11-17 T3.2 done — G12. New test-support crate omnia-golden at tests/golden/ (workspace
+                       member; no product crate depends on it). Rule in src/lib.rs: an image
+                       passes when at most 1 pixel per 1,000 has some channel (alpha
+                       included) more than 2/255 off the golden. The library uses GPUI
+                       without test-support, so workspace builds of app and bench do not
+                       gain that feature; test targets pass set_scale_factor and
+                       render_to_image in through Hooks. render_to_image returns the window
+                       at its real DPI, so views are laid out in a fixed logical box in a
+                       window 1.5x that size and cropped to the box at each scale factor:
+                       goldens are 640x400, 800x500 and 960x600 on any display of 100% or
+                       more. tests/sheet.rs (harness = false) loads inverting-amp.ron (all
+                       six symbols, FLIP_X and ROT_90, six junctions, a rail across the
+                       view; made once from the symbol library through Doc::from_items and
+                       Doc::save) and compares 6 PNGs: GRAPHITE and GRAY at 1.0/1.25/1.5.
+                       Both themes give byte-identical images: the tokens this fixture
+                       paints (stage/paper, stage/grid, stage/ink) are equal in the two
+                       themes today (stage/snap differs but is not painted here). cargo xtask golden [--update] runs each
+                       suite in xtask/src/golden.rs SUITES with OMNIA_GOLDEN_UPDATE=1 or
+                       with it removed. Failures leave .actual.png and .diff.png in
+                       target/tmp/golden-sheet. Skips under OMNIA_HEADLESS_CI and on
+                       Linux/FreeBSD (no render_to_image, T0.8); updating there is an error.
+                       S8 never measured no-GPU readback, so the test runs on Windows
+                       development machines as AGENTS.md says, not reference-only.
+                       Done-when, Windows dev machine (i7-14650HX, Intel UHD active,
+                       Windows 11, 100%): unchanged code 0 differing pixels, largest
+                       channel difference 0, in all 6 images on three runs; the rail
+                       segment moved down one logical px (127,000 nm, planted in the RON
+                       and reverted) failed all 6: 746/953/1147 differing pixels against
+                       limits 256/400/576 at 1.0/1.25/1.5. image (plan section 10) is a
+                       normal dependency of this test-only crate, already in the graph
+                       through GPUI; Cargo.lock gains only omnia-golden. For U1.9: the
+                       harness exists now (ui-plan section 14 expected U1.9 to create it);
+                       U1.9 dev-depends on omnia-golden, calls omnia_golden::run with its
+                       shell view and Suite::new("tests/golden/shell", ...), and adds its
+                       (package, test) line to SUITES. T3.1's labels will change these
+                       goldens; rerun --update there. T3.3 adds a FIXTURES line.
+                       Deviations from Owns: xtask/src/main.rs gains the `golden` and
+                       `golden --update` dispatch arms and usage text (beyond the mod line,
+                       needed for the cargo xtask golden command); the workspace Cargo.toml
+                       gains the tests/golden member; canvas-plan.md section 10 now lists
+                       image as a normal dependency of the test-only omnia-golden crate.

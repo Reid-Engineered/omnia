@@ -1,7 +1,9 @@
-//! Asset generation commands: `cargo xtask tokens` (T1.2) and `cargo xtask symbols` (T2.3).
+//! Asset generation commands: `cargo xtask tokens` (T1.2) and `cargo xtask symbols` (T2.3),
+//! and `cargo xtask golden [--update]` (T3.2).
 
 use std::process::ExitCode;
 
+mod golden;
 mod symbols;
 mod tokens;
 
@@ -15,7 +17,9 @@ fn main() -> ExitCode {
     {
         ["tokens"] => tokens::run(&tokens::workspace_root()),
         ["symbols"] => symbols::run(&tokens::workspace_root()),
-        _ => Err("usage: cargo xtask <tokens|symbols>".to_owned()),
+        ["golden"] => golden::run(&tokens::workspace_root(), false),
+        ["golden", "--update"] => golden::run(&tokens::workspace_root(), true),
+        _ => Err("usage: cargo xtask <tokens|symbols|golden [--update]>".to_owned()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

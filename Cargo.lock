@@ -3564,6 +3564,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "omnia-golden"
+version = "0.1.0"
+dependencies = [
+ "gpui",
+ "gpui_platform",
+ "image",
+ "omnia-canvas",
+ "omnia-doc",
+ "omnia-theme",
+]
+
+[[package]]
 name = "omnia-symbols"
 version = "0.1.0"
 dependencies = [
