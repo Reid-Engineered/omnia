@@ -35,6 +35,14 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - name: Lint the headless bench
+        run: cargo clippy --locked -p omnia-bench --all-targets --features headless -- -D warnings
+      - name: Lint and test the canvas with bench-paint-scopes off
+        # Workspace builds unify the feature on through omnia-bench; build these alone so the
+        # feature-off side of sheet.rs is compiled and checked too.
+        run: |
+          cargo clippy --locked -p omnia-canvas -p omnia-app --all-targets -- -D warnings
+          cargo test --locked -p omnia-canvas
       - name: Build the headless bench
         run: cargo build --locked -p omnia-bench --features headless
       - name: Compare real-sheet counts

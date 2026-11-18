@@ -308,20 +308,24 @@ fn paint_mark(
     #[cfg(feature = "bench-paint-scopes")] sheet: &SheetView,
 ) {
     match mark {
+        // Arguments are built before entering the platform scope so any allocation they
+        // make is counted as ours (Q5).
         Mark::Quad(bounds) => {
-            paint_scope!(sheet, platform, { window.paint_quad(fill(bounds, ink)) })
+            let mut quad = Some(fill(bounds, ink));
+            paint_scope!(sheet, platform, {
+                if let Some(quad) = quad.take() {
+                    window.paint_quad(quad)
+                }
+            })
         }
         Mark::Sprite(shape) => {
             let (bounds, transform) = shape.sprite(sf);
+            let mut key = Some(shape.mask.key.clone());
             paint_scope!(sheet, platform, {
-                if let Err(error) = window.paint_svg(
-                    bounds,
-                    shape.mask.key.clone(),
-                    Some(&shape.mask.svg),
-                    transform,
-                    ink,
-                    cx,
-                ) {
+                if let Some(key) = key.take()
+                    && let Err(error) =
+                        window.paint_svg(bounds, key, Some(&shape.mask.svg), transform, ink, cx)
+                {
                     eprintln!("sheet mask: {error}");
                 }
             });
@@ -491,6 +495,8 @@ impl Element for SheetView {
         cx: &mut App,
     ) {
         let scale_factor = window.scale_factor();
+        // The outer scope is GPUI's (not counted as ours under Q5). Omnia drawing code added to
+        // this method must sit inside a `canvas` scope, or its allocations go uncounted.
         paint_scope!(self, platform, {
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
                 window.paint_layer(|window| {

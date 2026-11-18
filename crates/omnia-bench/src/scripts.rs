@@ -96,12 +96,19 @@ mod headless {
 
         let mut allocations = Vec::with_capacity(config.frames as usize);
         let mut counts = BTreeMap::<String, u64>::new();
-        // Repeat the same path after warm-up. This puts both sweeps and atlas cache use on a
-        // fixed schedule independent of focus, display scale, refresh rate and GPU.
+        // Measured frames continue the camera path past warm-up, as the windowed harness does
+        // (harness.rs), so an allocation made only at a camera position not yet drawn is
+        // counted. The schedule stays fixed: independent of focus, display scale, refresh rate
+        // and GPU.
         for (measuring, frames) in [(false, config.warmup), (true, config.frames)] {
             for frame in 0..frames {
+                let step = if measuring {
+                    config.warmup + frame
+                } else {
+                    frame
+                };
                 let before = AllocCounts::now();
-                camera.set(ours(|| config.script.camera(frame)));
+                camera.set(ours(|| config.script.camera(step)));
                 paint_time.set(None);
                 app.update_window(window.into(), |_, window, cx| {
                     window.refresh();

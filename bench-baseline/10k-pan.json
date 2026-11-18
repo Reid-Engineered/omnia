@@ -25,14 +25,14 @@
       }
     },
     "primitives": {
-      "monochrome_sprites": 95980,
+      "monochrome_sprites": 95013,
       "paths": 0,
       "polychrome_sprites": 0,
-      "quads": 1618940,
+      "quads": 1618536,
       "shadows": 0,
       "subpixel_sprites": 0,
       "surfaces": 0,
-      "total": 1714920,
+      "total": 1713549,
       "underlines": 0
     }
   }
