@@ -4,7 +4,10 @@
 //! thread CPU time (`CLOCK_THREAD_CPUTIME_ID`), page faults and voluntary and involuntary
 //! context switches (`getrusage(RUSAGE_THREAD)`), run-queue wait and timeslices
 //! (`/proc/thread-self/schedstat`), the CPU at start and end (`sched_getcpu`), and the end
-//! CPU's `scaling_cur_freq`. Wall time well above CPU time means the thread was not
+//! CPU's `scaling_cur_freq` (an unreliable instant reading under intel_pstate, kept for
+//! context), and the thread's user-space cycles, instructions and reference cycles
+//! (`perf_event_open`, unprivileged at perf_event_paranoid 2): cycles / reference cycles is
+//! the core clock while running, instructions per cycle shows contention. Wall time well above CPU time means the thread was not
 //! running (run-queue wait says whether it was runnable); CPU time well above the usual
 //! paint, with no faults or waits, means it ran slowly. Files are opened once and re-read with
 //! `pread` into stack buffers, and samples go into a vector reserved up front, so a paint
@@ -26,6 +29,10 @@ mod linux {
         voluntary: u64,
         involuntary: u64,
         cpu: u32,
+        /// User-space cycles, instructions and reference cycles; `u64::MAX` when unavailable.
+        hw: [u64; 3],
+        /// Hardware counters were time-multiplexed (enabled time != running time).
+        multiplexed: bool,
     }
 
     #[derive(Clone, Copy)]
@@ -39,6 +46,38 @@ mod linux {
     struct Files {
         schedstat: std::fs::File,
         freq: Vec<Option<std::fs::File>>,
+        /// perf_event fds for this thread: cycles, instructions, ref-cycles (user space only).
+        hw: [Option<std::fs::File>; 3],
+    }
+
+    /// Opens a user-space-only hardware counter for the calling thread (perf_event_open).
+    /// Works at perf_event_paranoid 2 without privileges. `perf_event_attr` is laid out by
+    /// hand: libc has the syscall number but not the struct (PERF_ATTR_SIZE_VER8, 136 bytes).
+    fn hw_counter(config: u64) -> Option<std::fs::File> {
+        use std::os::fd::FromRawFd;
+        const PERF_TYPE_HARDWARE: u64 = 0;
+        const ATTR_SIZE: u64 = 136;
+        const READ_TIMES: u64 = 1 | 2; // TOTAL_TIME_ENABLED | TOTAL_TIME_RUNNING
+        const EXCLUDE_KERNEL_HV: u64 = (1 << 5) | (1 << 6);
+        const PERF_FLAG_FD_CLOEXEC: libc::c_ulong = 1 << 3;
+        let mut attr = [0u64; 17];
+        attr[0] = PERF_TYPE_HARDWARE | (ATTR_SIZE << 32); // type: u32, size: u32
+        attr[1] = config;
+        attr[4] = READ_TIMES; // read_format
+        attr[5] = EXCLUDE_KERNEL_HV; // flags bitfield
+        // SAFETY: attr is a zero-initialised, correctly sized perf_event_attr.
+        let fd = unsafe {
+            libc::syscall(
+                libc::SYS_perf_event_open,
+                attr.as_ptr(),
+                0,
+                -1,
+                -1,
+                PERF_FLAG_FD_CLOEXEC,
+            )
+        };
+        // SAFETY: a non-negative return is a new fd we own.
+        (fd >= 0).then(|| unsafe { std::fs::File::from_raw_fd(fd as i32) })
     }
 
     struct Probe {
@@ -74,7 +113,12 @@ mod linux {
                 .collect();
             PROBE.with_borrow_mut(|probe| {
                 *probe = Some(Probe {
-                    files: Files { schedstat, freq },
+                    files: Files {
+                        schedstat,
+                        freq,
+                        // PERF_COUNT_HW_CPU_CYCLES, _INSTRUCTIONS, _REF_CPU_CYCLES.
+                        hw: [hw_counter(0), hw_counter(1), hw_counter(9)],
+                    },
                     samples: Vec::with_capacity(capacity),
                     dropped: 0,
                     open: None,
@@ -135,13 +179,18 @@ mod linux {
                         s.start.cpu,
                         s.end.cpu,
                         s.freq_khz,
+                        hw_delta(s.start.hw[0], s.end.hw[0]),
+                        hw_delta(s.start.hw[1], s.end.hw[1]),
+                        hw_delta(s.start.hw[2], s.end.hw[2]),
+                        s.start.multiplexed || s.end.multiplexed,
                     ])
                 })
                 .collect();
             Some(json!({
                 "columns": ["wall_ns", "cpu_ns", "runqueue_wait_ns", "timeslices", "minor_faults",
                             "major_faults", "voluntary_switches", "involuntary_switches",
-                            "cpu_start", "cpu_end", "end_cpu_cur_freq_khz"],
+                            "cpu_start", "cpu_end", "end_cpu_cur_freq_khz", "user_cycles",
+                            "user_instructions", "user_ref_cycles", "counters_multiplexed"],
                 "scope": "every SceneElement paint, warm-up included, one per draw",
                 "dropped": probe.dropped,
                 "rows": rows,
@@ -177,6 +226,19 @@ mod linux {
                 counters.wait_ns = fields.next().unwrap_or(0);
                 counters.slices = fields.next().unwrap_or(0);
             }
+            for (slot, file) in counters.hw.iter_mut().zip(&self.files.hw) {
+                *slot = u64::MAX;
+                let Some(file) = file else { continue };
+                let mut words = [0u8; 24];
+                // perf fds read the current count on every read(); offsets do not apply.
+                if std::io::Read::read(&mut &*file, &mut words).ok() == Some(24) {
+                    let word = |i: usize| {
+                        u64::from_ne_bytes(words[i * 8..i * 8 + 8].try_into().unwrap_or([0; 8]))
+                    };
+                    *slot = word(0);
+                    counters.multiplexed |= word(1) != word(2);
+                }
+            }
             counters
         }
 
@@ -189,6 +251,11 @@ mod linux {
             file.read_at(&mut buf, 0)
                 .map_or(0, |n| fields(&buf[..n]).next().unwrap_or(0))
         }
+    }
+
+    /// Counter delta, or null when the counter was unavailable.
+    fn hw_delta(start: u64, end: u64) -> Option<u64> {
+        (start != u64::MAX && end != u64::MAX).then(|| end.saturating_sub(start))
     }
 
     pub(super) fn number(digits: &[u8]) -> u64 {

@@ -10,9 +10,14 @@ the baseline) is split by the probe:
   wait >= half of (wall - cpu);
 - blocked: wall - cpu >= half the excess otherwise (a voluntary switch: asleep, not runnable);
 - slow, faulting: cpu carries the excess and minor + major faults >= 10x the run's median;
-- slow, no faults: cpu carries the excess without that, so execution itself was slow
-  (clocks, SMT sibling or memory contention); the end CPU's cur freq is shown against the
-  run's median.
+- slow, no faults: cpu carries the excess without that, so execution itself was slow. When
+  the hardware counters are present (user-space cycles, instructions and reference cycles,
+  not multiplexed), it is split against the local medians of those counters:
+  - more work: instructions >= 1.5x local;
+  - low clock: cycles < 1.5x local (same work, same cycles, slower cycles);
+  - low IPC: otherwise (same work, many more cycles: the core was starved, e.g. by the SMT
+    sibling or by memory and cache contention with the GPU).
+  The clock column is cycles / reference cycles x NOMINAL_GHZ (the i5-7300U's 2.6 GHz).
 
 Also prints each run's /proc/vmstat deltas and every present interval over 1.5 refreshes with
 its paint. Standard library only.
@@ -30,15 +35,40 @@ from attribute import timeline
 
 COLUMNS = ["wall_ns", "cpu_ns", "runqueue_wait_ns", "timeslices", "minor_faults",
            "major_faults", "voluntary_switches", "involuntary_switches", "cpu_start", "cpu_end",
-           "end_cpu_cur_freq_khz"]
+           "end_cpu_cur_freq_khz", "user_cycles", "user_instructions", "user_ref_cycles",
+           "counters_multiplexed"]
+
+
+NOMINAL_GHZ = 2.6
+
+
+def neighbours(measured, index):
+    return measured[max(0, index - 10):index] + measured[index + 1:index + 11]
 
 
 def local_wall(measured, index):
-    window = measured[max(0, index - 10):index] + measured[index + 1:index + 11]
-    return median(r["wall_ns"] for r in window)
+    return median(r["wall_ns"] for r in neighbours(measured, index))
 
 
-def classify(row, local, base):
+def local(measured, index, key):
+    values = [r[key] for r in neighbours(measured, index) if r.get(key) is not None]
+    return median(values) if values else None
+
+
+def counters(row, measured, index):
+    """(instructions ratio, cycles ratio, clock GHz, IPC, local clock GHz), or None."""
+    keys = ("user_cycles", "user_instructions", "user_ref_cycles")
+    if row.get("counters_multiplexed") or any(not row.get(k) for k in keys):
+        return None
+    cycles, instructions, ref = (local(measured, index, k) for k in keys)
+    if not (cycles and instructions and ref):
+        return None
+    return (row["user_instructions"] / instructions, row["user_cycles"] / cycles,
+            NOMINAL_GHZ * row["user_cycles"] / row["user_ref_cycles"],
+            row["user_instructions"] / row["user_cycles"], NOMINAL_GHZ * cycles / ref)
+
+
+def classify(row, local, base, hw):
     excess = row["wall_ns"] - local
     off_cpu = row["wall_ns"] - row["cpu_ns"]
     faults = row["minor_faults"] + row["major_faults"]
@@ -48,7 +78,14 @@ def classify(row, local, base):
         return "blocked"
     if faults >= 10 * max(base["faults"], 1):
         return "slow, faulting"
-    return "slow, no faults"
+    if hw is None:
+        return "slow, no faults"
+    instructions, cycles = hw[0], hw[1]
+    if instructions >= 1.5:
+        return "slow: more work"
+    if cycles < 1.5:
+        return "slow: low clock"
+    return "slow: low IPC"
 
 
 def main():
@@ -90,7 +127,8 @@ def main():
               f"{base['freq'] / 1e3:.0f} | {len(stalls)} | {len(late)} | "
               f"{ {k: v for k, v in delta.items() if v} }")
         for index, r, local in stalls:
-            kind = classify(r, local, base)
+            hw = counters(r, measured, index)
+            kind = classify(r, local, base, hw)
             totals[kind] = totals.get(kind, 0) + 1
             interval = next((ns for i, ns in late if i == index), None)
             details.append(
@@ -99,6 +137,8 @@ def main():
                 f"{r['cpu_ns'] / 1e6:.2f}, run-queue wait {r['runqueue_wait_ns'] / 1e6:.2f}, "
                 f"switches {r['voluntary_switches']}v/{r['involuntary_switches']}i, faults {r['minor_faults']}+{r['major_faults']}, cpu "
                 f"{r['cpu_start']}->{r['cpu_end']}, freq {r['end_cpu_cur_freq_khz'] / 1e3:.0f} MHz"
+                + (f"; instructions x{hw[0]:.2f}, cycles x{hw[1]:.2f}, clock {hw[2]:.2f} GHz "
+                   f"(local {hw[4]:.2f}), IPC {hw[3]:.2f}" if hw else "; no hardware counters")
                 + (f"; present interval {interval / 1e6:.2f} ms" if interval else ""))
     print("\nStalls")
     print("\n".join(details) or "  none")
