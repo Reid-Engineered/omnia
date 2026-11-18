@@ -378,7 +378,7 @@ of the `canvas` lane.
 - Done when: zero allocations per frame once warm on `text` at a fixed zoom; a zoom sweep
   run twice leaves the atlas the same size after the second pass as after the first.
 
-### T3.2 Golden-image harness · todo
+### T3.2 Golden-image harness · doing
 - Lane: bench · Depends: T2.5 · Read: G12, T0.4's S8 result
 - Owns: `tests/golden/`, `xtask/src/golden.rs`
 - Do: a test that loads a sheet, renders it with `render_to_image` in both themes at scale
