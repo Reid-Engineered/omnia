@@ -219,7 +219,7 @@ without being drawn.
 - Done when: headless tests cover each state, keyboard activation and Esc; hover changes notify
   only the widget's view.
 
-### U1.4 Action registry, command state and keymap · todo
+### U1.4 Action registry, command state and keymap · done
 - Lane: shell · Depends: U1.1 · Read: UD3, UINV3, UINV4, UINV5, T5.2, `gpui/docs/key_dispatch.md`
 - Owns: `crates/omnia-app/src/actions.rs`, `keymap.rs`
 - Do: the stage 2 action set, `ActionSpec`, `ACTIONS`, `CommandState` with `CanvasEdits` flags
@@ -632,3 +632,21 @@ per pass) `save_1k` `1.330`/`1.480` ms, `load_1k` `4.771`/`5.211` ms, `save_10k`
 (range `13.863–50.079` ms), `load_10k` `50.710`/`52.954` ms. Nothing run on Orion; `needs-human`
 until the owner runs `bash docs/measurements/U0.5/run.sh` on Orion to decide US4 / `UB10`
 (`save_10k` < 33.3 ms p99 vs `DocSnapshot`).
+2026-11-17 U1.4 done — Implemented the single action registry (`crates/omnia-app/src/actions.rs`)
+and default keymap/conflict validator (`crates/omnia-app/src/keymap.rs`), exposed via
+`crates/omnia-app/src/lib.rs` (UD2, UD3, UD19, UK2, UK3, UQ11). `ACTIONS` covers the full
+stage 2 menu/toolbar/instrument set (`ActionSpec`, `TopMenu`, `ToolbarGroup`, `MenuPlace`,
+`ToolbarPlace`, `KeyContext`, `Binding`, `CommandState`, `SimState`, and `CanvasEdits` with all
+edit flags off by default; canvas tool actions `Rotate`, `MirrorHorizontal`, `MirrorVertical`,
+`PlaceWire`, and `PlaceNetLabel` stay disabled via `enabled: never` until T5.2/U5.1 land).
+`keymap::default_bindings()` builds GPUI `KeyBinding`s from `ACTIONS` plus `F10` ->
+`FocusMenuBar` in `Shell`; `keymap::conflicts()` validates UINV4 using GPUI's
+`KeyBindingContextPredicate::depth_of` against `VALID_CONTEXT_STACKS` and restricts unmodified
+letters/digits/Space to `{Sheet, Menu, Dialog, TextField}`; `format_keystroke`, `format_keybinding`,
+and `tooltip_for_action` format OS shortcuts via `Keystroke::unparse` (`Ctrl+S` style per UQ11).
+Tests cover UINV3 completeness/menu/toolbar order/icons, UINV4 default pass and planted
+same-context, parent-child co-active, global, chord-prefix, and disallowed bare-key failures,
+a representative enabled/checked table across every action in `ACTIONS`, and headless GPUI key
+dispatch across `Shell`/`Workspace`/`Sheet`. Deviations: `PlacePart` uses `omnia_doc::SymbolId`
+(instead of `omnia_symbols::SymbolId`) matching `omnia-doc`'s type. All five standard CI checks
+pass on a Windows development machine (certifies no reference budget).
