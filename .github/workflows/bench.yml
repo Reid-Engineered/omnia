@@ -1,0 +1,107 @@
+name: Bench regression gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      orion_baseline:
+        description: Repository-relative directory with the baseline Orion campaign
+        required: true
+      orion_candidate:
+        description: Repository-relative directory with the candidate Orion campaign
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  deterministic:
+    name: Headless primitive and allocation counts
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            ~/.cargo/git/checkouts
+            target
+          key: ${{ runner.os }}-headless-bench-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-headless-bench-
+      - name: Build the headless bench
+        run: cargo build --locked --release -p omnia-bench --features headless
+      - name: Compare real-sheet costs
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          $bench = 'target/release/omnia-bench.exe'
+          New-Item -ItemType Directory -Path bench-reports | Out-Null
+          $useBase = $false
+          if ($env:BASE_SHA) {
+            git cat-file -e "${env:BASE_SHA}^{commit}"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            git cat-file -e "${env:BASE_SHA}:.github/workflows/bench.yml" 2>$null
+            $useBase = $LASTEXITCODE -eq 0
+          }
+          foreach ($sheet in '1k', '10k') {
+            foreach ($script in 'pan', 'zoom') {
+              $case = "${sheet}-${script}"
+              $committed = "bench-baseline/$case.json"
+              $baseline = "bench-reports/$case-base.json"
+              $candidate = "bench-reports/$case.json"
+              if ($useBase) {
+                git show "${env:BASE_SHA}:$committed" | Set-Content -Encoding utf8 $baseline
+                if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              } else {
+                # Initial introduction of the PR gate, or a run on main.
+                Copy-Item -LiteralPath $committed -Destination $baseline
+              }
+              & $bench run --headless --sheet $sheet --script $script --warmup 600 --frames 600 --json $candidate
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              $baselineReport = Get-Content -LiteralPath $baseline -Raw | ConvertFrom-Json
+              $candidateReport = Get-Content -LiteralPath $candidate -Raw | ConvertFrom-Json
+              if ($baselineReport.metrics.allocs_per_frame.ours.max -ne 0) {
+                throw "Baseline for $case does not have zero Omnia allocations"
+              }
+              if ($candidateReport.metrics.primitives.monochrome_sprites -le 0) {
+                throw "No document sprites were emitted for $case"
+              }
+              & $bench compare $baseline $candidate --max-regression 10 --metrics allocs_per_frame.ours,primitives
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: headless-bench-reports
+          path: bench-reports
+
+  orion:
+    name: Compare recorded Orion frame times
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare median run p99s
+        env:
+          ORION_BASELINE: ${{ inputs.orion_baseline }}
+          ORION_CANDIDATE: ${{ inputs.orion_candidate }}
+        run: python3 bench-baseline/compare-orion.py "$ORION_BASELINE" "$ORION_CANDIDATE"

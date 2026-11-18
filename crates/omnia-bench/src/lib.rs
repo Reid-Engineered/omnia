@@ -11,6 +11,8 @@ pub mod driver;
 pub mod generate;
 pub mod harness;
 pub mod scene;
+#[cfg(feature = "headless")]
+pub mod scripts;
 pub mod spike;
 pub mod start;
 pub mod stats;

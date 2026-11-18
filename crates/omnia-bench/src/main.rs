@@ -17,8 +17,8 @@ static GLOBAL: CountingAlloc = CountingAlloc;
 const USAGE: &str = "\
 usage: bench <command> [options]
 
-  run     [--sheet empty|t01|placeholder] [--script pan|zoom] [--frames 600] [--warmup 60]
-          [--size 1280x800] [--json FILE]
+  run     [--sheet S] [--script pan|zoom] [--frames 600] [--warmup 60]
+          [--size 1280x800] [--headless] [--json FILE]
   spike   s1..s6|s8 [--count N] [--mode fixed|sweep|square|rounded|sprite|direct|direct-sweep|cached|repaint|quality|monitors|displays]\n          [--frames 600] [--warmup 60] [--size 3072x1728] [--json FILE]\n  start   [--sheet empty|t01|placeholder] [--runs 10] [--size 960x640] [--json FILE]
   idle    [--sheet empty|t01|placeholder] [--seconds 10] [--settle-ms 1000] [--size 960x640] [--json FILE]
   hit     [--sheet 10k|1k|100|dense|text] [--samples 20000] [--seed 42] [--snap] [--json FILE]
@@ -28,6 +28,8 @@ usage: bench <command> [options]
   spike   chrome [--seconds 60] [--png FILE]
   spike   shell-cache [--hover-frames 300] [--pan-frames 600] [--warmup 60] [--size 1440x900] [--json FILE]
 
+Sheets: empty, t01, placeholder, 100, 1k, 10k, dense, text.
+Headless runs report deterministic costs for real sheets (requires --features headless).
 Every command exits by itself. Exit codes: 0 ok; 1 compare found a regression or a missing
 metric; 2 usage or input error, including reports that cannot be compared or a --metrics
 prefix that selects no base metric; 3 the run failed or timed out. compare --json writes
@@ -156,9 +158,10 @@ fn positive(name: &str, value: u32) -> Result<u32, Failure> {
 }
 
 fn cmd_run(args: impl Iterator<Item = String>) -> Result<(), Failure> {
-    let args = usage(Args::parse(
+    let args = usage(Args::parse_with_flags(
         args,
         &["sheet", "script", "frames", "warmup", "size", "json"],
+        &["headless"],
     ))?;
     usage(args.no_positionals())?;
     let size = usage(parse_size(args.get("size").unwrap_or("1280x800")))?;
@@ -170,9 +173,20 @@ fn cmd_run(args: impl Iterator<Item = String>) -> Result<(), Failure> {
         warmup: positive("warmup", usage(args.number("warmup", 60))?)?,
         size,
     };
-    if config.script == Script::Zoom && config.sheet != Sheet::Empty {
+    if config.script == Script::Zoom && !config.sheet.supports_zoom() {
         return Err(Failure::Usage(
-            "--script zoom needs --sheet empty (other sheets ignore zoom)".into(),
+            "--script zoom needs the empty sheet or a generated document".into(),
+        ));
+    }
+    if args.flag("headless") {
+        #[cfg(feature = "headless")]
+        {
+            let report = omnia_bench::scripts::run_headless(config).map_err(Failure::Run)?;
+            return finish(&report, args.get("json"));
+        }
+        #[cfg(not(feature = "headless"))]
+        return Err(Failure::Usage(
+            "--headless requires a build with --features headless".into(),
         ));
     }
     let report = harness::run(config).map_err(Failure::Run)?;

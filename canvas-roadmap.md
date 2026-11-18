@@ -342,9 +342,11 @@ of the `canvas` lane.
   of device pixels wide with constant width along its length; the INV7 test passes (no
   `paint_path` or `canvas(` in `sheet*`; zero allocations per frame once warm on `1k`).
 
-### T2.6 Bench scripts and CI gate · todo
+### T2.6 Bench scripts and CI gate · done
 - Lane: bench · Depends: T2.5 · Read: plan section 11 (CI noise)
-- Owns: `crates/omnia-bench/src/scripts.rs`, `.github/workflows/bench.yml`, `bench-baseline/`
+- Owns: `crates/omnia-bench/src/scripts.rs`, `.github/workflows/bench.yml`, `bench-baseline/`.
+  Owner-approved additions: `crates/omnia-bench/src/main.rs` and `crates/omnia-bench/src/scene.rs`
+  (real-sheet CLI and scene wiring), and `crates/omnia-canvas/src/sheet.rs` (B10/Q5 paint accounting).
 - Do: `pan` and `zoom` scripts over real sheets; primitive counts by kind in the report. In
   hosted CI, compare the deterministic numbers (primitive counts, `allocs_per_frame.ours`)
   to a committed baseline with `bench compare`. Add a manually triggered job for the
@@ -1548,3 +1550,12 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        allocations. T2.6 picks up the renderer for real-sheet benchmarks.
                        U2.2 supplies the live document and invalidation to SheetCanvas
                        through SheetDocument and SheetView::with_document.
+2026-11-17 T2.6 done — Real T2.4 sheets in the pan and zoom bench (D4, B10, Q5).
+                       Bench scenes reuse T2.5's renderer and attribute Omnia and GPUI
+                       allocations separately. The Windows headless gate checks four
+                       committed cases (1k/10k × pan/zoom). All reproduced zero Omnia
+                       allocations per frame with unchanged counts. The workflow script
+                       rejected one planted allocation per frame and 311 extra quads
+                       (2820 to 3131, +11%). Temporary probes were removed. Standard
+                       checks passed. The manual workflow compares recorded Orion
+                       campaigns under Q4; no reference timing was run.
