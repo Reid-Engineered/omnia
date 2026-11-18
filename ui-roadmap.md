@@ -209,7 +209,7 @@ without being drawn.
 - Done when: a test renders every icon name the registry and mockup use without a missing-asset
   error; `THIRD_PARTY.md` lists the additions.
 
-### U1.3 Widgets · todo
+### U1.3 Widgets · done
 - Lane: shell · Depends: U1.2 · Read: UK3, UK12, UG7, UG8, UG9
 - Owns: `crates/omnia-app/src/widgets/` (`button.rs`, `popover.rs`, `splitter.rs`,
   `tooltip.rs`)
@@ -652,3 +652,20 @@ a representative enabled/checked table across every action in `ACTIONS`, and hea
 dispatch across `Shell`/`Workspace`/`Sheet`. Deviations: `PlacePart` uses `omnia_doc::SymbolId`
 (instead of `omnia_symbols::SymbolId`) matching `omnia-doc`'s type. All five standard CI checks
 pass on a Windows development machine (certifies no reference budget).
+2026-11-17 U1.3 done — Implemented the shell widget set in `crates/omnia-app/src/widgets/`
+(`button.rs`, `popover.rs`, `splitter.rs`, `tooltip.rs`, exported from `mod.rs`): `ButtonGroup`
+and `IconButton` (UK3 34 px group / 30x30 px buttons, active, hover, disabled with
+`aria_description("unavailable")` and `tab_stop(false)`, 2 px `focus/ring` focus-visible ring,
+`Role` / ARIA attributes), `TextButton` (`ButtonVariant::Primary` and `Plain`, optional icon,
+shortcut hint, tooltip), `Popover` (`deferred` + `anchored` with `occlude()`, window-margin
+clamping, Esc and click-outside dismissal, `tab_stop(false)` on container focus handle),
+`Tooltip` (`TOOLTIP_DELAY` = 500 ms UK12, label + Source Code Pro shortcut hint, `Role::Tooltip`),
+and `Splitter` (`SPLITTER_HIT_SIZE` = 6 px hit target, centered 1 px `rule` line, hover and
+drag feedback, `Role::Splitter`). Headless tests in all four modules verify dimensions, states,
+keyboard activation (`Enter`/`Space`), Tab skipping disabled controls, nested/child `Escape` and
+click-outside close, 500 ms tooltip delay/hide/cancel, vertical/horizontal splitter drag, and
+hover isolation (notifying only the widget's view with 0 root/sibling notifies or renders).
+All five standard checks (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
+`cargo test --workspace`, and `cargo deny check`) pass on a Windows development machine
+(certifies no reference budget).
