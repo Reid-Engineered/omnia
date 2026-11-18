@@ -55,49 +55,104 @@ pub(crate) enum UndoOp {
     Batch(Vec<UndoOp>),
 }
 
-#[derive(Debug, Default)]
+/// One history step: the operation that moves between the `before` and
+/// `after` states, whose cursors name those states (UD6, U2.1).
+#[derive(Debug)]
+pub(crate) struct HistoryEntry {
+    pub(crate) op: UndoOp,
+    pub(crate) before: u64,
+    pub(crate) after: u64,
+}
+
+/// Undo/redo stacks plus the history cursor (UD6, U2.1). The cursor names the
+/// current state: an effective `apply` issues a fresh value from `next_cursor`
+/// (never reissued, so a state on a discarded branch can never be named
+/// again), while `undo` and `redo` move back to the value stored with the
+/// entry. Validated no-ops never reach `push_undo`, so they change nothing.
+#[derive(Debug)]
 pub(crate) struct History {
-    undo: Vec<UndoOp>,
-    redo: Vec<UndoOp>,
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
+    cursor: u64,
+    next_cursor: u64,
+}
+
+impl Default for History {
+    fn default() -> Self {
+        Self {
+            undo: Vec::new(),
+            redo: Vec::new(),
+            cursor: 0,
+            next_cursor: 1,
+        }
+    }
 }
 
 impl History {
-    pub(crate) fn push_undo(&mut self, op: UndoOp) {
-        self.undo.push(op);
-        self.redo.clear();
+    pub(crate) fn cursor(&self) -> u64 {
+        self.cursor
     }
 
-    pub(crate) fn pop_undo(&mut self) -> Option<UndoOp> {
+    pub(crate) fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    pub(crate) fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
+    pub(crate) fn push_undo(&mut self, op: UndoOp) {
+        let before = self.cursor;
+        let after = self.next_cursor;
+        self.next_cursor = after.checked_add(1).expect("history cursor exhausted");
+        self.undo.push(HistoryEntry { op, before, after });
+        self.redo.clear();
+        self.cursor = after;
+    }
+
+    pub(crate) fn pop_undo(&mut self) -> Option<HistoryEntry> {
         self.undo.pop()
     }
 
-    pub(crate) fn push_redo(&mut self, op: UndoOp) {
-        self.redo.push(op);
+    pub(crate) fn push_redo(&mut self, before: u64, after: u64, inverse: UndoOp) {
+        self.cursor = before;
+        self.redo.push(HistoryEntry {
+            op: inverse,
+            before,
+            after,
+        });
     }
 
-    pub(crate) fn pop_redo(&mut self) -> Option<UndoOp> {
+    pub(crate) fn pop_redo(&mut self) -> Option<HistoryEntry> {
         self.redo.pop()
     }
 
-    pub(crate) fn push_undo_from_redo(&mut self, op: UndoOp) {
-        self.undo.push(op);
+    pub(crate) fn push_undo_from_redo(&mut self, before: u64, after: u64, inverse: UndoOp) {
+        self.cursor = after;
+        self.undo.push(HistoryEntry {
+            op: inverse,
+            before,
+            after,
+        });
     }
 }
 
 pub(crate) fn undo(doc: &mut Doc) -> Option<Change> {
-    let op = doc.history.pop_undo()?;
+    let entry = doc.history.pop_undo()?;
+    let (op, before, after) = (entry.op, entry.before, entry.after);
     let mut acc = ChangeAcc::default();
     let inverse = apply_undo_op(doc, op, &mut acc);
-    doc.history.push_redo(inverse);
+    doc.history.push_redo(before, after, inverse);
     doc.bump_revision();
     Some(acc.into_change(doc.revision()))
 }
 
 pub(crate) fn redo(doc: &mut Doc) -> Option<Change> {
-    let op = doc.history.pop_redo()?;
+    let entry = doc.history.pop_redo()?;
+    let (op, before, after) = (entry.op, entry.before, entry.after);
     let mut acc = ChangeAcc::default();
     let inverse = apply_undo_op(doc, op, &mut acc);
-    doc.history.push_undo_from_redo(inverse);
+    doc.history.push_undo_from_redo(before, after, inverse);
     doc.bump_revision();
     Some(acc.into_change(doc.revision()))
 }
@@ -322,6 +377,316 @@ pub(crate) fn apply_undo_op(doc: &mut Doc, op: UndoOp, acc: &mut ChangeAcc) -> U
                 next_ops.push(apply_undo_op(doc, sub, acc));
             }
             UndoOp::Batch(next_ops)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Command, Rect, SymbolId, TextField};
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    fn snapshot(doc: &Doc) -> Doc {
+        let mut bytes = Vec::new();
+        doc.save(&mut bytes).unwrap();
+        Doc::load(bytes.as_slice()).unwrap()
+    }
+
+    fn place(x: i32, y: i32) -> Command {
+        Command::PlacePart {
+            part: crate::Part {
+                symbol: SymbolId(0),
+                at: Pt { x, y },
+                orient: Orient::IDENTITY,
+                designator: "R1".into(),
+                value: "1k".into(),
+            },
+            local_pins: vec![Pt::ZERO],
+            local_bounds: Rect::from_points(Pt { x: -2, y: -1 }, Pt { x: 2, y: 1 }).unwrap(),
+        }
+    }
+
+    fn wire_cmd(x: i32, y: i32) -> Command {
+        Command::AddWires(vec![Wire {
+            a: Pt { x, y },
+            b: Pt { x: x + 10, y },
+        }])
+    }
+
+    #[test]
+    fn u2_1_cursor_moves_with_history_and_counts() {
+        let mut doc = Doc::new();
+        let c0 = doc.history_cursor();
+        assert!(!doc.can_undo());
+        assert!(!doc.can_redo());
+        assert_eq!(doc.part_count(), 0);
+        assert_eq!(doc.net_count(), 0);
+
+        doc.apply(place(0, 0)).unwrap();
+        let c1 = doc.history_cursor();
+        assert_ne!(c1, c0);
+        assert!(doc.can_undo());
+        assert!(!doc.can_redo());
+        assert_eq!(doc.part_count(), 1);
+        assert_eq!(doc.part_count(), doc.parts().count());
+
+        doc.apply(wire_cmd(100, 100)).unwrap();
+        doc.apply(Command::AddWires(vec![Wire {
+            a: Pt { x: 200, y: 200 },
+            b: Pt { x: 210, y: 200 },
+        }]))
+        .unwrap();
+        // Two disjoint wires plus the placed part's lone pin: three nets.
+        assert_eq!(doc.net_count(), 3);
+        let mut wires_only = Doc::new();
+        wires_only.apply(wire_cmd(100, 100)).unwrap();
+        wires_only
+            .apply(Command::AddWires(vec![Wire {
+                a: Pt { x: 200, y: 200 },
+                b: Pt { x: 210, y: 200 },
+            }]))
+            .unwrap();
+        assert_eq!(wires_only.net_count(), 2);
+        let c3 = doc.history_cursor();
+        assert_ne!(c3, c1);
+
+        doc.undo().unwrap();
+        doc.undo().unwrap();
+        assert_eq!(doc.history_cursor(), c1);
+        assert!(doc.can_redo());
+        doc.redo().unwrap();
+        doc.redo().unwrap();
+        assert_eq!(doc.history_cursor(), c3);
+        assert!(!doc.can_redo());
+    }
+
+    #[test]
+    fn u2_1_noops_and_failures_change_nothing() {
+        let mut doc = Doc::new();
+        doc.apply(place(0, 0)).unwrap();
+        doc.undo().unwrap();
+        let cursor = doc.history_cursor();
+        assert!(doc.can_redo());
+
+        for cmd in [
+            Command::AddWires(vec![]),
+            Command::Batch(vec![]),
+            Command::Move {
+                items: vec![],
+                delta: Pt { x: 1, y: 0 },
+                follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
+            },
+        ] {
+            let change = doc.apply(cmd).unwrap();
+            assert_eq!(change.dirty, None);
+            assert_eq!(doc.history_cursor(), cursor);
+            assert!(!doc.can_undo());
+            assert!(doc.can_redo());
+        }
+        // A rejected command changes nothing either (D2).
+        assert!(
+            doc.apply(Command::AddWires(vec![Wire {
+                a: Pt::ZERO,
+                b: Pt { x: 1, y: 1 },
+            }]))
+            .is_err()
+        );
+        assert_eq!(doc.history_cursor(), cursor);
+        assert!(doc.redo().is_some(), "redo must survive no-ops");
+    }
+
+    /// UTC-saved-point at the doc level (UD6): modified is `cursor != saved_cursor`.
+    #[test]
+    fn utc_saved_point_at_doc_level() {
+        let mut doc = Doc::new();
+        doc.apply(place(0, 0)).unwrap(); // A
+        let saved = doc.history_cursor();
+        doc.apply(place(50, 0)).unwrap(); // B
+        assert_ne!(doc.history_cursor(), saved);
+        doc.undo().unwrap();
+        assert_eq!(doc.history_cursor(), saved, "not modified at save point");
+        doc.undo().unwrap();
+        assert_ne!(doc.history_cursor(), saved, "modified past save point");
+        doc.redo().unwrap();
+        assert_eq!(doc.history_cursor(), saved, "not modified again");
+    }
+
+    /// UTC-branch at the doc level (UD6): an edit after undoing past the save
+    /// point discards its branch; the saved cursor stays unreachable.
+    #[test]
+    fn utc_branch_at_doc_level() {
+        let mut doc = Doc::new();
+        doc.apply(place(0, 0)).unwrap(); // A
+        let saved = doc.history_cursor();
+        doc.undo().unwrap();
+        doc.apply(place(50, 0)).unwrap(); // B, on a new branch
+        assert_ne!(doc.history_cursor(), saved);
+        assert!(!doc.can_redo(), "branching must discard redo");
+        doc.undo().unwrap();
+        assert_ne!(doc.history_cursor(), saved, "still modified");
+        // No undo/redo walk from here ever reaches the saved cursor again.
+        let mut reached = vec![doc.history_cursor()];
+        while doc.undo().is_some() {
+            reached.push(doc.history_cursor());
+        }
+        while doc.redo().is_some() {
+            reached.push(doc.history_cursor());
+        }
+        assert!(!reached.contains(&saved));
+    }
+
+    #[derive(Debug, Clone)]
+    enum Step {
+        Place { x: i32, y: i32 },
+        Wire { x: i32, y: i32, bad: bool },
+        Label { x: i32, y: i32 },
+        Move { pick: usize, dx: i32 },
+        Delete { pick: usize },
+        SetText { pick: usize },
+        Noop,
+        Undo,
+        Redo,
+    }
+
+    fn gen_step() -> impl Strategy<Value = Step> {
+        prop_oneof![
+            3 => (-20i32..=20, -20i32..=20).prop_map(|(x, y)| Step::Place { x, y }),
+            3 => (-20i32..=20, -20i32..=20, any::<bool>())
+                .prop_map(|(x, y, bad)| Step::Wire { x, y, bad }),
+            2 => (-20i32..=20, -20i32..=20).prop_map(|(x, y)| Step::Label { x, y }),
+            2 => (0usize..16, -3i32..=3).prop_map(|(pick, dx)| Step::Move { pick, dx }),
+            2 => (0usize..16).prop_map(|pick| Step::Delete { pick }),
+            1 => (0usize..16).prop_map(|pick| Step::SetText { pick }),
+            1 => Just(Step::Noop),
+            3 => Just(Step::Undo),
+            2 => Just(Step::Redo),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        /// U2.1 done-when: equal cursors exactly when one state is reached from
+        /// the other by undo and redo alone. Only undo/redo may produce a
+        /// previously issued cursor, they return to the exact earlier cursor,
+        /// and an effective apply always issues a fresh one (even on a new
+        /// branch, so a discarded save point can never be reissued).
+        #[test]
+        fn u2_1_cursor_identity_over_random_command_undo_redo(
+            steps in prop::collection::vec(gen_step(), 1..60),
+        ) {
+            let mut doc = Doc::new();
+            let mut seen: HashMap<u64, Doc> = HashMap::new();
+            seen.insert(doc.history_cursor(), snapshot(&doc));
+            let mut undo_model: Vec<u64> = Vec::new();
+            let mut redo_model: Vec<u64> = Vec::new();
+
+            for step in steps {
+                let before = doc.history_cursor();
+                match step {
+                    Step::Undo => match doc.undo() {
+                        Some(_) => {
+                            let expected = undo_model.pop().expect("model undo stack");
+                            prop_assert_eq!(doc.history_cursor(), expected);
+                            redo_model.push(before);
+                        }
+                        None => {
+                            prop_assert!(undo_model.is_empty());
+                            prop_assert_eq!(doc.history_cursor(), before);
+                        }
+                    },
+                    Step::Redo => match doc.redo() {
+                        Some(_) => {
+                            let expected = redo_model.pop().expect("model redo stack");
+                            prop_assert_eq!(doc.history_cursor(), expected);
+                            undo_model.push(before);
+                        }
+                        None => {
+                            prop_assert!(redo_model.is_empty());
+                            prop_assert_eq!(doc.history_cursor(), before);
+                        }
+                    },
+                    step => {
+                        let live: Vec<ItemId> = doc
+                            .parts()
+                            .map(|(id, _)| ItemId::Part(id))
+                            .chain(doc.wires().map(|(id, _)| ItemId::Wire(id)))
+                            .chain(doc.labels().map(|(id, _)| ItemId::Label(id)))
+                            .collect();
+                        let cmd = match step {
+                            Step::Place { x, y } => place(x, y),
+                            Step::Wire { x, y, bad } => {
+                                if bad {
+                                    Command::AddWires(vec![Wire {
+                                        a: Pt { x, y },
+                                        b: Pt { x: x + 1, y: y + 1 },
+                                    }])
+                                } else {
+                                    wire_cmd(x, y)
+                                }
+                            }
+                            Step::Label { x, y } => Command::AddLabel(Label {
+                                at: Pt { x, y },
+                                text: "SIG".into(),
+                            }),
+                            Step::Move { pick, dx } => Command::Move {
+                                items: if live.is_empty() {
+                                    vec![]
+                                } else {
+                                    vec![live[pick % live.len()]]
+                                },
+                                delta: Pt { x: dx, y: 0 },
+                                follow: crate::prefs::FollowPolicy::new(false, 10, false)
+                                    .unwrap(),
+                            },
+                            Step::Delete { pick } => Command::Delete {
+                                items: if live.is_empty() {
+                                    vec![]
+                                } else {
+                                    vec![live[pick % live.len()]]
+                                },
+                                with_wires: false,
+                            },
+                            Step::SetText { pick } => Command::SetText {
+                                item: if live.is_empty() {
+                                    ItemId::Wire(WireId(99_999))
+                                } else {
+                                    live[pick % live.len()]
+                                },
+                                field: TextField::Label,
+                                text: "CLK".into(),
+                            },
+                            Step::Noop => Command::AddWires(vec![]),
+                            Step::Undo | Step::Redo => unreachable!(),
+                        };
+                        match doc.apply(cmd) {
+                            Ok(change) if change.dirty.is_some() => {
+                                let cursor = doc.history_cursor();
+                                prop_assert!(
+                                    !seen.contains_key(&cursor),
+                                    "effective apply must issue a fresh cursor"
+                                );
+                                undo_model.push(before);
+                                redo_model.clear();
+                                seen.insert(cursor, snapshot(&doc));
+                            }
+                            Ok(_) | Err(_) => {
+                                prop_assert_eq!(doc.history_cursor(), before);
+                            }
+                        }
+                    }
+                }
+                prop_assert_eq!(doc.can_undo(), !undo_model.is_empty());
+                prop_assert_eq!(doc.can_redo(), !redo_model.is_empty());
+                prop_assert_eq!(doc.part_count(), doc.parts().count());
+                if let Some(snap) = seen.get(&doc.history_cursor()) {
+                    prop_assert!(
+                        doc.content_eq(snap),
+                        "equal cursor must mean the same state (INV4 content)"
+                    );
+                }
+            }
         }
     }
 }

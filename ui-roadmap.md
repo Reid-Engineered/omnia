@@ -302,7 +302,7 @@ without being drawn.
 
 ## Milestone U2: documents and files
 
-### U2.1 History cursor and counts · todo
+### U2.1 History cursor and counts · doing
 - Lane: doc · Depends: T5.1 (`done` and merged) · Read: UD6, D2, INV4
 - Owns: `crates/omnia-doc/src/undo.rs`, `doc.rs` (the five methods only), canvas-plan.md section 9
 - Do: `history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count` as sketched in
@@ -632,3 +632,5 @@ per pass) `save_1k` `1.330`/`1.480` ms, `load_1k` `4.771`/`5.211` ms, `save_10k`
 (range `13.863–50.079` ms), `load_10k` `50.710`/`52.954` ms. Nothing run on Orion; `needs-human`
 until the owner runs `bash docs/measurements/U0.5/run.sh` on Orion to decide US4 / `UB10`
 (`save_10k` < 33.3 ms p99 vs `DocSnapshot`).
+
+2026-11-17 U2.1 doing — History cursor and counts (UD6, D2, INV4; ui-plan section 10 sketch). `History` in `crates/omnia-doc/src/undo.rs` now stores a `before`/`after` cursor pair with each undo and redo entry plus a never-reissued counter: an effective `apply` issues a fresh cursor, `undo`/`redo` move to the stored value, and validated no-ops and rejected commands change nothing (they never reach `push_undo`). Added the five `Doc` methods in `crates/omnia-doc/src/doc.rs` (`history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count`) and the matching canvas-plan.md section 9 sketch lines (applied after T2.5 PR #69 merged and this branch was updated to `a7e7b76`). Tests in `undo.rs`: a generative property test over random command/undo/redo sequences asserting undo/redo return to the exact earlier cursor, an effective apply always issues a fresh cursor (so a discarded branch's save point can never be reissued), equal cursor implies `content_eq`, and `can_undo`/`can_redo` match a model stack; plus doc-level UTC-saved-point and UTC-branch and no-op/count coverage. Status stays `doing` pending independent review.
