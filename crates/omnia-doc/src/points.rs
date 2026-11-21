@@ -10,7 +10,7 @@ pub(crate) enum End {
     Pin { part: PartId, pin: usize },
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct Points(HashMap<Pt, Vec<End>>);
 
 impl Points {
