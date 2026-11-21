@@ -1675,6 +1675,25 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        time around paint, plus scheduler or frequency tracing, to tell
                        preemption from clock changes. Then decide the fix with the owner.
                        Evidence: docs/measurements/T2.7-wire/orion-2026-11-18-scoped/.
+2026-11-18 T2.7 blocked (diagnosis) — Two diagnostic Orion campaigns (evidence only;
+                       02:00 and 02:10 EST; 100%, AC, powersave/balance_performance; 10 x 1k
+                       pan + 10 x 10k zoom each) with a new opt-in per-paint probe
+                       (OMNIA_BENCH_PAINT_PROBE, omnia-bench/src/paint_probe.rs; 0 Omnia
+                       allocations). Campaign 1: 22 of 23 stalls on-CPU with no faults or
+                       waits, 1 preemption. Campaign 2 (user cycles, instructions, ref
+                       cycles): 18 of 20 stalls are a low clock: same instructions and cycles
+                       as neighbours, clock 0.67 to 1.07 GHz against up to 3.35 GHz, IPC ~2.2;
+                       the B4-sized ones (41.9 to 51.1 ms) all low clock. 1k pan paints run at
+                       0.77 GHz throughout; 10k zoom reaches 3.35 GHz only under sustained far
+                       zoom. Throttle counters unchanged and 60 C peak: not thermal. Likely
+                       powersave frequency policy. Unconfirmed: needs an A/B with the
+                       performance policy (root) and an owner decision on the GUI-gate
+                       governor (plan 2.1). Report: docs/measurements/T2.7-paint-stall.md.
+                       Dependency: libc 0.2 (MIT OR Apache-2.0, already in the graph) for
+                       omnia-bench on Linux, logged in plan section 10. For the owner of
+                       crates/omnia-bench/src/spike/shell_cache.rs: Linux clippy -D warnings
+                       fails on an unused `window` at line 1657 (CI is Windows-only, so it
+                       never fires there); not changed here.
 2026-11-20 T2.7 done — Owner decision: require the performance CPU governor for Orion GUI
                        gate runs (plan 2.1, matching CPU-only runs) after the T2.7 paint-stall
                        A/B campaign (PR #80) showed powersave clock drops caused the 20 stalls

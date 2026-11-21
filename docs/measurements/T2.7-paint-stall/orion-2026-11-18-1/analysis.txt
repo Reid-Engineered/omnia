@@ -1,0 +1,48 @@
+run | paints | median paint wall/cpu ms | median freq MHz | stalls | intervals > 1.5 R | vmstat deltas (non-zero)
+1k-pan-1 | 1200 | 3.52/3.48 | 800 | 0 | 0 | {'thp_fault_alloc': 8, 'pgfault': 27027, 'pgmajfault': 63}
+10k-zoom-1 | 1200 | 3.90/3.87 | 800 | 4 | 30 | {'thp_fault_alloc': 32, 'pgfault': 40493}
+10k-zoom-2 | 1200 | 3.94/3.92 | 800 | 0 | 36 | {'thp_fault_alloc': 29, 'pgfault': 45226}
+1k-pan-2 | 1200 | 3.38/3.34 | 800 | 0 | 0 | {'thp_fault_alloc': 5, 'pgfault': 29805}
+1k-pan-3 | 1200 | 3.43/3.39 | 800 | 1 | 0 | {'thp_fault_alloc': 5, 'pgfault': 30097, 'pgmajfault': 2}
+10k-zoom-3 | 1200 | 3.95/3.92 | 800 | 1 | 28 | {'thp_fault_alloc': 27, 'pgfault': 43355}
+10k-zoom-4 | 1200 | 3.87/3.85 | 800 | 0 | 37 | {'thp_fault_alloc': 29, 'pgfault': 44529}
+1k-pan-4 | 1200 | 3.50/3.45 | 800 | 1 | 0 | {'thp_fault_alloc': 5, 'pgfault': 30560}
+1k-pan-5 | 1200 | 3.37/3.35 | 800 | 0 | 0 | {'thp_fault_alloc': 5, 'pgfault': 27238}
+10k-zoom-5 | 1200 | 4.15/4.12 | 800 | 2 | 53 | {'thp_fault_alloc': 29, 'pgfault': 44083}
+10k-zoom-6 | 1200 | 3.95/3.89 | 800 | 6 | 31 | {'thp_fault_alloc': 27, 'pgfault': 46345}
+1k-pan-6 | 1200 | 3.48/3.45 | 800 | 0 | 0 | {'thp_fault_alloc': 6, 'pgfault': 26657}
+1k-pan-7 | 1200 | 3.59/3.55 | 800 | 0 | 0 | {'thp_fault_alloc': 5, 'pgfault': 29018}
+10k-zoom-7 | 1200 | 3.93/3.90 | 800 | 2 | 34 | {'thp_fault_alloc': 32, 'pgfault': 40812}
+10k-zoom-8 | 1200 | 3.75/3.73 | 800 | 2 | 45 | {'thp_fault_alloc': 34, 'pgfault': 41404}
+1k-pan-8 | 1200 | 3.44/3.40 | 800 | 1 | 0 | {'thp_fault_alloc': 6, 'pgfault': 29172}
+1k-pan-9 | 1200 | 3.49/3.45 | 800 | 0 | 0 | {'thp_fault_alloc': 5, 'pgfault': 28545}
+10k-zoom-9 | 1200 | 4.13/4.10 | 800 | 0 | 52 | {'thp_fault_alloc': 30, 'pgfault': 41204}
+10k-zoom-10 | 1200 | 4.24/4.22 | 800 | 3 | 31 | {'thp_fault_alloc': 27, 'pgfault': 41859}
+1k-pan-10 | 1200 | 3.46/3.43 | 800 | 0 | 0 | {'thp_fault_alloc': 5, 'pgfault': 30444}
+
+Stalls
+  10k-zoom-1 frame 197: preempted; wall 7.82 ms (local 3.24), cpu 4.56, run-queue wait 3.21, switches 0v/25i, faults 0+0, cpu 0->0, freq 800 MHz; no hardware counters
+  10k-zoom-1 frame 518: slow, no faults; wall 16.99 ms (local 4.88), cpu 16.87, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 800 MHz; no hardware counters; present interval 31.71 ms
+  10k-zoom-1 frame 519: slow, no faults; wall 10.81 ms (local 4.68), cpu 10.75, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 1200 MHz; no hardware counters; present interval 26.54 ms
+  10k-zoom-1 frame 520: slow, no faults; wall 9.43 ms (local 4.47), cpu 9.35, run-queue wait 0.04, switches 0v/2i, faults 0+0, cpu 0->0, freq 1600 MHz; no hardware counters
+  1k-pan-3 frame 14: slow, no faults; wall 7.44 ms (local 3.26), cpu 7.36, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 1->1, freq 1200 MHz; no hardware counters
+  10k-zoom-3 frame 514: slow, no faults; wall 19.46 ms (local 5.31), cpu 19.31, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 800 MHz; no hardware counters; present interval 32.59 ms
+  1k-pan-4 frame 22: slow, no faults; wall 9.82 ms (local 3.42), cpu 9.51, run-queue wait 0.25, switches 0v/2i, faults 0+0, cpu 3->3, freq 800 MHz; no hardware counters
+  10k-zoom-5 frame 477: slow, no faults; wall 23.94 ms (local 7.95), cpu 23.77, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 1600 MHz; no hardware counters; present interval 52.50 ms
+  10k-zoom-5 frame 507: slow, no faults; wall 19.95 ms (local 6.32), cpu 19.74, run-queue wait 0.06, switches 0v/3i, faults 0+0, cpu 0->0, freq 1537 MHz; no hardware counters; present interval 31.10 ms
+  10k-zoom-6 frame 520: slow, no faults; wall 15.63 ms (local 4.96), cpu 15.49, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 1->1, freq 800 MHz; no hardware counters; present interval 27.30 ms
+  10k-zoom-6 frame 521: slow, no faults; wall 9.91 ms (local 4.86), cpu 9.85, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 1->1, freq 1200 MHz; no hardware counters; present interval 27.12 ms
+  10k-zoom-6 frame 522: slow, no faults; wall 9.73 ms (local 4.72), cpu 9.43, run-queue wait 0.22, switches 0v/3i, faults 0+0, cpu 1->1, freq 1200 MHz; no hardware counters
+  10k-zoom-6 frame 546: slow, no faults; wall 9.31 ms (local 4.26), cpu 9.20, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 1->1, freq 800 MHz; no hardware counters
+  10k-zoom-6 frame 547: slow, no faults; wall 8.53 ms (local 4.25), cpu 8.46, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 800 MHz; no hardware counters
+  10k-zoom-6 frame 549: slow, no faults; wall 8.52 ms (local 4.25), cpu 7.81, run-queue wait 0.57, switches 0v/3i, faults 0+0, cpu 1->1, freq 800 MHz; no hardware counters
+  10k-zoom-7 frame 517: slow, no faults; wall 17.85 ms (local 4.93), cpu 17.72, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 800 MHz; no hardware counters; present interval 31.22 ms
+  10k-zoom-7 frame 518: slow, no faults; wall 11.54 ms (local 4.93), cpu 11.49, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 1200 MHz; no hardware counters; present interval 27.68 ms
+  10k-zoom-8 frame 548: slow, no faults; wall 8.42 ms (local 3.80), cpu 8.35, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 800 MHz; no hardware counters
+  10k-zoom-8 frame 549: slow, no faults; wall 8.16 ms (local 3.74), cpu 8.05, run-queue wait 0.03, switches 0v/1i, faults 0+0, cpu 0->0, freq 800 MHz; no hardware counters
+  1k-pan-8 frame 480: slow, no faults; wall 8.10 ms (local 3.48), cpu 7.99, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 1->1, freq 800 MHz; no hardware counters
+  10k-zoom-10 frame 420: slow, no faults; wall 21.43 ms (local 7.36), cpu 21.26, run-queue wait 0.01, switches 0v/1i, faults 0+0, cpu 0->0, freq 1600 MHz; no hardware counters; present interval 30.99 ms
+  10k-zoom-10 frame 438: slow, no faults; wall 19.69 ms (local 7.03), cpu 19.54, run-queue wait 0.01, switches 0v/1i, faults 0+0, cpu 0->0, freq 1600 MHz; no hardware counters; present interval 36.12 ms
+  10k-zoom-10 frame 487: slow, no faults; wall 21.80 ms (local 7.13), cpu 21.61, run-queue wait 0.03, switches 0v/2i, faults 0+0, cpu 0->0, freq 1600 MHz; no hardware counters; present interval 39.80 ms
+
+Totals: {'preempted': 1, 'slow, no faults': 22}

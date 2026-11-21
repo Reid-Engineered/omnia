@@ -1,0 +1,26 @@
+run | paints | median paint wall/cpu ms | median freq MHz | stalls | intervals > 1.5 R | vmstat deltas (non-zero)
+1k-pan-1 | 1200 | 0.83/0.83 | 3500 | 0 | 0 | {'thp_fault_alloc': 18, 'pgfault': 30417, 'pgmajfault': 1258}
+10k-zoom-1 | 1200 | 1.07/1.07 | 3500 | 0 | 27 | {'thp_fault_alloc': 38, 'pgfault': 36761, 'pgmajfault': 4}
+10k-zoom-2 | 1200 | 1.06/1.06 | 3500 | 0 | 27 | {'thp_fault_alloc': 42, 'pgfault': 44061}
+1k-pan-2 | 1200 | 0.83/0.83 | 3500 | 0 | 0 | {'thp_fault_alloc': 16, 'pgfault': 25102}
+1k-pan-3 | 1200 | 0.83/0.83 | 3500 | 0 | 0 | {'thp_fault_alloc': 15, 'pgfault': 24539}
+10k-zoom-3 | 1200 | 1.06/1.06 | 3500 | 0 | 29 | {'thp_fault_alloc': 41, 'pgfault': 39156}
+10k-zoom-4 | 1200 | 1.06/1.06 | 3500 | 0 | 30 | {'thp_fault_alloc': 40, 'pgfault': 39496}
+1k-pan-4 | 1200 | 0.82/0.82 | 3500 | 0 | 0 | {'thp_fault_alloc': 16, 'pgfault': 23737}
+1k-pan-5 | 1200 | 0.81/0.81 | 3500 | 0 | 0 | {'thp_fault_alloc': 16, 'pgfault': 24353, 'pgmajfault': 1}
+10k-zoom-5 | 1200 | 1.08/1.07 | 3500 | 0 | 30 | {'thp_fault_alloc': 41, 'pgfault': 47195, 'pgmajfault': 1}
+10k-zoom-6 | 1200 | 1.17/1.16 | 3500 | 0 | 33 | {'thp_fault_alloc': 40, 'pgfault': 38672}
+1k-pan-6 | 1200 | 0.82/0.82 | 3500 | 0 | 0 | {'thp_fault_alloc': 16, 'pgfault': 24116}
+1k-pan-7 | 1200 | 0.82/0.82 | 3500 | 0 | 0 | {'thp_fault_alloc': 15, 'pgfault': 27102}
+10k-zoom-7 | 1200 | 1.07/1.07 | 3500 | 0 | 29 | {'thp_fault_alloc': 40, 'pgfault': 51950}
+10k-zoom-8 | 1200 | 1.06/1.06 | 3500 | 0 | 30 | {'thp_fault_alloc': 40, 'pgfault': 38725}
+1k-pan-8 | 1200 | 0.81/0.80 | 3500 | 0 | 0 | {'thp_fault_alloc': 15, 'pgfault': 24860}
+1k-pan-9 | 1200 | 0.84/0.83 | 3500 | 0 | 1 | {'thp_fault_alloc': 16, 'pgfault': 28610}
+10k-zoom-9 | 1200 | 1.05/1.06 | 3500 | 0 | 22 | {'thp_fault_alloc': 39, 'pgfault': 40005}
+10k-zoom-10 | 1200 | 1.06/1.06 | 3500 | 0 | 28 | {'thp_fault_alloc': 38, 'pgfault': 40381}
+1k-pan-10 | 1200 | 0.81/0.80 | 3500 | 0 | 0 | {'thp_fault_alloc': 14, 'pgfault': 21236, 'pgmajfault': 2}
+
+Stalls
+  none
+
+Totals: no stalls
