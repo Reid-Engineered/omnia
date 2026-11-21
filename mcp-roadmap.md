@@ -111,7 +111,7 @@ own in turn.
 
 ## Milestone A1: headless read, preview, apply, undo
 
-### A1.1 Doc::fork · doing
+### A1.1 Doc::fork · done
 - Lane: doc · Depends: A0.2 · Read: D2, D8, INV4, INV10, AD3, AQ14
 - Owns: `Doc::fork` in `crates/omnia-doc/src/doc.rs`; `Clone` derives in `arena.rs`,
   `points.rs`, `index.rs`, `connectivity.rs`
@@ -346,3 +346,21 @@ policy; "session" in the stateless era as a storage lifetime only; protocol logg
 in 2026-07-28. Next: A1.8 reads the pinned specification pages before coding; 10.5 is a
 summary. Rule-1 scan done on the changed files. Docs only; nothing measured; no dependency
 added.
+
+2026-11-20 A1.1 done — `Doc::fork` in doc.rs copies all three arenas (reserved slots
+included), the point map, the spatial index, the connectivity and the revision, and leaves the
+history empty (AD3). `Clone` is derived on `Points`, the index's `Entry`, `Entries` and
+`SpatialIndex`, and the connectivity's `PointSlot`, `PointStore`, `Comp`, `Net` and
+`Connectivity` (`Arena` was already `Clone`). Tests in doc.rs: a 128-case property test over the
+T5.1 generator, which checks at every reached state (undo and redo included) that
+`fork == original`, that the derived state is the same (partitions, sheet query order,
+junctions), and that the same command on both gives equal `Result<Change, _>`, `PartialEq`
+documents and INV10 on each. Two unit tests cover reserved-slot id allocation and the original
+staying untouched. Deviations: the T5.1 generator is private to `command.rs`, which A1.1 may not
+touch, so the test mirrors it with the same steps, weights, ranges and mapping. The done-when
+bench needed `crates/omnia-bench/benches/fork.rs` and its `[[bench]]` entry, outside **Owns**.
+Bench, non-reference (Windows development laptop, i7-14650HX, on battery, Silent scheme; certifies
+nothing): fork of `10k`, median of run p99s 9.419 ms (range 8.222 to 13.055) over 10 runs, and
+17,296,160 heap bytes in 129,671 allocations per live fork (docs/measurements/A1.1.md). For
+A1.10: AB2's 25 ms includes this fork, and the fork's memory goes against B9. mcp-plan.md
+section 3's "no Clone, no fork" finding is now resolved by this task. No dependency added.
