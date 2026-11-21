@@ -140,7 +140,7 @@ impl Default for DocumentCache {
 #[derive(Debug, Default)]
 struct Scratch {
     items: Vec<ItemId>,
-    segments: Vec<wires::Segment>,
+    segments: wires::MergedSegments,
     junctions: Vec<Pt>,
 }
 
@@ -234,17 +234,21 @@ impl DocumentCache {
             ItemId::Wire(id) => (1, id.0),
             ItemId::Label(id) => (2, id.0),
         });
+        let parts_end = items.partition_point(|id| matches!(id, ItemId::Part(_)));
+        let wires_end = items.partition_point(|id| !matches!(id, ItemId::Label(_)));
         let part_shapes = || {
-            items.iter().filter_map(|id| match *id {
+            items[..parts_end].iter().filter_map(|id| match *id {
                 ItemId::Part(id) => self.masks.symbol(doc.part(id)?, camera, sf),
                 _ => None,
             })
         };
         let wire_segments = || {
-            items.iter().filter_map(|id| match *id {
-                ItemId::Wire(id) => doc.wire(id).copied().map(wires::Segment::from),
-                _ => None,
-            })
+            items[parts_end..wires_end]
+                .iter()
+                .filter_map(|id| match *id {
+                    ItemId::Wire(id) => doc.wire(id).copied().map(wires::Segment::from),
+                    _ => None,
+                })
         };
 
         layer(Layer::WiresAndBoxes, &mut |sink| {
@@ -254,19 +258,11 @@ impl DocumentCache {
             if diameter.is_some() {
                 wire_segments().for_each(&mut draw);
             } else {
-                segments.clear();
-                segments.extend(wire_segments());
-                segments.sort_unstable();
-                let mut iter = segments.iter().copied();
-                if let Some(mut current) = iter.next() {
-                    for next in iter {
-                        if !current.merge(next) {
-                            draw(current);
-                            current = next;
-                        }
-                    }
-                    draw(current);
-                }
+                segments
+                    .visible(wire_segments())
+                    .iter()
+                    .copied()
+                    .for_each(draw);
             }
             for shape in part_shapes().filter(|s| lod::symbol_box(s.logical_side)) {
                 let side = stroke_device_px(shape.logical_side, sf);
