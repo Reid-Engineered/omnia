@@ -65,3 +65,7 @@ harness = false
 [[bench]]
 name = "doc_io"
 harness = false
+
+[[bench]]
+name = "fork"
+harness = false

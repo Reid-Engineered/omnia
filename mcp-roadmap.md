@@ -111,10 +111,12 @@ own in turn.
 
 ## Milestone A1: headless read, preview, apply, undo
 
-### A1.1 Doc::fork · todo
+### A1.1 Doc::fork · done
 - Lane: doc · Depends: A0.2 · Read: D2, D8, INV4, INV10, AD3, AQ14
 - Owns: `Doc::fork` in `crates/omnia-doc/src/doc.rs`; `Clone` derives in `arena.rs`,
-  `points.rs`, `index.rs`, `connectivity.rs`
+  `points.rs`, `index.rs`, `connectivity.rs`; `crates/omnia-bench/benches/fork.rs` and its
+  `[[bench]]` entry; `docs/measurements/A1.1.md` and `docs/measurements/A1.1/` (widened
+  2026-11-20 by owner-delegated decision: the done-when bench needs them)
 - Do: `pub fn fork(&self) -> Doc`: every arena slot (reserved ones included), the index, the
   connectivity and the revision; empty history.
 - Done when: a property test over the T5.1 random command generator shows `fork == original`
@@ -122,7 +124,7 @@ own in turn.
   documents and INV10; a criterion bench records fork time and size on `10k` (non-reference
   machine, labelled).
 
-### A1.2 Place-part helper · todo
+### A1.2 Place-part helper · done
 - Lane: assets · Depends: A0.2 · Read: K2, K7, AD11, canvas-plan.md section 9 (`PlacePart`)
 - Owns: `crates/omnia-symbols/src/lib.rs` (`SymbolLibrary::place_command`)
 - Do: build `Command::PlacePart` from a `SymbolId`, position, orientation, designator and
@@ -349,6 +351,42 @@ policy; "session" in the stateless era as a storage lifetime only; protocol logg
 in 2026-07-28. Next: A1.8 reads the pinned specification pages before coding; 10.5 is a
 summary. Rule-1 scan done on the changed files. Docs only; nothing measured; no dependency
 added.
+
+2026-11-20 A1.1 done — `Doc::fork` in doc.rs copies all three arenas (reserved slots
+included), the point map, the spatial index, the connectivity and the revision, and leaves the
+history empty (AD3). `Clone` is derived on `Points`, the index's `Entry`, `Entries` and
+`SpatialIndex`, and the connectivity's `PointSlot`, `PointStore`, `Comp`, `Net` and
+`Connectivity` (`Arena` was already `Clone`). Tests in doc.rs: a 128-case property test over the
+T5.1 generator, which checks at every reached state (undo and redo included) that
+`fork == original`, that the derived state is the same (partitions, sheet query order,
+junctions), and that the same command on both gives equal `Result<Change, _>`, `PartialEq`
+documents and INV10 on each. Two unit tests cover reserved-slot id allocation and the original
+staying untouched. Deviations: the T5.1 generator is private to `command.rs`, which A1.1 may not
+touch, so the test mirrors it with the same steps, weights, ranges and mapping. The done-when
+bench needed `crates/omnia-bench/benches/fork.rs` and its `[[bench]]` entry, outside **Owns**.
+Bench, non-reference (Windows development laptop, i7-14650HX, on battery, Silent scheme; certifies
+nothing): fork of `10k`, median of run p99s 9.419 ms (range 8.222 to 13.055) over 10 runs, and
+17,296,160 incremental live heap bytes in 129,671 allocations per live fork
+(docs/measurements/A1.1.md). Independent review (a model other than the author): no defect in
+`fork`; added checks after undo and redo steps and a test of the unsorted junction order and
+exact `NetId`s through a fork; relabelled the size. The owner delegated the follow-up
+decisions: the **Owns** line was widened to the bench and measurement files, and the campaign
+scripts stay as run. For
+A1.10: AB2's 25 ms includes this fork, and the fork's memory goes against B9. mcp-plan.md
+section 3's "no Clone, no fork" finding is now resolved by this task. No dependency added.
+
+2026-11-20 A1.2 done — `SymbolLibrary::place_command(id, at, orient, designator, value) ->
+Command` in `crates/omnia-symbols/src/lib.rs` builds `Command::PlacePart`, taking the local pins
+(in pin order) and the bounds from the `SymbolDef` (AD11). The signature is as in mcp-plan.md
+section 14. Test `a1_2_place_command_world_pins_for_every_symbol_and_orientation`: for every
+built-in symbol under all 8 `Orient::ALL`, the applied command is accepted. `Doc::pins` equals
+the `SymbolDef` pins mapped by `at + Orient::apply`, in order; the stored `Part` is the one
+built; the command carries `def.bounds`. For T5.3: the canvas place tool (`tool/place.rs`)
+builds its `PlacePart` with `place_command`, so the tool and the agent share one helper. The two
+hand-built `PlacePart`s in `crates/omnia-canvas/src/sheet.rs` (about lines 612 and 752) are test
+fixtures and may switch when that file's owner next touches it. Independent review (a model
+other than the author) found no bug; it led to a doc note that an unknown `SymbolId` panics, as
+`get` does, and to this corrected handoff. No dependency added; nothing measured.
 
 2026-11-20 AQ15 (docs, not a task) — the owner delegated the question that A0.2's review
 raised. Answer: job tools in every era, and tasks never advertised. This supersedes the A0.2
