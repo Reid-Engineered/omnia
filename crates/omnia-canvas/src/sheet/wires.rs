@@ -89,3 +89,54 @@ impl Segment {
 pub(super) fn width(camera: &Camera, sf: f32) -> u32 {
     stroke_device_px(WIDTH_NM * camera.scale(), sf)
 }
+
+// Keep world coordinates so every frame still uses the current camera and stroke.
+// Compare geometry in stable wire-id order, including edits that reuse a wire id.
+#[derive(Debug, Default)]
+pub(super) struct MergedSegments {
+    source: Vec<Segment>,
+    runs: Vec<Segment>,
+}
+
+impl MergedSegments {
+    pub(super) fn visible(
+        &mut self,
+        segments: impl Iterator<Item = Segment> + Clone,
+    ) -> &[Segment] {
+        if !segments.clone().eq(self.source.iter().copied()) {
+            self.source.clear();
+            self.source.extend(segments);
+            self.runs.clone_from(&self.source);
+            self.runs.sort_unstable();
+            self.runs.dedup_by(|next, current| current.merge(*next));
+        }
+        &self.runs
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn d4_visible_runs_follow_geometry_and_view_changes() {
+        let segment = |start, end| Segment {
+            vertical: false,
+            line: 0,
+            start,
+            end,
+        };
+        let mut cache = MergedSegments::default();
+        let input = [segment(2, 3), segment(0, 1), segment(1, 2)];
+        for _ in 0..2 {
+            assert_eq!(cache.visible(input.into_iter()), &[segment(0, 3)]);
+        }
+        let edited = [segment(2, 3), segment(0, 1), segment(5, 6)];
+        assert_eq!(
+            cache.visible(edited.into_iter()),
+            &[edited[1], edited[0], edited[2]]
+        );
+        assert_eq!(cache.visible(input[..1].iter().copied()), &input[..1]);
+        assert!(cache.visible(std::iter::empty()).is_empty());
+    }
+}

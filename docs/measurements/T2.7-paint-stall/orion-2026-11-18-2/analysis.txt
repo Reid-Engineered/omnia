@@ -1,0 +1,45 @@
+run | paints | median paint wall/cpu ms | median freq MHz | stalls | intervals > 1.5 R | vmstat deltas (non-zero)
+1k-pan-1 | 1200 | 3.45/3.45 | 800 | 0 | 0 | {'thp_fault_alloc': 5, 'pgfault': 29333, 'pgmajfault': 1}
+10k-zoom-1 | 1200 | 4.13/4.12 | 800 | 1 | 28 | {'thp_fault_alloc': 34, 'pgfault': 77613}
+10k-zoom-2 | 1200 | 4.10/4.08 | 800 | 2 | 58 | {'thp_fault_alloc': 36, 'pgfault': 75216}
+1k-pan-2 | 1200 | 3.44/3.43 | 800 | 0 | 0 | {'thp_fault_alloc': 11, 'pgfault': 60035}
+1k-pan-3 | 1200 | 3.33/3.33 | 800 | 0 | 0 | {'thp_fault_alloc': 10, 'pgfault': 64991}
+10k-zoom-3 | 1200 | 4.13/4.11 | 800 | 0 | 35 | {'thp_fault_alloc': 34, 'pgfault': 75150}
+10k-zoom-4 | 1200 | 4.07/4.06 | 800 | 1 | 30 | {'thp_fault_alloc': 38, 'pgfault': 79853}
+1k-pan-4 | 1200 | 3.37/3.36 | 800 | 0 | 0 | {'thp_fault_alloc': 12, 'pgfault': 65496}
+1k-pan-5 | 1200 | 3.42/3.40 | 800 | 0 | 0 | {'thp_fault_alloc': 12, 'pgfault': 58722}
+10k-zoom-5 | 1200 | 4.08/4.05 | 800 | 3 | 32 | {'thp_fault_alloc': 38, 'pgfault': 80142}
+10k-zoom-6 | 1200 | 3.99/3.98 | 800 | 2 | 25 | {'thp_fault_alloc': 37, 'pgfault': 73921, 'pgmajfault': 1}
+1k-pan-6 | 1200 | 3.38/3.37 | 800 | 0 | 0 | {'thp_fault_alloc': 13, 'pgfault': 65951}
+1k-pan-7 | 1200 | 3.44/3.43 | 800 | 0 | 0 | {'thp_fault_alloc': 14, 'pgfault': 55649}
+10k-zoom-7 | 1200 | 4.00/3.87 | 800 | 1 | 34 | {'thp_fault_alloc': 43, 'pgfault': 77038, 'pgmajfault': 1}
+10k-zoom-8 | 1200 | 3.86/3.79 | 800 | 6 | 34 | {'thp_fault_alloc': 38, 'pgfault': 75574}
+1k-pan-8 | 1200 | 3.43/3.43 | 800 | 0 | 0 | {'thp_fault_alloc': 14, 'pgfault': 66624, 'pgmajfault': 1}
+1k-pan-9 | 1200 | 3.46/3.44 | 800 | 0 | 0 | {'thp_fault_alloc': 13, 'pgfault': 59088}
+10k-zoom-9 | 1200 | 3.87/3.85 | 800 | 4 | 33 | {'thp_fault_alloc': 38, 'pgfault': 78536}
+10k-zoom-10 | 1200 | 3.89/3.88 | 800 | 0 | 36 | {'thp_fault_alloc': 36, 'pgfault': 79414}
+1k-pan-10 | 1200 | 3.37/3.37 | 800 | 0 | 0 | {'thp_fault_alloc': 15, 'pgfault': 59289, 'pgmajfault': 1}
+
+Stalls
+  10k-zoom-1 frame 494: slow: low clock; wall 25.16 ms (local 6.98), cpu 25.03, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 1600 MHz; instructions x1.07, cycles x1.01, clock 0.93 GHz (local 3.35), IPC 2.21; present interval 41.87 ms
+  10k-zoom-2 frame 562: slow: low clock; wall 8.69 ms (local 4.30), cpu 8.65, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 799 MHz; instructions x1.30, cycles x1.22, clock 0.68 GHz (local 1.13), IPC 2.09
+  10k-zoom-2 frame 563: slow: low clock; wall 8.86 ms (local 4.30), cpu 8.50, run-queue wait 0.29, switches 0v/2i, faults 0+0, cpu 0->0, freq 700 MHz; instructions x1.24, cycles x1.20, clock 0.67 GHz (local 1.09), IPC 2.07
+  10k-zoom-4 frame 506: slow: low clock; wall 21.69 ms (local 6.28), cpu 21.57, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 2->2, freq 1200 MHz; instructions x0.99, cycles x0.95, clock 0.82 GHz (local 2.98), IPC 2.23; present interval 33.35 ms
+  10k-zoom-5 frame 519: slow: low clock; wall 16.54 ms (local 6.14), cpu 16.36, run-queue wait 0.06, switches 0v/1i, faults 0+0, cpu 0->0, freq 800 MHz; instructions x1.00, cycles x0.95, clock 0.77 GHz (local 2.16), IPC 2.22; present interval 31.28 ms
+  10k-zoom-5 frame 520: slow: low clock; wall 15.49 ms (local 6.49), cpu 15.41, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 1200 MHz; instructions x1.00, cycles x1.01, clock 0.79 GHz (local 1.87), IPC 2.20; present interval 31.19 ms
+  10k-zoom-5 frame 563: slow: low clock; wall 9.06 ms (local 4.51), cpu 8.51, run-queue wait 0.39, switches 0v/2i, faults 0+0, cpu 1->1, freq 789 MHz; instructions x1.24, cycles x1.20, clock 0.68 GHz (local 1.07), IPC 2.04
+  10k-zoom-6 frame 132: preempted; wall 8.96 ms (local 3.03), cpu 5.92, run-queue wait 3.04, switches 0v/23i, faults 0+0, cpu 0->0, freq 1481 MHz; instructions x1.07, cycles x2.27, clock 1.07 GHz (local 0.86), IPC 0.86
+  10k-zoom-6 frame 444: slow: low clock; wall 23.79 ms (local 6.63), cpu 23.65, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 1200 MHz; instructions x1.00, cycles x0.90, clock 0.84 GHz (local 3.34), IPC 2.41; present interval 51.05 ms
+  10k-zoom-7 frame 488: slow: low clock; wall 24.03 ms (local 6.97), cpu 23.89, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 3->3, freq 1200 MHz; instructions x1.00, cycles x0.86, clock 0.84 GHz (local 3.35), IPC 2.40; present interval 43.80 ms
+  10k-zoom-8 frame 482: slow: low clock; wall 19.33 ms (local 6.86), cpu 18.81, run-queue wait 0.36, switches 0v/2i, faults 0+0, cpu 1->1, freq 1600 MHz; instructions x1.00, cycles x0.88, clock 1.07 GHz (local 3.34), IPC 2.40; present interval 36.63 ms
+  10k-zoom-8 frame 525: slow: low clock; wall 13.77 ms (local 4.09), cpu 13.65, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 1->1, freq 800 MHz; instructions x1.00, cycles x0.96, clock 0.72 GHz (local 2.49), IPC 2.18; present interval 27.89 ms
+  10k-zoom-8 frame 526: slow: low clock; wall 12.35 ms (local 4.09), cpu 12.23, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 1->1, freq 800 MHz; instructions x1.00, cycles x0.97, clock 0.77 GHz (local 2.35), IPC 2.19; present interval 32.10 ms
+  10k-zoom-8 frame 527: slow: low clock; wall 11.81 ms (local 4.09), cpu 11.75, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 1->1, freq 800 MHz; instructions x1.00, cycles x0.95, clock 0.77 GHz (local 2.29), IPC 2.18; present interval 32.88 ms
+  10k-zoom-8 frame 535: slow: low clock; wall 8.63 ms (local 3.81), cpu 8.37, run-queue wait 0.22, switches 0v/1i, faults 0+0, cpu 0->0, freq 800 MHz; instructions x1.00, cycles x0.98, clock 0.77 GHz (local 1.81), IPC 2.16
+  10k-zoom-8 frame 536: slow: low clock; wall 8.48 ms (local 3.81), cpu 8.18, run-queue wait 0.24, switches 0v/2i, faults 0+0, cpu 0->0, freq 800 MHz; instructions x0.94, cycles x0.94, clock 0.77 GHz (local 1.83), IPC 2.12
+  10k-zoom-9 frame 351: slow: low IPC; wall 11.87 ms (local 4.60), cpu 11.76, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 1->1, freq 1011 MHz; instructions x1.06, cycles x2.21, clock 0.78 GHz (local 0.92), IPC 0.94
+  10k-zoom-9 frame 508: slow: low clock; wall 20.14 ms (local 5.85), cpu 20.00, run-queue wait 0.02, switches 0v/1i, faults 0+0, cpu 0->0, freq 1200 MHz; instructions x1.00, cycles x0.94, clock 0.85 GHz (local 3.10), IPC 2.22; present interval 32.50 ms
+  10k-zoom-9 frame 521: slow: low clock; wall 15.07 ms (local 4.74), cpu 14.99, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 800 MHz; instructions x1.00, cycles x0.94, clock 0.77 GHz (local 2.55), IPC 2.22; present interval 29.34 ms
+  10k-zoom-9 frame 522: slow: low clock; wall 14.51 ms (local 4.68), cpu 14.43, run-queue wait 0.00, switches 0v/0i, faults 0+0, cpu 0->0, freq 800 MHz; instructions x1.00, cycles x1.00, clock 0.77 GHz (local 2.34), IPC 2.21; present interval 33.60 ms
+
+Totals: {'slow: low clock': 18, 'preempted': 1, 'slow: low IPC': 1}
