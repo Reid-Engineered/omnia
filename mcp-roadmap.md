@@ -180,9 +180,10 @@ own in turn.
 ### A1.8 MCP over stdio · todo
 - Lane: agent · Depends: A1.7 · Read: mcp-plan.md section 10; AK1; AQ1
 - Owns: `crates/omnia-cli/src/mcp.rs`, `crates/omnia-cli/tests/transcripts/`
-- Do: both protocol eras per mcp-plan.md section 10.5 (amended at A0.2): era selection on the
-  first message; `initialize` and `ping` for the handshake era; per-request `_meta` revision,
-  `server/discover` and `UnsupportedProtocolVersionError` for the stateless era; `tools/list`
+- Do: both protocol eras per mcp-plan.md section 10.5 (amended at A0.2): Omnia's one-era-per-
+  process selection on the first valid request; `initialize` and `ping` for the handshake era;
+  per-request `_meta` revision and client capabilities, `server/discover`, caching hints and
+  `UnsupportedProtocolVersionError` for the stateless era; `tools/list`
   with input and output schemas and annotations; `tools/call` with `structuredContent` and a
   text block; resources (list, read, and subscribe in each era's form); prompts; logging;
   `notifications/cancelled`. Read the pinned specification pages first.
@@ -333,7 +334,15 @@ names 2026-07-28 as current, and that revision is stateless (no `initialize`, ve
 request's `_meta`, `server/discover`, no `ping`, `subscriptions/listen`). Answer: both eras.
 AK1 pins 2026-07-28, 2025-11-25 and 2025-06-18. With the owner's approval A0.2 also amended
 sections 10 (new 10.5, protocol eras), 11.1 and 11.5 of mcp-plan.md and the A1.8 and A3.2 task
-text, so the plan stays true (AGENTS "keep the plans true"). 11.5 records that no pinned
-revision has a core task primitive (2026-07-28 moved tasks to an extension), so the job tools
-are used. Next: A1.8 reads the pinned specification pages before coding; 10.5 is a summary.
-Rule-1 scan done on the changed files. Docs only; nothing measured; no dependency added.
+text, so the plan stays true (AGENTS "keep the plans true"). 11.5 records the task timeline:
+none in 2025-06-18, experimental Tasks in the 2025-11-25 core, an optional extension in
+2026-07-28. Its existing rule therefore maps jobs onto Tasks only in a 2025-11-25 session that
+negotiates them; job tools everywhere else. Independent review (a model other than the
+author) checked 10.5, AK1 and 11.5 against the published specification. Fixed from it: the
+2025-11-25 Tasks claim; progress and cancel share one stdio channel each way; the envelopes,
+not the payloads, differ by era; the full caching-hint list; required `clientCapabilities`
+metadata and the `-32602` and `data.requested` error details; era selection labelled as Omnia's
+policy; "session" in the stateless era as a storage lifetime only; protocol logging deprecated
+in 2026-07-28. Next: A1.8 reads the pinned specification pages before coding; 10.5 is a
+summary. Rule-1 scan done on the changed files. Docs only; nothing measured; no dependency
+added.

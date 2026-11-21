@@ -458,36 +458,47 @@ stateless era's forms.
 ### 10.5 Protocol eras (AK1)
 
 Added at A0.2 (2026-11-20). The pinned revisions span two eras, and one `omnia mcp` process
-serves both (AQ2). The service, tools, resources and response bytes are the same in both; only
-the framing in `mcp.rs` differs. A1.8 reads the pinned specification pages before coding, as
-for GPUI; the summary below is what A0.2 read and is not a substitute.
+serves both (AQ2). The service and the application payloads (tool arguments, `structuredContent`,
+resource contents, error `details`) are the same in both. The protocol envelopes differ:
+`mcp.rs` serializes each era's results, errors and notifications. A1.8 reads the pinned
+specification pages before coding; the summary below is what A0.2 read and is not a substitute.
 
 | | Handshake era: 2025-11-25, 2025-06-18 | Stateless era: 2026-07-28 |
 | --- | --- | --- |
-| Version | `initialize` negotiates one revision for the process | Each request names its revision in `_meta` (`io.modelcontextprotocol/protocolVersion`); there is no handshake |
-| Unknown version | Answer `initialize` with 2025-11-25, the newest handshake revision pinned | `UnsupportedProtocolVersionError` (`-32022`) with `data.supported` listing AK1 |
+| Version | `initialize` negotiates one revision for the process | Each request's `_meta` carries its revision (`io.modelcontextprotocol/protocolVersion`) and the client's capabilities (`io.modelcontextprotocol/clientCapabilities`), both required; there is no handshake |
+| Unknown or missing version | Answer `initialize` with 2025-11-25, the newest handshake revision pinned | An unsupported revision gets `UnsupportedProtocolVersionError` (`-32022`), `data: {supported, requested}`, with `supported` listing AK1. Missing required `_meta` is invalid params (`-32602`) |
 | Discovery | `initialize` result | `server/discover`, which the server must implement |
-| Results | As in 10.1 | As in 10.1, plus `resultType: "complete"`; `tools/list` carries `ttlMs` and `cacheScope` |
-| Subscriptions | `resources/subscribe`, then `notifications/resources/updated` | `subscriptions/listen` |
-| Logging | `logging/setLevel`, then `notifications/message` | `notifications/message` only when the request carries `io.modelcontextprotocol/logLevel` |
+| Results | As in 10.1 | As in 10.1, with `resultType`: `"complete"` for a finished result (the core also defines `"input_required"`, which Omnia does not use). Complete results of `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list` and `resources/read` carry the caching hints `ttlMs` and `cacheScope` |
+| Subscriptions | `resources/subscribe`, then `notifications/resources/updated` | `subscriptions/listen` (requesting `notifications.resourceSubscriptions`), then `notifications/resources/updated`, tagged with the listen request |
+| Logging | Optional `logging/setLevel`, then `notifications/message` | `notifications/message` only when the request carries `io.modelcontextprotocol/logLevel`. Protocol logging is deprecated in this revision; Omnia supports it because 10.4 lists it, and A1.8 may drop it here |
 | Liveness | `ping` | None (removed) |
-| Progress, cancel | `notifications/progress`, `notifications/cancelled` | The same, on the stdout stream of the request they belong to |
+| Progress, cancel | `notifications/progress` from the server, correlated by `progressToken`; `notifications/cancelled` from the client, correlated by `requestId` | The same. stdio has one channel each way and no per-request streams: progress goes on stdout, cancellation arrives on stdin. Progress stops when its request completes |
 | Server-to-client requests | None used | None: the server never sends a request |
 
-Selection on stdio: if the first message is `initialize`, the process runs in the handshake
-era for its lifetime; otherwise every request is handled by its `_meta` revision. A message of
-the other era after that is a protocol error. No era is chosen by guessing from other fields.
-The stateless era forbids relying on per-connection state; on stdio a session is the process
-(11.1), and every document is named by an explicit `doc_id` argument, so nothing depends on
-which request came first.
+Selection on stdio is Omnia's policy, not the specification's. The specification lets a
+dual-era server serve both eras at once on one process; Omnia picks one per process, which
+matches how clients open a connection. The first valid request decides: `initialize` puts the
+process in the handshake era for its lifetime. Any other request carrying a `_meta` revision,
+typically a client's `server/discover` probe, puts it in the stateless era, where every request
+is handled by its own `_meta` revision. After that, a message of the other era is refused as a
+protocol error. No era is chosen by guessing from other fields. A dual-era client that probes
+with `server/discover` and gets a recognised version error stays in the stateless era and
+retries with a supported revision.
+
+The stateless era has no protocol-level session. Each request carries its own protocol
+metadata. Documents and jobs are reached through explicit handles (`doc_id`, `job_id`, the
+idempotency key) or resource URIs, and `omnia://docs` lists the open documents. The process is
+only the storage lifetime of those handles (11.1): they expire when it exits.
 
 ## 11. Semantics
 
 ### 11.1 Sessions and documents
 
 - A session is one transport connection: one stdio process, one JSON-lines stream, later one
-  HTTP session. In the stateless protocol era (10.5) the stdio session is still the process;
-  state is reached only through explicit `doc_id`, `job_id` and idempotency-key arguments.
+  HTTP session. In the stateless protocol era (10.5) MCP has no protocol-level session; the
+  stdio process is then only the storage lifetime of the handles below, which every request
+  names explicitly (`doc_id`, `job_id`, idempotency key, or a resource URI) and which expire
+  when the process exits.
 - A session holds its open documents (`doc_id` → document, path, `saved_revision`), its
   `WiringPrefs` (WK10 defaults), its idempotency cache, its approval grants and its jobs.
 - `doc_id`s are never reused within a session. A document is dirty when
@@ -536,9 +547,15 @@ binds a commit to its preview and an approval to an effect. It is not a security
 - MCP: `progressToken` maps to `notifications/progress`; `notifications/cancelled` sets the
   token. If the pinned revision (AK1) has a native task primitive, jobs map onto it; otherwise
   the job tools and `omnia://jobs/{id}` with subscriptions are used, and nothing polls.
-  Checked at A0.2 (2026-11-20): none of the AK1 revisions has a core task primitive (2026-07-28
-  moved tasks to an optional extension), so the job tools are used, subscribed through
-  `resources/subscribe` or `subscriptions/listen` by era (10.5).
+  The rule is applied per era. Checked at A0.2 (2026-11-20): 2025-06-18 has no task primitive;
+  2025-11-25 added Tasks to the core, marked experimental and negotiated by capability;
+  2026-07-28 moved them out of the core into the optional `io.modelcontextprotocol/tasks`
+  extension. So under this rule a 2025-11-25 session maps jobs onto Tasks when the client
+  negotiates them, and every other session uses the job tools with `omnia://jobs/{id}`,
+  subscribed through `resources/subscribe` or `subscriptions/listen` by era (10.5). The job
+  tools stay available in every era. Once the tool call that returns a job handle completes,
+  later job updates go through that resource subscription, not `notifications/progress`, which
+  stops when its request completes. A3.2 builds this.
 
 ### 11.6 App mode (A4)
 
