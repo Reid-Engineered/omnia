@@ -70,8 +70,10 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
   (1920x1080 logical) and at 125% (1536x864 logical). No window larger than the panel. The
   owner chose native 1080p over the brief's 4K; thresholds and budgets are otherwise unchanged.
 - **Refresh.** The panel refreshes at 60 Hz; B3 and B4 are judged against it (60 and 30 fps).
-- **Power and noise.** On AC, the bench window in the foreground, other apps closed. Each
-  result records the power source, CPU governor and power profile.
+- **Power and noise.** On AC, with the `performance` CPU governor (owner decision 2026-11-20,
+  matching CPU-only runs after the T2.7 paint-stall A/B confirmed `powersave` clock drops
+  caused the stalls), the bench window in the foreground, other apps closed. Each result
+  records the power source, CPU governor and power profile.
 - **CPU-only runs.** Owner decision 2026-11-17 (gate-blocker audit section 3.2): a timed run
   with no window or GPU work (for example the command-boundary runner) keeps the reference
   hardware, AC, the `performance` governor, other user apps closed, before/after records of

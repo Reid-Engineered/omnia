@@ -122,11 +122,13 @@ def capture():
     return conditions
 
 
-def validate_conditions(conditions, scale):
+def validate_conditions(conditions, scale, require_performance=False):
     check_conditions(conditions, scale)
     governors = conditions["governor"]
     if len(governors) != 4 or not conditions["processes"] or not conditions["time_utc"]:
         raise ValueError("expected all four CPU governors and a timestamped process snapshot")
+    if require_performance and set(governors.values()) != {"performance"}:
+        raise ValueError(f"expected performance CPU governor on all four CPUs: {governors}")
     if not any(line.strip().lower() == "dpms mode for screen edp-1: on"
                for line in conditions["dpms"].splitlines()):
         raise ValueError(f"expected active eDP-1 panel: {conditions['dpms']}")
@@ -143,6 +145,9 @@ def collect(binary, output):
     source_status = command("git", "-C", ROOT, "status", "--porcelain")
     if source_status:
         raise ValueError("run from a clean source checkout")
+    initial_governors = capture()["governor"]
+    if len(initial_governors) != 4 or set(initial_governors.values()) != {"performance"}:
+        raise ValueError(f"expected performance CPU governor on all four CPUs: {initial_governors}")
     original_scale = active_panel()["scale"]
     order = schedule()
     output.mkdir(parents=True)
@@ -181,14 +186,14 @@ def collect(binary, output):
                 identity = [tag, repetition, case]
                 before = capture()
                 write_record(journal, identity, "before", before, None)
-                validate_conditions(before, scale)
+                validate_conditions(before, scale, require_performance=True)
                 with stem.with_suffix(".log").open("xb") as log:
                     result = subprocess.run([binary, *args, "--size", size, "--json", path],
                                             env=run_env, stdout=log, stderr=subprocess.STDOUT)
                 after = capture()
                 write_record(journal, identity, "after", after, result.returncode)
                 result.check_returncode()
-                validate_conditions(after, scale)
+                validate_conditions(after, scale, require_performance=True)
     finally:
         try:
             set_scale(original_scale)
