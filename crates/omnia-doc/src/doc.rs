@@ -114,6 +114,23 @@ impl Doc {
         Self::default()
     }
 
+    /// Full copy for previews and jobs (A1.1, AD3): every arena slot, reserved ones
+    /// included, the point map, the spatial index, the connectivity and the revision. The
+    /// history is empty, so the fork cannot undo past its own commands. `fork() == self`
+    /// under `PartialEq`, and the same command applied to both gives the same `Change`.
+    pub fn fork(&self) -> Doc {
+        Doc {
+            parts: self.parts.clone(),
+            wires: self.wires.clone(),
+            labels: self.labels.clone(),
+            points: self.points.clone(),
+            index: self.index.clone(),
+            connectivity: self.connectivity.clone(),
+            history: History::default(),
+            revision: self.revision,
+        }
+    }
+
     /// Validates and executes a command transactionally, recording its inverse for undo.
     pub fn apply(&mut self, cmd: Command) -> Result<Change, CommandError> {
         crate::command::apply_command(self, cmd)
@@ -1386,5 +1403,396 @@ mod tests {
         assert_eq!(out, vec![ItemId::Label(lid)]);
         doc.query_touching(pt_box, &mut out);
         assert_eq!(out, vec![ItemId::Label(lid)]);
+    }
+
+    // ---- A1.1: Doc::fork (AD3, INV4, INV10) ----
+
+    /// Derived state the fork must carry over: connectivity partitions (INV10), the index
+    /// over the whole sheet and the junction dots, compared between two documents.
+    fn assert_same_derived(a: &Doc, b: &Doc) {
+        crate::connectivity::tests::assert_partitions(&a.connectivity, &b.connectivity);
+        let (mut qa, mut qb) = (Vec::new(), Vec::new());
+        a.query(sheet(), &mut qa);
+        b.query(sheet(), &mut qb);
+        assert_eq!(qa, qb, "fork index must answer queries in the same order");
+        let (mut ja, mut jb) = (Vec::new(), Vec::new());
+        a.junctions(sheet(), &mut ja);
+        b.junctions(sheet(), &mut jb);
+        ja.sort_by_key(|p| (p.x, p.y));
+        jb.sort_by_key(|p| (p.x, p.y));
+        assert_eq!(ja, jb);
+    }
+
+    /// INV10: incremental connectivity equals an independent rebuild.
+    fn assert_inv10(doc: &Doc) {
+        let oracle = Connectivity::rebuild_with_parts(
+            doc.wires().map(|(id, &w)| (id, w)),
+            doc.labels(),
+            doc.parts().map(|(id, _)| (id, doc.pins(id).unwrap())),
+        );
+        crate::connectivity::tests::assert_partitions(&doc.connectivity, &oracle);
+    }
+
+    #[test]
+    fn a1_1_fork_keeps_reserved_slots_and_revision_with_empty_history() {
+        let mut doc = Doc::new();
+        let bounds = Rect::from_points(Pt { x: -2, y: -1 }, Pt { x: 2, y: 1 }).unwrap();
+        let place = |x| Command::PlacePart {
+            part: part(Pt { x, y: 0 }, Orient::IDENTITY),
+            local_pins: vec![Pt::ZERO],
+            local_bounds: bounds,
+        };
+        doc.apply(place(0)).unwrap();
+        doc.apply(place(10)).unwrap();
+        doc.apply(Command::Delete {
+            items: vec![ItemId::Part(PartId(1))],
+            with_wires: false,
+        })
+        .unwrap();
+        // Part 1 is now a reserved (removed) slot.
+        let mut fork = doc.fork();
+        assert_eq!(fork, doc);
+        assert_eq!(fork.revision(), doc.revision());
+        assert!(doc.can_undo());
+        assert!(
+            !fork.can_undo() && !fork.can_redo(),
+            "fork history is empty"
+        );
+
+        // AD3: a commit at the same revision allocates the same ids in both.
+        let on_fork = fork.apply(place(20)).unwrap();
+        let on_doc = doc.apply(place(20)).unwrap();
+        assert_eq!(on_fork, on_doc);
+        assert_eq!(on_fork.added, vec![ItemId::Part(PartId(2))]);
+        assert_eq!(fork, doc);
+    }
+
+    #[test]
+    fn a1_1_applying_to_a_fork_leaves_the_original_untouched() {
+        let mut doc = Doc::new();
+        doc.apply(Command::AddWires(vec![Wire {
+            a: Pt::ZERO,
+            b: Pt { x: 10, y: 0 },
+        }]))
+        .unwrap();
+        let before = doc.fork();
+        let mut fork = doc.fork();
+        fork.apply(Command::AddWires(vec![Wire {
+            a: Pt { x: 10, y: 0 },
+            b: Pt { x: 10, y: 10 },
+        }]))
+        .unwrap();
+        assert_ne!(fork, doc);
+        assert_eq!(doc, before);
+        assert_same_derived(&doc, &before);
+        assert_inv10(&doc);
+        assert_inv10(&fork);
+    }
+
+    /// The T5.1 random command generator (`command.rs`, test
+    /// `inv4_and_inv10_over_random_legal_and_invalid_sequences`), mirrored here because
+    /// `command.rs` belongs to the wiring tasks and A1.1 may not touch it (mcp-roadmap.md,
+    /// dependency overview). Same steps, weights and ranges, and the same mapping to legal and
+    /// invalid commands.
+    #[derive(Debug, Clone)]
+    enum GenStep {
+        PlacePart {
+            x: i32,
+            y: i32,
+            orient: u8,
+            invalid_oob: bool,
+        },
+        AddWires {
+            x: i32,
+            y: i32,
+            horiz: bool,
+            bad_diag: bool,
+        },
+        AddLabel {
+            x: i32,
+            y: i32,
+            net: u8,
+            invalid_oob: bool,
+        },
+        Move {
+            pick: usize,
+            dx: i32,
+            dy: i32,
+            dup: bool,
+            missing: bool,
+        },
+        Reorient {
+            pick: usize,
+            px: i32,
+            py: i32,
+            orient: u8,
+            dup: bool,
+        },
+        Delete {
+            pick: usize,
+            count: usize,
+            dup: bool,
+            missing: bool,
+        },
+        SetText {
+            pick: usize,
+            field: u8,
+            net: u8,
+            missing: bool,
+        },
+        BatchMoveAndAdd {
+            pick: usize,
+            dx: i32,
+            fail_second: bool,
+        },
+        Undo,
+        Redo,
+    }
+
+    fn gen_step() -> impl Strategy<Value = GenStep> {
+        prop_oneof![
+            3 => (-10i32..=10, -10i32..=10, 0u8..8, prop::bool::weighted(0.15)).prop_map(
+                |(x, y, orient, invalid_oob)| GenStep::PlacePart { x, y, orient, invalid_oob }
+            ),
+            4 => (-10i32..=10, -10i32..=10, any::<bool>(), prop::bool::weighted(0.15)).prop_map(
+                |(x, y, horiz, bad_diag)| GenStep::AddWires { x, y, horiz, bad_diag }
+            ),
+            3 => (-10i32..=10, -10i32..=10, 0u8..4, prop::bool::weighted(0.1)).prop_map(
+                |(x, y, net, invalid_oob)| GenStep::AddLabel { x, y, net, invalid_oob }
+            ),
+            4 => (0usize..32, -5i32..=5, -5i32..=5, prop::bool::weighted(0.1), prop::bool::weighted(0.1)).prop_map(
+                |(pick, dx, dy, dup, missing)| GenStep::Move { pick, dx, dy, dup, missing }
+            ),
+            3 => (0usize..32, -4i32..=4, -4i32..=4, 0u8..8, prop::bool::weighted(0.1)).prop_map(
+                |(pick, px, py, orient, dup)| GenStep::Reorient { pick, px, py, orient, dup }
+            ),
+            3 => (0usize..32, 1usize..4, prop::bool::weighted(0.1), prop::bool::weighted(0.1)).prop_map(
+                |(pick, count, dup, missing)| GenStep::Delete { pick, count, dup, missing }
+            ),
+            3 => (0usize..32, 0u8..3, 0u8..4, prop::bool::weighted(0.1)).prop_map(
+                |(pick, field, net, missing)| GenStep::SetText { pick, field, net, missing }
+            ),
+            2 => (0usize..32, -4i32..=4, prop::bool::weighted(0.35)).prop_map(
+                |(pick, dx, fail_second)| GenStep::BatchMoveAndAdd { pick, dx, fail_second }
+            ),
+            3 => Just(GenStep::Undo),
+            2 => Just(GenStep::Redo),
+        ]
+    }
+
+    fn step_command(doc: &Doc, step: GenStep) -> Command {
+        let local_bounds = Rect::from_points(Pt { x: -2, y: -1 }, Pt { x: 2, y: 1 }).unwrap();
+        let local_pins = vec![Pt::ZERO, Pt { x: 1, y: 0 }];
+        let names = ["GND", "VCC", "SIG", "CLK"];
+        let follow = || crate::prefs::FollowPolicy::new(false, 10, false).unwrap();
+        let named = |at: Pt, orient: Orient, designator: &str, value: &str| Part {
+            symbol: SymbolId(0),
+            at,
+            orient,
+            designator: designator.into(),
+            value: value.into(),
+        };
+        let live: Vec<ItemId> = doc
+            .parts()
+            .map(|(id, _)| ItemId::Part(id))
+            .chain(doc.wires().map(|(id, _)| ItemId::Wire(id)))
+            .chain(doc.labels().map(|(id, _)| ItemId::Label(id)))
+            .collect();
+        let pick_one = |pick: usize, dup: bool| {
+            let mut items = if live.is_empty() {
+                Vec::new()
+            } else {
+                vec![live[pick % live.len()]]
+            };
+            if dup && !items.is_empty() {
+                items.push(items[0]);
+            }
+            items
+        };
+        match step {
+            GenStep::PlacePart {
+                x,
+                y,
+                orient,
+                invalid_oob,
+            } => Command::PlacePart {
+                part: named(
+                    Pt {
+                        x: if invalid_oob { SHEET_LIMIT_NM + 1 } else { x },
+                        y,
+                    },
+                    Orient::ALL[orient as usize],
+                    "U1",
+                    "1k",
+                ),
+                local_pins,
+                local_bounds,
+            },
+            GenStep::AddWires {
+                x,
+                y,
+                horiz,
+                bad_diag,
+            } => {
+                let a = Pt { x, y };
+                let b = if bad_diag {
+                    Pt { x: x + 1, y: y + 1 }
+                } else if horiz {
+                    Pt { x: x + 1, y }
+                } else {
+                    Pt { x, y: y + 1 }
+                };
+                Command::AddWires(vec![Wire { a, b }])
+            }
+            GenStep::AddLabel {
+                x,
+                y,
+                net,
+                invalid_oob,
+            } => Command::AddLabel(Label {
+                at: Pt {
+                    x: if invalid_oob { SHEET_LIMIT_NM + 1 } else { x },
+                    y,
+                },
+                text: names[net as usize].into(),
+            }),
+            GenStep::Move {
+                pick,
+                dx,
+                dy,
+                dup,
+                missing,
+            } => {
+                let mut items = pick_one(pick, dup);
+                if missing {
+                    items.push(ItemId::Part(PartId(99_999)));
+                }
+                Command::Move {
+                    follow: follow(),
+                    items,
+                    delta: Pt { x: dx, y: dy },
+                }
+            }
+            GenStep::Reorient {
+                pick,
+                px,
+                py,
+                orient,
+                dup,
+            } => Command::Reorient {
+                follow: follow(),
+                items: pick_one(pick, dup),
+                pivot: Pt { x: px, y: py },
+                by: Orient::ALL[orient as usize],
+            },
+            GenStep::Delete {
+                pick,
+                count,
+                dup,
+                missing,
+            } => {
+                let mut items = Vec::new();
+                for i in 0..count {
+                    if !live.is_empty() {
+                        let id = live[(pick + i) % live.len()];
+                        if !items.contains(&id) {
+                            items.push(id);
+                        }
+                    }
+                }
+                if dup && !items.is_empty() {
+                    items.push(items[0]);
+                }
+                if missing {
+                    items.push(ItemId::Label(LabelId(99_999)));
+                }
+                Command::Delete {
+                    items,
+                    with_wires: false,
+                }
+            }
+            GenStep::SetText {
+                pick,
+                field,
+                net,
+                missing,
+            } => Command::SetText {
+                item: if missing || live.is_empty() {
+                    ItemId::Wire(WireId(99_999))
+                } else {
+                    live[pick % live.len()]
+                },
+                field: match field {
+                    0 => TextField::Designator,
+                    1 => TextField::Value,
+                    _ => TextField::Label,
+                },
+                text: names[net as usize].into(),
+            },
+            GenStep::BatchMoveAndAdd {
+                pick,
+                dx,
+                fail_second,
+            } => {
+                let mut cmds = vec![Command::PlacePart {
+                    part: named(Pt::ZERO, Orient::IDENTITY, "B", "10"),
+                    local_pins,
+                    local_bounds,
+                }];
+                if !live.is_empty() {
+                    cmds.push(Command::Move {
+                        follow: follow(),
+                        items: vec![live[pick % live.len()]],
+                        delta: Pt { x: dx, y: 0 },
+                    });
+                }
+                if fail_second {
+                    cmds.push(Command::AddWires(vec![Wire {
+                        a: Pt::ZERO,
+                        b: Pt::ZERO,
+                    }]));
+                }
+                Command::Batch(cmds)
+            }
+            GenStep::Undo | GenStep::Redo => unreachable!(),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+        /// A1.1 done-when (AD3, INV4, INV10): at every state the T5.1 generator reaches,
+        /// undone and redone states included, `fork() == original`, the fork carries the same
+        /// derived state, and applying the same command to both gives equal results (`Change`
+        /// or error), `PartialEq` documents and INV10 on each.
+        #[test]
+        fn a1_1_fork_equals_original_and_commits_identically(
+            steps in prop::collection::vec(gen_step(), 1..80),
+        ) {
+            let mut doc = Doc::new();
+            for step in steps {
+                let mut fork = doc.fork();
+                prop_assert_eq!(&fork, &doc);
+                assert_same_derived(&fork, &doc);
+                prop_assert!(!fork.can_undo() && !fork.can_redo());
+                match step {
+                    GenStep::Undo => {
+                        doc.undo();
+                    }
+                    GenStep::Redo => {
+                        doc.redo();
+                    }
+                    step => {
+                        let cmd = step_command(&doc, step);
+                        let on_fork = fork.apply(cmd.clone());
+                        let on_doc = doc.apply(cmd);
+                        prop_assert_eq!(&on_fork, &on_doc);
+                        prop_assert_eq!(&fork, &doc);
+                        assert_same_derived(&fork, &doc);
+                        assert_inv10(&fork);
+                        assert_inv10(&doc);
+                    }
+                }
+            }
+        }
     }
 }

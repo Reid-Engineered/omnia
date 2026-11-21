@@ -111,7 +111,7 @@ own in turn.
 
 ## Milestone A1: headless read, preview, apply, undo
 
-### A1.1 Doc::fork · todo
+### A1.1 Doc::fork · doing
 - Lane: doc · Depends: A0.2 · Read: D2, D8, INV4, INV10, AD3, AQ14
 - Owns: `Doc::fork` in `crates/omnia-doc/src/doc.rs`; `Clone` derives in `arena.rs`,
   `points.rs`, `index.rs`, `connectivity.rs`
