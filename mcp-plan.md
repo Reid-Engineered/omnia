@@ -324,6 +324,9 @@ an `"id"` that the response echoes. All objects reject unknown fields.
 | `delete` | `items`; `with_wires` from A2.3 | `Delete` |
 | `set_text` | `item`, `field` (`designator`, `value`, `label`), `text` | `SetText` |
 
+Future minor schema additions once `omnia-doc` lands `parts-plan.md` `PD8` (`P2.2`): `set_param`,
+`list_parts` and `update_part_def`.
+
 `invert_follow` means exactly what holding Alt at commit means (WK3), applied to the session's
 `WiringPrefs` (WK10). It exists only once W2.2 has added `FollowPolicy` to the code.
 

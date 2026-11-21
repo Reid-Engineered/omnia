@@ -9,8 +9,8 @@ Read these before you change anything they cover. In order of authority:
 
 | File | What it decides |
 | --- | --- |
-| `canvas-plan.md`, `wiring-plan.md`, `mcp-plan.md`, `ui-plan.md` | Budgets, constants, decisions, invariants, open questions with defaults |
-| `canvas-roadmap.md`, `wiring-roadmap.md`, `mcp-roadmap.md`, `ui-roadmap.md` | Tasks, their status, dependencies, owned files, done-when checks, the log |
+| `canvas-plan.md`, `wiring-plan.md`, `mcp-plan.md`, `ui-plan.md`, `parts-plan.md` | Budgets, constants, decisions, invariants, open questions with defaults |
+| `canvas-roadmap.md`, `wiring-roadmap.md`, `mcp-roadmap.md`, `ui-roadmap.md`, `parts-roadmap.md` | Tasks, their status, dependencies, owned files, done-when checks, the log |
 | `ROADMAP.md` | Product stages above the technical roadmaps |
 | `docs/measurements/` | Recorded numbers and gate evidence |
 
@@ -19,7 +19,9 @@ Ids are global: `B`, `K`, `D`, `INV`, `Q`, `T` live in the canvas files; `W`-pre
 (`AB`, `AK`, `AD`, `AINV`, `ATC`, `AQ`, `HA`, tasks `A0.1`…) live in the agent-control files
 (`mcp-plan.md`, `mcp-roadmap.md`); `U`-prefixed ids (`UB`, `UK`, `UG`, `UD`, `UINV`, `UTC`,
 `US`, `UQ`, checkpoints `UH`, tasks `U0.1`…) live in the application UI files (`ui-plan.md`,
-`ui-roadmap.md`). Cite ids in commits, pull requests and log entries.
+`ui-roadmap.md`); `P`-prefixed ids (`PB`, `PK`, `PD`, `PINV`, `PTC`, `PS`, `PQ`, checkpoints
+`HP`, tasks `P0.1`…) live in the component-definitions and models files (`parts-plan.md`,
+`parts-roadmap.md`). Cite ids in commits, pull requests and log entries.
 
 The wiring files name crates `schematic-doc`, `schematic-canvas` and `schematic-bench`.
 Those are this repository's `omnia-doc`, `omnia-canvas` and `omnia-bench`.

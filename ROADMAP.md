@@ -1,6 +1,6 @@
 # Omnia project roadmap
 
-Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) provides the detailed implementation tasks beneath it, and the [wiring roadmap](wiring-roadmap.md) covers wire behaviour. The [agent-control plan](mcp-plan.md) and its [roadmap](mcp-roadmap.md) describe how agents and scripts drive Omnia through the same document commands as the editor; that surface serves the stages below and adds no product scope of its own.
+Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) provides the detailed implementation tasks beneath it, the [wiring roadmap](wiring-roadmap.md) covers wire behaviour, and the [parts plan](parts-plan.md) and [roadmap](parts-roadmap.md) cover component definitions, `.opart`/`.olib` containers and simulation model bindings. The [agent-control plan](mcp-plan.md) and its [roadmap](mcp-roadmap.md) describe how agents and scripts drive Omnia through the same document commands as the editor; that surface serves the stages below and adds no product scope of its own.
 
 This is an outcome-based roadmap, not a schedule. Stages can overlap, but a stage is complete only when its exit criteria are demonstrated. The first-release scope below is a proposed baseline; open product decisions are recorded at the end.
 
@@ -34,7 +34,7 @@ Connect component selection, placement, selection, movement, rotation, deletion,
 
 **Ready when:** a user can build an agreed example circuit without developer commands, edit it with predictable wire behavior, undo mistakes, and reopen it with its circuit data intact. File errors and unsaved changes have defined behavior.
 
-**Detailed work:** editing and final integration in the [canvas roadmap](canvas-roadmap.md), wire behavior in the wiring roadmap once it is published. Product file flows and component browsing need planning beyond test-sheet serialization.
+**Detailed work:** editing and final integration in the [canvas roadmap](canvas-roadmap.md), wire behavior in the [wiring roadmap](wiring-roadmap.md), and component definitions, `.opart`/`.olib` containers and deduplicated `.omnia` part embedding in the [parts plan](parts-plan.md) and [parts roadmap](parts-roadmap.md). Product file flows and full library browsing build on top of that schema.
 
 ## 3. Complete the simulation workflow
 
@@ -44,7 +44,7 @@ Define the connection between schematic components and simulation models, circui
 
 **Ready when:** an agreed set of reference circuits produces results within documented tolerances; invalid circuits give actionable diagnostics; a failed or cancelled run leaves the editor usable and the document intact.
 
-**Planning needed:** choose the initial engine and analysis types, define engine packaging and model licensing, and write a simulation implementation plan. The README's ngspice/RIS-C direction is an input to this decision.
+**Detailed work / planning needed:** component-to-model bindings, pin roles, typed parameters and `.omnia` embedding are specified in [parts-plan.md](parts-plan.md) (`PD1`–`PD11`) and [parts-roadmap.md](parts-roadmap.md). Still needed: choose the initial engine and analysis types, define engine packaging, and write a simulation execution plan. The README's ngspice/RIS-C direction is an input to this decision.
 
 ## 4. Complete the desktop experience
 
