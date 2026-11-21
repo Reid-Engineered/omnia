@@ -114,7 +114,9 @@ own in turn.
 ### A1.1 Doc::fork · done
 - Lane: doc · Depends: A0.2 · Read: D2, D8, INV4, INV10, AD3, AQ14
 - Owns: `Doc::fork` in `crates/omnia-doc/src/doc.rs`; `Clone` derives in `arena.rs`,
-  `points.rs`, `index.rs`, `connectivity.rs`
+  `points.rs`, `index.rs`, `connectivity.rs`; `crates/omnia-bench/benches/fork.rs` and its
+  `[[bench]]` entry; `docs/measurements/A1.1.md` and `docs/measurements/A1.1/` (widened
+  2026-11-20 by owner-delegated decision: the done-when bench needs them)
 - Do: `pub fn fork(&self) -> Doc`: every arena slot (reserved ones included), the index, the
   connectivity and the revision; empty history.
 - Done when: a property test over the T5.1 random command generator shows `fork == original`
@@ -364,6 +366,8 @@ nothing): fork of `10k`, median of run p99s 9.419 ms (range 8.222 to 13.055) ove
 17,296,160 incremental live heap bytes in 129,671 allocations per live fork
 (docs/measurements/A1.1.md). Independent review (a model other than the author): no defect in
 `fork`; added checks after undo and redo steps and a test of the unsorted junction order and
-exact `NetId`s through a fork; relabelled the size. For
+exact `NetId`s through a fork; relabelled the size. The owner delegated the follow-up
+decisions: the **Owns** line was widened to the bench and measurement files, and the campaign
+scripts stay as run. For
 A1.10: AB2's 25 ms includes this fork, and the fork's memory goes against B9. mcp-plan.md
 section 3's "no Clone, no fork" finding is now resolved by this task. No dependency added.
