@@ -353,7 +353,9 @@ Command` in `crates/omnia-symbols/src/lib.rs` builds `Command::PlacePart`, takin
 section 14. Test `a1_2_place_command_world_pins_for_every_symbol_and_orientation`: for every
 built-in symbol under all 8 `Orient::ALL`, the applied command is accepted. `Doc::pins` equals
 the `SymbolDef` pins mapped by `at + Orient::apply`, in order; the stored `Part` is the one
-built; the command carries `def.bounds`. For T5.3: the canvas place tool should build its
-`PlacePart` with `place_command`. Today `crates/omnia-canvas/src/sheet.rs` builds it by hand
-twice, at about lines 616 and 756. The task that owns that file switches them, so the place
-tool and the agent share one helper. No dependency added; nothing measured.
+built; the command carries `def.bounds`. For T5.3: the canvas place tool (`tool/place.rs`)
+builds its `PlacePart` with `place_command`, so the tool and the agent share one helper. The two
+hand-built `PlacePart`s in `crates/omnia-canvas/src/sheet.rs` (about lines 616 and 756) are test
+fixtures and may switch when that file's owner next touches it. Independent review (a model
+other than the author) found no bug; it led to a doc note that an unknown `SymbolId` panics, as
+`get` does, and to this corrected handoff. No dependency added; nothing measured.

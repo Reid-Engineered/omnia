@@ -152,6 +152,9 @@ impl SymbolLibrary {
     /// AD11). The command carries the symbol's local pins and bounds from its [`SymbolDef`], so
     /// the canvas place tool (T5.3) and the agent place parts through this one helper. `Doc`
     /// applies `orient` and `at` to them and validates the result.
+    ///
+    /// Panics, like [`Self::get`], if `id` is not in this library. A caller resolving a name
+    /// uses [`Self::by_name`] and handles a missing symbol first.
     pub fn place_command(
         &self,
         id: SymbolId,
