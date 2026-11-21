@@ -19,14 +19,14 @@ pub const INDEX_CELL_NM: i32 = 8 * GRID_NM;
 /// Cells per axis: enough to cover `-SHEET_LIMIT_NM..=SHEET_LIMIT_NM`.
 const CELLS_PER_AXIS: usize = (2 * SHEET_LIMIT_NM as i64 / INDEX_CELL_NM as i64) as usize + 1;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Entry {
     bounds: Option<Rect>,
     stamp: Cell<u32>,
 }
 
 /// One table per item kind, indexed by the arena id (ids are dense and never reused, D2).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct Entries(Vec<Entry>);
 
 impl Entries {
@@ -48,7 +48,7 @@ impl Entries {
 }
 
 /// Uniform-grid spatial index of [`ItemId`]s by bounding rectangle (D3, K12).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SpatialIndex {
     /// Row-major, `CELLS_PER_AXIS` squared; each cell lists the items whose bounds meet it.
     cells: Vec<Vec<ItemId>>,

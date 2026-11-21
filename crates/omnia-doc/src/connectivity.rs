@@ -50,7 +50,7 @@ struct LabelEntry {
     text: Arc<str>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PointSlot {
     comp: CompId,
     comp_idx: u32,
@@ -80,7 +80,7 @@ impl PointSlot {
 
 // Stable internal point slots keep graph traversal off the hash table. These are not
 // document IDs: a slot is recycled only after its last incidence has been removed.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct PointStore {
     index: FxHashMap<Pt, usize>,
     slots: Vec<Option<(Pt, PointSlot)>>,
@@ -143,7 +143,7 @@ impl std::ops::Index<&Pt> for PointStore {
 
 type LabelCounts = SmallVec<[(Arc<str>, u32); 1]>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Comp {
     net: NetId,
     net_idx: u32,
@@ -152,7 +152,7 @@ struct Comp {
     label_counts: LabelCounts,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Net {
     comps: Vec<CompId>,
     label_counts: LabelCounts,
@@ -163,7 +163,7 @@ struct Net {
 /// Each live wire belongs to a geometric connected component over the points its ends, pins and
 /// labels occupy, and geometric components sharing any net label text belong to the same
 /// [`NetId`].
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Connectivity {
     wires: Vec<Option<WireEntry>>,
     labels: Vec<Option<LabelEntry>>,

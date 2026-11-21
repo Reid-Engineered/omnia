@@ -32,6 +32,8 @@ resvg = { version = "0.46", optional = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 # gpui_platform defaults to headless-only on Linux unless a display backend is selected.
 gpui_platform = { workspace = true, features = ["wayland"] }
+# libc 0.2 (MIT OR Apache-2.0), already in the graph through GPUI: the diagnostic paint probe.
+libc = "0.2"
 
 [dev-dependencies]
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
@@ -62,4 +64,8 @@ harness = false
 
 [[bench]]
 name = "doc_io"
+harness = false
+
+[[bench]]
+name = "fork"
 harness = false
