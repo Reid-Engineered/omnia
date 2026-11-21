@@ -1407,8 +1407,9 @@ mod tests {
 
     // ---- A1.1: Doc::fork (AD3, INV4, INV10) ----
 
-    /// Derived state the fork must carry over: connectivity partitions (INV10), the index
-    /// over the whole sheet and the junction dots, compared between two documents.
+    /// Derived state the fork must carry over: connectivity partitions (INV10), the index's
+    /// answer over the whole sheet, in order, and the junction dots, compared between two
+    /// documents.
     fn assert_same_derived(a: &Doc, b: &Doc) {
         crate::connectivity::tests::assert_partitions(&a.connectivity, &b.connectivity);
         let (mut qa, mut qb) = (Vec::new(), Vec::new());
@@ -1465,6 +1466,80 @@ mod tests {
         assert_eq!(on_fork, on_doc);
         assert_eq!(on_fork.added, vec![ItemId::Part(PartId(2))]);
         assert_eq!(fork, doc);
+    }
+
+    /// AD8 determinism through a fork: the hash-map-backed outputs (unsorted junctions from the
+    /// point map, exact `NetId`s from the connectivity) come out identical, not merely
+    /// equivalent, on a sheet with several junctions and nets.
+    #[test]
+    fn a1_1_fork_keeps_hash_map_order_and_exact_net_ids() {
+        let mut doc = Doc::new();
+        let mut wires = Vec::new();
+        for i in 0..6 {
+            let x = i * 20;
+            // A cross at (x, 0) and a tee at (x, 30): two junctions per column.
+            wires.push(Wire {
+                a: Pt { x, y: -10 },
+                b: Pt { x, y: 0 },
+            });
+            wires.push(Wire {
+                a: Pt { x, y: 0 },
+                b: Pt { x, y: 10 },
+            });
+            wires.push(Wire {
+                a: Pt { x: x - 5, y: 0 },
+                b: Pt { x, y: 0 },
+            });
+            wires.push(Wire {
+                a: Pt { x, y: 0 },
+                b: Pt { x: x + 5, y: 0 },
+            });
+            wires.push(Wire {
+                a: Pt { x, y: 20 },
+                b: Pt { x, y: 30 },
+            });
+            wires.push(Wire {
+                a: Pt { x: x - 5, y: 30 },
+                b: Pt { x, y: 30 },
+            });
+            wires.push(Wire {
+                a: Pt { x, y: 30 },
+                b: Pt { x: x + 5, y: 30 },
+            });
+        }
+        doc.apply(Command::AddWires(wires)).unwrap();
+        doc.apply(Command::AddLabel(Label {
+            at: Pt { x: 0, y: 10 },
+            text: "VCC".into(),
+        }))
+        .unwrap();
+        doc.apply(Command::AddLabel(Label {
+            at: Pt { x: 100, y: 20 },
+            text: "VCC".into(),
+        }))
+        .unwrap();
+        let fork = doc.fork();
+
+        let (mut ja, mut jb) = (Vec::new(), Vec::new());
+        doc.junctions(sheet(), &mut ja);
+        fork.junctions(sheet(), &mut jb);
+        assert!(
+            ja.len() >= 12,
+            "fixture must have several junctions: {ja:?}"
+        );
+        assert_eq!(ja, jb, "unsorted junction order must survive the fork");
+
+        let mut nets = Vec::new();
+        for (id, wire) in doc.wires() {
+            assert_eq!(fork.net_of(id), doc.net_of(id));
+            for at in [wire.a, wire.b] {
+                assert_eq!(fork.net_at(at), doc.net_at(at));
+            }
+            nets.extend(doc.net_of(id));
+        }
+        nets.sort();
+        nets.dedup();
+        assert!(nets.len() >= 6, "fixture must have several nets: {nets:?}");
     }
 
     #[test]
@@ -1775,11 +1850,18 @@ mod tests {
                 assert_same_derived(&fork, &doc);
                 prop_assert!(!fork.can_undo() && !fork.can_redo());
                 match step {
-                    GenStep::Undo => {
-                        doc.undo();
-                    }
-                    GenStep::Redo => {
-                        doc.redo();
+                    GenStep::Undo | GenStep::Redo => {
+                        if matches!(step, GenStep::Undo) {
+                            doc.undo();
+                        } else {
+                            doc.redo();
+                        }
+                        // The state undo or redo reached, checked now so a sequence that
+                        // ends here is covered too.
+                        let after = doc.fork();
+                        prop_assert_eq!(&after, &doc);
+                        assert_same_derived(&after, &doc);
+                        assert_inv10(&after);
                     }
                     step => {
                         let cmd = step_command(&doc, step);

@@ -361,6 +361,9 @@ touch, so the test mirrors it with the same steps, weights, ranges and mapping. 
 bench needed `crates/omnia-bench/benches/fork.rs` and its `[[bench]]` entry, outside **Owns**.
 Bench, non-reference (Windows development laptop, i7-14650HX, on battery, Silent scheme; certifies
 nothing): fork of `10k`, median of run p99s 9.419 ms (range 8.222 to 13.055) over 10 runs, and
-17,296,160 heap bytes in 129,671 allocations per live fork (docs/measurements/A1.1.md). For
+17,296,160 incremental live heap bytes in 129,671 allocations per live fork
+(docs/measurements/A1.1.md). Independent review (a model other than the author): no defect in
+`fork`; added checks after undo and redo steps and a test of the unsorted junction order and
+exact `NetId`s through a fork; relabelled the size. For
 A1.10: AB2's 25 ms includes this fork, and the fork's memory goes against B9. mcp-plan.md
 section 3's "no Clone, no fork" finding is now resolved by this task. No dependency added.
