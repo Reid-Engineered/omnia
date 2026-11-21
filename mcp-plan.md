@@ -547,15 +547,14 @@ binds a commit to its preview and an approval to an effect. It is not a security
 - MCP: `progressToken` maps to `notifications/progress`; `notifications/cancelled` sets the
   token. If the pinned revision (AK1) has a native task primitive, jobs map onto it; otherwise
   the job tools and `omnia://jobs/{id}` with subscriptions are used, and nothing polls.
-  The rule is applied per era. Checked at A0.2 (2026-11-20): 2025-06-18 has no task primitive;
-  2025-11-25 added Tasks to the core, marked experimental and negotiated by capability;
-  2026-07-28 moved them out of the core into the optional `io.modelcontextprotocol/tasks`
-  extension. So under this rule a 2025-11-25 session maps jobs onto Tasks when the client
-  negotiates them, and every other session uses the job tools with `omnia://jobs/{id}`,
-  subscribed through `resources/subscribe` or `subscriptions/listen` by era (10.5). The job
-  tools stay available in every era. Once the tool call that returns a job handle completes,
-  later job updates go through that resource subscription, not `notifications/progress`, which
-  stops when its request completes. A3.2 builds this.
+  Checked at A0.2 (2026-11-20): 2025-06-18 has no task primitive; 2025-11-25 added Tasks to
+  the core, marked experimental and negotiated by capability; 2026-07-28 moved them out of the
+  core into the optional `io.modelcontextprotocol/tasks` extension. An experimental or
+  extension primitive does not count as native here (AQ15): every era uses the job tools with
+  `omnia://jobs/{id}`, subscribed through `resources/subscribe` or `subscriptions/listen` by
+  era (10.5), and Omnia never advertises the Tasks capability. Once the tool call that returns
+  a job handle completes, later job updates go through that resource subscription, not
+  `notifications/progress`, which stops when its request completes. A3.2 builds this.
 
 ### 11.6 App mode (A4)
 
@@ -747,9 +746,12 @@ Each has a default. Build to the default; the owner's answer replaces it here.
 | AQ12 | File format for agents | RON v2 test sheets only, labelled as not a product format, until a file plan exists | Default kept. `docs/file-format-proposal.md` now exists but is a proposal; agents move to the product format only when that proposal is decided and a task adds it to the schema. |
 | AQ13 | Build a network transport? | No (HA3) | Default kept: no. HA3 still decides it before any A5 work. |
 | AQ14 | May A1.1 change `omnia-doc` while T2.8 (`blocked`) lists the crate as owned? | Yes: A1.1 touches `fork` and `Clone` derives only, disjoint from T2.8's open measurement | Default kept. Moot since T2.8 is `done`: no other task now lists all of `omnia-doc` as owned. |
+| AQ15 | Map jobs onto the experimental core Tasks of 2025-11-25, or the 2026-07-28 tasks extension? | No: job tools in every era (11.5) | **Answered (owner-delegated):** default adopted. One path in every era; Tasks are experimental in 2025-11-25 and only an optional extension in 2026-07-28. Revisit if a pinned revision makes tasks core and stable. |
 
 HA1 was held on 2026-11-20: the owner delegated it to the agent, asked only AQ2 (because
-the newest revision changed what the default meant), and kept every other default.
+the newest revision changed what the default meant), and kept every other default. AQ15 was
+added after HA1, when review found that 2025-11-25 has experimental core Tasks; the owner
+delegated it the same day.
 
 ## 17. Changes to other files
 

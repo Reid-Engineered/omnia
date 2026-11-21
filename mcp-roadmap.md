@@ -260,7 +260,8 @@ own in turn.
 - Lane: agent · Depends: A3.1 · Read: mcp-plan.md section 10.4
 - Owns: `crates/omnia-cli/src/mcp.rs` (jobs and subscriptions)
 - Done when: transcript tests cover progress, cancellation and resource-updated notifications,
-  in both protocol eras (`resources/subscribe` and `subscriptions/listen`, section 10.5).
+  in both protocol eras (`resources/subscribe` and `subscriptions/listen`, section 10.5); no
+  era advertises the Tasks capability (AQ15).
 
 ### A3.3 First long job: large atomic batch · todo
 - Lane: agent · Depends: A3.2
