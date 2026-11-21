@@ -29,7 +29,8 @@ Status words are the canvas plan's (**DECIDED**, **DEFAULT**, **HYPOTHESIS**), t
 plan's **GATED**, and one more:
 
 - **PROPOSED**: written by the plan author. Becomes DECIDED, or is amended, at HA1. Build
-  nothing from a PROPOSED entry before HA1.
+  nothing from a PROPOSED entry before HA1. HA1 was held on 2026-11-20 (A0.2); no entry is
+  PROPOSED now.
 
 The Model Context Protocol is named here as an open protocol standard, as Vulkan and Wayland
 are named in the canvas plan (AQ8). No other company or product is named.
@@ -91,7 +92,7 @@ budgets still apply; these are added. AB1 to AB3 are chosen figures, not derived
 
 | ID | Constant | Value |
 | --- | --- | --- |
-| AK1 | Protocol revisions | The newest stable MCP revision published at A0.2, negotiated down to a minimum of 2025-06-18 (the first revision with structured tool output and `outputSchema`). The pinned list is recorded here at A0.2. |
+| AK1 | Protocol revisions | Pinned at A0.2 (2026-11-20) from the published specification's versioning page, which names 2026-07-28 as current: **2026-07-28**, **2025-11-25** and **2025-06-18**, newest first. 2025-06-18 is the minimum: the first revision with structured tool output and `outputSchema`. 2026-07-28 is stateless; the two older ones are handshake revisions. The server speaks both eras (section 10.5). |
 | AK2 | Request size; file size on open | 8 MiB each |
 | AK3 | Operations per request | 4,096 |
 | AK4 | Page size | 500 by default, 5,000 at most |
@@ -149,9 +150,10 @@ canvas through the path a tool commit uses (D7).
 
 ## 6. Decisions
 
-All PROPOSED until HA1.
+All DECIDED at HA1 on 2026-11-20. The owner delegated HA1 to the agent on that date: every
+AD below was kept as written, except where an amendment names its date.
 
-### AD1 One service, many transports. PROPOSED
+### AD1 One service, many transports. DECIDED
 
 - `AgentService` in `omnia-agent` handles every request. MCP, the one-shot command line and
   JSON-lines are adapters in `omnia-cli` that only parse and print.
@@ -160,7 +162,7 @@ All PROPOSED until HA1.
 - The service is synchronous and has no async runtime. Each transport owns its I/O; the host
   drives jobs (section 11).
 
-### AD2 Commands are the only way to edit. PROPOSED
+### AD2 Commands are the only way to edit. DECIDED
 
 - Agent edits are `omnia_doc::Command`s applied through `Doc::apply`, `undo` and `redo`.
 - Edit operations map one to one onto `Command` variants (section 9.2). A request with more
@@ -171,7 +173,7 @@ All PROPOSED until HA1.
   (D2), so an end placed at a pin's point connects to it. An agent that needs new ids previews
   first and reads the predicted ids.
 
-### AD3 Preview runs the commit's code. PROPOSED
+### AD3 Preview runs the commit's code. DECIDED
 
 - `preview` forks the document (`Doc::fork`, A1.1) and calls `Doc::apply` on the fork, then
   diffs the two documents over `Change.dirty`.
@@ -183,27 +185,27 @@ All PROPOSED until HA1.
   that can drift from `apply`). The canvas keeps its own fast previews, such as `plan_follow`,
   which `apply` also calls (WINV5).
 
-### AD4 Optimistic concurrency on the revision. PROPOSED
+### AD4 Optimistic concurrency on the revision. DECIDED
 
 - Every mutating request carries `expected_revision`. A mismatch with `Doc::revision()` is
   refused with `stale_revision` and changes nothing.
 - Every response carries `revision`. There are no locks and no leases.
 - Requests to one document are handled one at a time on the thread that owns it (D8).
 
-### AD5 One request, one undo step. PROPOSED
+### AD5 One request, one undo step. DECIDED
 
 - A request applies one `Command`, which is atomic and is one undo step.
 - There is one history per document. In app mode agent commits are ordinary undo steps that
   the person can undo.
 
-### AD6 Structured errors. PROPOSED
+### AD6 Structured errors. DECIDED
 
 - Every failure has a stable snake_case `code`, a `message`, `retryable`, typed `details` and
   an optional `hint` (section 9.4).
 - `CommandError` maps to codes through an exhaustive `match` with no wildcard arm, so a new
   variant fails to compile until it has a code (AINV10).
 
-### AD7 Approval tiers in the service. PROPOSED
+### AD7 Approval tiers in the service. DECIDED
 
 Enforced in `omnia-agent`, not in any user interface, so every surface meets the same guard.
 
@@ -214,7 +216,7 @@ Enforced in `omnia-agent`, not in any user interface, so every surface meets the
 | 2 | Write a new file inside roots | Allowed | The person approves |
 | 3 | Irreversible: overwrite a file, discard unsaved changes | Refused with `approval_required` and an `effect_digest`; the retry must echo that digest. The tool is annotated destructive so the client asks its user. | The person approves in the app. The agent cannot approve itself. |
 
-### AD8 Determinism. PROPOSED
+### AD8 Determinism. DECIDED
 
 - Arrays in responses are sorted: items by kind then id; `Change.added` and `removed` sorted,
   although `Doc` treats them as unordered sets.
@@ -223,34 +225,34 @@ Enforced in `omnia-agent`, not in any user interface, so every surface meets the
 - DTOs contain no hash maps and no floats; field order is fixed by struct order.
 - The same document and request give byte-identical JSON (AINV5).
 
-### AD9 No GUI input automation. PROPOSED
+### AD9 No GUI input automation. DECIDED
 
 No tool clicks, drags, types into or screenshots the window. Agents edit through commands.
 Visual checks use the SVG render (A2.4).
 
-### AD10 The agent surface never touches the project process. PROPOSED
+### AD10 The agent surface never touches the project process. DECIDED
 
 No tool reads or writes plans, roadmaps or `docs/measurements`, runs a gate campaign, answers
 an `H*`, `HW*` or `HA*` checkpoint, or marks a budget met. Human checkpoints stay explicit.
 
-### AD11 Parts are placed by symbol name. PROPOSED
+### AD11 Parts are placed by symbol name. DECIDED
 
 `place_part` names a symbol (`Resistor-IEEE-Standard`). Pins and bounds come from
 `SymbolLibrary::place_command` (A1.2), the same helper the canvas place tool uses.
 
-### AD12 Units and ids. PROPOSED
+### AD12 Units and ids. DECIDED
 
 - Points are integer nanometres (AK8). Floats never appear in the schema.
 - Ids are typed strings, 0-based like the arenas: `part:3`, `wire:7`, `label:2` (AQ5).
 - Orientations are named after the `Orient` constants in `geom.rs`: `identity`, `rot_90`,
   `rot_180`, `rot_270`, `flip_x`, `flip_x_rot_90`, `flip_y`, `flip_x_rot_270`.
 
-### AD13 Headless first, app-hosted later. PROPOSED
+### AD13 Headless first, app-hosted later. DECIDED
 
 Milestones A1 to A3 run headless on files. A4 hosts the same service in the app through a
 `DocHost` adapter over `Entity<Doc>`. Nothing in A1 to A3 depends on GPUI.
 
-### AD14 Document text is untrusted data. PROPOSED
+### AD14 Document text is untrusted data. DECIDED
 
 Designators, values and label text are returned only inside typed fields, never spliced into
 tool descriptions, prompts or messages. Tool and prompt descriptions are static strings in
@@ -450,12 +452,42 @@ Static, versioned with the schema, each with a transcript fixture:
 The catalog is fixed for a mode, so `tools/list_changed` is sent only when app mode attaches
 or detaches (A4). stdout carries only protocol messages; logs go to stderr.
 
+The table is the handshake era's (2025-11-25 and 2025-06-18). Section 10.5 gives the
+stateless era's forms.
+
+### 10.5 Protocol eras (AK1)
+
+Added at A0.2 (2026-11-20). The pinned revisions span two eras, and one `omnia mcp` process
+serves both (AQ2). The service, tools, resources and response bytes are the same in both; only
+the framing in `mcp.rs` differs. A1.8 reads the pinned specification pages before coding, as
+for GPUI; the summary below is what A0.2 read and is not a substitute.
+
+| | Handshake era: 2025-11-25, 2025-06-18 | Stateless era: 2026-07-28 |
+| --- | --- | --- |
+| Version | `initialize` negotiates one revision for the process | Each request names its revision in `_meta` (`io.modelcontextprotocol/protocolVersion`); there is no handshake |
+| Unknown version | Answer `initialize` with 2025-11-25, the newest handshake revision pinned | `UnsupportedProtocolVersionError` (`-32022`) with `data.supported` listing AK1 |
+| Discovery | `initialize` result | `server/discover`, which the server must implement |
+| Results | As in 10.1 | As in 10.1, plus `resultType: "complete"`; `tools/list` carries `ttlMs` and `cacheScope` |
+| Subscriptions | `resources/subscribe`, then `notifications/resources/updated` | `subscriptions/listen` |
+| Logging | `logging/setLevel`, then `notifications/message` | `notifications/message` only when the request carries `io.modelcontextprotocol/logLevel` |
+| Liveness | `ping` | None (removed) |
+| Progress, cancel | `notifications/progress`, `notifications/cancelled` | The same, on the stdout stream of the request they belong to |
+| Server-to-client requests | None used | None: the server never sends a request |
+
+Selection on stdio: if the first message is `initialize`, the process runs in the handshake
+era for its lifetime; otherwise every request is handled by its `_meta` revision. A message of
+the other era after that is a protocol error. No era is chosen by guessing from other fields.
+The stateless era forbids relying on per-connection state; on stdio a session is the process
+(11.1), and every document is named by an explicit `doc_id` argument, so nothing depends on
+which request came first.
+
 ## 11. Semantics
 
 ### 11.1 Sessions and documents
 
 - A session is one transport connection: one stdio process, one JSON-lines stream, later one
-  HTTP session.
+  HTTP session. In the stateless protocol era (10.5) the stdio session is still the process;
+  state is reached only through explicit `doc_id`, `job_id` and idempotency-key arguments.
 - A session holds its open documents (`doc_id` → document, path, `saved_revision`), its
   `WiringPrefs` (WK10 defaults), its idempotency cache, its approval grants and its jobs.
 - `doc_id`s are never reused within a session. A document is dirty when
@@ -504,6 +536,9 @@ binds a commit to its preview and an approval to an effect. It is not a security
 - MCP: `progressToken` maps to `notifications/progress`; `notifications/cancelled` sets the
   token. If the pinned revision (AK1) has a native task primitive, jobs map onto it; otherwise
   the job tools and `omnia://jobs/{id}` with subscriptions are used, and nothing polls.
+  Checked at A0.2 (2026-11-20): none of the AK1 revisions has a core task primitive (2026-07-28
+  moved tasks to an optional extension), so the job tools are used, subscribed through
+  `resources/subscribe` or `subscriptions/listen` by era (10.5).
 
 ### 11.6 App mode (A4)
 
@@ -679,22 +714,25 @@ dependency not listed there needs its licence logged before it is added (AGENTS.
 
 Each has a default. Build to the default; the owner's answer replaces it here.
 
-| ID | Question | Default until answered |
-| --- | --- | --- |
-| AQ1 | Hand-written JSON-RPC over stdio, or an MCP SDK crate (which pulls in an async runtime)? | Hand-written. Revisit at A5. |
-| AQ2 | Which protocol revisions are pinned (AK1)? | The newest stable revision at A0.2, down to 2025-06-18 |
-| AQ3 | Adopt a crate that generates JSON Schemas from types? | No: a hand-written schema module and a no-diff test |
-| AQ4 | Headless approval policy | Tier 1 allowed; tier 2 inside roots allowed; tier 3 needs the echoed digest |
-| AQ5 | Id string format | `part:3`, `wire:7`, `label:2` |
-| AQ6 | Units besides nanometres? | Nanometres only; capabilities report `grid_nm` |
-| AQ7 | In app mode, does every agent edit need the person's approval? | Yes, per request, until the person turns on "approve undoable edits for this session" |
-| AQ8 | AGENTS rule 1 and the protocol's name | Name MCP as an open protocol standard; name no vendor or product |
-| AQ9 | Crate split | `omnia-agent` (library) and `omnia-cli` (binary `omnia`) |
-| AQ10 | Preview and approval hash | FxHash locally; SHA-256 (new dependency, licence review) only if A5 is built |
-| AQ11 | Idempotency retention | AK5 entries per session, in memory, not persisted |
-| AQ12 | File format for agents | RON v2 test sheets only, labelled as not a product format, until a file plan exists |
-| AQ13 | Build a network transport? | No (HA3) |
-| AQ14 | May A1.1 change `omnia-doc` while T2.8 (`blocked`) lists the crate as owned? | Yes: A1.1 touches `fork` and `Clone` derives only, disjoint from T2.8's open measurement |
+| ID | Question | Default | Answer (2026-11-20) |
+| --- | --- | --- | --- |
+| AQ1 | Hand-written JSON-RPC over stdio, or an MCP SDK crate (which pulls in an async runtime)? | Hand-written. Revisit at A5. | Default kept: hand-written. The stateless era (10.5) needs no async runtime either. |
+| AQ2 | Which protocol revisions are pinned (AK1)? | The newest stable revision at A0.2, down to 2025-06-18 | **Answered:** both eras, 2026-07-28 down to 2025-06-18, as pinned in AK1 and 10.5. Chosen over handshake-only and stateless-only. |
+| AQ3 | Adopt a crate that generates JSON Schemas from types? | No: a hand-written schema module and a no-diff test | Default kept. |
+| AQ4 | Headless approval policy | Tier 1 allowed; tier 2 inside roots allowed; tier 3 needs the echoed digest | Default kept. |
+| AQ5 | Id string format | `part:3`, `wire:7`, `label:2` | Default kept. |
+| AQ6 | Units besides nanometres? | Nanometres only; capabilities report `grid_nm` | Default kept. |
+| AQ7 | In app mode, does every agent edit need the person's approval? | Yes, per request, until the person turns on "approve undoable edits for this session" | Default kept. |
+| AQ8 | AGENTS rule 1 and the protocol's name | Name MCP as an open protocol standard; name no vendor or product | Default kept. |
+| AQ9 | Crate split | `omnia-agent` (library) and `omnia-cli` (binary `omnia`) | Default kept. |
+| AQ10 | Preview and approval hash | FxHash locally; SHA-256 (new dependency, licence review) only if A5 is built | Default kept. |
+| AQ11 | Idempotency retention | AK5 entries per session, in memory, not persisted | Default kept. |
+| AQ12 | File format for agents | RON v2 test sheets only, labelled as not a product format, until a file plan exists | Default kept. `docs/file-format-proposal.md` now exists but is a proposal; agents move to the product format only when that proposal is decided and a task adds it to the schema. |
+| AQ13 | Build a network transport? | No (HA3) | Default kept: no. HA3 still decides it before any A5 work. |
+| AQ14 | May A1.1 change `omnia-doc` while T2.8 (`blocked`) lists the crate as owned? | Yes: A1.1 touches `fork` and `Clone` derives only, disjoint from T2.8's open measurement | Default kept. Moot since T2.8 is `done`: no other task now lists all of `omnia-doc` as owned. |
+
+HA1 was held on 2026-11-20: the owner delegated it to the agent, asked only AQ2 (because
+the newest revision changed what the default meant), and kept every other default.
 
 ## 17. Changes to other files
 
