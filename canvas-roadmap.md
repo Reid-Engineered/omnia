@@ -1635,6 +1635,11 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        needed for the cargo xtask golden command); the workspace Cargo.toml
                        gains the tests/golden member; canvas-plan.md section 10 now lists
                        image as a normal dependency of the test-only omnia-golden crate.
+2026-11-17 T2.7 blocked (B3/B4 present intervals) — Ran the fixed Orion Q4 campaign at
+100% and 125%. All 120 invocations completed and replay matched the reference summary.
+B2, frame-time p99, B5, B9 and B10 passed. Five counted intervals missed B3 (one 1k pan)
+or B4 (four 10k zoom). The tested renderer already implements far-zoom simplification.
+D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.md).
 2026-11-18 T2.7 needs-human — Owner decision: scope B4 so 10k far zoom is a known limit,
                        and plan option B (T2.9). Investigation of the 2026-11-17 wire-cache
                        campaign: all five counted B4 intervals (49.6 to 54.8 ms) fall in
@@ -1707,7 +1712,7 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        2.42 R in s125/10k-zoom-8), within B4. §2.1 disclosure: harness/agent
                        processes (t3code, cloudflared, agy_acp_server in all 240 snapshots;
                        claude in 23; baloo_file_extr in 8; gh in 2) ran during the campaign
-                       (conservative toward failure; noted for owner acknowledgement). Archive
+                       (conservative toward failure; owner acknowledged 2026-11-20 under Hard Rule 3). Archive
                        replays byte-identically (exit 0). T2.9 remains planned for balanced/
                        powersave laptop headroom and to remove the B4 known limit.
                        Evidence: docs/measurements/T2.7-wire/orion-2026-11-20-performance/.

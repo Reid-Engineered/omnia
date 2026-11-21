@@ -100,7 +100,7 @@ own in turn.
 - Done when: every `A`-prefixed id is defined once and every reference resolves; no statement
   contradicts a `D`, `WD`, `INV` or `WINV`; the rule-1 scan is logged.
 
-### A0.2 Owner decisions · todo → HA1
+### A0.2 Owner decisions · done → HA1
 - Lane: any · Depends: A0.1 · Read: mcp-plan.md sections 6 and 16
 - Owns: mcp-plan.md sections 4 (AK1), 6 and 16
 - Do: set this task to `needs-human`. The owner answers AQ1 to AQ14 and reviews AD1 to AD14.
@@ -180,9 +180,13 @@ own in turn.
 ### A1.8 MCP over stdio · todo
 - Lane: agent · Depends: A1.7 · Read: mcp-plan.md section 10; AK1; AQ1
 - Owns: `crates/omnia-cli/src/mcp.rs`, `crates/omnia-cli/tests/transcripts/`
-- Do: initialize and revision negotiation; `tools/list` with input and output schemas and
-  annotations; `tools/call` with `structuredContent` and a text block; resources (list, read,
-  subscribe); prompts; ping; logging; `notifications/cancelled`.
+- Do: both protocol eras per mcp-plan.md section 10.5 (amended at A0.2): Omnia's one-era-per-
+  process selection on the first valid request; `initialize` and `ping` for the handshake era;
+  per-request `_meta` revision and client capabilities, `server/discover`, caching hints and
+  `UnsupportedProtocolVersionError` for the stateless era; `tools/list`
+  with input and output schemas and annotations; `tools/call` with `structuredContent` and a
+  text block; resources (list, read, and subscribe in each era's form); prompts; logging;
+  `notifications/cancelled`. Read the pinned specification pages first.
 - Done when: ATC-mcp-01 and ATC-mcp-02 pass as exact transcripts on the CI runner; the
   prompts each have a fixture.
 
@@ -255,7 +259,8 @@ own in turn.
 ### A3.2 Progress, cancellation and subscriptions over MCP · todo
 - Lane: agent · Depends: A3.1 · Read: mcp-plan.md section 10.4
 - Owns: `crates/omnia-cli/src/mcp.rs` (jobs and subscriptions)
-- Done when: transcript tests cover progress, cancellation and resource-updated notifications.
+- Done when: transcript tests cover progress, cancellation and resource-updated notifications,
+  in both protocol eras (`resources/subscribe` and `subscriptions/listen`, section 10.5).
 
 ### A3.3 First long job: large atomic batch · todo
 - Lane: agent · Depends: A3.2
@@ -320,3 +325,24 @@ the canvas plan sketches (schema v1 follows the code); `Doc` has no fork or snap
 T2.8 lists all of `omnia-doc` as owned while blocked (AQ14). No id collides with an existing
 one. Rule-1 scan: the new and changed files name no other company or product; MCP is named as
 an open protocol standard (AQ8). Docs only; nothing measured; no dependency added.
+
+2026-11-20 A0.2 done — HA1 held: the owner delegated it to the agent this date. Every AD
+(AD1 to AD14) is DECIDED as written. AQ1 and AQ3 to AQ14 keep their defaults; AQ12 notes the
+new `docs/file-format-proposal.md` (still a proposal, so RON test sheets stay); AQ14 is moot
+now that T2.8 is `done`. AQ2 was put to the owner, because the published specification now
+names 2026-07-28 as current, and that revision is stateless (no `initialize`, version in each
+request's `_meta`, `server/discover`, no `ping`, `subscriptions/listen`). Answer: both eras.
+AK1 pins 2026-07-28, 2025-11-25 and 2025-06-18. With the owner's approval A0.2 also amended
+sections 10 (new 10.5, protocol eras), 11.1 and 11.5 of mcp-plan.md and the A1.8 and A3.2 task
+text, so the plan stays true (AGENTS "keep the plans true"). 11.5 records the task timeline:
+none in 2025-06-18, experimental Tasks in the 2025-11-25 core, an optional extension in
+2026-07-28. Its existing rule therefore maps jobs onto Tasks only in a 2025-11-25 session that
+negotiates them; job tools everywhere else. Independent review (a model other than the
+author) checked 10.5, AK1 and 11.5 against the published specification. Fixed from it: the
+2025-11-25 Tasks claim; progress and cancel share one stdio channel each way; the envelopes,
+not the payloads, differ by era; the full caching-hint list; required `clientCapabilities`
+metadata and the `-32602` and `data.requested` error details; era selection labelled as Omnia's
+policy; "session" in the stateless era as a storage lifetime only; protocol logging deprecated
+in 2026-07-28. Next: A1.8 reads the pinned specification pages before coding; 10.5 is a
+summary. Rule-1 scan done on the changed files. Docs only; nothing measured; no dependency
+added.
