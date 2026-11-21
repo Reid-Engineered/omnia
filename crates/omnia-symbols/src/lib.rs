@@ -2,7 +2,7 @@
 
 use std::{io::Write as _, sync::Arc};
 
-use omnia_doc::{Pt, Rect};
+use omnia_doc::{Command, Orient, Part, Pt, Rect};
 
 mod generated;
 
@@ -148,6 +148,35 @@ impl SymbolLibrary {
             .map(|def| def.id)
     }
 
+    /// Builds the [`Command::PlacePart`] that places symbol `id` at `at` with `orient` (A1.2,
+    /// AD11). The command carries the symbol's local pins and bounds from its [`SymbolDef`], so
+    /// the canvas place tool (T5.3) and the agent place parts through this one helper. `Doc`
+    /// applies `orient` and `at` to them and validates the result.
+    ///
+    /// Panics, like [`Self::get`], if `id` is not in this library. A caller resolving a name
+    /// uses [`Self::by_name`] and handles a missing symbol first.
+    pub fn place_command(
+        &self,
+        id: SymbolId,
+        at: Pt,
+        orient: Orient,
+        designator: Arc<str>,
+        value: Arc<str>,
+    ) -> Command {
+        let def = self.get(id);
+        Command::PlacePart {
+            part: Part {
+                symbol: id,
+                at,
+                orient,
+                designator,
+                value,
+            },
+            local_pins: def.pins.iter().map(|pin| pin.at).collect(),
+            local_bounds: def.bounds,
+        }
+    }
+
     /// Iterates over all symbols in the library in deterministic ID order.
     pub fn iter(&self) -> impl Iterator<Item = &SymbolDef> {
         self.defs.iter()
@@ -163,5 +192,66 @@ impl SymbolLibrary {
     #[inline]
     pub const fn is_empty(&self) -> bool {
         self.defs.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omnia_doc::{Doc, ItemId, PIN_LATTICE_NM};
+
+    /// A1.2 done-when (AD11): for every built-in symbol under all 8 orientations, applying
+    /// `place_command` gives the world pins `Doc::pins` reports, equal to the `SymbolDef` pins
+    /// transformed by `Orient::apply` and offset by the placement point, in pin order.
+    #[test]
+    fn a1_2_place_command_world_pins_for_every_symbol_and_orientation() {
+        let library = SymbolLibrary::builtin();
+        assert!(!library.is_empty());
+        let at = Pt {
+            x: 7 * PIN_LATTICE_NM,
+            y: -3 * PIN_LATTICE_NM,
+        };
+        let mut placed = 0;
+        for def in library.iter() {
+            for orient in Orient::ALL {
+                let mut doc = Doc::new();
+                let cmd = library.place_command(def.id, at, orient, "U1".into(), "v".into());
+                let Command::PlacePart {
+                    part,
+                    local_pins,
+                    local_bounds,
+                } = &cmd
+                else {
+                    panic!("place_command must build PlacePart");
+                };
+                assert_eq!(part.symbol, def.id);
+                assert_eq!((part.at, part.orient), (at, orient));
+                assert_eq!((&*part.designator, &*part.value), ("U1", "v"));
+                assert_eq!(*local_bounds, def.bounds);
+                assert_eq!(local_pins.len(), def.pins.len());
+                let part = part.clone();
+
+                let change = doc.apply(cmd).unwrap_or_else(|e| {
+                    panic!("placing {} at {orient:?} was refused: {e:?}", def.name)
+                });
+                let [ItemId::Part(id)] = change.added[..] else {
+                    panic!("expected one added part, got {:?}", change.added);
+                };
+                let expected: Vec<Pt> = def
+                    .pins
+                    .iter()
+                    .map(|pin| at + orient.apply(pin.at))
+                    .collect();
+                assert_eq!(
+                    doc.pins(id).unwrap(),
+                    expected.as_slice(),
+                    "{} at {orient:?}",
+                    def.name
+                );
+                assert_eq!(doc.part(id), Some(&part));
+                placed += 1;
+            }
+        }
+        assert_eq!(placed, library.len() * 8);
     }
 }

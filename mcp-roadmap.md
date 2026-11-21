@@ -124,7 +124,7 @@ own in turn.
   documents and INV10; a criterion bench records fork time and size on `10k` (non-reference
   machine, labelled).
 
-### A1.2 Place-part helper · todo
+### A1.2 Place-part helper · done
 - Lane: assets · Depends: A0.2 · Read: K2, K7, AD11, canvas-plan.md section 9 (`PlacePart`)
 - Owns: `crates/omnia-symbols/src/lib.rs` (`SymbolLibrary::place_command`)
 - Do: build `Command::PlacePart` from a `SymbolId`, position, orientation, designator and
@@ -371,3 +371,16 @@ decisions: the **Owns** line was widened to the bench and measurement files, and
 scripts stay as run. For
 A1.10: AB2's 25 ms includes this fork, and the fork's memory goes against B9. mcp-plan.md
 section 3's "no Clone, no fork" finding is now resolved by this task. No dependency added.
+
+2026-11-20 A1.2 done — `SymbolLibrary::place_command(id, at, orient, designator, value) ->
+Command` in `crates/omnia-symbols/src/lib.rs` builds `Command::PlacePart`, taking the local pins
+(in pin order) and the bounds from the `SymbolDef` (AD11). The signature is as in mcp-plan.md
+section 14. Test `a1_2_place_command_world_pins_for_every_symbol_and_orientation`: for every
+built-in symbol under all 8 `Orient::ALL`, the applied command is accepted. `Doc::pins` equals
+the `SymbolDef` pins mapped by `at + Orient::apply`, in order; the stored `Part` is the one
+built; the command carries `def.bounds`. For T5.3: the canvas place tool (`tool/place.rs`)
+builds its `PlacePart` with `place_command`, so the tool and the agent share one helper. The two
+hand-built `PlacePart`s in `crates/omnia-canvas/src/sheet.rs` (about lines 612 and 752) are test
+fixtures and may switch when that file's owner next touches it. Independent review (a model
+other than the author) found no bug; it led to a doc note that an unknown `SymbolId` panics, as
+`get` does, and to this corrected handoff. No dependency added; nothing measured.
