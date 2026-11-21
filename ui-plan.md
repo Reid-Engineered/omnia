@@ -55,7 +55,9 @@ In scope:
 Out of scope: canvas behaviour (the shell hosts `SheetCanvas` and calls its public methods);
 simulation internals, models, netlists, instrument signal processing and result plots (the
 shell reserves their places and the states idle, running, paused, failed); a component library
-browser beyond what placement needs; printing; packaging, installers and updates; multiple
+browser and property inspector beyond what placement needs (the data model is in
+[parts-plan.md](parts-plan.md); Part Libraries and inspector UI will consume
+`omnia-parts::Catalog` and `Doc::part_defs`); printing; packaging, installers and updates; multiple
 top-level workspace windows; multi-sheet designs and project containers (UQ3).
 
 Repository facts this plan builds on:

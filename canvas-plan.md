@@ -509,7 +509,7 @@ pub struct PartId(u32);  pub struct WireId(u32);  pub struct LabelId(u32);  pub 
 pub enum ItemId { Part(PartId), Wire(WireId), Label(LabelId) }
 
 pub struct Part { pub symbol: SymbolId, pub at: Pt, pub orient: Orient,
-                  pub designator: Arc<str>, pub value: Arc<str> }
+                  pub designator: Arc<str>, pub value: Arc<str> } // P2.1 (parts-plan.md PD8): adds def: PartDefId and params overrides
 pub struct Wire { pub a: Pt, pub b: Pt }                  // INV1
 pub struct Label { pub at: Pt, pub text: Arc<str> }
 
@@ -526,6 +526,7 @@ pub enum Command {
     DragSegment { wire: WireId, offset: i32 }, // wiring-plan.md WD7 (W3.2); nm, signed
     Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false)
     SetText { item: ItemId, field: TextField, text: Arc<str> },
+    // P2.2 (parts-plan.md PD8): SetParam { part, name, value } and UpdatePartDef { from, to }
     Paste { clip: Clip, at: Pt },
     Batch(Vec<Command>),
 }
@@ -575,6 +576,8 @@ impl Doc {
     pub fn save(&self, w: impl io::Write) -> io::Result<()>;
     pub fn load(r: impl io::Read) -> io::Result<Self>;
     // Version 2 RON embeds local bounds and pins (omnia-symbols depends on omnia-doc).
+    // P2.3 (parts-plan.md PD3, PD8, PK9): Version 3 adds the deduplicated part_defs table and per-part def/params; v2 remains loadable.
+    // P2.1 also adds part_def, part_defs and resolved_param queries on Doc.
     // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points, index and connectivity.
     pub fn content_eq(&self, other: &Self) -> bool; // live items, exact live IDs, interior gaps, bounds/pins
     // PartialEq compares persistent state, including revision and every reserved slot (pre-T5.1 contract).

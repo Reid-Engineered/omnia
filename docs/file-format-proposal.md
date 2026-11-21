@@ -54,7 +54,7 @@ Header (32 bytes, fixed)
   reserved     4   zero
 
 Section table (section_cnt × 24 bytes)
-  kind   u32   e.g. META, STRINGS, PARTS, WIRES, LABELS, SYMBOLS
+  kind   u32   e.g. META, STRINGS, PARTS, WIRES, LABELS, SYMBOLS, PART_DEFS
   flags  u32   bit 0 compressed, bit 1 must-understand
   offset u64
   len    u32   stored length
@@ -71,6 +71,9 @@ Sections, in kind order, then a trailer:
 - **`STRINGS`**: designators and values interned once, referenced by `u32` index.
 - **`SYMBOLS`**: the local pins and bounds each used symbol needs (what RON v2 embeds per
   part), stored once per symbol rather than once per part.
+- **`PART_DEFS`** (reserved for `parts-plan.md` `PD3`, `PQ8`): deduplicated `EmbeddedPartDef`
+  records referenced by `PARTS` (`def` id + non-default `params` overrides) if this binary
+  proposal is accepted at `FH0`.
 - **Unknown sections**: skipped on load. If marked must-understand, the file is refused with a
   clear message instead.
 
