@@ -260,8 +260,10 @@ own in turn.
 - Lane: agent · Depends: A3.1 · Read: mcp-plan.md section 10.4
 - Owns: `crates/omnia-cli/src/mcp.rs` (jobs and subscriptions)
 - Done when: transcript tests cover progress, cancellation and resource-updated notifications,
-  in both protocol eras (`resources/subscribe` and `subscriptions/listen`, section 10.5); no
-  era advertises the Tasks capability (AQ15).
+  in both protocol eras (`resources/subscribe` and `subscriptions/listen`, section 10.5). An
+  AQ15 assertion for each AK1 revision: no `capabilities.tasks` in the 2025-11-25 or 2025-06-18
+  `initialize` result, and no `io.modelcontextprotocol/tasks` extension in 2026-07-28's
+  `server/discover`.
 
 ### A3.3 First long job: large atomic batch · todo
 - Lane: agent · Depends: A3.2
@@ -347,3 +349,10 @@ policy; "session" in the stateless era as a storage lifetime only; protocol logg
 in 2026-07-28. Next: A1.8 reads the pinned specification pages before coding; 10.5 is a
 summary. Rule-1 scan done on the changed files. Docs only; nothing measured; no dependency
 added.
+
+2026-11-20 AQ15 (docs, not a task) — the owner delegated the question that A0.2's review
+raised. Answer: job tools in every era, and tasks never advertised. This supersedes the A0.2
+entry's per-era mapping of jobs onto 2025-11-25 Tasks. mcp-plan.md section 11.5 now states it
+directly, without the conditional rule. Section 10.4 scopes progress and cancellation to the
+in-flight request, and A3.2 asserts AQ15 for each pinned revision. Independent review by a
+model other than the author. Docs only.

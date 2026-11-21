@@ -443,11 +443,11 @@ Static, versioned with the schema, each with a transcript fixture:
 
 | Direction | Message | When |
 | --- | --- | --- |
-| Server to client | `notifications/resources/updated` | A subscribed document's revision changes |
+| Server to client | `notifications/resources/updated` | A subscribed document's revision changes, or a subscribed job's state or progress changes (A3) |
 | Server to client | `notifications/resources/list_changed` | Documents open or close; jobs start (A3) |
-| Server to client | `notifications/progress` | Jobs with a `progressToken` (A3) |
+| Server to client | `notifications/progress` | While the request that supplied the `progressToken` is in flight (A3, 11.5) |
 | Server to client | `notifications/message` | Logging, level-filtered |
-| Client to server | `notifications/cancelled` | Sets the request's cancel token |
+| Client to server | `notifications/cancelled` | Names an in-flight request by `requestId` and sets its cancel token; a returned job is cancelled with `omnia_job_cancel` |
 
 The catalog is fixed for a mode, so `tools/list_changed` is sent only when app mode attaches
 or detaches (A4). stdout carries only protocol messages; logs go to stderr.
@@ -544,17 +544,19 @@ binds a commit to its preview and an approval to an effect. It is not a security
 - A job that edits computes on a fork and commits once at the end, as one `Command`, only if
   the revision has not changed; otherwise it ends `failed` with `stale_revision`. Simulation
   jobs, once planned, never edit the document.
-- MCP: `progressToken` maps to `notifications/progress`; `notifications/cancelled` sets the
-  token. If the pinned revision (AK1) has a native task primitive, jobs map onto it; otherwise
-  the job tools and `omnia://jobs/{id}` with subscriptions are used, and nothing polls.
-  Checked at A0.2 (2026-11-20): 2025-06-18 has no task primitive; 2025-11-25 added Tasks to
-  the core, marked experimental and negotiated by capability; 2026-07-28 moved them out of the
-  core into the optional `io.modelcontextprotocol/tasks` extension. An experimental or
-  extension primitive does not count as native here (AQ15): every era uses the job tools with
-  `omnia://jobs/{id}`, subscribed through `resources/subscribe` or `subscriptions/listen` by
-  era (10.5), and Omnia never advertises the Tasks capability. Once the tool call that returns
-  a job handle completes, later job updates go through that resource subscription, not
-  `notifications/progress`, which stops when its request completes. A3.2 builds this.
+- MCP: every AK1 revision uses Omnia's job tools (`omnia_job_status`, `omnia_job_cancel`)
+  and `omnia://jobs/{id}` with subscriptions, by era `resources/subscribe` or
+  `subscriptions/listen` (10.5); nothing polls (AQ15). Omnia never advertises tasks: no
+  `capabilities.tasks` in either handshake revision's `initialize` result, and no
+  `io.modelcontextprotocol/tasks` in `server/discover`'s extensions. The published
+  specifications permit all three omissions. For context, checked at A0.2 (2026-11-20):
+  2025-06-18 has no task primitive; 2025-11-25 added Tasks to the core, marked experimental and
+  negotiated by capability; 2026-07-28 moved them into that optional extension.
+- While the request that starts a job is in flight, a `progressToken` on it maps to
+  `notifications/progress`, and `notifications/cancelled` naming that request's `requestId` sets
+  the job's cancel token. Progress stops when the request completes. Once the call has returned
+  the `job_id`, updates go only through the job resource subscription, and the client cancels
+  through `omnia_job_cancel`. A3.2 builds this.
 
 ### 11.6 App mode (A4)
 
