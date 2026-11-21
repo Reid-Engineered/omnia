@@ -71,9 +71,11 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
   owner chose native 1080p over the brief's 4K; thresholds and budgets are otherwise unchanged.
 - **Refresh.** The panel refreshes at 60 Hz; B3 and B4 are judged against it (60 and 30 fps).
 - **Power and noise.** On AC, with the `performance` CPU governor (owner decision 2026-11-20,
-  matching CPU-only runs after the T2.7 paint-stall A/B confirmed `powersave` clock drops
-  caused the stalls), the bench window in the foreground, other apps closed. Each result
-  records the power source, CPU governor and power profile.
+  matching CPU-only runs after the T2.7 paint-stall A/B in PR #80 showed `powersave` clock
+  drops caused the paint stalls), the bench window in the foreground, other apps closed. Each
+  result records the power source, CPU governor and power profile. Note: Orion GUI gates
+  certify under `performance`; laptops on default balanced/`powersave` policies remain exposed
+  to lower-clock paint stretches until T2.9 adds far-zoom headroom.
 - **CPU-only runs.** Owner decision 2026-11-17 (gate-blocker audit section 3.2): a timed run
   with no window or GPU work (for example the command-boundary runner) keeps the reference
   hardware, AC, the `performance` governor, other user apps closed, before/after records of

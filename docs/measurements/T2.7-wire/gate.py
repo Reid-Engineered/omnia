@@ -307,7 +307,8 @@ def summarize(output):
                 raise ValueError(f"unexpected benchmark exit records: {pre['exit']}, {post['exit']}")
             for record in (pre, post):
                 state = record["conditions"]
-                validate_conditions(state, scale)
+                validate_conditions(state, scale,
+                                    require_performance=state["time_utc"] >= "2026-11-20")
                 conditions[tag].add((tuple(sorted(set(state["governor"].values()))),
                                      state["power_profile"], tuple(state["platform_profile"].values())))
             report = read_report(stem)
