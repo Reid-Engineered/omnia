@@ -1672,7 +1672,7 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        Evidence: docs/measurements/T2.7-wire/orion-2026-11-18-scoped/.
 2026-11-20 T2.7 done — Owner decision: require the performance CPU governor for Orion GUI
                        gate runs (plan 2.1, matching CPU-only runs) after the T2.7 paint-stall
-                       A/B campaign confirmed powersave clock drops caused all 20 stalls
+                       A/B campaign (PR #80) showed powersave clock drops caused the 20 stalls
                        (20 -> 0 under performance; 0 intervals > 2.5 R). Fresh 120-invocation
                        Orion gate under performance (source bd2c036, binary 235daecc…,
                        22:49 to 23:19 EST, AC, performance on all 4 CPUs, fullscreen eDP-1
@@ -1681,9 +1681,14 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        B3 1k-pan p99 1.226 / 0.918 ms, 1k-zoom 1.606 / 1.119 ms;
                        B4 10k-pan p99 1.563 / 1.186 ms, 10k-zoom 8.055 / 7.952 ms;
                        B5 max 3.877 ms (1k) / 19.464 ms (10k); B9 max 112.719 MB; B10 0 in
-                       all 80 motion runs. Zero missed refreshes across all 80 motion runs
-                       (0 traced, 0 untraced, 0 compositor-side, 0 counted, and 0 known-limit
-                       10k far-zoom intervals over 2.5 refreshes). Archive replays
-                       byte-identically (exit 0). T2.9 remains planned to give balanced/
-                       powersave laptops headroom at far zoom and remove the B4 known limit.
+                       all 80 motion runs. Zero intervals over each budget's limit across all
+                       80 motion runs (1k: 0 over 1.5 R; 10k: 0 over 2.5 R, 0 known-limit
+                       far-zoom intervals, 0 compositor-side exclusions); 10k-zoom still had
+                       451 two-refresh (1.5 to 2.5 R) intervals at far zoom (worst 40.27 ms /
+                       2.42 R in s125/10k-zoom-8), within B4. §2.1 disclosure: harness/agent
+                       processes (t3code, cloudflared, agy_acp_server in all 240 snapshots;
+                       claude in 23; baloo_file_extr in 8; gh in 2) ran during the campaign
+                       (conservative toward failure; noted for owner acknowledgement). Archive
+                       replays byte-identically (exit 0). T2.9 remains planned for balanced/
+                       powersave laptop headroom and to remove the B4 known limit.
                        Evidence: docs/measurements/T2.7-wire/orion-2026-11-20-performance/.
