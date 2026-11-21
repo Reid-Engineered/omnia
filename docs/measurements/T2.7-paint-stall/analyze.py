@@ -90,15 +90,15 @@ def classify(row, local, base, hw):
 
 def main():
     output = Path(sys.argv[1])
-    order = json.loads((output / "order.json").read_text())
-    journal = [json.loads(line) for line in (output / "runs.jsonl").read_text().splitlines()]
+    order = json.loads((output / "order.json").read_text(encoding="utf-8"))
+    journal = [json.loads(line) for line in (output / "runs.jsonl").read_text(encoding="utf-8").splitlines()]
     totals = {}
     print("run | paints | median paint wall/cpu ms | median freq MHz | stalls | intervals > 1.5 R | "
           "vmstat deltas (non-zero)")
     details = []
     for (rep, sheet, script), record in zip(order, journal, strict=True):
         name = f"{sheet}-{script}-{rep}"
-        report = json.loads((output / f"{name}.json").read_text())
+        report = json.loads((output / f"{name}.json").read_text(encoding="utf-8"))
         probe = report["paint_probe"]
         # Campaign 1 (2026-11-18) predates the hardware-counter columns.
         columns = probe["columns"]
