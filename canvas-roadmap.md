@@ -371,7 +371,7 @@ of the `canvas` lane.
   record and set `needs-human`. If B4 misses, apply the "fails at 70k" row of the outcome
   table before reporting.
 
-### T2.9 Far-zoom wire stubs · needs-human
+### T2.9 Far-zoom wire stubs · blocked (Orion gate 2026-11-21 fail: B3 1k attribution)
 - Lane: canvas · Depends: T2.7 · Read: D4, D5, K9, plan 2.1 "B4 known limit",
   `docs/measurements/T2.7-wire.md`, G3, G12
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `crates/omnia-canvas/src/sheet/lod.rs`,
@@ -1732,7 +1732,7 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `docs/measurements/T2.9/gate.py` without `far_zoom`/`scope_known_limit`
                        (preserving `docs/measurements/T2.7-wire/gate.py` for archived T2.7
                        replay). Deviation outside T2.9's Owns list (`bench-baseline/` belongs
-                       to T2.6, pending owner acceptance): tightened `bench-baseline/1k-zoom.json`
+                       to T2.6, owner accepted 2026-11-21): tightened `bench-baseline/1k-zoom.json`
                        and `bench-baseline/10k-zoom.json` to the new lower deterministic zoom
                        counts (`10k-zoom` peak quads 28,279 -> 8,325, −70.6%; sweep quads
                        −54.8%; `1k-zoom` sweep quads −24.0%; pan baselines byte-identical; all
@@ -1750,3 +1750,38 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        cargo deny) pass locally. Awaiting the full Orion gate run via
                        `docs/measurements/T2.9/gate.py` at 100% and 125%.
                        Evidence: docs/measurements/T2.9.md.
+2026-11-21 T2.9 blocked (Orion gate fail: B3 1k attribution) — D4, D5, K9, plan 2.1. Full
+                       Orion reference campaign, one run, no retries: clean checkout 8fdab7a
+                       (task/T2.9-far-zoom-wire-stubs), release omnia-bench SHA-256
+                       23a80c92...c4567 before and after, i5-7300U, HD Graphics 620 (KBL
+                       GT2) on the Mesa open-source Vulkan driver, Linux 7.2.7 Wayland,
+                       eDP-1 1920x1080 at 60.008 Hz at 100% and 125%, AC online and the
+                       performance governor on all four CPUs in all 240 snapshots, under
+                       kde-inhibit; 120 invocations 21:28:17-21:58:02 EST, all exit 0.
+                       gate.py (docs/measurements/T2.9/gate.py, no far_zoom/KNOWN) recorded
+                       fail. B4 holds with no known limit: zero intervals over 2.5 refreshes
+                       in all 40 10k runs; 10k-zoom p99 5.016 / 4.954 ms and 10k-pan 2.257 /
+                       1.378 ms (< 33.3); B5 worst 15.286 / 9.183 ms (<= 50); B9 92.881 /
+                       94.432 MB (< 300); B10 0 in every cell; B2 delta 4.480 / 6.265 ms
+                       (< 300). B3 frame p99 passes (1k-pan 1.964 / 1.258 ms, 1k-zoom 1.635 /
+                       1.170 ms, < 16.7) as do B5 and B10, but B3's missed-refresh attribution
+                       FAILS in all four 1k cells: 1k-pan 5/10 (100%) and 8/10 (125%),
+                       1k-zoom 8/10 and 7/10 passed. 16 intervals over 1.5 refreshes (25.1 to
+                       39.9 ms), 2 compositor-side, 14 counted (13 fail criterion (b), 1 fails
+                       (c)); none untraced. The T2.7 2026-11-20 campaign on the same machine
+                       passed B3 attribution 10/10 in every cell; this report does not show
+                       the cause (the T2.9 change is in the far-zoom branch only). Plan 2.1
+                       disclosure: other apps were NOT closed; the KDE session, Akonadi,
+                       Baloo, two network tunnel/VPN daemons and the agent harness (T3 Code, t3code,
+                       claude and polling helpers) ran throughout (full list in
+                       docs/measurements/T2.9.md); AC dropped for ~40 s before the campaign
+                       and was online in all 240 snapshots; the governor was set by the
+                       agent minutes before and not restored. A first launch aborted on the
+                       clean-tree check (untracked bench-baseline/__pycache__ from a probe)
+                       before any timed run and was relaunched unchanged. Archive replays
+                       byte-identically (exit 1). Not Plan B: B4 does not miss. Blocked on
+                       the B3 result: the owner decides whether to schedule a fresh section
+                       2.1 campaign at the desk with apps closed (a new campaign, not a
+                       retry of this one) or to rule on these 1k misses. T2.9 is not done.
+                       Evidence: docs/measurements/T2.9.md,
+                       docs/measurements/T2.9/orion-2026-11-21/.
