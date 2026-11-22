@@ -1,9 +1,10 @@
 //! T3.1 / B10 / INV7: `SheetView`'s full paint path (including labels) makes zero heap
-//! allocations from our code once warm on the `text` stress sheet at a fixed zoom (and across
-//! repeated pans and zoom sweeps).
+//! allocations from our code once warm on the canonical `text` stress sheet at a fixed zoom
+//! (and across repeated pans and zoom sweeps), plus multiline net labels.
 //!
-//! Uses a test-local counting allocator and `SheetPaintScope` (Q5), matching `sheet_alloc.rs`
-//! and `omnia-bench`'s `BenchPaintScope`.
+//! Headless `TestApp` companion to `sheet_text_render.rs` (which verifies B10 on the real Windows
+//! rendering backend with non-zero glyph sprite emission). Uses a test-local counting allocator and
+//! `SheetPaintScope` (Q5), matching `sheet_alloc.rs` and `omnia-bench`'s `BenchPaintScope`.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -77,10 +78,10 @@ impl SheetPaintScope for TestScope {
     }
 }
 
-/// Deterministic `text` stress sheet matching `omnia-bench/src/generate.rs` (`StressSheet::TextHeavy`,
-/// seed 42): 1,000 parts with 6-char designators and 6-char values (12,000 chars), 2,000 wires,
-/// plus 100 net labels.
-fn text_stress_doc() -> Doc {
+/// Canonical `text` stress sheet matching `crates/omnia-bench/src/generate.rs`
+/// (`StressSheet::TextHeavy`, seed 42): 1,000 parts with 6-char designators and 6-char values
+/// (12,000 characters), 2,000 wires, and 0 net labels.
+fn canonical_text_stress_doc() -> Doc {
     struct SplitMix64(u64);
     impl SplitMix64 {
         fn next(&mut self) -> u64 {
@@ -95,13 +96,13 @@ fn text_stress_doc() -> Doc {
     let symbols = SymbolLibrary::builtin();
     let defs: Vec<_> = symbols.iter().collect();
     let count = 1_000usize;
+    let wire_count = 2_000usize;
     let columns = 32usize;
     let rows = count.div_ceil(columns);
     let pitch = 12 * PIN_LATTICE_NM;
     let mut rng = SplitMix64(42);
     let mut parts = Vec::with_capacity(count);
-    let mut wires = Vec::with_capacity(2_000);
-    let mut labels = Vec::with_capacity(100);
+    let mut wires = Vec::with_capacity(wire_count);
     for i in 0..count {
         let def = defs[(rng.next() % defs.len() as u64) as usize];
         let orient = Orient::ALL[(rng.next() % 8) as usize];
@@ -112,28 +113,31 @@ fn text_stress_doc() -> Doc {
                 - (rows as i32 - 1) * pitch / 2 / PIN_LATTICE_NM * PIN_LATTICE_NM,
         };
         let pin = at + orient.apply(def.pins[0].at);
-        for j in 0..2 {
-            let delta = if j == 0 {
-                Pt {
+        for j in 0..wire_count / count {
+            let delta = match j % 4 {
+                0 => Pt {
                     x: PIN_LATTICE_NM,
                     y: 0,
-                }
-            } else {
-                Pt {
+                },
+                1 => Pt {
                     x: 0,
                     y: PIN_LATTICE_NM,
-                }
+                },
+                2 => Pt {
+                    x: -PIN_LATTICE_NM,
+                    y: 0,
+                },
+                _ => Pt {
+                    x: 0,
+                    y: -PIN_LATTICE_NM,
+                },
             };
-            wires.push(Wire {
-                a: pin,
-                b: pin + delta,
-            });
-        }
-        if i % 10 == 0 {
-            labels.push(Label {
-                at: pin,
-                text: format!("NET{i:03}").into(),
-            });
+            let a = pin
+                + Pt {
+                    x: delta.x * (j / 4) as i32,
+                    y: delta.y * (j / 4) as i32,
+                };
+            wires.push(Wire { a, b: a + delta });
         }
         parts.push((
             Part {
@@ -147,7 +151,7 @@ fn text_stress_doc() -> Doc {
             def.bounds,
         ));
     }
-    Doc::from_items(parts, wires, labels).expect("stress sheet valid")
+    Doc::from_items(parts, wires, std::iter::empty::<Label>()).expect("stress sheet valid")
 }
 
 struct ScopedSheet {
@@ -225,12 +229,17 @@ impl Render for Host {
 }
 
 #[test]
-fn t3_1_text_stress_sheet_zero_omnia_allocations_once_warm() {
+fn t3_1_canonical_text_stress_sheet_zero_omnia_allocations_once_warm() {
     let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(1280.0), px(800.0)));
-    let doc = text_stress_doc();
+    let doc = canonical_text_stress_doc();
     assert_eq!(doc.part_count(), 1_000);
     assert_eq!(doc.wires().count(), 2_000);
-    assert_eq!(doc.labels().count(), 100);
+    assert_eq!(doc.labels().count(), 0);
+    let chars: usize = doc
+        .parts()
+        .map(|(_, p)| p.designator.len() + p.value.len())
+        .sum();
+    assert_eq!(chars, 12_000);
 
     let mut app = TestApp::new();
     let doc_entity: Entity<Doc> = app.update(|cx| cx.new(|_| doc));
@@ -249,7 +258,7 @@ fn t3_1_text_stress_sheet_zero_omnia_allocations_once_warm() {
     // Warm up frame 0 at 100% zoom.
     window.draw();
 
-    // Fixed-zoom pan across 120 frames (including bringing previously offscreen parts into view):
+    // Fixed-zoom pan across 120 frames (bringing previously offscreen parts into view):
     // our code must allocate zero times on every frame.
     for frame in 0..120 {
         window.update(|host, _, cx| {
@@ -268,7 +277,6 @@ fn t3_1_text_stress_sheet_zero_omnia_allocations_once_warm() {
         );
     }
 
-    // Also verify a zoom sweep across K4 makes zero allocations from our code once warm.
     // Warm up query scratch at far zoom once so `Doc::query` has peak capacity.
     window.update(|host, _, cx| {
         host.camera = Camera::new(Pt::ZERO, omnia_canvas::camera::MIN_ZOOM, bounds);
@@ -293,5 +301,55 @@ fn t3_1_text_stress_sheet_zero_omnia_allocations_once_warm() {
             allocs, 0,
             "zoom-sweep step {step} (zoom {zoom:.3}) allocated {allocs} times in our paint code"
         );
+    }
+}
+
+#[test]
+fn multiline_net_labels_zero_omnia_allocations_once_warm() {
+    let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(640.0), px(400.0)));
+    let labels = [
+        Label {
+            at: Pt {
+                x: -4 * PIN_LATTICE_NM,
+                y: 0,
+            },
+            text: "BUS\nA".into(),
+        },
+        Label {
+            at: Pt {
+                x: 4 * PIN_LATTICE_NM,
+                y: 0,
+            },
+            text: "BUS\r\nB".into(),
+        },
+    ];
+    let doc = Doc::from_items(std::iter::empty(), std::iter::empty(), labels).unwrap();
+
+    let mut app = TestApp::new();
+    let doc_entity: Entity<Doc> = app.update(|cx| cx.new(|_| doc));
+    let document = SheetDocument::new(doc_entity);
+    let mut window = app.open_window_with_options(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        },
+        move |_, _| Host {
+            camera: Camera::new(Pt::ZERO, 1.0, bounds),
+            document,
+        },
+    );
+
+    window.draw();
+    for frame in 0..20 {
+        window.update(|host, _, cx| {
+            let mut cam = Camera::new(Pt::ZERO, 1.0, bounds);
+            cam.pan_by(point(f64::from(frame) * 1.25, -f64::from(frame) * 0.75));
+            host.camera = cam;
+            cx.notify();
+        });
+        ALLOCS.with(|n| n.set(0));
+        OURS.with(|c| c.set(false));
+        window.draw();
+        assert_eq!(ALLOCS.with(Cell::get), 0);
     }
 }

@@ -1717,36 +1717,50 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        powersave laptop headroom and to remove the B4 known limit.
                        Evidence: docs/measurements/T2.7-wire/orion-2026-11-20-performance/.
 2026-11-21 T3.1 done — Added cached horizontal schematic labels (`crates/omnia-canvas/src/sheet/text.rs`)
-                       for part designators and values (K8/Q3: Inter SemiBold 17 px, `stage/ink`, 22 px
-                       stacked step), net labels (Inter Medium 13 px, `stage/ink-secondary`), and pin
-                       numbers on multi-pin symbols (Inter Medium 13 px, `stage/ink-secondary`). One
-                       cached `ShapedLine` per label and K11 0.5 px size bucket (capped at 128 px per
-                       plan section 11; K11 updated in `canvas-plan.md` per rule 12), reshaped only
-                       when bucket, text, or scale factor changes, with pin numbers shared per
-                       `(symbol, pin)` across parts. Enforced K9 LOD hiding (< 6.5 px text floor;
-                       pin numbers also hidden when K9 hides junction dots < 2.5 px) and K9's 700-label
-                       per-frame cap (smallest hidden first deterministically via bounded in-place
-                       selection, ties broken by kind, world `(y, x)`, id and pin index). Direct glyph
-                       emission via `Window::paint_glyph` / `paint_emoji` in one `paint_layer` with
-                       device-pixel origin snapping (D4, D6, G14, G15, S5). Wired into `sheet.rs`
-                       reusing `Doc::query` slices (zero re-query) and added `sheet/text.rs` to the
-                       INV7 source check; no colour literals (INV6) and no `#[allow]` added.
-                       Verification (Windows 11 dev machine — Intel Core i7-14650HX, NVIDIA RTX 5060
-                       Laptop GPU + Intel UHD Graphics; non-certifying per Q4 / Hard Rule 3):
-                       `sheet_text_alloc` reports 0 Omnia allocations per frame once warm across 120
-                       fixed-zoom pan frames and 60 zoom-sweep frames on the 1,000-part `text` stress
-                       sheet (B10); `sheet_text_render` verifies rendering at 1.0/1.25/1.5, K9 LOD
-                       hiding (0.45x / 0.35x), K9 700-label cap, fractional-pan tile stability, and
-                       exact glyph-atlas stability across two full K4 zoom sweeps (pass 1 = 14 pages /
-                       24,362,993 B / 335 tiles; pass 2 = 14 pages / 24,362,993 B / 335 tiles).
-                       Headless bench gate (`bench.yml` cases `1k-pan`, `1k-zoom`, `10k-pan`,
-                       `10k-zoom`): `allocs_per_frame.ours.max == 0` and all 24 metrics within 10%
-                       (+0 to +2 `paint_operations` for the single text layer). Deviations outside
-                       T3.1 Owns: minimal wiring in `crates/omnia-canvas/src/sheet.rs`, dev-dep
-                       `gpui/bench-support` (already in `Cargo.lock`, zero new crates) and test entry
-                       in `crates/omnia-canvas/Cargo.toml`, K11 128 px cap note in `canvas-plan.md`,
-                       bundled Inter font registration in `tests/golden/tests/sheet.rs`, and
-                       regenerated `tests/golden/inverting-amp-{graphite,gray}-{100,125,150}.png`
+                       for part designators and values (K8/Q3: Inter SemiBold 17 px, `stage/ink`,
+                       stacked on a shared left edge at the 22 px step; `Part` holds one `value`
+                       field today), net labels (Inter Medium 13 px, `stage/ink-secondary`,
+                       flattening `\n`/`\r` into visible escapes so distinct multiline net names stay
+                       distinct), and pin numbers on multi-pin symbols (Inter Medium 13 px,
+                       `stage/ink-secondary`; single-pin ground/power symbols omit pin numbers). One
+                       cached `ShapedLine` per label and K11 0.5 px size bucket (capped at 128 px to
+                       bound the non-evicting glyph atlas across K4; K8/K11 updated in
+                       `canvas-plan.md` per rule 12), reshaped only when bucket, text, or scale
+                       factor changes, with pin numbers shared per `(symbol, pin)` across parts and
+                       deleted/emptied lines released on `Doc::revision` changes while keeping slot
+                       capacity. Enforced D5/K9 drop order: ordinary text hides below 6.5 px font
+                       size first, then pin numbers hide together with junction dots below 2.5 px
+                       (31.25% zoom); labels are viewport-culled before K9's 700-label cap, which
+                       hides smallest first and breaks equal-size ties by world geometry `(y, x)`
+                       then lowest id. On `Doc::revision` changes only (zero per-frame cost), part
+                       labels pick a deterministic clearance-maximising side via local `Doc::query`.
+                       Direct glyph emission via `Window::paint_glyph` / `paint_emoji` in one
+                       `paint_layer` with device-pixel origin snapping (D4, D6, G14, G15, S5); no
+                       colour literals (INV6) and no `#[allow]` added.
+                       Verification (Windows 11 x64 dev machine — i7-14650HX, RTX 5060 Laptop + UHD
+                       Graphics; non-certifying per Q4 / Hard Rule 3):
+                       `sheet_text_alloc` (headless) and `sheet_text_render` (real DirectX/DirectWrite
+                       backend) both report 0 Omnia allocations/frame once warm on the canonical
+                       `text` stress sheet (matching `omnia-bench/src/generate.rs` `StressSheet::TextHeavy`,
+                       seed 42: 1,000 parts, 2,000 wires, 0 net labels, 12,000 chars), with the real
+                       backend emitting at least 990 glyph sprites/frame across 60 pan + 30 zoom
+                       frames (B10). `sheet_text_render` also verifies rendering at 1.0/1.25/1.5,
+                       D5/K9 drop order on both sides of the ordinary-text (0.45x/0.35x) and
+                       pin-number/junction (0.35x visible vs 0.30x hidden) boundaries, K9's 700-label
+                       cap, fractional-pan tile stability, and exact isolated glyph+emoji atlas
+                       stability across two full K4 zoom sweeps (excluding SVG/dot tiles: pass 1 =
+                       3 pages / 12,582,912 B / 418 tiles across 57 glyph heights + 11 emoji tiles;
+                       pass 2 = 3 pages / 12,582,912 B / 418 tiles). Headless bench gate (`bench.yml`
+                       cases `1k-pan`, `1k-zoom`, `10k-pan`, `10k-zoom`): `allocs_per_frame.ours.max
+                       == 0` and all 24 metrics within 10%.
+                       Files outside T3.1 Owns (`crates/omnia-canvas/src/sheet/text.rs`):
+                       `crates/omnia-canvas/src/sheet.rs` (`TextCache` wiring reusing `Doc::query`
+                       slices + INV7 source list), `crates/omnia-canvas/Cargo.toml` (dev-dep
+                       `gpui/bench-support` already in `Cargo.lock`, zero new crates +
+                       `sheet_text_render` test entry), `crates/omnia-canvas/tests/sheet_text_alloc.rs`,
+                       `crates/omnia-canvas/tests/sheet_text_render.rs`, `canvas-plan.md` (K8/K11
+                       clarifications per rule 12), `tests/golden/tests/sheet.rs` (bundled Inter
+                       registration), and regenerated `tests/golden/inverting-amp-{graphite,gray}-{100,125,150}.png`
                        goldens (as flagged in T3.2's log). Note for T3.4: `omnia-bench/src/harness.rs`
                        currently registers Inter only for S5 spike runs, not `Sheet::Stress(_)` runs;
                        register bundled Inter Medium and SemiBold there before gating `text` on Orion.
