@@ -1720,37 +1720,43 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        for part designators and values (K8/Q3: Inter SemiBold 17 px, `stage/ink`,
                        stacked on a shared left edge at the 22 px step; `Part` holds one `value`
                        field today), net labels (Inter Medium 13 px, `stage/ink-secondary`,
-                       flattening `\n`/`\r` into visible escapes so distinct multiline net names stay
-                       distinct), and pin numbers on multi-pin symbols (Inter Medium 13 px,
-                       `stage/ink-secondary`; single-pin ground/power symbols omit pin numbers). One
-                       cached `ShapedLine` per label and K11 0.5 px size bucket (capped at 128 px to
-                       bound the non-evicting glyph atlas across K4; K8/K11 updated in
-                       `canvas-plan.md` per rule 12), reshaped only when bucket, text, or scale
-                       factor changes, with pin numbers shared per `(symbol, pin)` across parts and
-                       deleted/emptied lines released on `Doc::revision` changes while keeping slot
-                       capacity. Enforced D5/K9 drop order: ordinary text hides below 6.5 px font
-                       size first, then pin numbers hide together with junction dots below 2.5 px
-                       (31.25% zoom); labels are viewport-culled before K9's 700-label cap, which
-                       hides smallest first and breaks equal-size ties by world geometry `(y, x)`
-                       then lowest id. On `Doc::revision` changes only (zero per-frame cost), part
-                       labels pick a deterministic clearance-maximising side via local `Doc::query`.
-                       Direct glyph emission via `Window::paint_glyph` / `paint_emoji` in one
+                       injectively escaping `\`, `\n` and `\r` at `Doc::revision` sync time so
+                       distinct multiline/escaped net names stay distinct with zero paint-time
+                       string preparation), and pin numbers on multi-pin symbols (Inter Medium
+                       13 px, `stage/ink-secondary`; single-pin ground/power symbols omit pin
+                       numbers). One cached `ShapedLine` per label and K11 0.5 px size bucket
+                       (capped at 128 px to bound the non-evicting glyph atlas across K4; K8/K11
+                       updated in `canvas-plan.md` per rule 12), reshaped only when bucket, text,
+                       or scale factor changes, with pin numbers shared per `(symbol, pin)` across
+                       parts and deleted, emptied, or edited lines released on `Doc::revision`
+                       changes while keeping slot capacity. Enforced D5/K9 drop order: ordinary
+                       text hides below 6.5 px font size first, then pin numbers hide together
+                       with junction dots below 2.5 px (31.25% zoom); label queries expand by
+                       label overhang and edge-straddling unshaped labels shape before culling so
+                       viewport culling precedes K9's 700-label cap, which hides smallest first
+                       and breaks equal-size ties by world geometry `(y, x)` then lowest id. On
+                       `Doc::revision` changes only (zero per-frame cost), part labels pick a
+                       deterministic clearance-maximising side via local `Doc::query`. Direct
+                       glyph emission via `Window::paint_glyph` / `paint_emoji` in one
                        `paint_layer` with device-pixel origin snapping (D4, D6, G14, G15, S5); no
                        colour literals (INV6) and no `#[allow]` added.
                        Verification (Windows 11 x64 dev machine — i7-14650HX, RTX 5060 Laptop + UHD
                        Graphics; non-certifying per Q4 / Hard Rule 3):
-                       `sheet_text_alloc` (headless) and `sheet_text_render` (real DirectX/DirectWrite
-                       backend) both report 0 Omnia allocations/frame once warm on the canonical
-                       `text` stress sheet (matching `omnia-bench/src/generate.rs` `StressSheet::TextHeavy`,
-                       seed 42: 1,000 parts, 2,000 wires, 0 net labels, 12,000 chars), with the real
-                       backend emitting at least 990 glyph sprites/frame across 60 pan + 30 zoom
-                       frames (B10). `sheet_text_render` also verifies rendering at 1.0/1.25/1.5,
-                       D5/K9 drop order on both sides of the ordinary-text (0.45x/0.35x) and
-                       pin-number/junction (0.35x visible vs 0.30x hidden) boundaries, K9's 700-label
-                       cap, fractional-pan tile stability, and exact isolated glyph+emoji atlas
-                       stability across two full K4 zoom sweeps (excluding SVG/dot tiles: pass 1 =
-                       3 pages / 12,582,912 B / 418 tiles across 57 glyph heights + 11 emoji tiles;
-                       pass 2 = 3 pages / 12,582,912 B / 418 tiles). Headless bench gate (`bench.yml`
+                       `sheet_text_alloc` (headless, including multiline bucket reshapes) and
+                       `sheet_text_render` (real DirectX/DirectWrite backend) both report 0 Omnia
+                       allocations/frame once warm on the canonical `text` stress sheet (matching
+                       `omnia-bench/src/generate.rs` `StressSheet::TextHeavy`, seed 42: 1,000
+                       parts, 2,000 wires, 0 net labels, 12,000 chars), with the real backend
+                       emitting at least 1,004 glyph sprites/frame across 60 pan frames and at
+                       least 6 glyph sprites/frame across 19 text-visible zoom frames of a 30-step
+                       zoom sweep (B10). `sheet_text_render` also verifies rendering at
+                       1.0/1.25/1.5, D5/K9 drop order on both sides of the ordinary-text
+                       (0.45x/0.35x) and pin-number/junction (0.35x visible vs 0.30x hidden)
+                       boundaries, K9's 700-label cap, fractional-pan tile stability, and exact
+                       isolated glyph+emoji atlas stability across two independent K4 zoom sweeps
+                       (excluding SVG/dot tiles: pass 1 = 3 pages / 12,582,912 B / 420 tiles
+                       across 20 K11 buckets + 11 emoji tiles; pass 2 = 3 pages / 12,582,912 B /
+                       420 tiles across 20 K11 buckets + 11 emoji tiles; identical tile sets). Headless bench gate (`bench.yml`
                        cases `1k-pan`, `1k-zoom`, `10k-pan`, `10k-zoom`): `allocs_per_frame.ours.max
                        == 0` and all 24 metrics within 10%.
                        Files outside T3.1 Owns (`crates/omnia-canvas/src/sheet/text.rs`):

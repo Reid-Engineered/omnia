@@ -196,7 +196,6 @@ mod render {
     struct GlyphAtlasStats {
         pages: BTreeMap<(u8, u32), (i32, i32)>,
         tiles: BTreeSet<(u8, u32, u32)>,
-        glyph_heights: BTreeSet<i32>,
         emoji_tiles: BTreeSet<(u8, u32, u32)>,
     }
 
@@ -215,8 +214,6 @@ mod render {
                 self.tiles.insert(key);
                 if is_emoji {
                     self.emoji_tiles.insert(key);
-                } else {
-                    self.glyph_heights.insert(tile.bounds.size.height.0);
                 }
             }
             sprites.len()
@@ -582,21 +579,32 @@ mod render {
                     // zoom sweep asserting 0 Omnia allocations on every frame.
                     let _ = draw_measured(cx, &stress_doc, omnia_canvas::camera::MIN_ZOOM, (0.0, 0.0))?;
                     let _ = draw_measured(cx, &stress_doc, 0.3125, (0.0, 0.0))?;
+                    let mut zoom_text_frames = 0usize;
+                    let mut min_zoom_text_sprites = usize::MAX;
                     for step in 0..30 {
                         let t = f64::from(step) / 29.0;
                         let zoom = (omnia_canvas::camera::MIN_ZOOM.log2()
                             + t * (omnia_canvas::camera::MAX_ZOOM.log2()
                                 - omnia_canvas::camera::MIN_ZOOM.log2()))
                         .exp2();
-                        let (allocs, _) = draw_measured(cx, &stress_doc, zoom, (0.0, 0.0))?;
+                        let (allocs, text_sprites) = draw_measured(cx, &stress_doc, zoom, (0.0, 0.0))?;
                         if allocs != 0 {
                             return Err(format!(
                                 "real-backend canonical text zoom step {step} allocated {allocs} times"
                             ));
                         }
+                        if text_sprites > 0 {
+                            zoom_text_frames += 1;
+                            min_zoom_text_sprites = min_zoom_text_sprites.min(text_sprites);
+                        }
+                    }
+                    if zoom_text_frames < 10 {
+                        return Err(format!(
+                            "zoom sweep exercised too few text-visible frames ({zoom_text_frames})"
+                        ));
                     }
                     println!(
-                        "  real-backend canonical text B10: 0 Omnia allocs/frame across 60 pan + 30 zoom frames (min {min_pan_sprites} glyph sprites/frame)"
+                        "  real-backend canonical text B10: 0 Omnia allocs/frame across 60 pan (min {min_pan_sprites} glyph sprites/frame) + 30 zoom frames ({zoom_text_frames} text-visible, min {min_zoom_text_sprites} glyph sprites/frame)"
                     );
 
                     // 2. Visual sanity across scale factors 1.0, 1.25, 1.5.
@@ -690,61 +698,107 @@ mod render {
                         })
                         .collect();
 
-                    let mut stats = GlyphAtlasStats::default();
-                    let mut run_pass = |stats: &mut GlyphAtlasStats| -> Result<usize, String> {
-                        let mut emitted_steps = 0usize;
-                        for &zoom in &zooms {
-                            win.update(cx, |probe, window, cx| {
-                                let viewport =
-                                    Bounds::new(point(px(0.0), px(0.0)), window.viewport_size());
-                                probe.camera = Camera::new(Pt::ZERO, zoom, viewport);
-                                probe.document = sample_doc.clone();
-                                cx.notify();
-                            })
-                            .map_err(|e| format!("sweep update: {e}"))?;
-                            let step_sprites = cx
-                                .update_window(win.into(), |_, window, cx| {
-                                    window.set_scale_factor(1.0);
-                                    window.draw(cx).clear(cx);
-                                    stats.record_text_layer(window)
+                    let mut run_pass =
+                        |stats: &mut GlyphAtlasStats| -> Result<(usize, BTreeSet<u16>), String> {
+                            let mut emitted_steps = 0usize;
+                            let mut active_buckets = BTreeSet::new();
+                            for &zoom in &zooms {
+                                win.update(cx, |probe, window, cx| {
+                                    let viewport = Bounds::new(
+                                        point(px(0.0), px(0.0)),
+                                        window.viewport_size(),
+                                    );
+                                    probe.camera = Camera::new(Pt::ZERO, zoom, viewport);
+                                    probe.document = sample_doc.clone();
+                                    cx.notify();
                                 })
-                                .map_err(|e| format!("sweep draw: {e}"))?;
-                            if step_sprites > 0 {
-                                emitted_steps += 1;
+                                .map_err(|e| format!("sweep update: {e}"))?;
+                                let step_sprites = cx
+                                    .update_window(win.into(), |_, window, cx| {
+                                        window.set_scale_factor(1.0);
+                                        window.draw(cx).clear(cx);
+                                        stats.record_text_layer(window)
+                                    })
+                                    .map_err(|e| format!("sweep draw: {e}"))?;
+                                if step_sprites > 0 {
+                                    emitted_steps += 1;
+                                    // Record the exact K11 0.5 px part-label bucket (or pin bucket
+                                    // when ordinary text is hidden) that emitted sprites at `zoom`.
+                                    let px_size = (17.0 * zoom).min(128.0);
+                                    let bucket_half_px = if px_size >= 6.5 {
+                                        (px_size / 0.5).round() as u16
+                                    } else {
+                                        ((13.0 * zoom).min(128.0) / 0.5).round() as u16
+                                    };
+                                    active_buckets.insert(bucket_half_px);
+                                }
                             }
-                        }
-                        Ok(emitted_steps)
-                    };
+                            Ok((emitted_steps, active_buckets))
+                        };
 
-                    let emitted_pass1 = run_pass(&mut stats)?;
-                    let pass1_pages = stats.pages.len();
-                    let pass1_bytes = stats.bytes();
-                    let pass1_tiles = stats.tiles.len();
-                    let pass1_heights = stats.glyph_heights.len();
-                    let pass1_emoji = stats.emoji_tiles.len();
-                    if emitted_pass1 < 2 || pass1_tiles == 0 || pass1_heights < 2 {
+                    let mut pass1 = GlyphAtlasStats::default();
+                    let (emitted_pass1, buckets_pass1) = run_pass(&mut pass1)?;
+                    if emitted_pass1 < 2
+                        || buckets_pass1.len() < 2
+                        || pass1.tiles.is_empty()
+                        || pass1.emoji_tiles.is_empty()
+                    {
                         return Err(format!(
-                            "zoom sweep pass 1 did not exercise multiple glyph size buckets \
-                             (steps={emitted_pass1}, tiles={pass1_tiles}, distinct_heights={pass1_heights})"
+                            "zoom sweep pass 1 did not exercise multiple font buckets + emoji \
+                             (steps={emitted_pass1}, buckets={}, tiles={}, emoji={})",
+                            buckets_pass1.len(),
+                            pass1.tiles.len(),
+                            pass1.emoji_tiles.len()
                         ));
                     }
 
-                    // Second pass of the exact same zoom sweep: glyph+emoji atlas pages, bytes,
-                    // and distinct tiles must be identical to pass 1.
-                    let _ = run_pass(&mut stats)?;
-                    let pass2_pages = stats.pages.len();
-                    let pass2_bytes = stats.bytes();
-                    let pass2_tiles = stats.tiles.len();
-                    println!(
-                        "  zoom sweep glyph+emoji atlas: pass1 = {pass1_pages} pages / {pass1_bytes} bytes / {pass1_tiles} tiles ({pass1_heights} glyph heights, {pass1_emoji} emoji tiles); \
-                         pass2 = {pass2_pages} pages / {pass2_bytes} bytes / {pass2_tiles} tiles"
-                    );
-                    if (pass1_pages, pass1_bytes, pass1_tiles)
-                        != (pass2_pages, pass2_bytes, pass2_tiles)
+                    // Independent second pass of the exact same zoom sweep: must also emit
+                    // multiple font buckets + emoji, and its tile set, page count, and bytes must
+                    // equal pass 1 exactly (no new glyph or emoji tiles allocated on pass 2).
+                    let mut pass2 = GlyphAtlasStats::default();
+                    let (emitted_pass2, buckets_pass2) = run_pass(&mut pass2)?;
+                    if emitted_pass2 < 2
+                        || buckets_pass2.len() < 2
+                        || pass2.tiles.is_empty()
+                        || pass2.emoji_tiles.is_empty()
                     {
                         return Err(format!(
-                            "glyph+emoji atlas grew on second zoom sweep: pass1=({pass1_pages} pages, {pass1_bytes} B, {pass1_tiles} tiles) \
-                             vs pass2=({pass2_pages} pages, {pass2_bytes} B, {pass2_tiles} tiles)"
+                            "zoom sweep pass 2 did not exercise multiple font buckets + emoji \
+                             (steps={emitted_pass2}, buckets={}, tiles={}, emoji={})",
+                            buckets_pass2.len(),
+                            pass2.tiles.len(),
+                            pass2.emoji_tiles.len()
+                        ));
+                    }
+                    println!(
+                        "  zoom sweep glyph+emoji atlas: pass1 = {} pages / {} bytes / {} tiles ({} K11 buckets, {} emoji tiles); \
+                         pass2 = {} pages / {} bytes / {} tiles ({} K11 buckets, {} emoji tiles)",
+                        pass1.pages.len(),
+                        pass1.bytes(),
+                        pass1.tiles.len(),
+                        buckets_pass1.len(),
+                        pass1.emoji_tiles.len(),
+                        pass2.pages.len(),
+                        pass2.bytes(),
+                        pass2.tiles.len(),
+                        buckets_pass2.len(),
+                        pass2.emoji_tiles.len(),
+                    );
+                    if pass1.tiles != pass2.tiles
+                        || pass1.emoji_tiles != pass2.emoji_tiles
+                        || (pass1.pages.len(), pass1.bytes()) != (pass2.pages.len(), pass2.bytes())
+                    {
+                        return Err(format!(
+                            "glyph+emoji atlas differed between zoom sweeps: pass1=({} pages, {} B, {} tiles, {} emoji) \
+                             vs pass2=({} pages, {} B, {} tiles, {} emoji)",
+                            pass1.pages.len(),
+                            pass1.bytes(),
+                            pass1.tiles.len(),
+                            pass1.emoji_tiles.len(),
+                            pass2.pages.len(),
+                            pass2.bytes(),
+                            pass2.tiles.len(),
+                            pass2.emoji_tiles.len(),
                         ));
                     }
 

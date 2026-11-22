@@ -352,4 +352,20 @@ fn multiline_net_labels_zero_omnia_allocations_once_warm() {
         window.draw();
         assert_eq!(ALLOCS.with(Cell::get), 0);
     }
+    // Changing font-size bucket (reshaping multiline/escaped labels) must also make 0 Omnia
+    // allocations because display strings are prepared at revision sync, never during shaping.
+    for &zoom in &[1.25f64, 1.75, 0.8] {
+        window.update(|host, _, cx| {
+            host.camera = Camera::new(Pt::ZERO, zoom, bounds);
+            cx.notify();
+        });
+        ALLOCS.with(|n| n.set(0));
+        OURS.with(|c| c.set(false));
+        window.draw();
+        assert_eq!(
+            ALLOCS.with(Cell::get),
+            0,
+            "multiline reshape at zoom {zoom} allocated in Omnia code"
+        );
+    }
 }

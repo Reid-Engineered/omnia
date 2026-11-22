@@ -155,11 +155,28 @@ fn priority_key(c: &Candidate) -> (Reverse<u16>, i32, i32, u32, u8, u16) {
 struct CachedLine {
     /// 0 means empty or invalidated; valid buckets are >= 1 (0.5 px).
     bucket: u16,
+    /// Prepared single-line display string, updated in `sync()` on `Doc::revision` changes so the
+    /// paint hot path never allocates to escape or copy label text (B10).
+    display: SharedString,
     line: Option<ShapedLine>,
 }
 
 impl CachedLine {
     fn clear(&mut self) {
+        self.bucket = 0;
+        self.display = SharedString::default();
+        self.line = None;
+    }
+
+    fn sync_text(&mut self, raw: &Arc<str>) {
+        if raw.is_empty() {
+            self.clear();
+            return;
+        }
+        if !self.display.is_empty() && matches_escaped(self.display.as_str(), raw) {
+            return;
+        }
+        self.display = prepare_display(raw);
         self.bucket = 0;
         self.line = None;
     }
@@ -227,7 +244,10 @@ pub(super) struct TextCache {
     label_lines: Vec<CachedLine>,
     candidates: Vec<Candidate>,
     query_buf: Vec<ItemId>,
-    flatten_buf: String,
+    max_net_chars: usize,
+    /// Max world-space overhang `(left, right, top, bottom)` of any placed part label beyond the
+    /// part's visual body, computed once per revision so edge-crossing labels are never missed.
+    max_part_overhang_nm: (i32, i32, i32, i32),
     doc_revision: Option<u64>,
     scale_factor_bits: u32,
     semibold: Font,
@@ -240,13 +260,17 @@ impl TextCache {
     pub(super) fn new() -> Self {
         let library = SymbolLibrary::builtin();
         let mut pin_offsets = Vec::with_capacity(library.len());
-        let mut total_pins = 0usize;
+        let mut pin_lines = Vec::new();
         for def in library.iter() {
-            pin_offsets.push(total_pins);
-            total_pins += def.pins.len();
+            pin_offsets.push(pin_lines.len());
+            for pin in def.pins {
+                pin_lines.push(CachedLine {
+                    bucket: 0,
+                    display: prepare_static_display(pin.number),
+                    line: None,
+                });
+            }
         }
-        let mut pin_lines = Vec::with_capacity(total_pins);
-        pin_lines.resize_with(total_pins, CachedLine::default);
         let inter = SharedString::new_static("Inter");
         Self {
             library,
@@ -256,7 +280,8 @@ impl TextCache {
             label_lines: Vec::new(),
             candidates: Vec::with_capacity(MAX_VISIBLE_LABELS * 2),
             query_buf: Vec::new(),
-            flatten_buf: String::new(),
+            max_net_chars: 0,
+            max_part_overhang_nm: (0, 0, 0, 0),
             doc_revision: None,
             scale_factor_bits: 0,
             semibold: Font {
@@ -273,8 +298,9 @@ impl TextCache {
     }
 
     /// Resets cached buckets on scale-factor changes (T7.4), releases cached `ShapedLine`s for
-    /// deleted or emptied items on `Doc::revision` changes while preserving slot capacity, and
-    /// computes deterministic part-label placements once per revision (B10).
+    /// deleted, emptied, or edited items on `Doc::revision` changes while preserving slot capacity,
+    /// prepares escaped display strings once per revision, and computes deterministic part-label
+    /// placements once per revision (B10).
     fn sync(&mut self, doc: &Doc, sf: f32) {
         let sf_bits = sf.to_bits();
         if self.scale_factor_bits != sf_bits {
@@ -293,6 +319,12 @@ impl TextCache {
         let revision = doc.revision();
         if self.doc_revision != Some(revision) {
             self.doc_revision = Some(revision);
+            let total_items = doc.part_count() + doc.wires().count() + doc.labels().count();
+            if self.query_buf.capacity() < total_items {
+                self.query_buf
+                    .reserve(total_items - self.query_buf.capacity());
+            }
+
             let max_part = doc
                 .parts()
                 .map(|(id, _)| id.0 as usize + 1)
@@ -305,12 +337,8 @@ impl TextCache {
                 match doc.part(PartId(idx as u32)) {
                     None => slot.clear(),
                     Some(part) => {
-                        if part.designator.is_empty() {
-                            slot.designator.clear();
-                        }
-                        if part.value.is_empty() {
-                            slot.value.clear();
-                        }
+                        slot.designator.sync_text(&part.designator);
+                        slot.value.sync_text(&part.value);
                         slot.placed_world = None;
                     }
                 }
@@ -324,13 +352,17 @@ impl TextCache {
             if self.label_lines.len() < max_label {
                 self.label_lines.resize_with(max_label, CachedLine::default);
             }
+            let mut max_net_chars = 0usize;
             for (idx, slot) in self.label_lines.iter_mut().enumerate() {
                 match doc.label(LabelId(idx as u32)) {
                     None => slot.clear(),
-                    Some(label) if label.text.is_empty() => slot.clear(),
-                    Some(_) => {}
+                    Some(label) => {
+                        slot.sync_text(&label.text);
+                        max_net_chars = max_net_chars.max(slot.display.chars().count());
+                    }
                 }
             }
+            self.max_net_chars = max_net_chars;
 
             self.place_part_labels(doc);
         }
@@ -459,11 +491,83 @@ impl TextCache {
             self.part_lines[idx].placement = best.2;
             self.part_lines[idx].placed_world = Some(best.3);
         }
+
+        // Record maximum world overhang of placed part labels beyond each part's visual body so
+        // `paint` queries just enough margin around the viewport to never miss edge-crossing text.
+        let mut overhang = (0i32, 0i32, 0i32, 0i32);
+        for (idx, slot) in self.part_lines.iter().enumerate() {
+            let Some(placed) = slot.placed_world else {
+                continue;
+            };
+            let Some(part) = doc.part(PartId(idx as u32)) else {
+                continue;
+            };
+            if part.symbol.index() >= self.library.len() {
+                continue;
+            }
+            let body = part_visual_body(part, self.library.get(part.symbol));
+            overhang.0 = overhang.0.max(body.min.x.saturating_sub(placed.min.x));
+            overhang.1 = overhang.1.max(placed.max.x.saturating_sub(body.max.x));
+            overhang.2 = overhang.2.max(body.min.y.saturating_sub(placed.min.y));
+            overhang.3 = overhang.3.max(placed.max.y.saturating_sub(body.max.y));
+        }
+        self.max_part_overhang_nm = overhang;
     }
 
-    /// Collects viewport-visible label candidates from the already-culled `Doc::query` slice (D6),
-    /// enforces K9's 700-label cap (hiding smallest first, ties by geometry then id), shapes only
-    /// cache misses, and emits glyphs directly inside one paint layer (D4, S5).
+    /// Computes a viewport query rect expanded by label overhang so long net labels anchored off
+    /// the left/bottom edge and part labels extending outside part bounds are still discovered.
+    fn expanded_query_area(&self, camera: &Camera, buckets: Buckets) -> Option<Rect> {
+        let scale = camera.scale();
+        let zoom = camera.zoom();
+        let mut left_nm = 0i32;
+        let mut right_nm = 0i32;
+        let mut top_nm = 0i32;
+        let mut bottom_nm = 0i32;
+
+        if let Some(part_bucket) = buckets.part {
+            let (ol, or, ot, ob) = self.max_part_overhang_nm;
+            // Add a small extra margin for proportional/wide glyphs beyond the placement estimate.
+            let extra_px = f64::from(part_bucket.pixels()) * 2.0;
+            let extra_nm = (extra_px / scale).ceil() as i32;
+            if ol > 0 || or > 0 || ot > 0 || ob > 0 {
+                left_nm = left_nm.max(ol.saturating_add(extra_nm));
+                right_nm = right_nm.max(or.saturating_add(extra_nm));
+                top_nm = top_nm.max(ot.saturating_add(extra_nm));
+                bottom_nm = bottom_nm.max(ob.saturating_add(extra_nm));
+            }
+        }
+        if let Some(net_bucket) = buckets.net
+            && self.max_net_chars > 0
+        {
+            let font_px = f64::from(net_bucket.pixels());
+            let max_w_px = self.max_net_chars as f64 * font_px * 1.25 + 4.0 * zoom;
+            let net_left_nm = (max_w_px / scale).ceil() as i32;
+            let net_bottom_nm = ((font_px * 1.3) / scale).ceil() as i32;
+            let net_top_nm = ((font_px * 0.5) / scale).ceil() as i32;
+            left_nm = left_nm.max(net_left_nm);
+            bottom_nm = bottom_nm.max(net_bottom_nm);
+            top_nm = top_nm.max(net_top_nm);
+        }
+        if left_nm == 0 && right_nm == 0 && top_nm == 0 && bottom_nm == 0 {
+            return None;
+        }
+        let view = camera.visible();
+        Some(Rect {
+            min: Pt {
+                x: view.min.x.saturating_sub(left_nm).max(-SHEET_LIMIT_NM),
+                y: view.min.y.saturating_sub(top_nm).max(-SHEET_LIMIT_NM),
+            },
+            max: Pt {
+                x: view.max.x.saturating_add(right_nm).min(SHEET_LIMIT_NM),
+                y: view.max.y.saturating_add(bottom_nm).min(SHEET_LIMIT_NM),
+            },
+        })
+    }
+
+    /// Collects viewport-visible label candidates (expanding the index query by label overhang so
+    /// edge-crossing net/part labels are never missed), enforces K9's 700-label cap (hiding
+    /// smallest first, ties by geometry then id), shapes only cache misses, and emits glyphs
+    /// directly inside one paint layer (D4, S5).
     pub(super) fn paint(
         &mut self,
         frame: &TextFrame<'_>,
@@ -481,7 +585,12 @@ impl TextCache {
             return;
         }
 
-        self.collect_candidates(frame, buckets);
+        if let Some(area) = self.expanded_query_area(frame.camera, buckets) {
+            frame.doc.query(area, &mut self.query_buf);
+            self.collect_from_query_buf(frame, buckets, window, scope);
+        } else {
+            self.collect_candidates(frame, buckets, Some(window), scope);
+        }
         if self.candidates.is_empty() {
             return;
         }
@@ -499,7 +608,39 @@ impl TextCache {
         });
     }
 
-    fn collect_candidates(&mut self, frame: &TextFrame<'_>, buckets: Buckets) {
+    fn collect_from_query_buf(
+        &mut self,
+        frame: &TextFrame<'_>,
+        buckets: Buckets,
+        window: &Window,
+        scope: &impl SheetPaintScope,
+    ) {
+        self.candidates.clear();
+        let len = self.query_buf.len();
+        for qi in 0..len {
+            let item = self.query_buf[qi];
+            match item {
+                ItemId::Part(part_id) if buckets.part.is_some() || buckets.pin.is_some() => {
+                    self.collect_part_item(part_id, frame, buckets, Some(window), scope);
+                }
+                ItemId::Label(label_id) => {
+                    if let Some(net_bucket) = buckets.net {
+                        self.collect_label_item(label_id, net_bucket, frame, Some(window), scope);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.finish_candidates();
+    }
+
+    fn collect_candidates(
+        &mut self,
+        frame: &TextFrame<'_>,
+        buckets: Buckets,
+        window: Option<&Window>,
+        scope: &impl SheetPaintScope,
+    ) {
         self.candidates.clear();
 
         if buckets.part.is_some() || buckets.pin.is_some() {
@@ -507,172 +648,23 @@ impl TextCache {
                 let ItemId::Part(part_id) = item else {
                     continue;
                 };
-                let Some(part) = frame.doc.part(part_id) else {
-                    continue;
-                };
-                if part.symbol.index() >= self.library.len() {
-                    continue;
-                }
-                let def = self.library.get(part.symbol);
-                let has_desig = !part.designator.is_empty();
-                let has_value = !part.value.is_empty();
-                if let Some(bucket) = buckets.part
-                    && (has_desig || has_value)
-                {
-                    let slots = self.part_lines.get(part_id.0 as usize);
-                    let placement = slots.map_or(LabelPlacement::default(), |s| s.placement);
-                    let desig_m = has_desig.then(|| {
-                        line_metrics(slots.map(|s| &s.designator), &part.designator, bucket)
-                    });
-                    let value_m = has_value
-                        .then(|| line_metrics(slots.map(|s| &s.value), &part.value, bucket));
-                    let block_w = desig_m
-                        .map_or(0.0, |m| m.width)
-                        .max(value_m.map_or(0.0, |m| m.width));
-                    let has_both = has_desig && has_value;
-                    let pair_flag = u16::from(has_both);
-
-                    if let Some(m) = desig_m {
-                        let layout = PartLabelLayout {
-                            placement,
-                            is_value: false,
-                            has_both,
-                            block_w,
-                        };
-                        let (left_x, baseline_y) =
-                            part_label_origin(part, def, layout, m, frame.camera);
-                        if label_intersects_viewport(
-                            left_x,
-                            baseline_y,
-                            m,
-                            frame.scale_factor,
-                            frame.viewport,
-                        ) {
-                            push_candidate(
-                                &mut self.candidates,
-                                Candidate {
-                                    kind: LabelKind::Designator,
-                                    bucket,
-                                    world: part.at,
-                                    id: part_id.0,
-                                    extra: pair_flag,
-                                    symbol: part.symbol,
-                                },
-                            );
-                        }
-                    }
-                    if let Some(m) = value_m {
-                        let layout = PartLabelLayout {
-                            placement,
-                            is_value: true,
-                            has_both,
-                            block_w,
-                        };
-                        let (left_x, baseline_y) =
-                            part_label_origin(part, def, layout, m, frame.camera);
-                        if label_intersects_viewport(
-                            left_x,
-                            baseline_y,
-                            m,
-                            frame.scale_factor,
-                            frame.viewport,
-                        ) {
-                            push_candidate(
-                                &mut self.candidates,
-                                Candidate {
-                                    kind: LabelKind::Value,
-                                    bucket,
-                                    world: part.at,
-                                    id: part_id.0,
-                                    extra: pair_flag,
-                                    symbol: part.symbol,
-                                },
-                            );
-                        }
-                    }
-                }
-                if let Some(bucket) = buckets.pin
-                    && def.pins.len() > 1
-                {
-                    let pin_base = self.pin_offsets[part.symbol.index()];
-                    for (pin_idx, pin) in def.pins.iter().enumerate() {
-                        if pin.number.is_empty() {
-                            continue;
-                        }
-                        let m = line_metrics(
-                            self.pin_lines.get(pin_base + pin_idx),
-                            pin.number,
-                            bucket,
-                        );
-                        let (left_x, baseline_y) =
-                            pin_number_origin(part, def, pin.at, m, frame.camera);
-                        if !label_intersects_viewport(
-                            left_x,
-                            baseline_y,
-                            m,
-                            frame.scale_factor,
-                            frame.viewport,
-                        ) {
-                            continue;
-                        }
-                        let pin_world = part.at + part.orient.apply(pin.at);
-                        push_candidate(
-                            &mut self.candidates,
-                            Candidate {
-                                kind: LabelKind::PinNumber,
-                                bucket,
-                                world: pin_world,
-                                id: part_id.0,
-                                extra: pin_idx as u16,
-                                symbol: part.symbol,
-                            },
-                        );
-                    }
-                }
+                self.collect_part_item(part_id, frame, buckets, window, scope);
             }
         }
 
         if let Some(bucket) = buckets.net {
-            let zoom = frame.camera.zoom();
             for &item in frame.labels {
                 let ItemId::Label(label_id) = item else {
                     continue;
                 };
-                let Some(label) = frame.doc.label(label_id) else {
-                    continue;
-                };
-                if label.text.is_empty() {
-                    continue;
-                }
-                let m = line_metrics(
-                    self.label_lines.get(label_id.0 as usize),
-                    &label.text,
-                    bucket,
-                );
-                let anchor = frame.camera.world_to_screen(label.at);
-                if !label_intersects_viewport(
-                    anchor.x + 2.0 * zoom,
-                    anchor.y,
-                    m,
-                    frame.scale_factor,
-                    frame.viewport,
-                ) {
-                    continue;
-                }
-                push_candidate(
-                    &mut self.candidates,
-                    Candidate {
-                        kind: LabelKind::NetLabel,
-                        bucket,
-                        world: label.at,
-                        id: label_id.0,
-                        extra: 0,
-                        symbol: SymbolId(0),
-                    },
-                );
+                self.collect_label_item(label_id, bucket, frame, window, scope);
             }
         }
 
+        self.finish_candidates();
+    }
+
+    fn finish_candidates(&mut self) {
         if self.candidates.len() > MAX_VISIBLE_LABELS {
             self.candidates
                 .select_nth_unstable_by_key(MAX_VISIBLE_LABELS, priority_key);
@@ -681,6 +673,382 @@ impl TextCache {
         // Deterministic paint order regardless of select_nth_unstable partitioning.
         self.candidates
             .sort_unstable_by_key(|c| (c.kind, c.id, c.extra));
+    }
+
+    fn ensure_part_slot_shaped(
+        &mut self,
+        part_id: PartId,
+        is_value: bool,
+        bucket: FontBucket,
+        ink: Hsla,
+        window: &Window,
+        scope: &impl SheetPaintScope,
+    ) {
+        let Some(slots) = self.part_lines.get_mut(part_id.0 as usize) else {
+            return;
+        };
+        let slot = if is_value {
+            &mut slots.value
+        } else {
+            &mut slots.designator
+        };
+        if slot.display.is_empty() || (slot.bucket == bucket.half_px && slot.line.is_some()) {
+            return;
+        }
+        let shaped = shape_display_line(&slot.display, bucket, &self.semibold, ink, window, scope);
+        slot.bucket = bucket.half_px;
+        slot.line = Some(shaped);
+        #[cfg(test)]
+        {
+            self.shape_count += 1;
+        }
+    }
+
+    fn ensure_label_slot_shaped(
+        &mut self,
+        label_id: LabelId,
+        bucket: FontBucket,
+        ink: Hsla,
+        window: &Window,
+        scope: &impl SheetPaintScope,
+    ) {
+        let Some(slot) = self.label_lines.get_mut(label_id.0 as usize) else {
+            return;
+        };
+        if slot.display.is_empty() || (slot.bucket == bucket.half_px && slot.line.is_some()) {
+            return;
+        }
+        let shaped = shape_display_line(&slot.display, bucket, &self.medium, ink, window, scope);
+        slot.bucket = bucket.half_px;
+        slot.line = Some(shaped);
+        #[cfg(test)]
+        {
+            self.shape_count += 1;
+        }
+    }
+
+    fn ensure_pin_slot_shaped(
+        &mut self,
+        slot_idx: usize,
+        bucket: FontBucket,
+        ink: Hsla,
+        window: &Window,
+        scope: &impl SheetPaintScope,
+    ) {
+        let slot = &mut self.pin_lines[slot_idx];
+        if slot.display.is_empty() || (slot.bucket == bucket.half_px && slot.line.is_some()) {
+            return;
+        }
+        let shaped = shape_display_line(&slot.display, bucket, &self.medium, ink, window, scope);
+        slot.bucket = bucket.half_px;
+        slot.line = Some(shaped);
+        #[cfg(test)]
+        {
+            self.shape_count += 1;
+        }
+    }
+
+    fn collect_part_item(
+        &mut self,
+        part_id: PartId,
+        frame: &TextFrame<'_>,
+        buckets: Buckets,
+        window: Option<&Window>,
+        scope: &impl SheetPaintScope,
+    ) {
+        let Some(part) = frame.doc.part(part_id) else {
+            return;
+        };
+        if part.symbol.index() >= self.library.len() {
+            return;
+        }
+        let has_desig = !part.designator.is_empty();
+        let has_value = !part.value.is_empty();
+        if let Some(bucket) = buckets.part
+            && (has_desig || has_value)
+        {
+            let slots = self.part_lines.get(part_id.0 as usize);
+            let placement = slots.map_or(LabelPlacement::default(), |s| s.placement);
+            let has_both = has_desig && has_value;
+            let pair_flag = u16::from(has_both);
+
+            let desig_cached = slots
+                .map(|s| s.designator.bucket == bucket.half_px && s.designator.line.is_some())
+                .unwrap_or(false);
+            let value_cached = slots
+                .map(|s| s.value.bucket == bucket.half_px && s.value.line.is_some())
+                .unwrap_or(false);
+
+            // If either field is unshaped and the conservative part-label box straddles a viewport
+            // edge, shape before culling so edited or wide strings never get misclassified.
+            if let Some(window) = window
+                && ((has_desig && !desig_cached) || (has_value && !value_cached))
+            {
+                let def = self.library.get(part.symbol);
+                let desig_c = has_desig.then(|| {
+                    conservative_metrics(slots.map(|s| &s.designator), &part.designator, bucket)
+                });
+                let value_c = has_value
+                    .then(|| conservative_metrics(slots.map(|s| &s.value), &part.value, bucket));
+                let block_w_c = desig_c
+                    .map_or(0.0, |m| m.width)
+                    .max(value_c.map_or(0.0, |m| m.width));
+                let mut any_intersects = false;
+                let mut all_strictly_inside = true;
+                for (is_value, opt_m) in [(false, desig_c), (true, value_c)] {
+                    let Some(m) = opt_m else {
+                        continue;
+                    };
+                    let layout = PartLabelLayout {
+                        placement,
+                        is_value,
+                        has_both,
+                        block_w: block_w_c,
+                    };
+                    let (lx, by) = part_label_origin(part, def, layout, m, frame.camera);
+                    let hits =
+                        label_intersects_viewport(lx, by, m, frame.scale_factor, frame.viewport);
+                    let inside = label_strictly_inside_viewport(
+                        lx,
+                        by,
+                        m,
+                        frame.scale_factor,
+                        frame.viewport,
+                    );
+                    any_intersects |= hits;
+                    all_strictly_inside &= inside;
+                }
+                if !any_intersects {
+                    // Definitely outside viewport; skip part text without shaping.
+                    if let Some(pin_bucket) = buckets.pin {
+                        self.collect_part_pins(part_id, pin_bucket, frame, Some(window), scope);
+                    }
+                    return;
+                }
+                if !all_strictly_inside {
+                    if has_desig {
+                        self.ensure_part_slot_shaped(
+                            part_id, false, bucket, frame.ink, window, scope,
+                        );
+                    }
+                    if has_value {
+                        self.ensure_part_slot_shaped(
+                            part_id, true, bucket, frame.ink, window, scope,
+                        );
+                    }
+                }
+            }
+
+            let def = self.library.get(part.symbol);
+            let slots = self.part_lines.get(part_id.0 as usize);
+            let desig_m = has_desig
+                .then(|| line_metrics(slots.map(|s| &s.designator), &part.designator, bucket));
+            let value_m =
+                has_value.then(|| line_metrics(slots.map(|s| &s.value), &part.value, bucket));
+            let block_w = desig_m
+                .map_or(0.0, |m| m.width)
+                .max(value_m.map_or(0.0, |m| m.width));
+
+            if let Some(m) = desig_m {
+                let layout = PartLabelLayout {
+                    placement,
+                    is_value: false,
+                    has_both,
+                    block_w,
+                };
+                let (left_x, baseline_y) = part_label_origin(part, def, layout, m, frame.camera);
+                if label_intersects_viewport(
+                    left_x,
+                    baseline_y,
+                    m,
+                    frame.scale_factor,
+                    frame.viewport,
+                ) {
+                    push_candidate(
+                        &mut self.candidates,
+                        Candidate {
+                            kind: LabelKind::Designator,
+                            bucket,
+                            world: part.at,
+                            id: part_id.0,
+                            extra: pair_flag,
+                            symbol: part.symbol,
+                        },
+                    );
+                }
+            }
+            if let Some(m) = value_m {
+                let layout = PartLabelLayout {
+                    placement,
+                    is_value: true,
+                    has_both,
+                    block_w,
+                };
+                let (left_x, baseline_y) = part_label_origin(part, def, layout, m, frame.camera);
+                if label_intersects_viewport(
+                    left_x,
+                    baseline_y,
+                    m,
+                    frame.scale_factor,
+                    frame.viewport,
+                ) {
+                    push_candidate(
+                        &mut self.candidates,
+                        Candidate {
+                            kind: LabelKind::Value,
+                            bucket,
+                            world: part.at,
+                            id: part_id.0,
+                            extra: pair_flag,
+                            symbol: part.symbol,
+                        },
+                    );
+                }
+            }
+        }
+        if let Some(bucket) = buckets.pin {
+            self.collect_part_pins(part_id, bucket, frame, window, scope);
+        }
+    }
+
+    fn collect_part_pins(
+        &mut self,
+        part_id: PartId,
+        bucket: FontBucket,
+        frame: &TextFrame<'_>,
+        window: Option<&Window>,
+        scope: &impl SheetPaintScope,
+    ) {
+        let Some(part) = frame.doc.part(part_id) else {
+            return;
+        };
+        if part.symbol.index() >= self.library.len() {
+            return;
+        }
+        let pin_count = self.library.get(part.symbol).pins.len();
+        if pin_count <= 1 {
+            return;
+        }
+        let pin_base = self.pin_offsets[part.symbol.index()];
+        for pin_idx in 0..pin_count {
+            let (pin_number, pin_at) = {
+                let pin = &self.library.get(part.symbol).pins[pin_idx];
+                (pin.number, pin.at)
+            };
+            if pin_number.is_empty() {
+                continue;
+            }
+            let slot_idx = pin_base + pin_idx;
+            let cached = self.pin_lines[slot_idx].bucket == bucket.half_px
+                && self.pin_lines[slot_idx].line.is_some();
+            if let Some(window) = window
+                && !cached
+            {
+                let def = self.library.get(part.symbol);
+                let cm = conservative_metrics(Some(&self.pin_lines[slot_idx]), pin_number, bucket);
+                let (lx, by) = pin_number_origin(part, def, pin_at, cm, frame.camera);
+                if !label_intersects_viewport(lx, by, cm, frame.scale_factor, frame.viewport) {
+                    continue;
+                }
+                if !label_strictly_inside_viewport(lx, by, cm, frame.scale_factor, frame.viewport) {
+                    self.ensure_pin_slot_shaped(
+                        slot_idx,
+                        bucket,
+                        frame.ink_secondary,
+                        window,
+                        scope,
+                    );
+                }
+            }
+            let def = self.library.get(part.symbol);
+            let m = line_metrics(Some(&self.pin_lines[slot_idx]), pin_number, bucket);
+            let (left_x, baseline_y) = pin_number_origin(part, def, pin_at, m, frame.camera);
+            if !label_intersects_viewport(left_x, baseline_y, m, frame.scale_factor, frame.viewport)
+            {
+                continue;
+            }
+            let pin_world = part.at + part.orient.apply(pin_at);
+            push_candidate(
+                &mut self.candidates,
+                Candidate {
+                    kind: LabelKind::PinNumber,
+                    bucket,
+                    world: pin_world,
+                    id: part_id.0,
+                    extra: pin_idx as u16,
+                    symbol: part.symbol,
+                },
+            );
+        }
+    }
+
+    fn collect_label_item(
+        &mut self,
+        label_id: LabelId,
+        bucket: FontBucket,
+        frame: &TextFrame<'_>,
+        window: Option<&Window>,
+        scope: &impl SheetPaintScope,
+    ) {
+        let Some(label) = frame.doc.label(label_id) else {
+            return;
+        };
+        if label.text.is_empty() {
+            return;
+        }
+        let anchor = frame.camera.world_to_screen(label.at);
+        let left_x = anchor.x + 2.0 * frame.camera.zoom();
+        let baseline_y = anchor.y;
+        let cached = self
+            .label_lines
+            .get(label_id.0 as usize)
+            .is_some_and(|s| s.bucket == bucket.half_px && s.line.is_some());
+        if let Some(window) = window
+            && !cached
+        {
+            let cm = conservative_metrics(
+                self.label_lines.get(label_id.0 as usize),
+                &label.text,
+                bucket,
+            );
+            if !label_intersects_viewport(
+                left_x,
+                baseline_y,
+                cm,
+                frame.scale_factor,
+                frame.viewport,
+            ) {
+                return;
+            }
+            if !label_strictly_inside_viewport(
+                left_x,
+                baseline_y,
+                cm,
+                frame.scale_factor,
+                frame.viewport,
+            ) {
+                self.ensure_label_slot_shaped(label_id, bucket, frame.ink_secondary, window, scope);
+            }
+        }
+        let m = line_metrics(
+            self.label_lines.get(label_id.0 as usize),
+            &label.text,
+            bucket,
+        );
+        if !label_intersects_viewport(left_x, baseline_y, m, frame.scale_factor, frame.viewport) {
+            return;
+        }
+        push_candidate(
+            &mut self.candidates,
+            Candidate {
+                kind: LabelKind::NetLabel,
+                bucket,
+                world: label.at,
+                id: label_id.0,
+                extra: 0,
+                symbol: SymbolId(0),
+            },
+        );
     }
 
     fn shape_missing(
@@ -693,95 +1061,33 @@ impl TextCache {
             let c = self.candidates[index];
             match c.kind {
                 LabelKind::Designator | LabelKind::Value => {
-                    let Some(part) = frame.doc.part(PartId(c.id)) else {
-                        continue;
-                    };
-                    let Some(slots) = self.part_lines.get_mut(c.id as usize) else {
-                        continue;
-                    };
-                    let (arc_text, slot) = if c.kind == LabelKind::Designator {
-                        (&part.designator, &mut slots.designator)
-                    } else {
-                        (&part.value, &mut slots.value)
-                    };
-                    if slot.bucket == c.bucket.half_px
-                        && slot
-                            .line
-                            .as_ref()
-                            .is_some_and(|l| matches_flattened(l.text.as_str(), arc_text))
-                    {
-                        continue;
-                    }
-                    let shaped = shape_arc_line(
-                        arc_text,
-                        &mut self.flatten_buf,
+                    self.ensure_part_slot_shaped(
+                        PartId(c.id),
+                        c.kind == LabelKind::Value,
                         c.bucket,
-                        &self.semibold,
                         frame.ink,
                         window,
                         scope,
                     );
-                    slot.bucket = c.bucket.half_px;
-                    slot.line = Some(shaped);
-                    #[cfg(test)]
-                    {
-                        self.shape_count += 1;
-                    }
                 }
                 LabelKind::NetLabel => {
-                    let Some(label) = frame.doc.label(LabelId(c.id)) else {
-                        continue;
-                    };
-                    let Some(slot) = self.label_lines.get_mut(c.id as usize) else {
-                        continue;
-                    };
-                    if slot.bucket == c.bucket.half_px
-                        && slot
-                            .line
-                            .as_ref()
-                            .is_some_and(|l| matches_flattened(l.text.as_str(), &label.text))
-                    {
-                        continue;
-                    }
-                    let shaped = shape_arc_line(
-                        &label.text,
-                        &mut self.flatten_buf,
+                    self.ensure_label_slot_shaped(
+                        LabelId(c.id),
                         c.bucket,
-                        &self.medium,
                         frame.ink_secondary,
                         window,
                         scope,
                     );
-                    slot.bucket = c.bucket.half_px;
-                    slot.line = Some(shaped);
-                    #[cfg(test)]
-                    {
-                        self.shape_count += 1;
-                    }
                 }
                 LabelKind::PinNumber => {
-                    let pin_idx = usize::from(c.extra);
-                    let slot_idx = self.pin_offsets[c.symbol.index()] + pin_idx;
-                    let slot = &mut self.pin_lines[slot_idx];
-                    if slot.bucket == c.bucket.half_px && slot.line.is_some() {
-                        continue;
-                    }
-                    let text = self.library.get(c.symbol).pins[pin_idx].number;
-                    let shaped = shape_static_line(
-                        text,
-                        &mut self.flatten_buf,
+                    let slot_idx = self.pin_offsets[c.symbol.index()] + usize::from(c.extra);
+                    self.ensure_pin_slot_shaped(
+                        slot_idx,
                         c.bucket,
-                        &self.medium,
                         frame.ink_secondary,
                         window,
                         scope,
                     );
-                    slot.bucket = c.bucket.half_px;
-                    slot.line = Some(shaped);
-                    #[cfg(test)]
-                    {
-                        self.shape_count += 1;
-                    }
                 }
             }
         }
@@ -917,31 +1223,51 @@ fn push_candidate(candidates: &mut Vec<Candidate>, candidate: Candidate) {
     candidates.push(candidate);
 }
 
-fn has_line_break(text: &str) -> bool {
-    text.bytes().any(|b| b == b'\n' || b == b'\r')
+fn needs_escape(text: &str) -> bool {
+    text.bytes().any(|b| b == b'\n' || b == b'\r' || b == b'\\')
 }
 
-/// Flattens line breaks into visible escapes (`\n` -> `\\n`, `\r` -> `\\r`) so single-line
-/// shaping never panics and distinct multiline net names remain visually distinct.
-fn flatten_into(text: &str, out: &mut String) {
-    out.clear();
+/// Injectively flattens control breaks and backslashes (`\\` -> `\\\\`, `\n` -> `\\n`,
+/// `\r` -> `\\r`) so single-line shaping never panics and distinct net names (including raw
+/// newline vs literal `\n`) remain visually distinct.
+fn escape_single_line(text: &str) -> SharedString {
+    let mut out = String::with_capacity(text.len() + 4);
     for ch in text.chars() {
         match ch {
+            '\\' => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             other => out.push(other),
         }
     }
+    SharedString::from(out)
 }
 
-/// Allocation-free check whether `cached` equals `flatten_into(raw)`.
-fn matches_flattened(cached: &str, raw: &str) -> bool {
-    if !has_line_break(raw) {
+fn prepare_display(raw: &Arc<str>) -> SharedString {
+    if needs_escape(raw) {
+        escape_single_line(raw)
+    } else {
+        SharedString::from(raw.clone())
+    }
+}
+
+fn prepare_static_display(raw: &'static str) -> SharedString {
+    if needs_escape(raw) {
+        escape_single_line(raw)
+    } else {
+        SharedString::new_static(raw)
+    }
+}
+
+/// Allocation-free check whether `cached` equals `escape_single_line(raw)`.
+fn matches_escaped(cached: &str, raw: &str) -> bool {
+    if !needs_escape(raw) {
         return cached == raw;
     }
     let mut rest = cached.as_bytes();
     for &b in raw.as_bytes() {
         let expected: &[u8] = match b {
+            b'\\' => b"\\\\",
             b'\n' => b"\\n",
             b'\r' => b"\\r",
             _ => {
@@ -965,7 +1291,13 @@ fn matches_flattened(cached: &str, raw: &str) -> bool {
 
 fn flattened_char_len(text: &str) -> usize {
     text.chars()
-        .map(|c| if c == '\n' || c == '\r' { 2 } else { 1 })
+        .map(|c| {
+            if c == '\n' || c == '\r' || c == '\\' {
+                2
+            } else {
+                1
+            }
+        })
         .sum()
 }
 
@@ -986,10 +1318,40 @@ fn line_metrics(slot: Option<&CachedLine>, raw_text: &str, bucket: FontBucket) -
         return metrics_from_shaped(line);
     }
     let font_size = f64::from(bucket.pixels());
+    let chars = slot.filter(|s| !s.display.is_empty()).map_or_else(
+        || flattened_char_len(raw_text),
+        |s| s.display.chars().count(),
+    );
     LineMetrics {
-        width: flattened_char_len(raw_text) as f64 * font_size * 0.62,
+        width: chars as f64 * font_size * 0.62,
         ascent: font_size * 0.9,
         descent: font_size * 0.25,
+        font_size,
+    }
+}
+
+/// Conservative upper-bound metrics used only for unshaped edge-band detection so wide glyphs
+/// (e.g. `WW`) cannot be prematurely culled before shaping.
+fn conservative_metrics(
+    slot: Option<&CachedLine>,
+    raw_text: &str,
+    bucket: FontBucket,
+) -> LineMetrics {
+    if let Some(slot) = slot
+        && slot.bucket == bucket.half_px
+        && let Some(line) = slot.line.as_ref()
+    {
+        return metrics_from_shaped(line);
+    }
+    let font_size = f64::from(bucket.pixels());
+    let chars = slot.filter(|s| !s.display.is_empty()).map_or_else(
+        || flattened_char_len(raw_text),
+        |s| s.display.chars().count(),
+    );
+    LineMetrics {
+        width: chars as f64 * font_size * 1.25,
+        ascent: font_size * 1.2,
+        descent: font_size * 0.45,
         font_size,
     }
 }
@@ -1012,44 +1374,26 @@ fn label_intersects_viewport(
         || top_y > f32::from(viewport.bottom()))
 }
 
-fn shape_arc_line(
-    full: &Arc<str>,
-    flatten_buf: &mut String,
-    bucket: FontBucket,
-    font: &Font,
-    color: Hsla,
-    window: &Window,
-    scope: &impl SheetPaintScope,
-) -> ShapedLine {
-    let mut out = None;
-    let multiline = has_line_break(full);
-    if multiline {
-        scope.gpui(|| flatten_into(full, flatten_buf));
-    }
-    scope.gpui(|| {
-        let shared = if multiline {
-            SharedString::new(flatten_buf.as_str())
-        } else {
-            SharedString::from(full.clone())
-        };
-        let run = TextRun {
-            len: shared.len(),
-            font: font.clone(),
-            color,
-            ..Default::default()
-        };
-        out = Some(
-            window
-                .text_system()
-                .shape_line(shared, bucket.pixels(), &[run], None),
-        );
-    });
-    out.expect("scope.gpui runs closure")
+fn label_strictly_inside_viewport(
+    left_x: f64,
+    baseline_y: f64,
+    m: LineMetrics,
+    sf: f32,
+    viewport: Bounds<Pixels>,
+) -> bool {
+    let origin_x = snap_logical(left_x, sf) as f32;
+    let baseline_y = snap_logical(baseline_y, sf) as f32;
+    let top_y = baseline_y - m.ascent as f32;
+    let bottom_y = baseline_y + m.descent as f32;
+    let right_x = origin_x + m.width as f32;
+    origin_x >= f32::from(viewport.left())
+        && right_x <= f32::from(viewport.right())
+        && top_y >= f32::from(viewport.top())
+        && bottom_y <= f32::from(viewport.bottom())
 }
 
-fn shape_static_line(
-    text: &'static str,
-    flatten_buf: &mut String,
+fn shape_display_line(
+    display: &SharedString,
     bucket: FontBucket,
     font: &Font,
     color: Hsla,
@@ -1057,16 +1401,8 @@ fn shape_static_line(
     scope: &impl SheetPaintScope,
 ) -> ShapedLine {
     let mut out = None;
-    let multiline = has_line_break(text);
-    if multiline {
-        scope.gpui(|| flatten_into(text, flatten_buf));
-    }
+    let shared = display.clone();
     scope.gpui(|| {
-        let shared = if multiline {
-            SharedString::new(flatten_buf.as_str())
-        } else {
-            SharedString::new_static(text)
-        };
         let run = TextRun {
             len: shared.len(),
             font: font.clone(),
@@ -1536,7 +1872,7 @@ mod tests {
         let mut cache = TextCache::new();
         cache.sync(&doc, 1.0);
         let initial_cap = cache.candidates.capacity();
-        cache.collect_candidates(&frame, buckets);
+        cache.collect_candidates(&frame, buckets, None, &());
         assert_eq!(cache.candidates.len(), MAX_VISIBLE_LABELS);
         assert_eq!(
             cache.candidates.capacity(),
@@ -1580,7 +1916,7 @@ mod tests {
         };
         let mut cache2 = TextCache::new();
         cache2.sync(&doc, 1.0);
-        cache2.collect_candidates(&frame_rev, buckets);
+        cache2.collect_candidates(&frame_rev, buckets, None, &());
         let keys = |c: &TextCache| -> Vec<_> {
             c.candidates
                 .iter()
@@ -1592,30 +1928,139 @@ mod tests {
 
     #[test]
     fn multiline_net_labels_flatten_distinctly_without_truncating() {
-        let mut a = String::new();
-        let mut b = String::new();
-        let mut c = String::new();
-        let mut d = String::new();
-        flatten_into("BUS\nA", &mut a);
-        flatten_into("BUS\nB", &mut b);
-        flatten_into("BUS\r\nA", &mut c);
-        flatten_into("BUS A", &mut d);
+        let a = escape_single_line("BUS\nA");
+        let b = escape_single_line("BUS\nB");
+        let c = escape_single_line("BUS\r\nA");
+        let d = escape_single_line("BUS A");
+        let lit_n = escape_single_line("BUS\\nA");
+        let lit_r = escape_single_line("BUS\\r\\nA");
+        let lit_bs = escape_single_line("BUS\\A");
 
-        for s in [&a, &b, &c, &d] {
+        for s in [&a, &b, &c, &d, &lit_n, &lit_r, &lit_bs] {
             assert!(!s.contains('\n') && !s.contains('\r'));
         }
         assert_ne!(a, b, "BUS\\nA and BUS\\nB must stay visually distinct");
+        assert_ne!(
+            a, lit_n,
+            "actual newline and literal \\n must stay visually distinct"
+        );
+        assert_ne!(
+            c, lit_r,
+            "actual CRLF and literal \\r\\n must stay visually distinct"
+        );
         assert_ne!(a, c);
         assert_ne!(a, d);
-        assert_eq!(a, "BUS\\nA");
-        assert_eq!(b, "BUS\\nB");
-        assert_eq!(c, "BUS\\r\\nA");
+        assert_eq!(a.as_str(), "BUS\\nA");
+        assert_eq!(b.as_str(), "BUS\\nB");
+        assert_eq!(c.as_str(), "BUS\\r\\nA");
+        assert_eq!(lit_n.as_str(), "BUS\\\\nA");
+        assert_eq!(lit_r.as_str(), "BUS\\\\r\\\\nA");
+        assert_eq!(lit_bs.as_str(), "BUS\\\\A");
 
-        assert!(matches_flattened(&a, "BUS\nA"));
-        assert!(!matches_flattened(&a, "BUS\nB"));
-        assert!(matches_flattened(&c, "BUS\r\nA"));
-        assert!(matches_flattened("VCC", "VCC"));
-        assert!(!matches_flattened("VCC", "VCC\n2"));
+        assert!(matches_escaped(a.as_str(), "BUS\nA"));
+        assert!(!matches_escaped(a.as_str(), "BUS\\nA"));
+        assert!(!matches_escaped(a.as_str(), "BUS\nB"));
+        assert!(matches_escaped(lit_n.as_str(), "BUS\\nA"));
+        assert!(!matches_escaped(lit_n.as_str(), "BUS\nA"));
+        assert!(matches_escaped(c.as_str(), "BUS\r\nA"));
+        assert!(matches_escaped("VCC", "VCC"));
+        assert!(!matches_escaped("VCC", "VCC\n2"));
+        assert!(!matches_escaped("VCC", "VCC\\2"));
+    }
+
+    #[test]
+    fn edge_crossing_long_net_label_and_text_edit_stay_visible() {
+        let mut doc = Doc::new();
+        let bounds = viewport();
+        let camera = Camera::new(Pt::ZERO, 1.0, bounds);
+        let view = camera.visible();
+        // Anchor a net label just off the left edge of `camera.visible()` (so `doc.query(view)`
+        // alone does not return it), starting with short text `"I"` that does not reach the
+        // viewport, then edit it to a long string that reaches well inside the viewport.
+        let left_anchor = Pt {
+            x: view.min.x - 3 * GRID_NM,
+            y: 0,
+        };
+        let add = doc
+            .apply(Command::AddLabel(Label {
+                at: left_anchor,
+                text: "I".into(),
+            }))
+            .unwrap();
+        let ItemId::Label(label_id) = add.added[0] else {
+            unreachable!()
+        };
+
+        let mut app = gpui::TestApp::new();
+        let mut window = app.open_window_with_options(
+            gpui::WindowOptions {
+                window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            |_, _| gpui::Empty,
+        );
+        let mut cache = TextCache::new();
+        let ink = crate::sheet::gpui_color(omnia_theme::GRAPHITE.stage_ink);
+        let ink2 = crate::sheet::gpui_color(omnia_theme::GRAPHITE.stage_ink_secondary);
+        let buckets = Buckets {
+            part: FontBucket::from_logical(PART_LABEL_PX),
+            net: FontBucket::from_logical(NET_LABEL_PX),
+            pin: pin_number_bucket(&camera),
+        };
+
+        window.update(|_, window, _| {
+            cache.sync(&doc, 1.0);
+            let area = cache.expanded_query_area(&camera, buckets).unwrap();
+            doc.query(area, &mut cache.query_buf);
+            let frame = TextFrame {
+                doc: &doc,
+                parts: &[],
+                labels: &[],
+                camera: &camera,
+                viewport: bounds,
+                scale_factor: 1.0,
+                ink,
+                ink_secondary: ink2,
+            };
+            cache.collect_from_query_buf(&frame, buckets, window, &());
+            assert!(
+                cache.candidates.is_empty(),
+                "short off-left label `I` should not reach the viewport"
+            );
+
+            // Edit the same label without moving the camera so its text extends into the viewport.
+            doc.apply(Command::SetText {
+                item: ItemId::Label(label_id),
+                field: omnia_doc::TextField::Label,
+                text: "WWWWWWWWWWWWWWWW".into(),
+            })
+            .unwrap();
+            cache.sync(&doc, 1.0);
+            assert!(
+                cache.label_lines[label_id.0 as usize].line.is_none(),
+                "sync must clear stale shaped line on text edit"
+            );
+            let area2 = cache.expanded_query_area(&camera, buckets).unwrap();
+            doc.query(area2, &mut cache.query_buf);
+            let frame2 = TextFrame {
+                doc: &doc,
+                parts: &[],
+                labels: &[],
+                camera: &camera,
+                viewport: bounds,
+                scale_factor: 1.0,
+                ink,
+                ink_secondary: ink2,
+            };
+            cache.collect_from_query_buf(&frame2, buckets, window, &());
+            assert_eq!(
+                cache.candidates.len(),
+                1,
+                "widened off-left net label must be discovered and enter candidates immediately"
+            );
+            assert_eq!(cache.candidates[0].kind, LabelKind::NetLabel);
+            assert_eq!(cache.candidates[0].id, label_id.0);
+        });
     }
 
     #[test]
@@ -1682,7 +2127,7 @@ mod tests {
                     pin: pin_number_bucket(cam),
                 };
                 cache.sync(doc, sf);
-                cache.collect_candidates(&frame, buckets);
+                cache.collect_candidates(&frame, buckets, Some(window), &());
                 cache.shape_missing(&frame, window, &());
             };
 
