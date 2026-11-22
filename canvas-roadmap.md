@@ -419,7 +419,7 @@ of the `canvas` lane.
   reference machine and log that.
 - Done when: the test passes on unchanged code and fails when a wire is moved one pixel.
 
-### T3.3 Wien oscillator fixture · todo → H2
+### T3.3 Wien oscillator fixture · done → H2
 - Lane: bench · Depends: T3.1, T3.2 · Read: `build-omnia.mjs` lines 159 to 234
 - Owns: `tests/golden/wien-oscillator.ron` and its PNGs
 - Do: rebuild the mockup's sheet as a fixture from the coordinates in `build-omnia.mjs`
@@ -1843,3 +1843,32 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        goldens (as flagged in T3.2's log). Note for T3.4: `omnia-bench/src/harness.rs`
                        currently registers Inter only for S5 spike runs, not `Sheet::Stress(_)` runs;
                        register bundled Inter Medium and SemiBold there before gating `text` on Orion.
+2026-11-22 T3.3 done — H2 approved by owner in the T3.3 task thread (2026-11-22). Built
+                       `tests/golden/wien-oscillator.ron` from `design/build-omnia.mjs` lines
+                       159–234 (11 parts, 31 normal-form wires, 1 net label `N+`, 7 junctions,
+                       9 nets; `20 px = GRID_NM`, origin shifted `(-690, -370)` px so mockup grid
+                       dots align with `GRID_NM` and `(mx, my)` lands at screen `(mx, my)` at 100%
+                       zoom). Kept exact `build-omnia.mjs` coordinates (including off-lattice `C2`
+                       at `y = 456` and left `GND` at `x = 285`) for pixel-exact alignment with
+                       `workspace-graphite.png` — note that those two points sit off
+                       `PIN_LATTICE_NM`, so future tasks calling `assert_normal_form` (`WINV3`) or
+                       `Move`/`DragSegment` on this visual fixture will hit off-lattice wire ends.
+                       Omitted floating oscilloscope, on-sheet `XSC1` symbol/probes, `+12V`/`−12V`
+                       pills, and `R3` interactive box. Extended `tests/golden/src/lib.rs`
+                       (`Shot::content`) and `tests/golden/tests/sheet.rs` (outside Owns, T3.2's
+                       `bench` lane) so fixtures of different logical sizes (`640x400` and
+                       `1366x718`) render in one hidden window; `inverting-amp` goldens are
+                       unchanged. Committed all 6 `wien-oscillator-{graphite,gray}-{100,125,150}.png`
+                       goldens (`1366x718`, `1708x898`, `2049x1077`; `GRAPHITE` and `GRAY`
+                       byte-identical). Rendered on Windows 11 dev laptop (i7-14650HX, Intel UHD
+                       Graphics active on 1920x1200 @ 165 Hz, 125%; RTX 5060 Laptop GPU present on
+                       1920x1080 @ 60 Hz; AC, Silent; non-reference). Side-by-side against cropped
+                       `workspace-graphite.png` and full difference list are in
+                       `docs/measurements/T3.3.md`. Independent review by Claude Opus 5.5 approved
+                       with minor findings (all addressed). Follow-up logged for `sheet/text.rs`:
+                       `R4` automatic label overlaps pin `2` and the right tap wire, and `N+`
+                       baseline touches the horizontal wire. Standard checks: `cargo fmt --all --check`,
+                       workspace clippy, bench feature clippy, and `cargo test --workspace` (all
+                       12 goldens 0 differing pixels) pass locally; `cargo deny check` passes
+                       bans/licenses/sources but reports pre-existing `RUSTSEC-2026-0592` on
+                       `url 2.5.8` in `Cargo.lock` (out of T3.3 scope). No new dependencies.
