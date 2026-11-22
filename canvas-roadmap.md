@@ -363,7 +363,7 @@ of the `canvas` lane.
   | --- | --- | --- |
   | B2 | `bench start --sheet 1k` minus `bench start` | < 300 ms |
   | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes, compositor-side ones excluded per plan 2.1), max ≤ 33.3 ms |
-  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes (compositor-side ones excluded per plan 2.1; 10k zoom far-zoom intervals reported as the known limit until T2.9), max ≤ 50 ms |
+  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes (compositor-side ones excluded per plan 2.1), max ≤ 50 ms |
   | B9 | `memory_mb` in the `10k` run | < 300 |
   | B10 | all reports | `allocs_per_frame.ours == 0` |
 
@@ -371,7 +371,7 @@ of the `canvas` lane.
   record and set `needs-human`. If B4 misses, apply the "fails at 70k" row of the outcome
   table before reporting.
 
-### T2.9 Far-zoom wire stubs · todo
+### T2.9 Far-zoom wire stubs · needs-human
 - Lane: canvas · Depends: T2.7 · Read: D4, D5, K9, plan 2.1 "B4 known limit",
   `docs/measurements/T2.7-wire.md`, G3, G12
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `crates/omnia-canvas/src/sheet/lod.rs`,
@@ -1716,3 +1716,75 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        replays byte-identically (exit 0). T2.9 remains planned for balanced/
                        powersave laptop headroom and to remove the B4 known limit.
                        Evidence: docs/measurements/T2.7-wire/orion-2026-11-20-performance/.
+2026-11-21 T2.9 needs-human — D4, D5, K9. Added `lod::MIN_WIRE_RUN_PX = 2.5` and
+                       `lod::wire_run(length_px) -> bool` (hidden below 2.5 logical px, drawn at
+                       or above) in `crates/omnia-canvas/src/sheet/lod.rs`, `Segment::length_px`
+                       in `wires.rs` (i64 subtraction before f64 scaling, INV8), and per-frame
+                       zero-allocation filtering of merged runs in the far-zoom branch of
+                       `DocumentCache::draw` in `sheet.rs` (`MergedSegments` cache, near-zoom
+                       path, junctions, boxes and sprite layer unchanged). Added unit tests
+                       covering the K9 boundary, below/at/above threshold runs, near-zoom
+                       invariance, long wires composed of short collinear segments across
+                       junctions, and zero allocations across far-zoom camera changes. Removed
+                       the B4 known limit from `canvas-plan.md` (§2.1, B4 row, D4) and
+                       `canvas-roadmap.md` (T2.7 table), added the 2.5 logical-px stub
+                       threshold to K9, and froze a clean Orion gate script
+                       `docs/measurements/T2.9/gate.py` without `far_zoom`/`scope_known_limit`
+                       (preserving `docs/measurements/T2.7-wire/gate.py` for archived T2.7
+                       replay). Deviation outside T2.9's Owns list (`bench-baseline/` belongs
+                       to T2.6, owner accepted 2026-11-21): tightened `bench-baseline/1k-zoom.json`
+                       and `bench-baseline/10k-zoom.json` to the new lower deterministic zoom
+                       counts (`10k-zoom` peak quads 28,279 -> 8,325, −70.6%; sweep quads
+                       −54.8%; `1k-zoom` sweep quads −24.0%; pan baselines byte-identical; all
+                       4 cases pass `bench compare` against `main`). Non-reference Windows
+                       measurements
+                       (i7-14650HX, Intel UHD Graphics, Windows 11, 1920x1200 @ 165 Hz, 125%
+                       scaling, AC, Silent; certifies no budget): `--features scene-counts` on
+                       10k zoom at frames 376/420/461/500/545 gives quads before -> after at
+                       1920x1080 (s100): 2944->2944, 16070->1214, 28279->8325, 16791->1273,
+                       3072->3072; at 1536x864 (s125): 1951->1951, 12906->978, 28279->8325,
+                       13379->1011, 1985->1985 (sprites unchanged on every frame); full
+                       600-warmup + 600-frame 10k zoom runs report `allocs_per_frame.ours == 0`
+                       (B10) at both viewports. Standard checks (fmt, workspace clippy,
+                       feature-enabled bench clippy, workspace tests, Windows goldens unchanged,
+                       cargo deny) pass locally. Awaiting the full Orion gate run via
+                       `docs/measurements/T2.9/gate.py` at 100% and 125%.
+                       Evidence: docs/measurements/T2.9.md.
+2026-11-21 T2.9 blocked (Orion gate fail: B3 1k attribution) — D4, D5, K9, plan 2.1. Full
+                       Orion reference campaign, one run, no retries: clean checkout 8fdab7a
+                       (task/T2.9-far-zoom-wire-stubs), release omnia-bench SHA-256
+                       23a80c92...c4567 before and after, i5-7300U, HD Graphics 620 (KBL
+                       GT2) on the Mesa open-source Vulkan driver, Linux 7.2.7 Wayland,
+                       eDP-1 1920x1080 at 60.008 Hz at 100% and 125%, AC online and the
+                       performance governor on all four CPUs in all 240 snapshots, under
+                       kde-inhibit; 120 invocations 21:28:17-21:58:02 EST, all exit 0.
+                       gate.py (docs/measurements/T2.9/gate.py, no far_zoom/KNOWN) recorded
+                       fail. B4 holds with no known limit: zero intervals over 2.5 refreshes
+                       in all 40 10k runs; 10k-zoom p99 5.016 / 4.954 ms and 10k-pan 2.257 /
+                       1.378 ms (< 33.3); B5 worst 15.286 / 9.183 ms (<= 50); B9 92.881 /
+                       94.432 MB (< 300); B10 0 in every cell; B2 delta 4.480 / 6.265 ms
+                       (< 300). B3 frame p99 passes (1k-pan 1.964 / 1.258 ms, 1k-zoom 1.635 /
+                       1.170 ms, < 16.7) as do B5 and B10, but B3's missed-refresh attribution
+                       FAILS in all four 1k cells: 1k-pan 5/10 (100%) and 8/10 (125%),
+                       1k-zoom 8/10 and 7/10 passed. 16 intervals over 1.5 refreshes (25.1 to
+                       39.9 ms), 2 compositor-side, 14 counted (13 fail criterion (b), 1 fails
+                       (c)); none untraced. The T2.7 2026-11-20 campaign on the same machine
+                       passed B3 attribution 10/10 in every cell; this report does not show
+                       the cause (the T2.9 change is in the far-zoom branch only). Plan 2.1
+                       disclosure: other apps were NOT closed; the KDE session, Akonadi,
+                       Baloo, two network tunnel/VPN daemons and the agent harness (T3 Code, t3code,
+                       claude and polling helpers) ran throughout (full list in
+                       docs/measurements/T2.9.md); AC dropped for ~40 s before the campaign
+                       and was online in all 240 snapshots; the governor was set by the
+                       agent minutes before and not restored. A first launch aborted on the
+                       clean-tree check (untracked bench-baseline/__pycache__ from a probe)
+                       before any timed run and was relaunched unchanged. Archive replays
+                       byte-identically (exit 1). Not Plan B: B4 does not miss. Blocked on
+                       the B3 result: the owner decides whether to schedule a fresh section
+                       2.1 campaign at the desk with apps closed (a new campaign, not a
+                       retry of this one) or to rule on these 1k misses. T2.9 is not done.
+                       Owner decision (2026-11-21): keep status `needs-human` (matching T1.6
+                       precedent) and merge PR #86 with this Orion evidence recorded,
+                       deferring the clean §2.1 desk run (apps/Baloo idle) to certify T2.9.
+                       Evidence: docs/measurements/T2.9.md,
+                       docs/measurements/T2.9/orion-2026-11-21/.

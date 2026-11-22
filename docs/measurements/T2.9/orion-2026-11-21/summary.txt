@@ -1,0 +1,256 @@
+Orion: Intel(R) Core(TM) i5-7300U CPU @ 2.60GHz, Linux orion-laptop 7.2.7-arch1-1 #1 SMP PREEMPT_DYNAMIC Mon, 21 Sep 2026 18:51:14 +0000 x86_64 GNU/Linux, wayland, eDP-1, source 8fdab7ad2735b7757f2bb5d87e311a199dc10f66, binary SHA-256 23a80c92664991492f5f718b1308fdbd6ae01746fdaefc355974f866ae5c4567
+Vulkan device and driver: [('Intel(R) HD Graphics 620 (KBL GT2)', 'Intel open-source Mesa driver')]
+
+s100: scale 1.0, [1920, 1080], native 1920x1080 at 60 Hz, AC power
+CPU governors, power profile and platform profile: [(('performance',), None, ())]
+PASS B2 startup delta 4.480 [0.384, 11.509] ms (< 300)
+PASS B3 1k-pan frame p99 1.964 [1.417, 2.245] ms (< 16.7)
+FAIL B3 1k-pan attribution 5/10 passed
+PASS B5 1k-pan worst frame 12.493 ms (<= 33.3)
+PASS B10 1k-pan max Omnia allocations/frame 0 (= 0)
+PASS B3 1k-zoom frame p99 1.635 [1.607, 1.988] ms (< 16.7)
+FAIL B3 1k-zoom attribution 8/10 passed
+PASS B5 1k-zoom worst frame 6.177 ms (<= 33.3)
+PASS B10 1k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B4 10k-pan frame p99 2.257 [1.942, 2.451] ms (< 33.3)
+PASS B4 10k-pan attribution 10/10 passed
+PASS B5 10k-pan worst frame 11.354 ms (<= 50)
+PASS B10 10k-pan max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan private memory 74.041 [73.125, 74.969] MB (all < 300)
+PASS B4 10k-zoom frame p99 5.016 [4.952, 5.091] ms (< 33.3)
+PASS B4 10k-zoom attribution 10/10 passed
+PASS B5 10k-zoom worst frame 15.286 ms (<= 50)
+PASS B10 10k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-zoom private memory 92.881 [91.422, 94.957] MB (all < 300)
+
+s125: scale 1.25, [1536, 864], native 1920x1080 at 60 Hz, AC power
+CPU governors, power profile and platform profile: [(('performance',), None, ())]
+PASS B2 startup delta 6.265 [2.516, 11.244] ms (< 300)
+PASS B3 1k-pan frame p99 1.258 [0.863, 1.450] ms (< 16.7)
+FAIL B3 1k-pan attribution 8/10 passed
+PASS B5 1k-pan worst frame 5.689 ms (<= 33.3)
+PASS B10 1k-pan max Omnia allocations/frame 0 (= 0)
+PASS B3 1k-zoom frame p99 1.170 [1.107, 1.839] ms (< 16.7)
+FAIL B3 1k-zoom attribution 7/10 passed
+PASS B5 1k-zoom worst frame 6.763 ms (<= 33.3)
+PASS B10 1k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B4 10k-pan frame p99 1.378 [1.085, 1.703] ms (< 33.3)
+PASS B4 10k-pan attribution 10/10 passed
+PASS B5 10k-pan worst frame 1.895 ms (<= 50)
+PASS B10 10k-pan max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan private memory 72.369 [71.926, 73.656] MB (all < 300)
+PASS B4 10k-zoom frame p99 4.954 [4.854, 5.022] ms (< 33.3)
+PASS B4 10k-zoom attribution 10/10 passed
+PASS B5 10k-zoom worst frame 9.183 ms (<= 50)
+PASS B10 10k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-zoom private memory 94.432 [94.031, 95.703] MB (all < 300)
+
+Missed-refresh attribution
+s100/1k-pan-1: FAIL; over limit 1 traced, 0 untraced; compositor-side 0, counted 1
+  frame 491: interval 27.058 ms; present end to signal 14.378 ms; main thread idle before signal 14.378 ms; signal to present end 12.680 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +14.378 ms  signal
+       +14.387 ms  dirty
+       +14.393 ms  draw start
+       +15.843 ms  draw end
+       +15.848 ms  present start
+       +27.058 ms  present end
+s100/1k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-2: FAIL; over limit 1 traced, 0 untraced; compositor-side 0, counted 1
+  frame 465: interval 32.807 ms; present end to signal 13.613 ms; main thread idle before signal 13.613 ms; signal to present end 19.195 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +13.613 ms  signal
+       +13.621 ms  dirty
+       +13.626 ms  draw start
+       +15.224 ms  draw end
+       +15.229 ms  present start
+       +32.807 ms  present end
+s100/1k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-5: FAIL; over limit 2 traced, 0 untraced; compositor-side 1, counted 1
+  frame 457: interval 33.353 ms; present end to signal 15.396 ms; main thread idle before signal 15.396 ms; signal to present end 17.956 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +15.396 ms  signal
+       +15.406 ms  dirty
+       +15.410 ms  draw start
+       +17.054 ms  draw end
+       +27.897 ms  present start
+       +33.353 ms  present end
+  frame 498: interval 33.302 ms; present end to signal 17.500 ms; main thread idle before signal 17.500 ms; signal to present end 15.802 ms; source native; compositor-side: (a) to (e) hold
+        +0.000 ms  previous present end
+       +17.500 ms  signal
+       +17.509 ms  dirty
+       +17.514 ms  draw start
+       +25.594 ms  draw end
+       +25.600 ms  present start
+       +33.302 ms  present end
+s100/1k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-6: FAIL; over limit 1 traced, 0 untraced; compositor-side 0, counted 1
+  frame 125: interval 26.631 ms; present end to signal 13.837 ms; main thread idle before signal 13.837 ms; signal to present end 12.794 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +13.837 ms  signal
+       +13.845 ms  dirty
+       +13.850 ms  draw start
+       +15.393 ms  draw end
+       +15.399 ms  present start
+       +26.631 ms  present end
+s100/10k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-7: FAIL; over limit 1 traced, 0 untraced; compositor-side 0, counted 1
+  frame 590: interval 39.869 ms; present end to signal 14.634 ms; main thread idle before signal 14.634 ms; signal to present end 25.235 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +14.634 ms  signal
+       +14.643 ms  dirty
+       +14.648 ms  draw start
+       +26.336 ms  draw end
+       +26.463 ms  present start
+       +39.869 ms  present end
+s100/1k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-9: FAIL; over limit 2 traced, 0 untraced; compositor-side 0, counted 2
+  frame 274: interval 35.429 ms; present end to signal 16.928 ms; main thread idle before signal 16.928 ms; signal to present end 18.500 ms; source native; counted: (c) fails: signal to present end not under one refresh
+        +0.000 ms  previous present end
+       +16.928 ms  signal
+       +16.938 ms  dirty
+       +16.943 ms  draw start
+       +20.093 ms  draw end
+       +20.100 ms  present start
+       +35.429 ms  present end
+  frame 275: interval 25.320 ms; present end to signal 12.560 ms; main thread idle before signal 12.560 ms; signal to present end 12.759 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +12.560 ms  signal
+       +12.568 ms  dirty
+       +12.573 ms  draw start
+       +14.178 ms  draw end
+       +14.193 ms  present start
+       +25.320 ms  present end
+s100/1k-zoom-9: FAIL; over limit 1 traced, 0 untraced; compositor-side 0, counted 1
+  frame 228: interval 35.778 ms; present end to signal 15.457 ms; main thread idle before signal 15.457 ms; signal to present end 20.321 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +15.457 ms  signal
+       +15.468 ms  dirty
+       +15.473 ms  draw start
+       +17.171 ms  draw end
+       +17.179 ms  present start
+       +35.778 ms  present end
+s100/10k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-2: FAIL; over limit 2 traced, 0 untraced; compositor-side 1, counted 1
+  frame 462: interval 31.273 ms; present end to signal 15.050 ms; main thread idle before signal 15.050 ms; signal to present end 16.223 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +15.050 ms  signal
+       +15.059 ms  dirty
+       +15.065 ms  draw start
+       +16.111 ms  draw end
+       +16.117 ms  present start
+       +31.273 ms  present end
+  frame 463: interval 28.127 ms; present end to signal 17.622 ms; main thread idle before signal 17.622 ms; signal to present end 10.505 ms; source native; compositor-side: (a) to (e) hold
+        +0.000 ms  previous present end
+       +17.622 ms  signal
+       +17.630 ms  dirty
+       +17.634 ms  draw start
+       +18.677 ms  draw end
+       +18.681 ms  present start
+       +28.127 ms  present end
+s125/1k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-4: FAIL; over limit 1 traced, 0 untraced; compositor-side 0, counted 1
+  frame 357: interval 33.383 ms; present end to signal 14.850 ms; main thread idle before signal 14.850 ms; signal to present end 18.533 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +14.850 ms  signal
+       +14.859 ms  dirty
+       +14.863 ms  draw start
+       +16.609 ms  draw end
+       +16.614 ms  present start
+       +33.383 ms  present end
+s125/10k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-5: FAIL; over limit 2 traced, 0 untraced; compositor-side 0, counted 2
+  frame 192: interval 25.079 ms; present end to signal 14.946 ms; main thread idle before signal 14.946 ms; signal to present end 10.134 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +14.946 ms  signal
+       +14.955 ms  dirty
+       +14.960 ms  draw start
+       +16.013 ms  draw end
+       +16.021 ms  present start
+       +25.079 ms  present end
+  frame 229: interval 29.925 ms; present end to signal 15.426 ms; main thread idle before signal 15.426 ms; signal to present end 14.498 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +15.426 ms  signal
+       +15.435 ms  dirty
+       +15.439 ms  draw start
+       +16.493 ms  draw end
+       +16.498 ms  present start
+       +29.925 ms  present end
+s125/10k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-6: FAIL; over limit 1 traced, 0 untraced; compositor-side 0, counted 1
+  frame 308: interval 32.696 ms; present end to signal 16.492 ms; main thread idle before signal 16.492 ms; signal to present end 16.204 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +16.492 ms  signal
+       +16.502 ms  dirty
+       +16.506 ms  draw start
+       +22.181 ms  draw end
+       +22.188 ms  present start
+       +32.696 ms  present end
+s125/1k-zoom-6: FAIL; over limit 1 traced, 0 untraced; compositor-side 0, counted 1
+  frame 354: interval 28.955 ms; present end to signal 14.491 ms; main thread idle before signal 14.491 ms; signal to present end 14.464 ms; source native; counted: (b) fails: signal within one refresh of the previous present end
+        +0.000 ms  previous present end
+       +14.491 ms  signal
+       +14.502 ms  dirty
+       +14.507 ms  draw start
+       +16.094 ms  draw end
+       +16.099 ms  present start
+       +28.955 ms  present end
+s125/10k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0

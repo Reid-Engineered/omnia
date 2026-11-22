@@ -35,10 +35,10 @@
       "peak": {
         "batches": 8,
         "monochrome_sprites": 5559,
-        "paint_operations": 29963,
+        "paint_operations": 10009,
         "paths": 0,
         "polychrome_sprites": 0,
-        "quads": 28279,
+        "quads": 8325,
         "shadows": 0,
         "subpixel_sprites": 0,
         "surfaces": 0,
@@ -48,13 +48,13 @@
         "monochrome_sprites": 435315,
         "paths": 0,
         "polychrome_sprites": 0,
-        "quads": 3103852,
+        "quads": 1403431,
         "shadows": 0,
         "subpixel_sprites": 0,
         "surfaces": 0,
         "underlines": 0
       },
-      "sweep_total": 3539167
+      "sweep_total": 1838746
     }
   }
 }
