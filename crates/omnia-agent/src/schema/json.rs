@@ -8,18 +8,25 @@
 //! bytes do not depend on whether a build enables `serde_json`'s `preserve_order` feature.
 //! Dialect: JSON Schema 2020-12.
 //!
-//! Files: `request` and `response` (every operation), and per operation `<op>.params` (its
-//! `params` object, the MCP `inputSchema`) and `<op>.response` (its envelope, the MCP
-//! `outputSchema`).
+//! Files: `request` and `response` (every available operation), and per available operation
+//! `<op>.params` (its `params` object in the request envelope), `<op>.arguments` (its MCP tool
+//! arguments, the `inputSchema`: the params plus `idempotency_key` where section 11.2 allows it)
+//! and `<op>.response` (its envelope, the MCP `outputSchema`). Operations whose milestone has
+//! not been delivered ([`crate::OpSpec::available`]) get no committed file, but their schemas
+//! are still generated in memory for the decoders.
+//!
+//! Ranges the codecs hold are in the schemas: id patterns spell `0..=u32::MAX` (items) and
+//! `0..=u64::MAX` (documents, jobs) exactly, every `u64` has its maximum, and bounds corners lie
+//! inside K1. Corner ordering is the one shape rule only the decoder checks (section 9.1).
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::OnceLock};
 
 use serde_json::{Value, json};
 
 use crate::{
     EditOpName, ErrorCode, MAX_OPERATIONS, MAX_PAGE_SIZE, OpName, SCHEMA,
     catalog::spec,
-    schema::{ORIENT_NAMES, TEXT_FIELD_NAMES},
+    schema::{ORIENT_NAMES, TEXT_FIELD_NAMES, validate::decimal_up_to},
 };
 
 const DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -80,7 +87,7 @@ fn uint(max: u64) -> Value {
 }
 
 fn u64_() -> Value {
-    json!({ "type": "integer", "minimum": 0 })
+    uint(u64::MAX)
 }
 
 fn u32_() -> Value {
@@ -100,8 +107,8 @@ fn enum_of<'a>(names: impl IntoIterator<Item = &'a str>) -> Value {
     json!({ "type": "string", "enum": names })
 }
 
-fn konst(v: &str) -> Value {
-    json!({ "const": v })
+fn konst(v: impl Into<Value>) -> Value {
+    json!({ "const": v.into() })
 }
 
 /// A closed object: `required` fields first in the list, all fields in `props`.
@@ -126,10 +133,10 @@ fn one_of(alternatives: Vec<Value>) -> Value {
     json!({ "oneOf": alternatives })
 }
 
-/// An internally tagged union: each alternative is `obj` plus `tag: const`.
 /// One alternative of [`tagged`]: tag value, properties, required properties.
 type Variant<'a> = (&'a str, Vec<(&'a str, Value)>, &'a [&'a str]);
 
+/// An internally tagged union: each alternative is `obj` plus `tag: const`.
 fn tagged(tag: &str, variants: Vec<Variant<'_>>) -> Value {
     one_of(
         variants
@@ -144,37 +151,42 @@ fn tagged(tag: &str, variants: Vec<Variant<'_>>) -> Value {
     )
 }
 
-fn id_pattern(prefix: &str, what: &str) -> Value {
-    described(
-        json!({ "type": "string", "pattern": format!("^{prefix}(0|[1-9][0-9]*)$") }),
-        what,
-    )
+/// A string `<prefix><n>` with `n` in canonical decimal, `0..=max`.
+fn id_pattern(prefix: &str, max: u64, what: &str) -> Value {
+    let pattern = format!("^{prefix}{}$", decimal_up_to(max));
+    described(json!({ "type": "string", "pattern": pattern }), what)
 }
+
+const ITEM_MAX: u64 = u32::MAX as u64;
 
 // ---- codecs --------------------------------------------------------------------------------
 
 fn part_ref(_: &mut Gen) -> Value {
-    id_pattern("part:", "A part id, 0-based (AQ5).")
+    id_pattern("part:", ITEM_MAX, "A part id, 0-based (AQ5).")
 }
 
 fn wire_ref(_: &mut Gen) -> Value {
-    id_pattern("wire:", "A wire id, 0-based (AQ5).")
+    id_pattern("wire:", ITEM_MAX, "A wire id, 0-based (AQ5).")
 }
 
 fn label_ref(_: &mut Gen) -> Value {
-    id_pattern("label:", "A label id, 0-based (AQ5).")
+    id_pattern("label:", ITEM_MAX, "A label id, 0-based (AQ5).")
 }
 
 fn item_ref(_: &mut Gen) -> Value {
-    id_pattern("(part|wire|label):", "An item id, 0-based (AQ5).")
+    id_pattern("(part|wire|label):", ITEM_MAX, "An item id, 0-based (AQ5).")
 }
 
 fn doc_id(_: &mut Gen) -> Value {
-    id_pattern("d", "A document id, never reused within a session.")
+    id_pattern(
+        "d",
+        u64::MAX,
+        "A document id, never reused within a session.",
+    )
 }
 
 fn job_id(_: &mut Gen) -> Value {
-    id_pattern("j", "A job id.")
+    id_pattern("j", u64::MAX, "A job id.")
 }
 
 fn preview_id(_: &mut Gen) -> Value {
@@ -197,11 +209,27 @@ fn point(_: &mut Gen) -> Value {
     )
 }
 
+fn sheet_point(_: &mut Gen) -> Value {
+    let limit = omnia_doc::SHEET_LIMIT_NM;
+    let coord = json!({ "type": "integer", "minimum": -limit, "maximum": limit });
+    described(
+        json!({
+            "type": "array",
+            "prefixItems": [coord.clone(), coord],
+            "items": false,
+            "minItems": 2,
+            "maxItems": 2,
+        }),
+        "[x, y] in integer nanometres inside the K1 sheet limits.",
+    )
+}
+
 fn bounds(g: &mut Gen) -> Value {
-    let p = g.r("Point", point);
+    let p = g.r("SheetPoint", sheet_point);
     described(
         obj(vec![("min", p.clone()), ("max", p)], &["min", "max"]),
-        "An axis-aligned rectangle; min <= max on both axes, inside the sheet limits.",
+        "An axis-aligned rectangle inside the sheet limits. The decoder also requires \
+         min <= max on both axes (mcp-plan.md section 9.1).",
     )
 }
 
@@ -439,6 +467,7 @@ const fn params_def(op: OpName) -> (&'static str, Build) {
 fn request(g: &mut Gen) -> Value {
     let alternatives = OpName::ALL
         .iter()
+        .filter(|&&op| spec(op).available)
         .map(|&op| {
             let (name, build) = params_def(op);
             let mut props = vec![("op", konst(op.as_str())), ("params", g.r(name, build))];
@@ -578,6 +607,7 @@ fn agent_error(g: &mut Gen) -> Value {
             json!({
                 "properties": {
                     "code": konst(code.as_str()),
+                    "retryable": konst(code.retryable()),
                     "details": details(g, code),
                 }
             })
@@ -813,27 +843,31 @@ fn op_name(_: &mut Gen) -> Value {
     enum_of(OpName::ALL.iter().map(|op| op.as_str()))
 }
 
+/// `applied` names the operation of the stored response in `op`: one of the operations that
+/// take an idempotency key (section 11.2), and the response is a success of that operation.
 fn request_status(g: &mut Gen) -> Value {
-    tagged(
-        "status",
-        vec![
-            ("not_run", vec![], &[]),
-            (
-                "applied",
+    let mut alternatives = vec![obj(vec![("status", konst("not_run"))], &["status"])];
+    for &op in OpName::ALL {
+        if let Some((name, build)) = success_def(op) {
+            alternatives.push(obj(
                 vec![
-                    ("op", g.r("OpName", op_name)),
+                    ("status", konst("applied")),
+                    ("op", konst(op.as_str())),
                     ("revision", u64_()),
-                    ("response", g.r("Response", response_any)),
+                    ("response", g.r(name, build)),
                 ],
-                &["op", "revision", "response"],
-            ),
-            (
-                "failed",
-                vec![("error", g.r("Error", agent_error))],
-                &["error"],
-            ),
+                &["status", "op", "revision", "response"],
+            ));
+        }
+    }
+    alternatives.push(obj(
+        vec![
+            ("status", konst("failed")),
+            ("error", g.r("Error", agent_error)),
         ],
-    )
+        &["status", "error"],
+    ));
+    one_of(alternatives)
 }
 
 fn progress(_: &mut Gen) -> Value {
@@ -910,6 +944,7 @@ fn catalog(g: &mut Gen) -> Value {
             ("idempotent", boolean()),
             ("idempotency_key", boolean()),
             ("params_schema", string()),
+            ("arguments_schema", string()),
             ("response_schema", string()),
             ("description", string()),
         ],
@@ -922,6 +957,7 @@ fn catalog(g: &mut Gen) -> Value {
             "idempotent",
             "idempotency_key",
             "params_schema",
+            "arguments_schema",
             "response_schema",
             "description",
         ],
@@ -1004,11 +1040,65 @@ fn envelope(g: &mut Gen, result: Value) -> Value {
     s
 }
 
-/// The envelope of any operation. `anyOf`, because two results may share a shape.
+/// The envelope of a successful response to `op`: `result` required, no `error`.
+fn success(g: &mut Gen, op: OpName) -> Value {
+    let (name, build) = result_def(op);
+    obj(
+        vec![
+            ("schema", konst(SCHEMA)),
+            ("doc_id", g.r("DocId", doc_id)),
+            ("revision", u64_()),
+            ("result", g.r(name, build)),
+            ("warnings", array(g.r("Warning", warning))),
+        ],
+        &["schema", "result", "warnings"],
+    )
+}
+
+fn apply_success(g: &mut Gen) -> Value {
+    success(g, OpName::Apply)
+}
+
+fn undo_success(g: &mut Gen) -> Value {
+    success(g, OpName::Undo)
+}
+
+fn redo_success(g: &mut Gen) -> Value {
+    success(g, OpName::Redo)
+}
+
+fn save_success(g: &mut Gen) -> Value {
+    success(g, OpName::Save)
+}
+
+/// The stored-success definition of an operation that takes an idempotency key. Exhaustive;
+/// a test checks it agrees with `spec(op).idempotency_key`.
+const fn success_def(op: OpName) -> Option<(&'static str, Build)> {
+    match op {
+        OpName::Apply => Some(("ApplySuccess", apply_success)),
+        OpName::Undo => Some(("UndoSuccess", undo_success)),
+        OpName::Redo => Some(("RedoSuccess", redo_success)),
+        OpName::Save => Some(("SaveSuccess", save_success)),
+        OpName::Capabilities
+        | OpName::New
+        | OpName::Open
+        | OpName::Close
+        | OpName::Inspect
+        | OpName::Query
+        | OpName::Nets
+        | OpName::Validate
+        | OpName::Preview
+        | OpName::RequestStatus
+        | OpName::JobStatus
+        | OpName::JobCancel => None,
+    }
+}
+
+/// The envelope of any available operation. `anyOf`, because two results may share a shape.
 fn response_any(g: &mut Gen) -> Value {
     let mut seen = Vec::new();
     let mut results = Vec::new();
-    for &op in OpName::ALL {
+    for &op in OpName::ALL.iter().filter(|&&op| spec(op).available) {
         let (name, build) = result_def(op);
         if !seen.contains(&name) {
             seen.push(name);
@@ -1020,19 +1110,44 @@ fn response_any(g: &mut Gen) -> Value {
 
 // ---- files ---------------------------------------------------------------------------------
 
-/// The file `<op>.params` (`params == true`) or `<op>.response`.
-fn op_file(op: OpName, params: bool) -> Value {
-    let mut g = Gen::new();
-    if params {
-        let (_, build) = params_def(op);
-        let root = build(&mut g);
-        g.finish(root, &format!("{op}.params"))
-    } else {
-        let (name, build) = result_def(op);
-        let result = g.r(name, build);
-        let root = envelope(&mut g, result);
-        g.finish(root, &format!("{op}.response"))
+/// What one per-operation file describes.
+#[derive(Clone, Copy)]
+enum Part {
+    Params,
+    Arguments,
+    Response,
+}
+
+impl Part {
+    const ALL: [Part; 3] = [Part::Params, Part::Arguments, Part::Response];
+
+    const fn suffix(self) -> &'static str {
+        match self {
+            Part::Params => "params",
+            Part::Arguments => "arguments",
+            Part::Response => "response",
+        }
     }
+}
+
+fn op_file(op: OpName, part: Part) -> Value {
+    let mut g = Gen::new();
+    let root = match part {
+        Part::Params => params_def(op).1(&mut g),
+        Part::Arguments => {
+            let mut root = params_def(op).1(&mut g);
+            if spec(op).idempotency_key {
+                root["properties"]["idempotency_key"] = string();
+            }
+            root
+        }
+        Part::Response => {
+            let (name, build) = result_def(op);
+            let result = g.r(name, build);
+            envelope(&mut g, result)
+        }
+    };
+    g.finish(root, &format!("{op}.{}", part.suffix()))
 }
 
 fn file(title: &str, build: Build) -> Value {
@@ -1041,29 +1156,48 @@ fn file(title: &str, build: Build) -> Value {
     g.finish(root, title)
 }
 
-/// Every schema file as `(name, JSON text)`, sorted by name. The text is the committed file.
+/// Every schema, generated once: the published files and those of unavailable operations,
+/// each with whether it is published.
+fn registry() -> &'static BTreeMap<String, (bool, Value)> {
+    static REGISTRY: OnceLock<BTreeMap<String, (bool, Value)>> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        let mut files = BTreeMap::new();
+        files.insert("request".to_owned(), (true, file("request", request)));
+        files.insert(
+            "response".to_owned(),
+            (true, file("response", response_any)),
+        );
+        for &op in OpName::ALL {
+            for part in Part::ALL {
+                let name = format!("{op}.{}", part.suffix());
+                files.insert(name, (spec(op).available, op_file(op, part)));
+            }
+        }
+        files
+    })
+}
+
+/// The schema named `name` as a value, published or not; the decoders validate against it.
+pub(crate) fn schema_value(name: &str) -> Option<&'static Value> {
+    registry().get(name).map(|(_, v)| v)
+}
+
+/// Every published schema file as `(name, JSON text)`, sorted by name: the committed files.
 pub fn schema_files() -> Vec<(String, String)> {
-    let mut files = vec![
-        ("request".to_owned(), file("request", request)),
-        ("response".to_owned(), file("response", response_any)),
-    ];
-    for &op in OpName::ALL {
-        files.push((format!("{op}.params"), op_file(op, true)));
-        files.push((format!("{op}.response"), op_file(op, false)));
-    }
-    files.sort_by(|a, b| a.0.cmp(&b.0));
-    files
-        .into_iter()
-        .map(|(name, value)| (name, to_canonical_json(&value)))
+    registry()
+        .iter()
+        .filter(|(_, (published, _))| *published)
+        .map(|(name, (_, value))| (name.clone(), to_canonical_json(value)))
         .collect()
 }
 
-/// The JSON Schema named `name` (`request`, `response`, `<op>.params`, `<op>.response`).
+/// The published JSON Schema named `name` (`request`, `response`, `<op>.params`,
+/// `<op>.arguments` or `<op>.response`).
 pub fn schema_text(name: &str) -> Option<String> {
-    schema_files()
-        .into_iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, text)| text)
+    match registry().get(name) {
+        Some((true, value)) => Some(to_canonical_json(value)),
+        _ => None,
+    }
 }
 
 /// Pretty JSON with object keys sorted and a final newline, independent of map ordering.
@@ -1115,5 +1249,18 @@ fn write_value(value: &Value, indent: usize, out: &mut String) {
 fn push_indent(level: usize, out: &mut String) {
     for _ in 0..level {
         out.push_str("  ");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `request_status` stores exactly the operations that take an idempotency key (11.2).
+    #[test]
+    fn stored_successes_are_the_keyed_operations() {
+        for &op in OpName::ALL {
+            assert_eq!(success_def(op).is_some(), spec(op).idempotency_key, "{op}");
+        }
     }
 }

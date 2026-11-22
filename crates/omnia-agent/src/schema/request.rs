@@ -1,10 +1,13 @@
 //! Requests: the envelope, the operation union and its params (mcp-plan.md sections 9.1, 9.2).
 //!
-//! A request is `{"op": "<operation>", "params": {..}, "idempotency_key": ".."}`. Every object
-//! rejects unknown fields. [`Request::from_slice`] decodes one strictly and reports a typed error:
-//! `invalid_request` for malformed JSON, duplicate keys or any non-integer number (AD12),
-//! `unknown_operation` for a name outside the catalog, `schema_violation {path}` for a shape that
-//! does not match, and `limit_exceeded` for AK2 to AK4.
+//! A request is `{"op": "<operation>", "params": {..}, "idempotency_key": ".."}`, or, over MCP,
+//! a tool's arguments (see [`Request`]). Every object rejects unknown fields. Decoding is strict
+//! and reports a typed error, in this order: `limit_exceeded` for AK2 (size), `invalid_request`
+//! for malformed JSON, duplicate keys or any number that is not a 64-bit integer (AD12),
+//! `unknown_operation` for a name the catalog does not list, `limit_exceeded` for AK3 and AK4,
+//! then `schema_violation {path}` from validation against the published schema. Only after the
+//! schema accepts are the params decoded into DTOs, where the one remaining decoder-only rule,
+//! bounds corner ordering, is checked (mcp-plan.md section 9.1).
 
 use std::fmt;
 
@@ -18,8 +21,13 @@ use serde_json::{Map, Value};
 use super::codec::{
     Bounds, DocId, ItemRef, JobId, OrientName, Point, PreviewId, TextFieldName, WireRef,
 };
+use super::{
+    json::schema_value,
+    validate::{escape, validate},
+};
 use crate::{
     EditOpName, ErrorKind, MAX_OPERATIONS, MAX_PAGE_SIZE, MAX_REQUEST_BYTES, OpName,
+    catalog::spec,
     error::{AgentError, Limit},
 };
 
@@ -264,54 +272,28 @@ impl Operation {
     }
 
     /// Decodes `params` for `op`: the decoder half of the dispatch table. Exhaustive.
-    fn decode(op: OpName, params: Value) -> Result<Self, AgentError> {
+    ///
+    /// `params` has been validated against the operation's schema; what serde can still refuse
+    /// is a decoder-only rule (section 9.1), reported at `base`.
+    fn decode(op: OpName, params: Value, base: &str) -> Result<Self, AgentError> {
         Ok(match op {
-            OpName::Capabilities => Self::Capabilities(params_of(params)?),
-            OpName::New => Self::New(params_of(params)?),
-            OpName::Open => Self::Open(params_of(params)?),
-            OpName::Close => Self::Close(params_of(params)?),
-            OpName::Inspect => Self::Inspect(params_of(params)?),
-            OpName::Query => Self::Query(params_of(params)?),
-            OpName::Nets => Self::Nets(params_of(params)?),
-            OpName::Validate => Self::Validate(edit_params(params)?),
-            OpName::Preview => Self::Preview(edit_params(params)?),
-            OpName::Apply => Self::Apply(edit_params(params)?),
-            OpName::Undo => Self::Undo(params_of(params)?),
-            OpName::Redo => Self::Redo(params_of(params)?),
-            OpName::Save => Self::Save(params_of(params)?),
-            OpName::RequestStatus => Self::RequestStatus(params_of(params)?),
-            OpName::JobStatus => Self::JobStatus(params_of(params)?),
-            OpName::JobCancel => Self::JobCancel(params_of(params)?),
+            OpName::Capabilities => Self::Capabilities(typed(params, base)?),
+            OpName::New => Self::New(typed(params, base)?),
+            OpName::Open => Self::Open(typed(params, base)?),
+            OpName::Close => Self::Close(typed(params, base)?),
+            OpName::Inspect => Self::Inspect(typed(params, base)?),
+            OpName::Query => Self::Query(typed(params, base)?),
+            OpName::Nets => Self::Nets(typed(params, base)?),
+            OpName::Validate => Self::Validate(typed(params, base)?),
+            OpName::Preview => Self::Preview(typed(params, base)?),
+            OpName::Apply => Self::Apply(typed(params, base)?),
+            OpName::Undo => Self::Undo(typed(params, base)?),
+            OpName::Redo => Self::Redo(typed(params, base)?),
+            OpName::Save => Self::Save(typed(params, base)?),
+            OpName::RequestStatus => Self::RequestStatus(typed(params, base)?),
+            OpName::JobStatus => Self::JobStatus(typed(params, base)?),
+            OpName::JobCancel => Self::JobCancel(typed(params, base)?),
         })
-    }
-
-    /// Checks the rules a derive cannot state: AK3 and AK4 limits, non-empty and unique lists,
-    /// and `nets` taking at most one of `at` and `wire`.
-    fn check(&self) -> Result<(), AgentError> {
-        match self {
-            Self::Inspect(args) => {
-                if args.include.is_empty() {
-                    return Err(violation(
-                        "/params/include",
-                        "include lists at least one part",
-                    ));
-                }
-                let mut seen = args.include.clone();
-                seen.sort_unstable();
-                seen.dedup();
-                if seen.len() != args.include.len() {
-                    return Err(violation("/params/include", "include repeats an entry"));
-                }
-                check_page(args.limit)
-            }
-            Self::Query(args) => check_page(args.limit),
-            Self::Nets(args) if args.at.is_some() && args.wire.is_some() => {
-                Err(violation("/params", "nets takes `at` or `wire`, not both"))
-            }
-            Self::Validate(args) | Self::Preview(args) => check_operations(args.operations.len()),
-            Self::Apply(args) => check_operations(args.operations.len()),
-            _ => Ok(()),
-        }
     }
 }
 
@@ -322,57 +304,62 @@ fn violation(path: &str, message: &str) -> AgentError {
     )
 }
 
-fn check_page(limit: Option<u32>) -> Result<(), AgentError> {
-    match limit {
-        Some(0) => Err(violation("/params/limit", "limit is at least 1")),
-        Some(n) if n > MAX_PAGE_SIZE => Err(AgentError::new(ErrorKind::LimitExceeded {
-            limit: Limit::PageSize,
-            value: n.into(),
-        })),
-        _ => Ok(()),
-    }
+fn typed<T: DeserializeOwned>(params: Value, base: &str) -> Result<T, AgentError> {
+    serde_json::from_value(params).map_err(|e| violation(base, &e.to_string()))
 }
 
-fn check_operations(count: usize) -> Result<(), AgentError> {
-    let count = u64::try_from(count).unwrap_or(u64::MAX);
-    if count == 0 {
-        Err(violation(
-            "/params/operations",
-            "operations lists at least one operation",
-        ))
-    } else if count > MAX_OPERATIONS {
-        Err(AgentError::new(ErrorKind::LimitExceeded {
-            limit: Limit::Operations,
-            value: count,
-        }))
-    } else {
-        Ok(())
-    }
-}
-
-fn params_of<T: DeserializeOwned>(params: Value) -> Result<T, AgentError> {
-    serde_json::from_value(params).map_err(|e| violation("/params", &e.to_string()))
-}
-
-/// Decodes edit params, naming the first operation that does not match (`/params/operations/i`).
-fn edit_params<T: DeserializeOwned>(params: Value) -> Result<T, AgentError> {
-    serde_json::from_value::<T>(params.clone()).map_err(|e| {
-        let ops = params.get("operations").and_then(Value::as_array);
-        let bad = ops.and_then(|ops| {
-            ops.iter().enumerate().find_map(|(i, op)| {
-                serde_json::from_value::<EditOp>(op.clone())
-                    .err()
-                    .map(|e| (i, e))
-            })
-        });
-        match bad {
-            Some((i, e)) => violation(&format!("/params/operations/{i}"), &e.to_string()),
-            None => violation("/params", &e.to_string()),
+/// AK3 and AK4, checked on the raw params before the schema so an over-limit request is
+/// `limit_exceeded`, never a schema violation, and is refused, never truncated.
+fn check_limits(op: OpName, params: &Value) -> Result<(), AgentError> {
+    let exceeded = |limit, value| Err(AgentError::new(ErrorKind::LimitExceeded { limit, value }));
+    let edits = matches!(op, OpName::Validate | OpName::Preview | OpName::Apply);
+    let paged = matches!(op, OpName::Inspect | OpName::Query);
+    if edits && let Some(ops) = params.get("operations").and_then(Value::as_array) {
+        let count = u64::try_from(ops.len()).unwrap_or(u64::MAX);
+        if count > MAX_OPERATIONS {
+            return exceeded(Limit::Operations, count);
         }
-    })
+    }
+    if paged
+        && let Some(n) = params.get("limit").and_then(Value::as_u64)
+        && n > u64::from(MAX_PAGE_SIZE)
+    {
+        return exceeded(Limit::PageSize, n);
+    }
+    Ok(())
+}
+
+/// Validates `value` against the schema `name`, reporting paths below `base`.
+fn conform(name: &str, value: &Value, base: &str) -> Result<(), AgentError> {
+    let schema = schema_value(name).expect("every operation has generated schemas");
+    validate(schema, value).map_err(|v| violation(&format!("{base}{}", v.path), &v.message))
+}
+
+/// Resolves an operation name the catalog lists; anything else is `unknown_operation`.
+fn available(name: &str) -> Result<OpName, AgentError> {
+    OpName::from_name(name)
+        .filter(|&op| spec(op).available)
+        .ok_or_else(|| AgentError::new(ErrorKind::UnknownOperation))
+}
+
+fn check_size(bytes: &[u8]) -> Result<(), AgentError> {
+    let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if len > MAX_REQUEST_BYTES {
+        return Err(AgentError::new(ErrorKind::LimitExceeded {
+            limit: Limit::RequestBytes,
+            value: len,
+        }));
+    }
+    Ok(())
 }
 
 /// One request (section 9.1).
+///
+/// It has two wire forms with the same meaning. The envelope `{op, params, idempotency_key?}`
+/// is what `omnia call` and `omnia serve` read ([`Request::from_slice`]). The MCP form is a
+/// tool's `arguments` object: the params with `idempotency_key` beside them, on the operations
+/// section 11.2 names ([`Request::from_arguments`], schema `<op>.arguments`). Both decode to
+/// the same `Request`, and [`Request::to_json`] and [`Request::to_arguments`] write them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     pub op: Operation,
@@ -381,20 +368,21 @@ pub struct Request {
 }
 
 impl Request {
-    /// Decodes one request strictly (see the module docs).
+    /// Decodes one envelope strictly (see the module docs).
     pub fn from_slice(bytes: &[u8]) -> Result<Self, AgentError> {
-        let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        if len > MAX_REQUEST_BYTES {
-            return Err(AgentError::new(ErrorKind::LimitExceeded {
-                limit: Limit::RequestBytes,
-                value: len,
-            }));
-        }
-        let value = strict_value(bytes)?;
-        Self::from_value(value)
+        check_size(bytes)?;
+        Self::from_envelope_value(parse_strict(bytes)?)
     }
 
-    fn from_value(value: Value) -> Result<Self, AgentError> {
+    /// Decodes the MCP tool arguments of `op` strictly (see the module docs).
+    pub fn from_arguments(op: OpName, bytes: &[u8]) -> Result<Self, AgentError> {
+        check_size(bytes)?;
+        Self::from_arguments_value(op, parse_strict(bytes)?)
+    }
+
+    /// Decodes an envelope already parsed by [`parse_strict`]. A value parsed any other way
+    /// has lost its duplicate keys and so cannot be checked for them.
+    pub fn from_envelope_value(value: Value) -> Result<Self, AgentError> {
         let Value::Object(mut map) = value else {
             return Err(AgentError::with_message(
                 ErrorKind::InvalidRequest,
@@ -406,56 +394,76 @@ impl Request {
             .filter(|k| !matches!(k.as_str(), "op" | "params" | "idempotency_key"))
             .min()
         {
-            return Err(violation(
-                &format!("/{}", escape_pointer(key)),
-                "unknown field",
-            ));
+            return Err(violation(&format!("/{}", escape(key)), "unknown field"));
         }
         let op = match map.remove("op") {
-            Some(Value::String(name)) => OpName::from_name(&name)
-                .ok_or_else(|| AgentError::new(ErrorKind::UnknownOperation))?,
-            Some(_) => return Err(violation("/op", "op is a string")),
-            None => return Err(violation("/op", "missing field `op`")),
+            Some(Value::String(name)) => available(&name)?,
+            Some(_) => return Err(violation("/op", "expected string")),
+            None => return Err(violation("", "missing field `op`")),
         };
         let idempotency_key = match map.remove("idempotency_key") {
             None => None,
-            Some(_) if !crate::catalog::spec(op).idempotency_key => {
-                return Err(violation(
-                    "/idempotency_key",
-                    "this operation takes no idempotency key",
-                ));
+            Some(_) if !spec(op).idempotency_key => {
+                return Err(violation("/idempotency_key", "unknown field"));
             }
             Some(Value::String(key)) => Some(key),
-            Some(_) => return Err(violation("/idempotency_key", "idempotency_key is a string")),
+            Some(_) => return Err(violation("/idempotency_key", "expected string")),
         };
         let params = map
             .remove("params")
-            .ok_or_else(|| violation("/params", "missing field `params`"))?;
-        let op = Operation::decode(op, params)?;
-        op.check()?;
+            .ok_or_else(|| violation("", "missing field `params`"))?;
+        check_limits(op, &params)?;
+        conform(&spec(op).params_schema(), &params, "/params")?;
         Ok(Self {
-            op,
+            op: Operation::decode(op, params, "/params")?,
             idempotency_key,
         })
     }
 
-    /// The request as JSON text, in the canonical field order.
+    /// Decodes tool arguments already parsed by [`parse_strict`].
+    pub fn from_arguments_value(op: OpName, value: Value) -> Result<Self, AgentError> {
+        let op = available(op.as_str())?;
+        check_limits(op, &value)?;
+        conform(&spec(op).arguments_schema(), &value, "")?;
+        let mut params = value;
+        // On the keyed operations the key sits beside the params; `request_status` has a
+        // params field of the same name, which stays.
+        let idempotency_key = if spec(op).idempotency_key {
+            params
+                .as_object_mut()
+                .and_then(|m| m.remove("idempotency_key"))
+                .and_then(|k| k.as_str().map(str::to_owned))
+        } else {
+            None
+        };
+        Ok(Self {
+            op: Operation::decode(op, params, "")?,
+            idempotency_key,
+        })
+    }
+
+    /// The envelope as JSON text, in the canonical field order.
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("requests always serialize")
+    }
+
+    /// The MCP tool arguments as JSON text: the params' fields, then `idempotency_key`.
+    pub fn to_arguments(&self) -> String {
+        serde_json::to_string(&Arguments {
+            params: Params(&self.op),
+            idempotency_key: self.idempotency_key.as_deref(),
+        })
+        .expect("arguments always serialize")
     }
 }
 
 impl std::str::FromStr for Request {
     type Err = AgentError;
 
-    /// Decodes one request from text; see [`Request::from_slice`].
+    /// Decodes one envelope from text; see [`Request::from_slice`].
     fn from_str(text: &str) -> Result<Self, AgentError> {
         Self::from_slice(text.as_bytes())
     }
-}
-
-fn escape_pointer(key: &str) -> String {
-    key.replace('~', "~0").replace('/', "~1")
 }
 
 /// Serializes the params of an operation. Exhaustive.
@@ -480,6 +488,14 @@ impl Serialize for Params<'_> {
     }
 }
 
+#[derive(Serialize)]
+struct Arguments<'a> {
+    #[serde(flatten)]
+    params: Params<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    idempotency_key: Option<&'a str>,
+}
+
 impl Serialize for Request {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let len = if self.idempotency_key.is_some() { 3 } else { 2 };
@@ -495,13 +511,19 @@ impl Serialize for Request {
 
 // ---- strict JSON ---------------------------------------------------------------------------
 
-/// Parses JSON refusing duplicate object keys and every number that is not an integer.
-fn strict_value(bytes: &[u8]) -> Result<Value, AgentError> {
+/// Parses JSON refusing duplicate object keys and every number that is not a 64-bit integer
+/// written without fraction or exponent (`invalid_request`).
+pub fn parse_strict(bytes: &[u8]) -> Result<Value, AgentError> {
+    parse_strict_raw(bytes)
+        .map_err(|e| AgentError::with_message(ErrorKind::InvalidRequest, e.to_string()))
+}
+
+/// [`parse_strict`] with the parser's own error.
+pub(crate) fn parse_strict_raw(bytes: &[u8]) -> Result<Value, serde_json::Error> {
     let mut de = serde_json::Deserializer::from_slice(bytes);
-    let value = StrictValue::deserialize(&mut de)
-        .and_then(|v| de.end().map(|()| v.0))
-        .map_err(|e| AgentError::with_message(ErrorKind::InvalidRequest, e.to_string()))?;
-    Ok(value)
+    let value = StrictValue::deserialize(&mut de)?;
+    de.end()?;
+    Ok(value.0)
 }
 
 struct StrictValue(Value);
@@ -535,7 +557,7 @@ impl<'de> Visitor<'de> for StrictVisitor {
 
     fn visit_f64<E: de::Error>(self, _: f64) -> Result<Value, E> {
         Err(E::custom(
-            "numbers are integers; floats never appear (AD12)",
+            "numbers are 64-bit integers without fraction or exponent (AD12)",
         ))
     }
 

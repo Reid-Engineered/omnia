@@ -4,6 +4,11 @@
 //! list as the enum. [`spec`] gives each one its tool name, approval tiers (AD7), annotations
 //! (mcp-plan.md section 10.1) and schema names through an exhaustive `match`, so an operation
 //! cannot exist without a catalog entry. [`Catalog::current`] is what `capabilities` returns.
+//!
+//! An operation whose milestone has not been delivered keeps its DTOs but is not
+//! [`OpSpec::available`]: the catalog does not list it, the request decoder refuses it with
+//! `unknown_operation`, no schema file is committed for it, and so `tools/list` (A1.8), which is
+//! built from the catalog, does not advertise it. `job_status` and `job_cancel` wait for A3.1.
 
 use std::fmt;
 
@@ -109,8 +114,11 @@ pub struct OpSpec {
     pub read_only: bool,
     pub destructive: bool,
     pub idempotent: bool,
-    /// Whether the request envelope may carry `idempotency_key` (section 11.2).
+    /// Whether the request may carry `idempotency_key` (section 11.2).
     pub idempotency_key: bool,
+    /// Whether the operation's milestone is delivered; only available operations are listed,
+    /// dispatched and published.
+    pub available: bool,
     /// Static text (AD14).
     pub description: &'static str,
 }
@@ -119,6 +127,12 @@ impl OpSpec {
     /// Name of the committed schema for this operation's `params`.
     pub fn params_schema(&self) -> String {
         format!("{}.params", self.op)
+    }
+
+    /// Name of the committed schema for this operation's MCP tool arguments: `params` plus
+    /// `idempotency_key` when [`Self::idempotency_key`] allows it.
+    pub fn arguments_schema(&self) -> String {
+        format!("{}.arguments", self.op)
     }
 
     /// Name of the committed schema for this operation's response envelope.
@@ -143,7 +157,16 @@ const fn row(
         destructive,
         idempotent,
         idempotency_key,
+        available: true,
         description,
+    }
+}
+
+/// A row for an operation whose milestone is not delivered yet.
+const fn later(spec: OpSpec) -> OpSpec {
+    OpSpec {
+        available: false,
+        ..spec
     }
 }
 
@@ -253,20 +276,21 @@ pub const fn spec(op: OpName) -> OpSpec {
             READ_ONCE,
             "Report whether the request with this idempotency key ran, and its response.",
         ),
-        OpName::JobStatus => row(
+        // A3.1 makes these available.
+        OpName::JobStatus => later(row(
             op,
             "omnia_job_status",
             &[0],
             [false, false, false, false],
             "Report a job's state and progress.",
-        ),
-        OpName::JobCancel => row(
+        )),
+        OpName::JobCancel => later(row(
             op,
             "omnia_job_cancel",
             &[0],
             [false, false, false, false],
             "Ask a job to stop; it stops at its next step.",
-        ),
+        )),
     }
 }
 
@@ -344,6 +368,7 @@ pub struct OperationEntry {
     pub idempotent: bool,
     pub idempotency_key: bool,
     pub params_schema: String,
+    pub arguments_schema: String,
     pub response_schema: String,
     pub description: String,
 }
@@ -392,6 +417,7 @@ impl Catalog {
             },
             operations: OpName::ALL
                 .iter()
+                .filter(|&&op| spec(op).available)
                 .map(|&op| {
                     let s = spec(op);
                     OperationEntry {
@@ -403,6 +429,7 @@ impl Catalog {
                         idempotent: s.idempotent,
                         idempotency_key: s.idempotency_key,
                         params_schema: s.params_schema(),
+                        arguments_schema: s.arguments_schema(),
                         response_schema: s.response_schema(),
                         description: s.description.to_owned(),
                     }
@@ -441,9 +468,18 @@ mod tests {
     #[test]
     fn ainv11_catalog_rows_follow_the_dispatch_table() {
         let catalog = Catalog::current();
-        assert_eq!(catalog.operations.len(), OpName::ALL.len());
+        let available: Vec<OpName> = OpName::ALL
+            .iter()
+            .copied()
+            .filter(|&op| spec(op).available)
+            .collect();
+        let listed: Vec<OpName> = catalog.operations.iter().map(|e| e.name).collect();
+        assert_eq!(
+            listed, available,
+            "AINV11: the catalog lists the available operations"
+        );
         let mut tools = BTreeSet::new();
-        for (entry, &op) in catalog.operations.iter().zip(OpName::ALL) {
+        for (entry, &op) in catalog.operations.iter().zip(&available) {
             let s = spec(op);
             assert_eq!(entry.name, op);
             assert_eq!(s.op, op, "spec({op}) names its own operation");
@@ -458,6 +494,19 @@ mod tests {
         let codes: Vec<_> = catalog.error_codes.iter().map(|e| e.code).collect();
         assert_eq!(codes, ErrorCode::ALL);
         assert_eq!(OpName::from_name("omnia_inspect"), None);
+    }
+
+    #[test]
+    fn job_tools_wait_for_a3() {
+        for op in [OpName::JobStatus, OpName::JobCancel] {
+            assert!(!spec(op).available, "{op}");
+            assert!(Catalog::current().operations.iter().all(|e| e.name != op));
+        }
+        let unavailable = OpName::ALL
+            .iter()
+            .filter(|&&op| !spec(op).available)
+            .count();
+        assert_eq!(unavailable, 2);
     }
 
     #[test]

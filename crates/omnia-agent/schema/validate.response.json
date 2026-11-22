@@ -88,13 +88,13 @@
     },
     "Bounds": {
       "additionalProperties": false,
-      "description": "An axis-aligned rectangle; min <= max on both axes, inside the sheet limits.",
+      "description": "An axis-aligned rectangle inside the sheet limits. The decoder also requires min <= max on both axes (mcp-plan.md section 9.1).",
       "properties": {
         "max": {
-          "$ref": "#/$defs/Point"
+          "$ref": "#/$defs/SheetPoint"
         },
         "min": {
-          "$ref": "#/$defs/Point"
+          "$ref": "#/$defs/SheetPoint"
         }
       },
       "required": [
@@ -125,6 +125,7 @@
           "type": "array"
         },
         "revision": {
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": "integer"
         }
@@ -139,7 +140,7 @@
     },
     "DocId": {
       "description": "A document id, never reused within a session.",
-      "pattern": "^d(0|[1-9][0-9]*)$",
+      "pattern": "^d(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
       "type": "string"
     },
     "Error": {
@@ -155,6 +156,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -174,6 +178,9 @@
                 "path"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -186,6 +193,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -208,6 +218,7 @@
                   "type": "string"
                 },
                 "value": {
+                  "maximum": 18446744073709551615,
                   "minimum": 0,
                   "type": "integer"
                 }
@@ -217,6 +228,9 @@
                 "value"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -229,6 +243,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -241,6 +258,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -253,6 +273,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -265,6 +288,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -277,6 +303,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -289,6 +318,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -301,6 +333,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -320,6 +355,9 @@
                 "item"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -339,6 +377,9 @@
                 "item"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -367,6 +408,9 @@
                 "field"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -394,6 +438,9 @@
                 "blocker"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -413,6 +460,9 @@
                 "blocker"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -436,6 +486,9 @@
                 "blocker"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -455,6 +508,9 @@
                 "at"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -467,10 +523,12 @@
               "additionalProperties": false,
               "properties": {
                 "actual": {
+                  "maximum": 18446744073709551615,
                   "minimum": 0,
                   "type": "integer"
                 },
                 "expected": {
+                  "maximum": 18446744073709551615,
                   "minimum": 0,
                   "type": "integer"
                 }
@@ -480,6 +538,9 @@
                 "actual"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": true
             }
           }
         },
@@ -492,6 +553,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -504,6 +568,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -516,6 +583,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": true
             }
           }
         },
@@ -528,6 +598,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -540,6 +613,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -579,6 +655,9 @@
                 "effect_digest"
               ],
               "type": "object"
+            },
+            "retryable": {
+              "const": true
             }
           }
         },
@@ -591,6 +670,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -603,6 +685,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -615,6 +700,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -627,6 +715,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": true
             }
           }
         },
@@ -639,6 +730,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -651,6 +745,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -663,6 +760,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         },
@@ -675,6 +775,9 @@
               "additionalProperties": false,
               "properties": {},
               "type": "object"
+            },
+            "retryable": {
+              "const": false
             }
           }
         }
@@ -744,12 +847,12 @@
     },
     "ItemRef": {
       "description": "An item id, 0-based (AQ5).",
-      "pattern": "^(part|wire|label):(0|[1-9][0-9]*)$",
+      "pattern": "^(part|wire|label):(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-4]|4294967295)$",
       "type": "string"
     },
     "PartRef": {
       "description": "A part id, 0-based (AQ5).",
-      "pattern": "^part:(0|[1-9][0-9]*)$",
+      "pattern": "^part:(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-4]|4294967295)$",
       "type": "string"
     },
     "Point": {
@@ -771,10 +874,30 @@
       ],
       "type": "array"
     },
+    "SheetPoint": {
+      "description": "[x, y] in integer nanometres inside the K1 sheet limits.",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "maximum": 1000000000,
+          "minimum": -1000000000,
+          "type": "integer"
+        },
+        {
+          "maximum": 1000000000,
+          "minimum": -1000000000,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
     "ValidateResult": {
       "additionalProperties": false,
       "properties": {
         "base_revision": {
+          "maximum": 18446744073709551615,
           "minimum": 0,
           "type": "integer"
         },
@@ -806,7 +929,7 @@
     },
     "WireRef": {
       "description": "A wire id, 0-based (AQ5).",
-      "pattern": "^wire:(0|[1-9][0-9]*)$",
+      "pattern": "^wire:(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-4]|4294967295)$",
       "type": "string"
     }
   },
@@ -835,6 +958,7 @@
       "$ref": "#/$defs/ValidateResult"
     },
     "revision": {
+      "maximum": 18446744073709551615,
       "minimum": 0,
       "type": "integer"
     },

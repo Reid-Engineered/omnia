@@ -312,14 +312,30 @@ On failure `result` is replaced by `error` (9.4). Requests through `omnia call` 
 serve` are `{"op": "<operation>", "params": { }, "idempotency_key": "..."}`; JSON-lines adds
 an `"id"` that the response echoes. All objects reject unknown fields.
 
-Decoding rules, fixed at A1.3 (2026-11-21): `params` is always present (`{}` for
-`capabilities` and `new`); `idempotency_key` is accepted only on the operations section 11.2
-names and is a `schema_violation` elsewhere. Malformed JSON, a duplicate object key or any
-non-integer number is `invalid_request`; an operation outside the catalog is
-`unknown_operation`; any other mismatch is `schema_violation {path}` with a JSON Pointer
-(`/params`, or `/params/operations/<i>` for the first edit operation that does not match). An
-absent optional field is omitted from responses, never `null`. Document ids are `d<n>` and job
-ids `j<n>`, in the canonical decimal of AD12's item ids.
+Decoding rules, fixed at A1.3 (2026-11-21; amended by its review the same day):
+
+- Two wire forms, one meaning. The envelope above is what `omnia call` and `omnia serve` read;
+  `params` is always present (`{}` for `capabilities` and `new`). Over MCP a tool's
+  `arguments` are the params object itself, with `idempotency_key` beside the params fields on
+  the operations section 11.2 names (schema `<op>.arguments`). Both decode to the same request.
+  `idempotency_key` anywhere else is a `schema_violation`.
+- Order of checks: size over AK2 is `limit_exceeded`; malformed JSON, a duplicate object key,
+  or a number that is not a 64-bit integer written without fraction or exponent is
+  `invalid_request`; an operation the catalog does not list is `unknown_operation`; over AK3
+  or AK4 is `limit_exceeded`; then the request is validated against its published schema
+  (`<op>.params` or `<op>.arguments`) and any mismatch is `schema_violation {path}`. Only then
+  are the DTOs decoded.
+- The decoder refuses everything the published schema refuses (nulls for optional fields,
+  arrays in place of objects, out-of-range ids and numbers). Beyond the schema it checks only:
+  the request size, duplicate keys, the integer spelling of numbers, and that bounds have
+  `min <= max` on both axes. Property tests mutate valid requests and responses and check
+  that the decoder and the published schema agree on every result but these.
+- `path` is a JSON Pointer to the first failure, found by visiting object keys in byte order;
+  when no alternative of a union matches, the deepest failure is reported. The same request
+  with its keys in another order gets the same error bytes (AINV5).
+- An absent optional field is omitted from responses, never `null`. Document ids are `d<n>` and
+  job ids `j<n>`, in the canonical decimal of AD12's item ids; ids fit `u32` (items) or `u64`
+  (documents, jobs).
 
 ### 9.2 Edit operations
 
@@ -399,7 +415,8 @@ holds. `nothing_to_redo` is added for `omnia_redo`. `limit` is one of `request_b
 `write_file`, `overwrite_file`, `discard_unsaved`. A `blocker` is
 `{"kind": "pin", "part", "pin"}`, `{"kind": "wire_end" | "wire_body" | "overlap", "wire"}` or
 `{"kind": "sheet"}`. Codes without details carry `"details": {}`. `retryable` is fixed per code:
-true for `stale_revision`, `user_gesture_in_progress`, `approval_required` and `io_error`.
+true for `stale_revision`, `user_gesture_in_progress`, `approval_required` and `io_error`. The
+schema pins it per code and the decoder refuses an error whose flag contradicts its code.
 
 ### 9.5 Schema files
 
@@ -409,12 +426,18 @@ fails on any difference (AINV11), the way `cargo xtask tokens` is checked. No sc
 added (AQ3).
 
 As built at A1.3: dialect JSON Schema 2020-12; files `request.json` and `response.json` cover
-every operation, and each operation has `<op>.params.json` (its MCP `inputSchema`) and
-`<op>.response.json` (its envelope, the MCP `outputSchema`), each self-contained with `$defs`.
-Keys are printed sorted, so the bytes do not depend on `serde_json` features. After a deliberate
-change, `OMNIA_BLESS_SCHEMAS=1 cargo test -p omnia-agent ainv11` rewrites the directory; without
-the variable the test only compares. A property test checks that every serialized DTO validates
-against its schema.
+every available operation, and each available operation has `<op>.params.json` (its `params`
+in the envelope), `<op>.arguments.json` (its MCP `inputSchema`: the params plus
+`idempotency_key` where 11.2 allows it) and `<op>.response.json` (its envelope, the MCP
+`outputSchema`), each self-contained with `$defs`. Operations the catalog does not list yet
+(the A3 job tools) have no committed files. Keys are printed sorted, so the bytes do not depend
+on `serde_json` features. The schemas state the ranges the codecs hold: id patterns spell
+exactly `0..=4294967295` (items) or `0..=18446744073709551615` (documents, jobs), every 64-bit
+integer has its maximum, and bounds corners lie inside K1. The decoders validate against these
+same schemas with a hand-written validator for the keywords the module emits (section 9.1).
+After a deliberate change, `OMNIA_BLESS_SCHEMAS=1 cargo test -p omnia-agent ainv11` rewrites
+the directory; without the variable the test only compares. Property tests check that every
+serialized DTO validates against its published schema text, with no codec in the check.
 
 ## 10. MCP mapping
 
@@ -439,10 +462,18 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_request_status {idempotency_key}` | 0 | read-only | A1 |
 | `omnia_route`, `omnia_snap`, `omnia_hit` | 0 | read-only, idempotent | A2 |
 | `omnia_render_svg {doc_id, area?, theme}` | 0 | read-only, idempotent | A2 |
-| `omnia_job_status`, `omnia_job_cancel` | 0 | — | A3 |
+| `omnia_job_status`, `omnia_job_cancel` | 0 | — | A3; not listed before A3.1 |
 
 Every tool declares an `inputSchema` and an `outputSchema`. A result carries
 `structuredContent` (the 9.1 envelope) and a text block with the same JSON.
+
+A tool's arguments are its operation's params, plus `idempotency_key` for `omnia_apply`,
+`omnia_undo`, `omnia_redo` and `omnia_save` (11.2); the `inputSchema` is `<op>.arguments` and
+the adapter decodes it with `Request::from_arguments`, which gives the same request as the
+envelope. `tools/list` is built from the catalog, and the catalog lists only operations whose
+milestone is delivered (`OpSpec::available`): an operation that is defined but not available
+keeps its DTOs, is refused as `unknown_operation`, and has no committed schema. The job tools
+are unavailable until A3.1 turns them on.
 
 Tool failures are results with `isError: true` and the structured error, so the model can read
 and correct them. Only malformed JSON-RPC messages and unknown tool names are JSON-RPC protocol
@@ -541,12 +572,16 @@ only the storage lifetime of those handles (11.1): they expire when it exits.
 
 ### 11.2 Idempotency
 
-- `idempotency_key` is optional on apply, undo, redo and save.
+- `idempotency_key` is optional on apply, undo, redo and save, and refused on every other
+  operation. In the envelope it sits beside `op` and `params`; in MCP tool arguments it sits
+  beside the params fields (9.1). `request_status` takes the key as its only param.
 - The session caches key, canonical request hash and full response for AK5 entries.
 - The same key with the same request returns the stored bytes and applies nothing (AINV7). The
   same key with another request is refused with `idempotency_conflict`.
-- After a lost reply, `omnia_request_status(key)` answers `not_run`, `applied {revision,
-  response}` or `failed {error}`.
+- After a lost reply, `omnia_request_status(key)` answers `not_run`, `applied {op, revision,
+  response}` or `failed {error}`. `op` names the stored request's operation, one of apply,
+  undo, redo and save, and `response` is a successful response of that operation; a request
+  that failed is reported as `failed`. Schema and decoder both refuse any other combination.
 - `expected_revision` alone already makes a blind retry safe: it is refused as stale and never
   applies twice.
 

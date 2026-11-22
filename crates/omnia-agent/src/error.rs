@@ -385,11 +385,13 @@ const fn limit_name(limit: Limit) -> &'static str {
 }
 
 /// A structured error (AD6, section 9.4).
+///
+/// `retryable` is not stored: the wire flag is always [`ErrorCode::retryable`] of the code, and
+/// decoding refuses a flag that contradicts it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentError {
     pub kind: ErrorKind,
     pub message: String,
-    pub retryable: bool,
     pub hint: Option<String>,
 }
 
@@ -406,7 +408,6 @@ impl AgentError {
         Self {
             kind,
             message: message.into(),
-            retryable: code.retryable(),
             hint: code.hint().map(str::to_owned),
         }
     }
@@ -414,6 +415,11 @@ impl AgentError {
     /// The error's code.
     pub const fn code(&self) -> ErrorCode {
         self.kind.code()
+    }
+
+    /// The wire `retryable` flag, fixed by the code.
+    pub const fn retryable(&self) -> bool {
+        self.code().retryable()
     }
 }
 
@@ -705,7 +711,7 @@ impl Serialize for AgentError {
         let mut s = serializer.serialize_struct("AgentError", len)?;
         s.serialize_field("code", &self.code())?;
         s.serialize_field("message", &self.message)?;
-        s.serialize_field("retryable", &self.retryable)?;
+        s.serialize_field("retryable", &self.retryable())?;
         s.serialize_field("details", &Details(&self.kind))?;
         if let Some(hint) = &self.hint {
             s.serialize_field("hint", hint)?;
@@ -728,12 +734,18 @@ struct ErrorWire {
 impl<'de> Deserialize<'de> for AgentError {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let wire = ErrorWire::deserialize(deserializer)?;
+        if wire.retryable != wire.code.retryable() {
+            return Err(de::Error::custom(format_args!(
+                "`retryable` of {} is {}",
+                wire.code,
+                wire.code.retryable()
+            )));
+        }
         let kind = decode_kind(wire.code, wire.details).map_err(de::Error::custom)?;
         debug_assert_eq!(kind.code(), wire.code);
         Ok(Self {
             kind,
             message: wire.message,
-            retryable: wire.retryable,
             hint: wire.hint,
         })
     }
@@ -886,6 +898,8 @@ mod tests {
             r#"{"code":"stale_revision","message":"m","retryable":true,"details":{}}"#,
             r#"{"code":"no_such_code","message":"m","retryable":true,"details":{}}"#,
             r#"{"code":"internal","message":"m","retryable":false,"details":{},"extra":1}"#,
+            r#"{"code":"nothing_to_undo","message":"m","retryable":true,"details":{}}"#,
+            r#"{"code":"stale_revision","message":"m","retryable":false,"details":{"expected":1,"actual":2}}"#,
         ];
         for text in bad {
             assert!(serde_json::from_str::<AgentError>(text).is_err(), "{text}");

@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 1b6c159dedc6738494571c6e797b4c291bff660d76a3c6f3aa43555dbbcf432a # shrinks to req = Request { op: RequestStatus(KeyArgs { idempotency_key: "" }), idempotency_key: None }, at = Index(0), m = AddField("aa")
+cc 3148725e0245ab2b2bdbe8872dd02990097c573f8c4110bb1d6a74554638d200 # shrinks to req = Request { op: RequestStatus(KeyArgs { idempotency_key: "" }), idempotency_key: None }

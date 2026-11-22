@@ -429,3 +429,31 @@ the schemas leave out. For A1.7: the INV12 crate-list line must gain `omnia-cli`
 exists (the line is A1.3's, so A1.7 needs it in its **Owns**), and JSON-lines' `"id"` must be
 stripped before `Request::from_slice`, which rejects unknown envelope fields. No GUI dependency;
 nothing measured.
+
+2026-11-21 A1.3 done (review fixes) — independent review (a model other than the author)
+requested changes; findings 1 to 7 fixed on the same branch, all written into mcp-plan.md
+sections 9.1, 9.4, 9.5, 10.1 and 11.2. (1) MCP tool arguments are the params with
+`idempotency_key` beside them on apply, undo, redo and save: new committed `<op>.arguments`
+schemas are the `inputSchema`, `Request::from_arguments` and `to_arguments` decode and write
+them, and both forms give the same request (ATC-edit-03); the envelope is unchanged. (2, 3) The
+decoders now validate against the published schema before typed decoding, through a new
+`schema/validate.rs`: a validator for exactly the emitted keywords and a small matcher for the
+emitted pattern subset, with no codec shortcut. So nulls for optional fields, positional arrays
+and `"error": null` are refused. Error paths are JSON Pointers found in byte order of keys,
+with the deepest failing alternative, so error bytes do not depend on `preserve_order`. Only
+the request size, duplicate keys, integer spelling and bounds corner ordering are
+decoder-only. Property tests mutate valid requests (both forms) and responses and check that
+the decoder agrees with the published schema text, and that reversed key order gives the same
+error bytes. (4) `request_status` `applied {op, revision, response}`: `op` is one of the four
+keyed operations, and `response` is a success of that operation, in the schema (per-op
+success definitions) and in the decoder; the strategies can only generate such pairs.
+(5) Schemas encode the representable ranges: exact decimal patterns up to `u32::MAX` and
+`u64::MAX`, a maximum on every `u64`, and K1 bounds corners. (6) `AgentError` no longer stores
+`retryable`; the wire flag comes from the code, the schema pins it per code, and the decoder
+refuses a contradiction. (7) `OpSpec::available`: `job_status` and `job_cancel` keep their DTOs
+but are not listed, not dispatched (`unknown_operation`) and have no committed schema until
+A3.1 sets them available; A1.8's `tools/list` builds on the catalog. 44 committed schema files.
+For A1.7, in addition to the entry above: when it lifts the JSON-lines `"id"` off a line, it
+must keep duplicate-key detection, so it parses the line with `parse_strict` and passes the
+rest to `Request::from_envelope_value`, never round-tripping through a plain JSON value first.
+Checks rerun locally; no dependency added; nothing measured.

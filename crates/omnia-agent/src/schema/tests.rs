@@ -1,8 +1,10 @@
 //! A1.3 done-when tests: every DTO round-trips through JSON, every serialized DTO validates
-//! against its committed JSON Schema, and the committed schemas equal the generated ones
-//! (AINV11). Strategies pick variants through exhaustive `match`es over the catalog's name lists,
-//! so a new operation, edit operation, result or error code fails to compile here until it has
-//! a generator.
+//! against its published JSON Schema, the committed schemas equal the generated ones (AINV11),
+//! and the decoders and the published schemas refuse the same inputs.
+//!
+//! Strategies pick variants through exhaustive `match`es over the catalog's name lists, so a new
+//! operation, edit operation, result or error code fails to compile here until it has a
+//! generator. Schema checks read the published text ([`schema_files`]), never a codec.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -12,12 +14,21 @@ use std::{
 };
 
 use omnia_doc::{ItemId, LabelId, Orient, PartId, Pt, Rect, TextField, WireId};
-use proptest::{collection::vec, option, prelude::*, sample::select};
-use serde_json::Value;
+use proptest::{
+    collection::vec,
+    option,
+    prelude::*,
+    sample::{Index, select},
+};
+use serde_json::{Value, json};
 
-use super::*;
+use super::{
+    validate::{KEYWORDS, Pattern, validate},
+    *,
+};
 use crate::{
     AgentError, Catalog, EditOpName, ErrorCode, ErrorKind, OpName,
+    catalog::spec,
     error::{BlockerDto, Effect, Limit},
 };
 
@@ -261,9 +272,18 @@ fn operation_for(op: OpName) -> BoxedStrategy<Operation> {
     }
 }
 
+fn available_ops() -> Vec<OpName> {
+    OpName::ALL
+        .iter()
+        .copied()
+        .filter(|&op| spec(op).available)
+        .collect()
+}
+
+/// A request to an available operation.
 fn request() -> impl Strategy<Value = Request> {
-    select(OpName::ALL.to_vec()).prop_flat_map(|op| {
-        let key = if crate::catalog::spec(op).idempotency_key {
+    select(available_ops()).prop_flat_map(|op| {
+        let key = if spec(op).idempotency_key {
             option::of(text()).boxed()
         } else {
             Just(None).boxed()
@@ -378,14 +398,11 @@ fn agent_error() -> impl Strategy<Value = AgentError> {
         .prop_flat_map(|kind| {
             prop_oneof![
                 Just(AgentError::new(kind.clone())),
-                (text(), any::<bool>(), option::of(text())).prop_map(
-                    move |(message, retryable, hint)| AgentError {
-                        kind: kind.clone(),
-                        message,
-                        retryable,
-                        hint,
-                    }
-                ),
+                (text(), option::of(text())).prop_map(move |(message, hint)| AgentError {
+                    kind: kind.clone(),
+                    message,
+                    hint,
+                }),
             ]
         })
 }
@@ -525,15 +542,17 @@ fn job_state() -> impl Strategy<Value = JobState> {
         })
 }
 
-/// A non-recursive response to `op`, for `request_status`'s stored response.
+/// A stored response, as `request_status` reports it: a success of an operation that takes an
+/// idempotency key (section 11.2). Nothing else can be generated, so nothing else is blessed.
 fn stored_response() -> impl Strategy<Value = (OpName, Response)> {
-    let ops: Vec<OpName> = OpName::ALL
+    let keyed: Vec<OpName> = OpName::ALL
         .iter()
         .copied()
-        .filter(|&op| op != OpName::RequestStatus)
+        .filter(|&op| spec(op).idempotency_key)
         .collect();
-    select(ops).prop_flat_map(|op| {
-        response_for(op, Just(RequestStatus::NotRun).boxed()).prop_map(move |r| (op, r))
+    select(keyed).prop_flat_map(|op| {
+        let outcome = output_for(op, Just(RequestStatus::NotRun).boxed()).prop_map(Ok);
+        envelope_with(outcome.boxed()).prop_map(move |r| (op, r))
     })
 }
 
@@ -620,11 +639,7 @@ fn output_for(op: OpName, status: BoxedStrategy<RequestStatus>) -> BoxedStrategy
     }
 }
 
-fn response_for(op: OpName, status: BoxedStrategy<RequestStatus>) -> BoxedStrategy<Response> {
-    let outcome = prop_oneof![
-        output_for(op, status).prop_map(Ok),
-        agent_error().prop_map(Err),
-    ];
+fn envelope_with(outcome: BoxedStrategy<Result<Output, AgentError>>) -> BoxedStrategy<Response> {
     let warning = (text(), text()).prop_map(|(code, message)| Warning { code, message });
     (
         option::of(doc_id()),
@@ -639,39 +654,49 @@ fn response_for(op: OpName, status: BoxedStrategy<RequestStatus>) -> BoxedStrate
         .boxed()
 }
 
-fn response() -> impl Strategy<Value = (OpName, Response)> {
-    select(OpName::ALL.to_vec())
-        .prop_flat_map(|op| response_for(op, request_status()).prop_map(move |r| (op, r)))
+fn response_for(op: OpName) -> BoxedStrategy<Response> {
+    let outcome = prop_oneof![
+        output_for(op, request_status()).prop_map(Ok),
+        agent_error().prop_map(Err),
+    ];
+    envelope_with(outcome.boxed())
 }
 
-// ---- a JSON Schema validator for the keywords the module emits ------------------------------
+fn response() -> impl Strategy<Value = (OpName, Response)> {
+    select(OpName::ALL.to_vec()).prop_flat_map(|op| response_for(op).prop_map(move |r| (op, r)))
+}
 
-const KEYWORDS: &[&str] = &[
-    "$schema",
-    "$defs",
-    "$ref",
-    "title",
-    "description",
-    "type",
-    "properties",
-    "required",
-    "additionalProperties",
-    "items",
-    "prefixItems",
-    "minItems",
-    "maxItems",
-    "uniqueItems",
-    "enum",
-    "const",
-    "oneOf",
-    "anyOf",
-    "not",
-    "minimum",
-    "maximum",
-    "pattern",
-];
+// ---- published schemas ---------------------------------------------------------------------
 
-/// Fails on any keyword the validator does not implement, so none is silently ignored.
+/// The published schema files, parsed from their text.
+fn published(name: &str) -> &'static Value {
+    static SCHEMAS: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
+    let schemas = SCHEMAS.get_or_init(|| {
+        schema_files()
+            .into_iter()
+            .map(|(n, text)| (n, serde_json::from_str(&text).unwrap()))
+            .collect()
+    });
+    schemas
+        .get(name)
+        .unwrap_or_else(|| panic!("published schema {name}"))
+}
+
+fn conforms(name: &str, v: &Value) -> bool {
+    validate(published(name), v).is_ok()
+}
+
+fn check(name: &str, v: &Value) {
+    if let Err(e) = validate(published(name), v) {
+        panic!("AINV11: {v} does not validate against {name}: {e:?}");
+    }
+}
+
+fn refuse(name: &str, v: &Value) {
+    assert!(!conforms(name, v), "{name} accepts {v}");
+}
+
+/// Fails on any keyword the validator does not implement, and on any unsupported pattern.
 fn audit(schema: &Value, at: &str) {
     match schema {
         Value::Bool(_) => {}
@@ -690,7 +715,10 @@ fn audit(schema: &Value, at: &str) {
                         }
                     }
                     "items" | "not" | "additionalProperties" => audit(sub, &format!("{at}/{key}")),
-                    "pattern" => assert!(pattern_check(sub.as_str().unwrap()).is_some(), "{at}"),
+                    "pattern" => assert!(
+                        Pattern::parse(sub.as_str().unwrap()).is_some(),
+                        "{at}: pattern"
+                    ),
                     _ => {}
                 }
             }
@@ -699,186 +727,7 @@ fn audit(schema: &Value, at: &str) {
     }
 }
 
-/// The patterns the module emits, checked with the codecs that own them.
-fn pattern_check(pattern: &str) -> Option<fn(&str) -> bool> {
-    Some(match pattern {
-        "^part:(0|[1-9][0-9]*)$" => |s| s.parse::<PartRef>().is_ok(),
-        "^wire:(0|[1-9][0-9]*)$" => |s| s.parse::<WireRef>().is_ok(),
-        "^label:(0|[1-9][0-9]*)$" => |s| s.parse::<LabelRef>().is_ok(),
-        "^(part|wire|label):(0|[1-9][0-9]*)$" => |s| s.parse::<ItemRef>().is_ok(),
-        "^d(0|[1-9][0-9]*)$" => |s| s.parse::<DocId>().is_ok(),
-        "^j(0|[1-9][0-9]*)$" => |s| s.parse::<JobId>().is_ok(),
-        "^pv-[0-9a-f]{16}$" => |s| s.parse::<PreviewId>().is_ok(),
-        _ => return None,
-    })
-}
-
-fn type_matches(ty: &str, v: &Value) -> bool {
-    match ty {
-        "object" => v.is_object(),
-        "array" => v.is_array(),
-        "string" => v.is_string(),
-        "boolean" => v.is_boolean(),
-        "null" => v.is_null(),
-        "integer" => v.is_i64() || v.is_u64(),
-        other => panic!("type {other}"),
-    }
-}
-
-fn as_i128(v: &Value) -> Option<i128> {
-    v.as_i64()
-        .map(i128::from)
-        .or_else(|| v.as_u64().map(i128::from))
-}
-
-fn validate(root: &Value, schema: &Value, v: &Value, at: &str) -> Result<(), String> {
-    let map = match schema {
-        Value::Bool(true) => return Ok(()),
-        Value::Bool(false) => return Err(format!("{at}: no value is allowed")),
-        Value::Object(map) => map,
-        _ => unreachable!("audited"),
-    };
-    if let Some(r) = map.get("$ref") {
-        let name = r.as_str().unwrap().strip_prefix("#/$defs/").unwrap();
-        validate(root, &root["$defs"][name], v, at)?;
-    }
-    if let Some(ty) = map.get("type")
-        && !type_matches(ty.as_str().unwrap(), v)
-    {
-        return Err(format!("{at}: not of type {ty}"));
-    }
-    if let Some(c) = map.get("const")
-        && c != v
-    {
-        return Err(format!("{at}: not {c}"));
-    }
-    if let Some(e) = map.get("enum")
-        && !e.as_array().unwrap().contains(v)
-    {
-        return Err(format!("{at}: {v} not in enum"));
-    }
-    if let (Some(min), Some(n)) = (map.get("minimum"), as_i128(v))
-        && n < as_i128(min).unwrap()
-    {
-        return Err(format!("{at}: below minimum"));
-    }
-    if let (Some(max), Some(n)) = (map.get("maximum"), as_i128(v))
-        && n > as_i128(max).unwrap()
-    {
-        return Err(format!("{at}: above maximum"));
-    }
-    if let (Some(p), Some(s)) = (map.get("pattern"), v.as_str())
-        && !pattern_check(p.as_str().unwrap()).unwrap()(s)
-    {
-        return Err(format!("{at}: {s:?} does not match {p}"));
-    }
-    if let Some(obj) = v.as_object() {
-        let props = map.get("properties").and_then(Value::as_object);
-        if let Some(required) = map.get("required") {
-            for name in required.as_array().unwrap() {
-                if !obj.contains_key(name.as_str().unwrap()) {
-                    return Err(format!("{at}: missing {name}"));
-                }
-            }
-        }
-        for (key, value) in obj {
-            match props.and_then(|p| p.get(key)) {
-                Some(s) => validate(root, s, value, &format!("{at}/{key}"))?,
-                None => {
-                    if let Some(extra) = map.get("additionalProperties") {
-                        validate(root, extra, value, &format!("{at}/{key}"))?;
-                    }
-                }
-            }
-        }
-    }
-    if let Some(items) = v.as_array() {
-        let prefix = map
-            .get("prefixItems")
-            .and_then(Value::as_array)
-            .map_or(&[][..], Vec::as_slice);
-        for (i, item) in items.iter().enumerate() {
-            let s = prefix.get(i).or_else(|| map.get("items"));
-            if let Some(s) = s {
-                validate(root, s, item, &format!("{at}/{i}"))?;
-            }
-        }
-        let len = items.len() as u64;
-        if map
-            .get("minItems")
-            .is_some_and(|m| len < m.as_u64().unwrap())
-        {
-            return Err(format!("{at}: too few items"));
-        }
-        if map
-            .get("maxItems")
-            .is_some_and(|m| len > m.as_u64().unwrap())
-        {
-            return Err(format!("{at}: too many items"));
-        }
-        if map.get("uniqueItems") == Some(&Value::Bool(true)) {
-            for (i, a) in items.iter().enumerate() {
-                if items[..i].contains(a) {
-                    return Err(format!("{at}: repeated item"));
-                }
-            }
-        }
-    }
-    if let Some(alternatives) = map.get("oneOf") {
-        let passing = alternatives
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|s| validate(root, s, v, at).is_ok())
-            .count();
-        if passing != 1 {
-            return Err(format!("{at}: {passing} oneOf alternatives match"));
-        }
-    }
-    if let Some(alternatives) = map.get("anyOf")
-        && !alternatives
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|s| validate(root, s, v, at).is_ok())
-    {
-        return Err(format!("{at}: no anyOf alternative matches"));
-    }
-    if let Some(not) = map.get("not")
-        && validate(root, not, v, at).is_ok()
-    {
-        return Err(format!("{at}: matches `not`"));
-    }
-    Ok(())
-}
-
-fn schema_value(name: &str) -> &'static Value {
-    static SCHEMAS: OnceLock<BTreeMap<String, Value>> = OnceLock::new();
-    let schemas = SCHEMAS.get_or_init(|| {
-        schema_files()
-            .into_iter()
-            .map(|(n, text)| (n, serde_json::from_str(&text).unwrap()))
-            .collect()
-    });
-    schemas.get(name).unwrap_or_else(|| panic!("schema {name}"))
-}
-
-fn check(name: &str, v: &Value) {
-    let schema = schema_value(name);
-    if let Err(e) = validate(schema, schema, v, "") {
-        panic!("AINV11: {v} does not validate against {name}: {e}");
-    }
-}
-
-fn refuse(name: &str, v: &Value) {
-    let schema = schema_value(name);
-    assert!(
-        validate(schema, schema, v, "").is_err(),
-        "{name} accepts {v}"
-    );
-}
-
-/// Compact JSON with object keys in reverse sorted order (AINV5: key order does not matter).
+/// Compact JSON with object keys in reverse byte order (AINV5: key order does not matter).
 fn reversed_keys(v: &Value) -> String {
     match v {
         Value::Object(map) => {
@@ -905,26 +754,181 @@ fn reversed_keys(v: &Value) -> String {
     }
 }
 
+// ---- mutations -----------------------------------------------------------------------------
+
+/// One change to a valid document, for the parity tests.
+#[derive(Debug, Clone)]
+enum Mutation {
+    Remove,
+    AddField(&'static str),
+    Null,
+    ToArray,
+    ToObject,
+    Str(&'static str),
+    Num(i128),
+    Bool,
+}
+
+fn mutation() -> impl Strategy<Value = Mutation> {
+    prop_oneof![
+        Just(Mutation::Remove),
+        select(vec!["aa", "zz", "x", "with_wires"]).prop_map(Mutation::AddField),
+        Just(Mutation::Null),
+        Just(Mutation::ToArray),
+        Just(Mutation::ToObject),
+        select(vec![
+            "",
+            "x",
+            "part:01",
+            "part:4294967296",
+            "wire:4294967295",
+            "d18446744073709551616",
+            "pv-0",
+            "identity",
+            "summary",
+            "applied",
+        ])
+        .prop_map(Mutation::Str),
+        select(vec![
+            -1i128,
+            0,
+            1,
+            5_001,
+            1_000_000_001,
+            4_294_967_296,
+            i128::from(u64::MAX),
+            i128::from(i64::MIN),
+        ])
+        .prop_map(Mutation::Num),
+        Just(Mutation::Bool),
+    ]
+}
+
+/// Every node below the root, as a path of object keys and array indexes.
+fn node_paths(v: &Value, prefix: &mut Vec<Value>, out: &mut Vec<Vec<Value>>) {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for k in keys {
+                prefix.push(Value::String(k.clone()));
+                out.push(prefix.clone());
+                node_paths(&map[k.as_str()], prefix, out);
+                prefix.pop();
+            }
+        }
+        Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                prefix.push(json!(i));
+                out.push(prefix.clone());
+                node_paths(item, prefix, out);
+                prefix.pop();
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_mutation(doc: &Value, at: Index, m: &Mutation) -> Value {
+    let mut doc = doc.clone();
+    let mut paths = Vec::new();
+    node_paths(&doc, &mut Vec::new(), &mut paths);
+    if paths.is_empty() {
+        return doc;
+    }
+    let path = &paths[at.index(paths.len())];
+    let (last, parent_path) = path.split_last().unwrap();
+    let mut parent = &mut doc;
+    for seg in parent_path {
+        parent = match seg {
+            Value::String(k) => &mut parent[k.as_str()],
+            _ => &mut parent[seg.as_u64().unwrap() as usize],
+        };
+    }
+    if let Mutation::Remove = m {
+        match (parent, last) {
+            (Value::Object(map), Value::String(k)) => {
+                map.remove(k);
+            }
+            (Value::Array(items), i) => {
+                items.remove(i.as_u64().unwrap() as usize);
+            }
+            _ => unreachable!(),
+        }
+        return doc;
+    }
+    let node = match last {
+        Value::String(k) => &mut parent[k.as_str()],
+        i => &mut parent[i.as_u64().unwrap() as usize],
+    };
+    *node = match (m, node.take()) {
+        (Mutation::AddField(k), Value::Object(mut map)) => {
+            map.insert((*k).to_owned(), json!(1));
+            Value::Object(map)
+        }
+        (Mutation::AddField(_), other) => other,
+        (Mutation::Null, _) => Value::Null,
+        (Mutation::ToArray, Value::Object(map)) => {
+            let mut keys: Vec<String> = map.keys().cloned().collect();
+            keys.sort();
+            Value::Array(keys.iter().map(|k| map[k.as_str()].clone()).collect())
+        }
+        (Mutation::ToArray, other) => json!([other]),
+        (Mutation::ToObject, Value::Array(items)) => {
+            let map = items
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| (i.to_string(), v))
+                .collect();
+            Value::Object(map)
+        }
+        (Mutation::ToObject, other) => json!({ "v": other }),
+        (Mutation::Str(s), _) => json!(s),
+        (Mutation::Num(n), _) => match (i64::try_from(*n), u64::try_from(*n)) {
+            (Ok(i), _) => json!(i),
+            (_, Ok(u)) => json!(u),
+            _ => unreachable!(),
+        },
+        (Mutation::Bool, _) => json!(true),
+        (Mutation::Remove, _) => unreachable!(),
+    };
+    doc
+}
+
+/// The decoder refuses a document the schema accepts only for a decoder-only rule (9.1).
+fn decoder_only(message: &str) -> bool {
+    message.contains("inverted rectangle")
+}
+
 // ---- tests ---------------------------------------------------------------------------------
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(512))]
 
-    /// Every request DTO round-trips through JSON, validates against `request` and its
-    /// `<op>.params`, and decodes the same with object keys in another order (AINV5, AINV11).
+    /// Every request round-trips through both wire forms, validates against `request`,
+    /// `<op>.params` and `<op>.arguments`, and decodes the same with object keys in another
+    /// order (AINV5, AINV11).
     #[test]
     fn requests_round_trip_and_validate(req in request()) {
+        let op = req.op.name();
         let text = req.to_json();
         prop_assert_eq!(&text.parse::<Request>().unwrap(), &req);
         let value: Value = serde_json::from_str(&text).unwrap();
         check("request", &value);
-        check(&format!("{}.params", req.op.name()), &value["params"]);
+        check(&format!("{op}.params"), &value["params"]);
         prop_assert_eq!(&reversed_keys(&value).parse::<Request>().unwrap(), &req);
-        prop_assert_eq!(text, req.to_json());
+        prop_assert_eq!(&text, &req.to_json());
+
+        let args = req.to_arguments();
+        prop_assert_eq!(&Request::from_arguments(op, args.as_bytes()).unwrap(), &req);
+        let args_value: Value = serde_json::from_str(&args).unwrap();
+        check(&format!("{op}.arguments"), &args_value);
+        let reordered = reversed_keys(&args_value);
+        prop_assert_eq!(&Request::from_arguments(op, reordered.as_bytes()).unwrap(), &req);
     }
 
-    /// Every response DTO round-trips through JSON and validates against `response` and its
-    /// `<op>.response` (AINV11).
+    /// Every response round-trips through JSON and validates against `response` and its
+    /// `<op>.response` when published (AINV11).
     #[test]
     fn responses_round_trip_and_validate((op, resp) in response()) {
         let text = resp.to_json();
@@ -933,19 +937,102 @@ proptest! {
             prop_assert!(output.answers(op));
         }
         let value: Value = serde_json::from_str(&text).unwrap();
-        check("response", &value);
-        check(&format!("{op}.response"), &value);
+        if spec(op).available {
+            check("response", &value);
+            check(&format!("{op}.response"), &value);
+        }
         let reordered = reversed_keys(&value);
         prop_assert_eq!(&Response::from_slice(op, reordered.as_bytes()).unwrap(), &resp);
     }
 
-    /// Every error kind round-trips and keeps its code.
+    /// Every error kind round-trips and keeps its code and its fixed `retryable`.
     #[test]
     fn errors_round_trip(err in agent_error()) {
         let text = serde_json::to_string(&err).unwrap();
         let back: AgentError = serde_json::from_str(&text).unwrap();
         prop_assert_eq!(back.code(), err.code());
         prop_assert_eq!(back, err);
+    }
+
+    /// Parity, envelope form: after any one mutation of a valid request the decoder accepts it
+    /// exactly when the published `request` schema does, except for a decoder-only rule.
+    /// AINV5 for invalid requests: reordering keys does not change the error bytes.
+    #[test]
+    fn envelope_decoder_and_schema_agree(req in request(), at in any::<Index>(), m in mutation()) {
+        let doc = apply_mutation(&serde_json::from_str(&req.to_json()).unwrap(), at, &m);
+        let text = serde_json::to_string(&doc).unwrap();
+        let decoded = text.parse::<Request>();
+        let schema_ok = conforms("request", &doc);
+        match &decoded {
+            Ok(_) => prop_assert!(schema_ok, "decoder accepts what the schema refuses: {}", text),
+            Err(e) => prop_assert!(
+                !schema_ok || decoder_only(&e.message),
+                "decoder refuses what the schema accepts: {} -> {}", text, e
+            ),
+        }
+        let again = reversed_keys(&doc).parse::<Request>();
+        prop_assert_eq!(
+            decoded.map(|r| r.to_json()).map_err(|e| serde_json::to_string(&e).unwrap()),
+            again.map(|r| r.to_json()).map_err(|e| serde_json::to_string(&e).unwrap())
+        );
+    }
+
+    /// Parity, MCP arguments form, against `<op>.arguments`.
+    #[test]
+    fn arguments_decoder_and_schema_agree(req in request(), at in any::<Index>(), m in mutation()) {
+        let op = req.op.name();
+        let doc = apply_mutation(&serde_json::from_str(&req.to_arguments()).unwrap(), at, &m);
+        let text = serde_json::to_string(&doc).unwrap();
+        let decoded = Request::from_arguments(op, text.as_bytes());
+        let schema_ok = conforms(&format!("{op}.arguments"), &doc);
+        match &decoded {
+            Ok(_) => prop_assert!(schema_ok, "decoder accepts what the schema refuses: {}", text),
+            Err(e) => prop_assert!(
+                !schema_ok || decoder_only(&e.message),
+                "decoder refuses what the schema accepts: {} -> {}", text, e
+            ),
+        }
+        let again = Request::from_arguments(op, reversed_keys(&doc).as_bytes());
+        prop_assert_eq!(
+            decoded.map(|r| r.to_arguments()).map_err(|e| serde_json::to_string(&e).unwrap()),
+            again.map(|r| r.to_arguments()).map_err(|e| serde_json::to_string(&e).unwrap())
+        );
+    }
+
+    /// Parity, responses, against `<op>.response`.
+    #[test]
+    fn response_decoder_and_schema_agree(
+        (op, resp) in response(),
+        at in any::<Index>(),
+        m in mutation(),
+    ) {
+        prop_assume!(spec(op).available);
+        let doc = apply_mutation(&serde_json::from_str(&resp.to_json()).unwrap(), at, &m);
+        let text = serde_json::to_string(&doc).unwrap();
+        let decoded = Response::from_slice(op, text.as_bytes());
+        let schema_ok = conforms(&format!("{op}.response"), &doc);
+        match &decoded {
+            Ok(_) => prop_assert!(schema_ok, "decoder accepts what the schema refuses: {}", text),
+            Err(e) => prop_assert!(
+                !schema_ok || decoder_only(&e.to_string()),
+                "decoder refuses what the schema accepts: {} -> {}", text, e
+            ),
+        }
+    }
+
+    /// The published id patterns accept exactly what the codecs hold.
+    #[test]
+    fn id_patterns_agree_with_the_codecs(n in any::<u64>(), digits in "[0-9]{1,21}") {
+        for s in [n.to_string(), digits] {
+            prop_assert_eq!(
+                conforms("undo.params", &json!({ "doc_id": format!("d{s}"), "expected_revision": 0 })),
+                format!("d{s}").parse::<DocId>().is_ok()
+            );
+            prop_assert_eq!(
+                conforms("nets.params", &json!({ "doc_id": "d1", "wire": format!("wire:{s}") })),
+                format!("wire:{s}").parse::<WireRef>().is_ok()
+            );
+        }
     }
 }
 
@@ -996,18 +1083,15 @@ fn ainv11_generation_is_deterministic_and_covers_the_catalog() {
     let names: BTreeSet<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
     let catalog = Catalog::current();
     for entry in &catalog.operations {
-        assert!(
-            names.contains(entry.params_schema.as_str()),
-            "{}",
-            entry.params_schema
-        );
-        assert!(
-            names.contains(entry.response_schema.as_str()),
-            "{}",
-            entry.response_schema
-        );
+        for name in [
+            &entry.params_schema,
+            &entry.arguments_schema,
+            &entry.response_schema,
+        ] {
+            assert!(names.contains(name.as_str()), "{name}");
+        }
     }
-    assert_eq!(names.len(), 2 + 2 * catalog.operations.len());
+    assert_eq!(names.len(), 2 + 3 * catalog.operations.len());
     for (name, text) in &files {
         let value: Value = serde_json::from_str(text).unwrap();
         audit(&value, name);
@@ -1018,12 +1102,21 @@ fn ainv11_generation_is_deterministic_and_covers_the_catalog() {
         assert_eq!(value["type"], "object", "{name}: MCP needs an object root");
         assert_eq!(*text, to_canonical_json(&value), "{name} is canonical");
     }
+    assert!(
+        schema_text("job_status.params").is_none(),
+        "A3 operations are unpublished"
+    );
 }
 
 /// AINV11: the request decoder dispatches exactly the catalog's operations.
 #[test]
-fn ainv11_decoder_dispatches_every_catalog_operation() {
+fn ainv11_decoder_dispatches_exactly_the_catalog() {
     let mut runner = proptest::test_runner::TestRunner::deterministic();
+    let listed: BTreeSet<OpName> = Catalog::current()
+        .operations
+        .iter()
+        .map(|e| e.name)
+        .collect();
     for &op in OpName::ALL {
         let sample = operation_for(op).new_tree(&mut runner).unwrap().current();
         assert_eq!(sample.name(), op);
@@ -1031,7 +1124,23 @@ fn ainv11_decoder_dispatches_every_catalog_operation() {
             op: sample,
             idempotency_key: None,
         };
-        assert_eq!(req.to_json().parse::<Request>().unwrap().op.name(), op);
+        let envelope = req.to_json().parse::<Request>();
+        let arguments = Request::from_arguments(op, req.to_arguments().as_bytes());
+        if listed.contains(&op) {
+            assert_eq!(envelope.unwrap().op.name(), op);
+            assert_eq!(arguments.unwrap().op.name(), op);
+        } else {
+            assert_eq!(
+                envelope.unwrap_err().code(),
+                ErrorCode::UnknownOperation,
+                "{op}"
+            );
+            assert_eq!(
+                arguments.unwrap_err().code(),
+                ErrorCode::UnknownOperation,
+                "{op}"
+            );
+        }
     }
     let err = r#"{"op":"omnia_inspect","params":{}}"#.parse::<Request>().unwrap_err();
     assert_eq!(err.code(), ErrorCode::UnknownOperation);
@@ -1064,36 +1173,88 @@ fn violation_at(text: &str) -> String {
 fn section_9_1_objects_reject_unknown_fields() {
     let doc = r#""doc_id":"d1""#;
     assert_eq!(violation_at(r#"{"op":"new","params":{},"x":1}"#), "/x");
-    assert_eq!(violation_at(r#"{"op":"new","params":{"x":1}}"#), "/params");
+    assert_eq!(
+        violation_at(r#"{"op":"new","params":{"x":1}}"#),
+        "/params/x"
+    );
     assert_eq!(
         violation_at(&format!(
             r#"{{"op":"nets","params":{{{doc},"at":[0,0],"z":0}}}}"#
         )),
-        "/params"
+        "/params/z"
     );
     assert_eq!(
         violation_at(&format!(
             r#"{{"op":"preview","params":{{{doc},"expected_revision":0,"operations":[{{"op":"delete","items":[]}},{{"op":"delete","items":[],"with_wires":true}}]}}}}"#
         )),
-        "/params/operations/1",
+        "/params/operations/1/with_wires",
         "with_wires arrives with A2.3"
     );
     assert_eq!(
         violation_at(&format!(
             r#"{{"op":"inspect","params":{{{doc},"include":["summary"],"area":{{"min":[0,0],"max":[1,1],"w":0}}}}}}"#
         )),
-        "/params"
+        "/params/area/w"
     );
-    refuse("new.params", &serde_json::json!({ "x": 1 }));
-    refuse(
-        "request",
-        &serde_json::json!({ "op": "new", "params": {}, "x": 1 }),
-    );
+    refuse("new.params", &json!({ "x": 1 }));
+    refuse("request", &json!({ "op": "new", "params": {}, "x": 1 }));
     refuse(
         "preview.params",
-        &serde_json::json!({ "doc_id": "d1", "expected_revision": 0,
+        &json!({ "doc_id": "d1", "expected_revision": 0,
             "operations": [{ "op": "delete", "items": [], "with_wires": true }] }),
     );
+}
+
+/// Review finding 3: the reported field does not depend on the order keys arrive in.
+#[test]
+fn ainv5_error_paths_do_not_depend_on_key_order() {
+    let a = r#"{"op":"inspect","params":{"doc_id":"d1","include":["summary"],"x":1,"y":2}}"#;
+    let b = r#"{"op":"inspect","params":{"y":2,"x":1,"include":["summary"],"doc_id":"d1"}}"#;
+    assert_eq!(violation_at(a), "/params/x");
+    let (ea, eb) = (
+        a.parse::<Request>().unwrap_err(),
+        b.parse::<Request>().unwrap_err(),
+    );
+    assert_eq!(
+        serde_json::to_string(&ea).unwrap(),
+        serde_json::to_string(&eb).unwrap()
+    );
+    let c = r#"{"zz":1,"op":"new","params":{},"aa":1}"#;
+    assert_eq!(violation_at(c), "/aa");
+}
+
+/// Review finding 2: shapes the schemas refuse are refused by the decoder too.
+#[test]
+fn decoder_refuses_nulls_positional_arrays_and_null_errors() {
+    for (text, path) in [
+        (
+            r#"{"op":"save","params":{"doc_id":"d1","path":null}}"#,
+            "/params/path",
+        ),
+        (r#"{"op":"open","params":["sheet.ron"]}"#, "/params"),
+        (
+            r#"{"op":"query","params":{"doc_id":"d1","area":[[0,0],[1,1]],"mode":"within"}}"#,
+            "/params/area",
+        ),
+        (
+            r#"{"op":"close","params":{"doc_id":"d1","approval":["a","b"]}}"#,
+            "/params/approval",
+        ),
+        (
+            r#"{"op":"preview","params":{"doc_id":"d1","expected_revision":0,"operations":[["delete",[]]]}}"#,
+            "/params/operations/0",
+        ),
+    ] {
+        assert_eq!(violation_at(text), path, "{text}");
+        let value: Value = serde_json::from_str(text).unwrap();
+        refuse("request", &value);
+    }
+    let null_error =
+        r#"{"schema":"omnia.agent/1","result":{"discarded":true},"error":null,"warnings":[]}"#;
+    assert!(Response::from_slice(OpName::Close, null_error.as_bytes()).is_err());
+    refuse("close.response", &serde_json::from_str(null_error).unwrap());
+    let positional = r#"{"schema":"omnia.agent/1","result":[true],"warnings":[]}"#;
+    assert!(Response::from_slice(OpName::Close, positional.as_bytes()).is_err());
 }
 
 #[test]
@@ -1105,6 +1266,7 @@ fn malformed_requests_get_typed_errors() {
         r#"{"op":"new","params":{},"op":"new"}"#,
         r#"{"op":"undo","params":{"doc_id":"d1","expected_revision":1.0}}"#,
         r#"{"op":"undo","params":{"doc_id":"d1","expected_revision":1e3}}"#,
+        r#"{"op":"undo","params":{"doc_id":"d1","expected_revision":18446744073709551616}}"#,
         r#"{"op":"new","params":{}} x"#,
     ] {
         assert_eq!(code_of(text).0, ErrorCode::InvalidRequest, "{text}");
@@ -1113,9 +1275,14 @@ fn malformed_requests_get_typed_errors() {
         code_of(r#"{"op":"fly","params":{}}"#).0,
         ErrorCode::UnknownOperation
     );
-    assert_eq!(violation_at(r#"{"params":{}}"#), "/op");
+    assert_eq!(
+        code_of(r#"{"op":"job_status","params":{"job_id":"j1"}}"#).0,
+        ErrorCode::UnknownOperation,
+        "job tools wait for A3"
+    );
+    assert_eq!(violation_at(r#"{"params":{}}"#), "");
     assert_eq!(violation_at(r#"{"op":3,"params":{}}"#), "/op");
-    assert_eq!(violation_at(r#"{"op":"new"}"#), "/params");
+    assert_eq!(violation_at(r#"{"op":"new"}"#), "");
     assert_eq!(
         violation_at(
             r#"{"op":"inspect","params":{"doc_id":"d1","include":["summary"]},"idempotency_key":"k"}"#
@@ -1123,37 +1290,170 @@ fn malformed_requests_get_typed_errors() {
         "/idempotency_key",
         "section 11.2: only apply, undo, redo and save take a key"
     );
-    assert_eq!(
-        violation_at(r#"{"op":"undo","params":{"doc_id":"d01","expected_revision":1}}"#),
-        "/params"
-    );
-    assert_eq!(
-        violation_at(r#"{"op":"inspect","params":{"doc_id":"d1","include":[]}}"#),
-        "/params/include"
-    );
-    assert_eq!(
-        violation_at(r#"{"op":"inspect","params":{"doc_id":"d1","include":["nets","nets"]}}"#),
-        "/params/include"
-    );
-    assert_eq!(
-        violation_at(r#"{"op":"inspect","params":{"doc_id":"d1","include":["items"],"limit":0}}"#),
-        "/params/limit"
-    );
-    assert_eq!(
-        violation_at(r#"{"op":"nets","params":{"doc_id":"d1","at":[0,0],"wire":"wire:1"}}"#),
-        "/params"
-    );
-    assert_eq!(
-        violation_at(
-            r#"{"op":"preview","params":{"doc_id":"d1","expected_revision":0,"operations":[]}}"#
+    for (text, path) in [
+        (
+            r#"{"op":"undo","params":{"doc_id":"d01","expected_revision":1}}"#,
+            "/params/doc_id",
         ),
-        "/params/operations"
-    );
-    assert_eq!(
-        violation_at(
-            r#"{"op":"preview","params":{"doc_id":"d1","expected_revision":0,"operations":[{"op":"move","items":["part:01"],"delta":[0,0]}]}}"#
+        (
+            r#"{"op":"inspect","params":{"doc_id":"d1","include":[]}}"#,
+            "/params/include",
         ),
-        "/params/operations/0"
+        (
+            r#"{"op":"inspect","params":{"doc_id":"d1","include":["nets","nets"]}}"#,
+            "/params/include",
+        ),
+        (
+            r#"{"op":"inspect","params":{"doc_id":"d1","include":["items"],"limit":0}}"#,
+            "/params/limit",
+        ),
+        (
+            r#"{"op":"nets","params":{"doc_id":"d1","at":[0,0],"wire":"wire:1"}}"#,
+            "/params",
+        ),
+        (
+            r#"{"op":"preview","params":{"doc_id":"d1","expected_revision":0,"operations":[]}}"#,
+            "/params/operations",
+        ),
+        (
+            r#"{"op":"preview","params":{"doc_id":"d1","expected_revision":0,"operations":[{"op":"move","items":["part:01"],"delta":[0,0]}]}}"#,
+            "/params/operations/0/items/0",
+        ),
+    ] {
+        assert_eq!(violation_at(text), path, "{text}");
+    }
+}
+
+/// Review finding 5: the published schemas hold only what the codecs can represent.
+#[test]
+fn schemas_refuse_values_the_codecs_cannot_hold() {
+    let nets = |wire: &str| json!({ "doc_id": "d1", "wire": wire });
+    check("nets.params", &nets("wire:4294967295"));
+    refuse("nets.params", &nets("wire:4294967296"));
+    assert_eq!(
+        violation_at(r#"{"op":"nets","params":{"doc_id":"d1","wire":"wire:4294967296"}}"#),
+        "/params/wire"
+    );
+    let undo = |doc: &str, rev: Value| json!({ "doc_id": doc, "expected_revision": rev });
+    check(
+        "undo.params",
+        &undo("d18446744073709551615", json!(u64::MAX)),
+    );
+    refuse("undo.params", &undo("d18446744073709551616", json!(0)));
+    let too_big: Value = serde_json::from_str("100000000000000000000").unwrap();
+    refuse("undo.params", &undo("d1", too_big));
+    let query = |max: i64| json!({ "doc_id": "d1", "area": { "min": [0, 0], "max": [max, 0] }, "mode": "within" });
+    check("query.params", &query(1_000_000_000));
+    refuse("query.params", &query(1_000_000_001));
+    assert_eq!(
+        violation_at(&format!(
+            r#"{{"op":"query","params":{}}}"#,
+            query(1_000_000_001)
+        )),
+        "/params/area/max/0"
+    );
+    // The one decoder-only shape rule: corner ordering.
+    let inverted =
+        json!({ "doc_id": "d1", "area": { "min": [5, 0], "max": [0, 0] }, "mode": "within" });
+    check("query.params", &inverted);
+    let (code, _) = code_of(&format!(r#"{{"op":"query","params":{inverted}}}"#));
+    assert_eq!(code, ErrorCode::SchemaViolation);
+}
+
+/// Review finding 6: `retryable` is fixed by the code, in the schema and the decoder.
+#[test]
+fn retryable_cannot_contradict_the_code() {
+    let resp = |retryable: bool| {
+        json!({ "schema": "omnia.agent/1", "warnings": [],
+            "error": { "code": "nothing_to_undo", "message": "m", "retryable": retryable,
+                       "details": {} } })
+    };
+    check("undo.response", &resp(false));
+    refuse("undo.response", &resp(true));
+    let text = serde_json::to_string(&resp(true)).unwrap();
+    assert!(Response::from_slice(OpName::Undo, text.as_bytes()).is_err());
+}
+
+/// Review finding 4: `applied` holds a success of the operation it names, and only for the
+/// operations that take an idempotency key.
+#[test]
+fn request_status_applied_is_a_matching_success() {
+    let status =
+        |status: Value| json!({ "schema": "omnia.agent/1", "result": status, "warnings": [] });
+    let change = json!({ "revision": 3, "added": [], "removed": [], "nets_changed": false });
+    let ok_undo = json!({ "schema": "omnia.agent/1", "revision": 3,
+        "result": { "change": change }, "warnings": [] });
+    let good = status(json!({ "status": "applied", "op": "undo", "revision": 3,
+        "response": ok_undo }));
+    check("request_status.response", &good);
+    let text = serde_json::to_string(&good).unwrap();
+    assert!(Response::from_slice(OpName::RequestStatus, text.as_bytes()).is_ok());
+
+    let failed_undo = json!({ "schema": "omnia.agent/1", "warnings": [],
+        "error": { "code": "nothing_to_undo", "message": "m", "retryable": false,
+                   "details": {} } });
+    let new_ok = json!({ "schema": "omnia.agent/1", "doc_id": "d1", "revision": 0,
+        "result": { "dirty": false }, "warnings": [] });
+    for bad in [
+        status(
+            json!({ "status": "applied", "op": "undo", "revision": 3, "response": failed_undo }),
+        ),
+        status(json!({ "status": "applied", "op": "undo", "revision": 0, "response": new_ok })),
+        status(json!({ "status": "applied", "op": "new", "revision": 0, "response": new_ok })),
+    ] {
+        refuse("request_status.response", &bad);
+        let text = serde_json::to_string(&bad).unwrap();
+        assert!(
+            Response::from_slice(OpName::RequestStatus, text.as_bytes()).is_err(),
+            "{text}"
+        );
+    }
+}
+
+/// Review finding 1: the MCP arguments carry `idempotency_key` beside the params, and both
+/// forms give the same request (ATC-edit-03).
+#[test]
+fn mcp_arguments_carry_the_idempotency_key() {
+    let envelope = r#"{"op":"apply","params":{"doc_id":"d1","expected_revision":4,"operations":[{"op":"delete","items":["part:1"]}]},"idempotency_key":"k-1"}"#;
+    let arguments = r#"{"doc_id":"d1","expected_revision":4,"operations":[{"op":"delete","items":["part:1"]}],"idempotency_key":"k-1"}"#;
+    let a = envelope.parse::<Request>().unwrap();
+    let b = Request::from_arguments(OpName::Apply, arguments.as_bytes()).unwrap();
+    assert_eq!(a, b);
+    assert_eq!(a.idempotency_key.as_deref(), Some("k-1"));
+    assert_eq!(a.to_arguments(), arguments);
+    check("apply.arguments", &serde_json::from_str(arguments).unwrap());
+    refuse("apply.params", &serde_json::from_str(arguments).unwrap());
+    for op in [OpName::Undo, OpName::Redo, OpName::Save] {
+        let args = json!({ "doc_id": "d1", "expected_revision": 1, "idempotency_key": "k" });
+        let args = if op == OpName::Save {
+            json!({ "doc_id": "d1", "idempotency_key": "k" })
+        } else {
+            args
+        };
+        check(&format!("{op}.arguments"), &args);
+        let text = serde_json::to_string(&args).unwrap();
+        let req = Request::from_arguments(op, text.as_bytes()).unwrap();
+        assert_eq!(req.idempotency_key.as_deref(), Some("k"));
+    }
+    let inspect = json!({ "doc_id": "d1", "include": ["summary"], "idempotency_key": "k" });
+    refuse("inspect.arguments", &inspect);
+    let err = Request::from_arguments(
+        OpName::Inspect,
+        serde_json::to_string(&inspect).unwrap().as_bytes(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.kind,
+        ErrorKind::SchemaViolation {
+            path: "/idempotency_key".into()
+        }
+    );
+    let err = Request::from_arguments(OpName::Apply, br#"{"doc_id":"d1","expected_revision":4,"operations":[{"op":"delete","items":[]}],"idempotency_key":7}"#).unwrap_err();
+    assert_eq!(
+        err.kind,
+        ErrorKind::SchemaViolation {
+            path: "/idempotency_key".into()
+        }
     );
 }
 
@@ -1284,22 +1584,41 @@ fn schema_checks_refuse_mutated_documents() {
     let good: Value = serde_json::from_str(&stale.to_json()).unwrap();
     check("undo.response", &good);
     let mut v = good.clone();
-    v["error"]["details"] = serde_json::json!({});
+    v["error"]["details"] = json!({});
     refuse("undo.response", &v);
     let mut v = good.clone();
-    v["result"] = serde_json::json!({});
+    v["result"] = json!({});
     refuse("undo.response", &v);
     let mut v = good;
     v["doc_id"] = "d01".into();
     refuse("undo.response", &v);
 
-    let mv = serde_json::json!({ "doc_id": "d1", "expected_revision": 0,
-        "operations": [{ "op": "move", "items": ["part:1"], "delta": [0, 0, 0] }] });
-    refuse("apply.params", &mv);
-    let mv = serde_json::json!({ "doc_id": "d1", "expected_revision": 0,
-        "operations": [{ "op": "move", "items": ["part:01"], "delta": [0, 0] }] });
-    refuse("apply.params", &mv);
-    let mv = serde_json::json!({ "doc_id": "d1", "expected_revision": -1,
-        "operations": [{ "op": "move", "items": ["part:1"], "delta": [0, 0] }] });
-    refuse("apply.params", &mv);
+    let mv = |items: Value, delta: Value, rev: Value| {
+        json!({ "doc_id": "d1", "expected_revision": rev,
+            "operations": [{ "op": "move", "items": items, "delta": delta }] })
+    };
+    check(
+        "apply.params",
+        &mv(json!(["part:1"]), json!([0, 0]), json!(0)),
+    );
+    refuse(
+        "apply.params",
+        &mv(json!(["part:1"]), json!([0, 0, 0]), json!(0)),
+    );
+    refuse(
+        "apply.params",
+        &mv(json!(["part:01"]), json!([0, 0]), json!(0)),
+    );
+    refuse(
+        "apply.params",
+        &mv(json!(["part:1"]), json!([0, 0]), json!(-1)),
+    );
+}
+
+#[test]
+fn job_dtos_round_trip_before_they_are_published() {
+    let args = JobArgs { job_id: JobId(7) };
+    let text = serde_json::to_string(&args).unwrap();
+    assert_eq!(text, r#"{"job_id":"j7"}"#);
+    assert_eq!(serde_json::from_str::<JobArgs>(&text).unwrap(), args);
 }

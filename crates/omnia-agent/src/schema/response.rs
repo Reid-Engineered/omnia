@@ -4,7 +4,9 @@
 //! with `error` in place of `result` on failure. Absent optional fields are omitted, never
 //! `null`. Lists of ids are sorted by kind and then id (AD8); [`ChangeDto::from`] sorts the
 //! unordered sets of a `Change`. A result's shape depends on the operation, so
-//! [`Response::from_slice`] takes the [`OpName`] the response answers.
+//! [`Response::from_slice`] takes the [`OpName`] the response answers. Like the request decoder,
+//! it parses strictly and validates against the published `<op>.response` schema before typed
+//! decoding, so both refuse the same documents.
 
 use omnia_doc::Change;
 use serde::{
@@ -17,7 +19,8 @@ use serde_json::Value;
 use super::codec::{
     Bounds, DocId, ItemRef, JobId, LabelRef, OrientName, PartRef, Point, PreviewId, WireRef,
 };
-use crate::{AgentError, Catalog, OpName, SCHEMA};
+use super::{json::schema_value, request::parse_strict_raw, validate::validate};
+use crate::{AgentError, Catalog, OpName, SCHEMA, catalog::spec};
 
 /// A warning on a response. Schema version 1 defines no warning codes and emits none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,7 +366,17 @@ impl<'de> Deserialize<'de> for RequestStatus {
         match (w.status.as_str(), w.op, w.revision, w.response, w.error) {
             ("not_run", None, None, None, None) => Ok(Self::NotRun),
             ("applied", Some(op), Some(revision), Some(response), None) => {
+                if !spec(op).idempotency_key {
+                    return Err(de::Error::custom(format_args!(
+                        "`{op}` takes no idempotency key, so it is never stored"
+                    )));
+                }
                 let response = Response::from_value(op, response).map_err(de::Error::custom)?;
+                if response.outcome.is_err() {
+                    return Err(de::Error::custom(
+                        "an applied request has a successful response; a failure is `failed`",
+                    ));
+                }
                 Ok(Self::Applied {
                     op,
                     revision,
@@ -531,13 +544,21 @@ impl Response {
         serde_json::to_string(self).expect("responses always serialize")
     }
 
-    /// Decodes the response to a request of `op`.
+    /// Decodes the response to a request of `op`: strict parsing, then the `<op>.response`
+    /// schema, then the DTOs.
     pub fn from_slice(op: OpName, bytes: &[u8]) -> Result<Self, serde_json::Error> {
-        Self::from_value(op, serde_json::from_slice(bytes)?)
+        Self::from_value(op, parse_strict_raw(bytes)?)
     }
 
     /// Decodes the response to a request of `op` from a JSON value.
     pub fn from_value(op: OpName, value: Value) -> Result<Self, serde_json::Error> {
+        let schema = schema_value(&spec(op).response_schema()).expect("generated schema");
+        validate(schema, &value).map_err(|v| {
+            de::Error::custom(format_args!(
+                "schema violation at `{}`: {}",
+                v.path, v.message
+            ))
+        })?;
         let wire: ResponseWire = serde_json::from_value(value)?;
         if wire.schema != SCHEMA {
             return Err(de::Error::custom(format_args!("schema is not {SCHEMA}")));

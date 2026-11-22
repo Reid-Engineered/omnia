@@ -8,6 +8,7 @@ mod codec;
 mod json;
 mod request;
 mod response;
+pub mod validate;
 
 #[cfg(test)]
 mod tests;
@@ -20,6 +21,7 @@ pub use json::{schema_files, schema_text, to_canonical_json};
 pub use request::{
     ApplyArgs, ApprovalEcho, CloseArgs, EditArgs, EditOp, Include, InspectArgs, JobArgs, KeyArgs,
     NetsArgs, NoArgs, OpenArgs, Operation, QueryArgs, QueryMode, Request, RevArgs, SaveArgs,
+    parse_strict,
 };
 pub use response::{
     ChangeDto, ChangeResult, CloseResult, Diff, DocInfo, EditResult, InspectResult, Item,
