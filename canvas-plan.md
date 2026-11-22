@@ -74,8 +74,8 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
   matching CPU-only runs after the T2.7 paint-stall A/B in PR #80 showed `powersave` clock
   drops caused the paint stalls), the bench window in the foreground, other apps closed. Each
   result records the power source, CPU governor and power profile. Note: Orion GUI gates
-  certify under `performance`; laptops on default balanced/`powersave` policies remain exposed
-  to lower-clock paint stretches until T2.9 adds far-zoom headroom.
+  certify under `performance`; laptops on default balanced/`powersave` policies can still hit
+  lower-clock paint stretches (T2.9 adds far-zoom headroom).
 - **CPU-only runs.** Owner decision 2026-11-17 (gate-blocker audit section 3.2): a timed run
   with no window or GPU work (for example the command-boundary runner) keeps the reference
   hardware, AC, the `performance` governor, other user apps closed, before/after records of
@@ -93,7 +93,7 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
 | B1 | Cold start to an interactive empty sheet < 400 ms | `bench start` |
 | B2 | Opening the 1,000-part sheet adds < 300 ms | `bench start --sheet 1k` |
 | B3 | Pan and zoom, 1,000 parts: 60 fps. p99 frame time < 16.7 ms, and zero missed refreshes: no present interval longer than 1.5 refresh intervals, except compositor-side ones (below) | `bench run --sheet 1k --script pan` and `--script zoom`: `frame_ms.p99`, `missed_refreshes`, attributed from `diagnostic_trace` |
-| B4 | Pan and zoom, 10,000 parts and 20,000 wires: 30 fps. p99 frame time < 33.3 ms, and no present interval longer than 2.5 refresh intervals (it never misses its 30 fps slot), except compositor-side ones and, until T2.9, the 10k zoom script's far-zoom known limit (both below) | `bench run --sheet 10k --script pan` and `--script zoom`: `frame_ms.p99`, `present_intervals_over_2_5_refreshes`, attributed from `diagnostic_trace` |
+| B4 | Pan and zoom, 10,000 parts and 20,000 wires: 30 fps. p99 frame time < 33.3 ms, and no present interval longer than 2.5 refresh intervals (it never misses its 30 fps slot), except compositor-side ones (below) | `bench run --sheet 10k --script pan` and `--script zoom`: `frame_ms.p99`, `present_intervals_over_2_5_refreshes`, attributed from `diagnostic_trace` |
 | B5 | No long stalls: no frame over 33.3 ms in a B3 run, none over 50 ms in a B4 run | `max_frame_ms` in the same report |
 | B6 | A dragged part or wire is drawn in the next frame | `bench run --script drag-part` and `drag-wire`: dirty-to-present p99 ≤ one refresh interval |
 | B7 | Hit test under the cursor < 0.2 ms at 10,000 parts | `bench hit --sheet 10k` |
@@ -159,29 +159,6 @@ outside a foreground turn, and folded sub-100 µs polls that ended in true idle,
 recorded; the owner accepted this limit on 2026-11-17. Frame p99 and B10 in a gate run are judged with the trace on. The criterion
 is implemented in `docs/measurements/T1.6/attribute.py`, with its tests.
 
-**B4 known limit: 10k far zoom.** Owner decision 2026-11-18 at T2.7: "Scope B4 so 10k far
-zoom is a known limit", with a planned fix (T2.9). Until T2.9 is done, a B4 interval over
-2.5 R that would count under the rules above is reported as a **known limit**, and does not
-fail the gate, only when both hold:
-
-- the run is `bench run --sheet 10k --script zoom`;
-- the late frame's camera is at D4 far zoom, where K9 hides junction dots: junction diameter
-  `1,016,000 nm × scale` under 2.5 logical px, which is zoom under 31.25%. In the 600-frame
-  zoom script that is frames 376 to 545 of each sweep.
-
-Everything else in B4 still gates in that run: frame p99 < 33.3 ms, B5, B9 and B10. The
-interval rule still gates the whole 10k pan run and the 10k zoom frames outside far zoom.
-A counted interval without a traced frame stays counted, and an unusable trace still fails
-the run. The gate prints the known-limit count for every campaign, so the limit stays
-visible. Reason: on Orion the whole 10,000-part sheet at far zoom is about 28,300 quads,
-which leaves the HD 620 no headroom. Those frames present every 1.5 refreshes on average,
-and in the T2.7 wire-cache campaign (2026-11-17), one paint stall per run in 5 of 20 10k
-zoom runs (frames 432 to 487, zoom 5.3% to 9.3%) became a three-refresh interval. Evidence:
-`docs/measurements/T2.7-wire.md`. A picture that keeps every pixel can't go below about
-20,000 quads, so the planned fix changes far-zoom level of detail (D4, T2.9). T2.9 removes
-this exception: its done-when is the full B4 rule on Orion. The exception is implemented in
-`docs/measurements/T2.7-wire/gate.py` (`far_zoom`, `scope_known_limit`).
-
 ## 3. Constants
 
 All from `build-omnia.mjs` unless marked "chosen". Screen sizes are logical pixels at 100% zoom.
@@ -196,7 +173,7 @@ All from `build-omnia.mjs` unless marked "chosen". Screen sizes are logical pixe
 | K6 | Junction dot; grid dot | 8 px diameter (1,016,000 nm); 1.2 px, constant on screen, at least 1 device pixel |
 | K7 | Symbol art box | 150 units square. Placed size: resistor, capacitor, diode 80 px (4 grid steps); op-amp 180 px (9); ground 48 px (2.4, anchored by its pin). |
 | K8 | Text | Designator and value: Inter SemiBold 17 px (Q3), stacked on a shared left edge. Net label and pin number: Inter Medium 13 px (single-pin symbols such as ground omit pin numbers; multi-pin symbols show every pin number). Secondary value text: Inter Medium 12 px (reserved for future multi-field parts; `Part` currently holds one `value` field). |
-| K9 | LOD thresholds (chosen) | Text hidden below 6.5 px font size. Pin numbers and junction dots hidden below 2.5 px. Symbol drawn as one filled quad when its box is under 8 px. Visible-label cap (T0.6): at most 700 labels per frame; past that, labels hide smallest first. |
+| K9 | LOD thresholds (chosen) | Text hidden below 6.5 px font size. Pin numbers and junction dots hidden below 2.5 px. Far-zoom merged wire runs hidden below 2.5 px on-screen length once junctions are hidden (D4, T2.9). Symbol drawn as one filled quad when its box is under 8 px. Visible-label cap (T0.6): at most 700 labels per frame; past that, labels hide smallest first. |
 | K10 | Grid density (chosen) | Show every 2^k-th grid point with k keeping on-screen pitch in [20, 40) px. Dots about to drop fade over the top quarter of that range: while the pitch is in [35, 40) the next finer level's extra dots are drawn with alpha rising from 0 at 35 px to full at 40 px. Above 200% zoom k is negative (binary subdivisions of the grid, k = −1 being the K2 pin lattice); k runs from −5 at 3200% to 5 at 5%, every level a whole number of nm (2,540,000 = 2^5 × 79,375). (T1.4) |
 | K11 | Cache buckets (chosen) | Font size quantised to 0.5 px, capped at 128 px to bound the non-evicting glyph atlas across K4 (T3.1). Symbol sprite sizes on a ladder of ratio 2^(1/4), matching K4. |
 | K12 | Spatial index cell (chosen) | 20,320,000 nm (8 grid steps) |
@@ -350,14 +327,13 @@ returns a `Change` that the views use to decide what to repaint.
   T1.6 empty-sheet grid baseline. Draw symbols under K9's box threshold as LOD boxes.
   Labels use direct glyph emission, not one
   `ShapedLine::paint` per label (S5: half the cost), with the visible-label cap in K9.
-- Far-zoom wire stubs. Owner decision 2026-11-18, **planned, not built (T2.9)**: once K9
-  hides junctions, draw a merged wire run only if its on-screen length is at least the
-  stub threshold, default 2.5 logical px (the K9 junction threshold), measured after
-  merging, so a long wire made of short segments still draws. On the 10k sheet at 5% to
-  10% zoom every one of the ~20,000 runs is 1 to 2 device px long and ~70% of the quads.
-  Dropping them leaves ~8,300 quads (box-only), about the load the 1k and mid-zoom frames
-  carry at 60 Hz. The picture changes: at far zoom, parts show without their short stubs.
-  Until T2.9 is done, B4 on 10k far zoom is a known limit (section 2.1).
+- Far-zoom wire stubs (T2.9, owner decision 2026-11-18): once K9 hides junctions, draw a
+  merged wire run only if its on-screen length is at least K9's stub threshold (2.5 logical
+  px), measured after merging, so a long wire made of short segments still draws. On the 10k
+  sheet at 5% to 10% zoom every one of the ~20,000 runs is under the threshold and ~70% of
+  the quads; dropping them leaves ~8,300 quads (box-only), about the load the 1k and
+  mid-zoom frames carry at 60 Hz. The picture changes: at far zoom, parts show without their
+  short stubs.
 - Fallback if B4 still misses after T2.9: Plan B (section 8). Ask the owner first.
 
 ### D5 Level of detail. DECIDED (thresholds K9, K10)

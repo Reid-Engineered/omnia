@@ -1,0 +1,222 @@
+[
+  {
+    "tag": "s100",
+    "requested_size": "1920x1080",
+    "frame": 376,
+    "zoom_pct": 31.13,
+    "quads": 2944,
+    "monochrome_sprites": 1559,
+    "paint_operations": 4511,
+    "batches": 4,
+    "ours_allocs_max": 12.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1920.0,
+      1080.0
+    ],
+    "viewport_device": [
+      2400.0,
+      1350.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  },
+  {
+    "tag": "s100",
+    "requested_size": "1920x1080",
+    "frame": 420,
+    "zoom_pct": 12.07,
+    "quads": 1214,
+    "monochrome_sprites": 6358,
+    "paint_operations": 7580,
+    "batches": 3,
+    "ours_allocs_max": 0.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1920.0,
+      1080.0
+    ],
+    "viewport_device": [
+      2400.0,
+      1350.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  },
+  {
+    "tag": "s100",
+    "requested_size": "1920x1080",
+    "frame": 461,
+    "zoom_pct": 5.01,
+    "quads": 8325,
+    "monochrome_sprites": 1676,
+    "paint_operations": 10009,
+    "batches": 2,
+    "ours_allocs_max": 0.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1920.0,
+      1080.0
+    ],
+    "viewport_device": [
+      2400.0,
+      1350.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  },
+  {
+    "tag": "s100",
+    "requested_size": "1920x1080",
+    "frame": 500,
+    "zoom_pct": 11.6,
+    "quads": 1273,
+    "monochrome_sprites": 6570,
+    "paint_operations": 7851,
+    "batches": 3,
+    "ours_allocs_max": 0.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1920.0,
+      1080.0
+    ],
+    "viewport_device": [
+      2400.0,
+      1350.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  },
+  {
+    "tag": "s100",
+    "requested_size": "1920x1080",
+    "frame": 545,
+    "zoom_pct": 30.59,
+    "quads": 3072,
+    "monochrome_sprites": 1575,
+    "paint_operations": 4655,
+    "batches": 4,
+    "ours_allocs_max": 0.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1920.0,
+      1080.0
+    ],
+    "viewport_device": [
+      2400.0,
+      1350.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  },
+  {
+    "tag": "s125",
+    "requested_size": "1536x864",
+    "frame": 376,
+    "zoom_pct": 31.13,
+    "quads": 1951,
+    "monochrome_sprites": 1008,
+    "paint_operations": 2967,
+    "batches": 4,
+    "ours_allocs_max": 11.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  },
+  {
+    "tag": "s125",
+    "requested_size": "1536x864",
+    "frame": 420,
+    "zoom_pct": 12.07,
+    "quads": 978,
+    "monochrome_sprites": 5061,
+    "paint_operations": 6047,
+    "batches": 3,
+    "ours_allocs_max": 0.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  },
+  {
+    "tag": "s125",
+    "requested_size": "1536x864",
+    "frame": 461,
+    "zoom_pct": 5.01,
+    "quads": 8325,
+    "monochrome_sprites": 1676,
+    "paint_operations": 10009,
+    "batches": 2,
+    "ours_allocs_max": 0.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  },
+  {
+    "tag": "s125",
+    "requested_size": "1536x864",
+    "frame": 500,
+    "zoom_pct": 11.6,
+    "quads": 1011,
+    "monochrome_sprites": 5221,
+    "paint_operations": 6240,
+    "batches": 3,
+    "ours_allocs_max": 0.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  },
+  {
+    "tag": "s125",
+    "requested_size": "1536x864",
+    "frame": 545,
+    "zoom_pct": 30.59,
+    "quads": 1985,
+    "monochrome_sprites": 1032,
+    "paint_operations": 3025,
+    "batches": 4,
+    "ours_allocs_max": 0.0,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 165.0,
+    "gpu": "Intel(R) UHD Graphics"
+  }
+]

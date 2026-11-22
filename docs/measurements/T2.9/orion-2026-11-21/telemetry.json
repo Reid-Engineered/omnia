@@ -1,0 +1,286 @@
+[
+  {
+    "label": "BEFORE",
+    "timestamp": "2026-11-21T21:28:14-0500",
+    "power": {
+      "AC": {
+        "type": "Mains",
+        "online": "1",
+        "status": null,
+        "capacity": null
+      },
+      "BAT0": {
+        "type": "Battery",
+        "online": null,
+        "status": "Full",
+        "capacity": "100"
+      },
+      "BAT1": {
+        "type": "Battery",
+        "online": null,
+        "status": "Not charging",
+        "capacity": "99"
+      },
+      "ucsi-source-psy-USBC000:001": {
+        "type": "USB",
+        "online": "0",
+        "status": "Not charging",
+        "capacity": null
+      }
+    },
+    "cpus": {
+      "cpu0": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3500298",
+        "package_throttle_count": "1841",
+        "core_throttle_count": "1835"
+      },
+      "cpu1": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "400000",
+        "package_throttle_count": "1841",
+        "core_throttle_count": "6"
+      },
+      "cpu2": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3500035",
+        "package_throttle_count": "1841",
+        "core_throttle_count": "1835"
+      },
+      "cpu3": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3501306",
+        "package_throttle_count": "1841",
+        "core_throttle_count": "6"
+      }
+    },
+    "thermals_millic": {
+      "thermal_zone0:acpitz": "41000",
+      "thermal_zone1:pch_skylake": "37500",
+      "thermal_zone2:iwlwifi_1": "33000",
+      "thermal_zone3:x86_pkg_temp": "61000"
+    },
+    "coretemp_millic": {
+      "Package id 0": "61000",
+      "Core 0": "61000",
+      "Core 1": "44000"
+    }
+  },
+  {
+    "label": "DURING_START",
+    "timestamp": "2026-11-21T21:28:57-0500",
+    "power": {
+      "AC": {
+        "type": "Mains",
+        "online": "1",
+        "status": null,
+        "capacity": null
+      },
+      "BAT0": {
+        "type": "Battery",
+        "online": null,
+        "status": "Full",
+        "capacity": "100"
+      },
+      "BAT1": {
+        "type": "Battery",
+        "online": null,
+        "status": "Not charging",
+        "capacity": "99"
+      },
+      "ucsi-source-psy-USBC000:001": {
+        "type": "USB",
+        "online": "0",
+        "status": "Not charging",
+        "capacity": null
+      }
+    },
+    "cpus": {
+      "cpu0": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3500011",
+        "package_throttle_count": "1843",
+        "core_throttle_count": "1837"
+      },
+      "cpu1": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3500003",
+        "package_throttle_count": "1843",
+        "core_throttle_count": "6"
+      },
+      "cpu2": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3499989",
+        "package_throttle_count": "1843",
+        "core_throttle_count": "1837"
+      },
+      "cpu3": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3500001",
+        "package_throttle_count": "1843",
+        "core_throttle_count": "6"
+      }
+    },
+    "thermals_millic": {
+      "thermal_zone0:acpitz": "45000",
+      "thermal_zone1:pch_skylake": "40500",
+      "thermal_zone2:iwlwifi_1": "33000",
+      "thermal_zone3:x86_pkg_temp": "67000"
+    },
+    "coretemp_millic": {
+      "Package id 0": "67000",
+      "Core 0": "67000",
+      "Core 1": "61000"
+    }
+  },
+  {
+    "label": "DURING_END",
+    "timestamp": "2026-11-21T21:58:07-0500",
+    "power": {
+      "AC": {
+        "type": "Mains",
+        "online": "1",
+        "status": null,
+        "capacity": null
+      },
+      "BAT0": {
+        "type": "Battery",
+        "online": null,
+        "status": "Full",
+        "capacity": "100"
+      },
+      "BAT1": {
+        "type": "Battery",
+        "online": null,
+        "status": "Not charging",
+        "capacity": "99"
+      },
+      "ucsi-source-psy-USBC000:001": {
+        "type": "USB",
+        "online": "0",
+        "status": "Not charging",
+        "capacity": null
+      }
+    },
+    "cpus": {
+      "cpu0": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3500469",
+        "package_throttle_count": "4222",
+        "core_throttle_count": "4137"
+      },
+      "cpu1": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3499993",
+        "package_throttle_count": "4222",
+        "core_throttle_count": "97"
+      },
+      "cpu2": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3500030",
+        "package_throttle_count": "4222",
+        "core_throttle_count": "4137"
+      },
+      "cpu3": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3499958",
+        "package_throttle_count": "4222",
+        "core_throttle_count": "97"
+      }
+    },
+    "thermals_millic": {
+      "thermal_zone0:acpitz": "48000",
+      "thermal_zone1:pch_skylake": "43000",
+      "thermal_zone2:iwlwifi_1": "32000",
+      "thermal_zone3:x86_pkg_temp": "47000"
+    },
+    "coretemp_millic": {
+      "Package id 0": "47000",
+      "Core 0": "47000",
+      "Core 1": "47000"
+    }
+  },
+  {
+    "label": "AFTER",
+    "timestamp": "2026-11-21T21:58:12-0500",
+    "power": {
+      "AC": {
+        "type": "Mains",
+        "online": "1",
+        "status": null,
+        "capacity": null
+      },
+      "BAT0": {
+        "type": "Battery",
+        "online": null,
+        "status": "Full",
+        "capacity": "100"
+      },
+      "BAT1": {
+        "type": "Battery",
+        "online": null,
+        "status": "Not charging",
+        "capacity": "99"
+      },
+      "ucsi-source-psy-USBC000:001": {
+        "type": "USB",
+        "online": "0",
+        "status": "Not charging",
+        "capacity": null
+      }
+    },
+    "cpus": {
+      "cpu0": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3500031",
+        "package_throttle_count": "4227",
+        "core_throttle_count": "4142"
+      },
+      "cpu1": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3499996",
+        "package_throttle_count": "4227",
+        "core_throttle_count": "97"
+      },
+      "cpu2": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3499464",
+        "package_throttle_count": "4227",
+        "core_throttle_count": "4142"
+      },
+      "cpu3": {
+        "governor": "performance",
+        "epp": "performance",
+        "cur_freq_khz": "3500021",
+        "package_throttle_count": "4227",
+        "core_throttle_count": "97"
+      }
+    },
+    "thermals_millic": {
+      "thermal_zone0:acpitz": "52000",
+      "thermal_zone1:pch_skylake": "43000",
+      "thermal_zone2:iwlwifi_1": "33000",
+      "thermal_zone3:x86_pkg_temp": "57000"
+    },
+    "coretemp_millic": {
+      "Package id 0": "57000",
+      "Core 0": "55000",
+      "Core 1": "57000"
+    }
+  }
+]
