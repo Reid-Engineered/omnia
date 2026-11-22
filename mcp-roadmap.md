@@ -475,8 +475,9 @@ Third review round (a third independent review at f2277b1 confirmed round two an
 blockers and three minor points; all fixed, written into mcp-plan.md sections 9.1, 9.5 and 14).
 (1) AK2 now bounds the raw input and both canonical forms: either decoder and `Request::new`
 accept a request only if `to_json` and `to_arguments` are both at most 8 MiB, so an accepted or
-built request can be sent in either form. MCP arguments of exactly 8 MiB are refused, since the
-envelope they imply is longer. Boundary tests sit at exactly the limit and one byte over, for
+built request can be sent in either form. MCP arguments whose canonical encoding is exactly 8 MiB
+are refused, since the envelope they imply is longer (raw input padded to 8 MiB passes when both
+canonical forms fit). Boundary tests sit at exactly the limit and one byte over, for
 both forms. (2) Every per-operation envelope schema forbids `result` and `error` together on its
 own, apart from the document-handle rule; a differential property test grafts errors, results
 and removed handles onto valid responses and checks every per-operation schema against

@@ -335,8 +335,9 @@ Decoding rules, fixed at A1.3 (2026-11-21; amended by its three review rounds th
 - AK2 bounds the raw input and both canonical forms. A request is accepted, by either decoder
   or by `Request::new`, only if `Request::to_json` and `Request::to_arguments` are both at most
   8 MiB, so whatever is accepted or built can be sent in either form. The value reported is the
-  larger form's size; the envelope is always the larger. MCP arguments of exactly 8 MiB are
-  therefore refused, because the envelope they imply is longer.
+  larger form's size; the envelope is always the larger. MCP arguments whose canonical
+  encoding is exactly 8 MiB are therefore refused, because the envelope they imply is longer;
+  raw input padded with whitespace to 8 MiB is still accepted when both canonical forms fit.
 - A refusal of well-formed JSON (a duplicate key, a number's spelling) has no position in its
   message, so both forms report it alike. Malformed JSON keeps the parser's line and column,
   which refer to the raw input.
