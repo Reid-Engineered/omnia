@@ -320,10 +320,8 @@ impl TextCache {
         if self.doc_revision != Some(revision) {
             self.doc_revision = Some(revision);
             let total_items = doc.part_count() + doc.wires().count() + doc.labels().count();
-            if self.query_buf.capacity() < total_items {
-                self.query_buf
-                    .reserve(total_items - self.query_buf.capacity());
-            }
+            self.query_buf.clear();
+            self.query_buf.reserve(total_items);
 
             let max_part = doc
                 .parts()
@@ -527,13 +525,16 @@ impl TextCache {
         if let Some(part_bucket) = buckets.part {
             let (ol, or, ot, ob) = self.max_part_overhang_nm;
             // Add a small extra margin for proportional/wide glyphs beyond the placement estimate.
+            // Overhang is mirrored when expanding the query box: a label extending RIGHT of a part
+            // by `or` can enter the viewport from a part off the LEFT edge, so expand `left_nm` by
+            // `or` (and symmetrically `right_nm` by `ol`, `top_nm` by `ob`, `bottom_nm` by `ot`).
             let extra_px = f64::from(part_bucket.pixels()) * 2.0;
             let extra_nm = (extra_px / scale).ceil() as i32;
             if ol > 0 || or > 0 || ot > 0 || ob > 0 {
-                left_nm = left_nm.max(ol.saturating_add(extra_nm));
-                right_nm = right_nm.max(or.saturating_add(extra_nm));
-                top_nm = top_nm.max(ot.saturating_add(extra_nm));
-                bottom_nm = bottom_nm.max(ob.saturating_add(extra_nm));
+                left_nm = left_nm.max(or.saturating_add(extra_nm));
+                right_nm = right_nm.max(ol.saturating_add(extra_nm));
+                top_nm = top_nm.max(ob.saturating_add(extra_nm));
+                bottom_nm = bottom_nm.max(ot.saturating_add(extra_nm));
             }
         }
         if let Some(net_bucket) = buckets.net
@@ -1970,24 +1971,58 @@ mod tests {
 
     #[test]
     fn edge_crossing_long_net_label_and_text_edit_stay_visible() {
+        let library = SymbolLibrary::builtin();
+        let resistor = library.get(library.by_name("Resistor-IEEE-Standard").unwrap());
         let mut doc = Doc::new();
         let bounds = viewport();
-        let camera = Camera::new(Pt::ZERO, 1.0, bounds);
-        let view = camera.visible();
-        // Anchor a net label just off the left edge of `camera.visible()` (so `doc.query(view)`
-        // alone does not return it), starting with short text `"I"` that does not reach the
-        // viewport, then edit it to a long string that reaches well inside the viewport.
-        let left_anchor = Pt {
-            x: view.min.x - 3 * GRID_NM,
+        let camera_initial = Camera::new(Pt::ZERO, 1.0, bounds);
+        let view0 = camera_initial.visible();
+
+        // 1. Place a net label `"I"` inside the initial viewport so it gets shaped & cached,
+        //    then pan the camera right so its anchor is just off the left edge (-10 logical px):
+        //    `"I"` is now off-screen (still cached!), then edit `"I"` -> `"WW"` without moving the
+        //    camera and verify `sync()` invalidates the stale `"I"` width and edge-band shaping
+        //    admits `"WW"` immediately.
+        let label_anchor = Pt {
+            x: view0.min.x + 2 * GRID_NM,
             y: 0,
         };
         let add = doc
             .apply(Command::AddLabel(Label {
-                at: left_anchor,
+                at: label_anchor,
                 text: "I".into(),
             }))
             .unwrap();
         let ItemId::Label(label_id) = add.added[0] else {
+            unreachable!()
+        };
+
+        // 2. Place a vertical resistor (RightCenter label overhanging rightward, `or > ol`) just
+        //    off the left edge of the panned viewport so its body is outside `camera.visible()`
+        //    while its right-hand designator/value still extend into the viewport.
+        let mut camera = Camera::new(Pt::ZERO, 1.0, bounds);
+        // Pan right by 2*20 + 12 = 52 logical px so `label_anchor` sits at screen x = -12 px
+        // (`left_x = -10 px`: `"I"` is ~4–8 px wide -> offscreen; `"WW"` is ~20 px wide -> visible).
+        camera.pan_by(point(-52.0, 0.0));
+        let view = camera.visible();
+        let edge_part_x = view.min.x - 3 * GRID_NM;
+        let part_add = doc
+            .apply(Command::PlacePart {
+                part: Part {
+                    symbol: resistor.id,
+                    at: Pt {
+                        x: edge_part_x,
+                        y: 4 * GRID_NM,
+                    },
+                    orient: Orient::ROT_90,
+                    designator: "REDGE1".into(),
+                    value: "100kOhm".into(),
+                },
+                local_pins: resistor.pins.iter().map(|p| p.at).collect(),
+                local_bounds: resistor.bounds,
+            })
+            .unwrap();
+        let ItemId::Part(edge_part_id) = part_add.added[0] else {
             unreachable!()
         };
 
@@ -2009,9 +2044,54 @@ mod tests {
         };
 
         window.update(|_, window, _| {
+            // Frame 1 at initial camera: `"I"` is inside viewport and gets shaped & cached.
             cache.sync(&doc, 1.0);
+            let area0 = cache.expanded_query_area(&camera_initial, buckets).unwrap();
+            doc.query(area0, &mut cache.query_buf);
+            let frame0 = TextFrame {
+                doc: &doc,
+                parts: &[],
+                labels: &[],
+                camera: &camera_initial,
+                viewport: bounds,
+                scale_factor: 1.0,
+                ink,
+                ink_secondary: ink2,
+            };
+            cache.collect_from_query_buf(&frame0, buckets, window, &());
+            cache.shape_missing(&frame0, window, &());
+            assert!(
+                cache.label_lines[label_id.0 as usize].line.is_some(),
+                "initial frame must cache shaped line for `I`"
+            );
+
+            // Verify asymmetric rightward overhang expands the query's LEFT edge (`min.x`) so the
+            // off-left vertical resistor is missing from `camera.visible()` but found by
+            // `expanded_query_area`.
+            assert!(
+                cache.max_part_overhang_nm.1 > cache.max_part_overhang_nm.0,
+                "RightCenter vertical part must have rightward overhang > leftward overhang: {:?}",
+                cache.max_part_overhang_nm
+            );
+            let mut plain_query = Vec::new();
+            doc.query(view, &mut plain_query);
+            assert!(
+                !plain_query.contains(&ItemId::Part(edge_part_id)),
+                "edge part body must be outside plain camera.visible()"
+            );
+
+            // Frame 2 at panned camera: `"I"` is discovered by expanded query (still cached) and
+            // culled as off-screen; off-left part's rightward-overhanging labels ARE visible!
             let area = cache.expanded_query_area(&camera, buckets).unwrap();
             doc.query(area, &mut cache.query_buf);
+            assert!(
+                cache.query_buf.contains(&ItemId::Label(label_id)),
+                "expanded query must still discover off-left `I`"
+            );
+            assert!(
+                cache.query_buf.contains(&ItemId::Part(edge_part_id)),
+                "expanded query must expand min.x by rightward part overhang to discover off-left part"
+            );
             let frame = TextFrame {
                 doc: &doc,
                 parts: &[],
@@ -2024,15 +2104,25 @@ mod tests {
             };
             cache.collect_from_query_buf(&frame, buckets, window, &());
             assert!(
-                cache.candidates.is_empty(),
-                "short off-left label `I` should not reach the viewport"
+                cache.candidates.iter().all(|c| c.kind != LabelKind::NetLabel),
+                "short cached off-left label `I` must be culled off-screen"
+            );
+            assert!(
+                cache
+                    .candidates
+                    .iter()
+                    .any(|c| c.kind == LabelKind::Designator && c.id == edge_part_id.0),
+                "off-left part's rightward-overhanging designator must stay visible"
             );
 
-            // Edit the same label without moving the camera so its text extends into the viewport.
+            // Frame 3: edit `"I"` -> `"WW"` without moving the camera. `sync()` must invalidate
+            // the stale cached `"I"` line, and edge-band shaping inside `collect_from_query_buf`
+            // must shape `"WW"` before culling (proving `shape_count` increases before
+            // `shape_missing`) and admit it into `candidates`.
             doc.apply(Command::SetText {
                 item: ItemId::Label(label_id),
                 field: omnia_doc::TextField::Label,
-                text: "WWWWWWWWWWWWWWWW".into(),
+                text: "WW".into(),
             })
             .unwrap();
             cache.sync(&doc, 1.0);
@@ -2040,6 +2130,7 @@ mod tests {
                 cache.label_lines[label_id.0 as usize].line.is_none(),
                 "sync must clear stale shaped line on text edit"
             );
+            let shapes_before = cache.shape_count;
             let area2 = cache.expanded_query_area(&camera, buckets).unwrap();
             doc.query(area2, &mut cache.query_buf);
             let frame2 = TextFrame {
@@ -2053,13 +2144,17 @@ mod tests {
                 ink_secondary: ink2,
             };
             cache.collect_from_query_buf(&frame2, buckets, window, &());
-            assert_eq!(
-                cache.candidates.len(),
-                1,
-                "widened off-left net label must be discovered and enter candidates immediately"
+            assert!(
+                cache.shape_count > shapes_before,
+                "edge-band label `WW` must be shaped during collect before viewport culling"
             );
-            assert_eq!(cache.candidates[0].kind, LabelKind::NetLabel);
-            assert_eq!(cache.candidates[0].id, label_id.0);
+            assert!(
+                cache
+                    .candidates
+                    .iter()
+                    .any(|c| c.kind == LabelKind::NetLabel && c.id == label_id.0),
+                "widened off-left net label `WW` must immediately enter candidates"
+            );
         });
     }
 
