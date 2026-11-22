@@ -280,12 +280,19 @@ impl<'de> Deserialize<'de> for Point {
 /// An axis-aligned rectangle on the wire: `{"min": [x, y], "max": [x, y]}` (section 9.3).
 ///
 /// Decoding requires `min <= max` on both axes and both corners inside K1, as `Rect::new` does.
+/// The field is private, so every `Bounds` holds such a rectangle and decodes back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Bounds(pub Rect);
+pub struct Bounds(Rect);
 
-impl From<Rect> for Bounds {
-    fn from(r: Rect) -> Self {
-        Self(r)
+impl Bounds {
+    /// `None` unless `min <= max` on both axes and both corners lie inside K1.
+    pub fn new(rect: Rect) -> Option<Self> {
+        Rect::new(rect.min, rect.max).ok().map(Self)
+    }
+
+    /// The rectangle.
+    pub const fn rect(self) -> Rect {
+        self.0
     }
 }
 

@@ -56,7 +56,7 @@ fn bounds() -> impl Strategy<Value = Bounds> {
             x: x0.max(x1),
             y: y0.max(y1),
         };
-        Bounds(Rect::new(min, max).expect("ordered corners inside K1"))
+        Bounds::new(Rect { min, max }).expect("ordered corners inside K1")
     })
 }
 
@@ -288,10 +288,35 @@ fn request() -> impl Strategy<Value = Request> {
         } else {
             Just(None).boxed()
         };
-        (operation_for(op), key).prop_map(|(op, idempotency_key)| Request {
-            op,
-            idempotency_key,
+        (operation_for(op), key).prop_map(|(op, idempotency_key)| {
+            Request::new(op, idempotency_key).expect("generated requests are valid")
         })
+    })
+}
+
+/// Requests built from parts that may break the rules: an empty or repeated `include`, a page
+/// size of 0 or over AK4, no edit operations, both `at` and `wire`, a key on any operation, an
+/// unavailable operation. Whatever [`Request::new`] accepts must round-trip.
+fn loose_request() -> impl Strategy<Value = (Operation, Option<String>)> {
+    let op = select(OpName::ALL.to_vec()).prop_flat_map(operation_for);
+    (op, option::of(text()), 0u8..8).prop_map(|(mut op, key, bend)| {
+        match (&mut op, bend) {
+            (Operation::Inspect(a), 0) => a.include.clear(),
+            (Operation::Inspect(a), 1) => {
+                let first = a.include[0];
+                a.include.push(first);
+            }
+            (Operation::Inspect(a), 2) => a.limit = Some(0),
+            (Operation::Query(a), 3) => a.limit = Some(crate::MAX_PAGE_SIZE + 1),
+            (Operation::Nets(a), 4) => {
+                a.at = Some(Point(Pt { x: 0, y: 0 }));
+                a.wire = Some(WireRef(1));
+            }
+            (Operation::Validate(a) | Operation::Preview(a), 5) => a.operations.clear(),
+            (Operation::Apply(a), 5) => a.operations.clear(),
+            _ => {}
+        }
+        (op, key)
     })
 }
 
@@ -560,11 +585,9 @@ fn request_status() -> BoxedStrategy<RequestStatus> {
     prop_oneof![
         Just(RequestStatus::NotRun),
         (stored_response(), any::<u64>()).prop_map(|((op, response), revision)| {
-            RequestStatus::Applied {
-                op,
-                revision,
-                response: Box::new(response),
-            }
+            RequestStatus::Applied(
+                StoredResponse::new(op, revision, response).expect("a keyed success"),
+            )
         }),
         agent_error().prop_map(|error| RequestStatus::Failed { error }),
     ]
@@ -639,19 +662,53 @@ fn output_for(op: OpName, status: BoxedStrategy<RequestStatus>) -> BoxedStrategy
     }
 }
 
+/// A response around `outcome`; a document's result always gets `doc_id` and `revision`.
 fn envelope_with(outcome: BoxedStrategy<Result<Output, AgentError>>) -> BoxedStrategy<Response> {
     let warning = (text(), text()).prop_map(|(code, message)| Warning { code, message });
     (
         option::of(doc_id()),
         option::of(any::<u64>()),
+        (doc_id(), any::<u64>()),
         outcome,
         vec(warning, 0..2),
     )
-        .prop_map(|(doc_id, revision, outcome, warnings)| Response {
-            warnings,
-            ..Response::new(doc_id, revision, outcome)
+        .prop_map(|(doc, revision, (d, r), outcome, warnings)| {
+            let scoped = outcome.as_ref().is_ok_and(Output::is_doc_scoped);
+            let (doc, revision) = if scoped {
+                (doc.or(Some(d)), revision.or(Some(r)))
+            } else {
+                (doc, revision)
+            };
+            Response::new(doc, revision, outcome)
+                .expect("a document's result has its handle")
+                .with_warnings(warnings)
         })
         .boxed()
+}
+
+/// Response parts that may break the rules: any handle, any result, any stored pair.
+fn loose_response()
+-> impl Strategy<Value = (Option<DocId>, Option<u64>, Result<Output, AgentError>)> {
+    let stored = (
+        select(OpName::ALL.to_vec()),
+        select(OpName::ALL.to_vec()),
+        any::<u64>(),
+    )
+        .prop_flat_map(|(tag, inner, revision)| {
+            response_for(inner).prop_map(move |r| (tag, revision, r))
+        });
+    let outcome = prop_oneof![
+        select(OpName::ALL.to_vec())
+            .prop_flat_map(|op| output_for(op, request_status()))
+            .prop_map(Ok),
+        agent_error().prop_map(Err),
+        stored.prop_filter_map("a checked stored response", |(tag, revision, r)| {
+            StoredResponse::new(tag, revision, r)
+                .ok()
+                .map(|s| Ok(Output::RequestStatus(RequestStatus::Applied(s))))
+        }),
+    ];
+    (option::of(doc_id()), option::of(any::<u64>()), outcome)
 }
 
 fn response_for(op: OpName) -> BoxedStrategy<Response> {
@@ -772,7 +829,7 @@ enum Mutation {
 fn mutation() -> impl Strategy<Value = Mutation> {
     prop_oneof![
         Just(Mutation::Remove),
-        select(vec!["aa", "zz", "x", "with_wires"]).prop_map(Mutation::AddField),
+        select(vec!["aa", "zz", "x", "with_wires", "idempotency_key"]).prop_map(Mutation::AddField),
         Just(Mutation::Null),
         Just(Mutation::ToArray),
         Just(Mutation::ToObject),
@@ -910,7 +967,7 @@ proptest! {
     /// order (AINV5, AINV11).
     #[test]
     fn requests_round_trip_and_validate(req in request()) {
-        let op = req.op.name();
+        let op = req.op().name();
         let text = req.to_json();
         prop_assert_eq!(&text.parse::<Request>().unwrap(), &req);
         let value: Value = serde_json::from_str(&text).unwrap();
@@ -933,7 +990,7 @@ proptest! {
     fn responses_round_trip_and_validate((op, resp) in response()) {
         let text = resp.to_json();
         prop_assert_eq!(&Response::from_slice(op, text.as_bytes()).unwrap(), &resp);
-        if let Ok(output) = &resp.outcome {
+        if let Ok(output) = resp.outcome() {
             prop_assert!(output.answers(op));
         }
         let value: Value = serde_json::from_str(&text).unwrap();
@@ -980,7 +1037,7 @@ proptest! {
     /// Parity, MCP arguments form, against `<op>.arguments`.
     #[test]
     fn arguments_decoder_and_schema_agree(req in request(), at in any::<Index>(), m in mutation()) {
-        let op = req.op.name();
+        let op = req.op().name();
         let doc = apply_mutation(&serde_json::from_str(&req.to_arguments()).unwrap(), at, &m);
         let text = serde_json::to_string(&doc).unwrap();
         let decoded = Request::from_arguments(op, text.as_bytes());
@@ -1120,16 +1177,22 @@ fn ainv11_decoder_dispatches_exactly_the_catalog() {
     for &op in OpName::ALL {
         let sample = operation_for(op).new_tree(&mut runner).unwrap().current();
         assert_eq!(sample.name(), op);
-        let req = Request {
-            op: sample,
-            idempotency_key: None,
-        };
-        let envelope = req.to_json().parse::<Request>();
-        let arguments = Request::from_arguments(op, req.to_arguments().as_bytes());
         if listed.contains(&op) {
-            assert_eq!(envelope.unwrap().op.name(), op);
-            assert_eq!(arguments.unwrap().op.name(), op);
+            let req = Request::new(sample, None).unwrap();
+            let envelope = req.to_json().parse::<Request>();
+            let arguments = Request::from_arguments(op, req.to_arguments().as_bytes());
+            assert_eq!(envelope.unwrap().op().name(), op);
+            assert_eq!(arguments.unwrap().op().name(), op);
         } else {
+            assert!(matches!(op, OpName::JobStatus | OpName::JobCancel), "{op}");
+            let params = json!({ "job_id": "j1" });
+            let envelope =
+                Request::from_envelope_value(json!({ "op": op.as_str(), "params": params }));
+            let arguments = Request::from_arguments_value(op, params);
+            assert_eq!(
+                Request::new(sample, None).unwrap_err().code(),
+                ErrorCode::UnknownOperation
+            );
             assert_eq!(
                 envelope.unwrap_err().code(),
                 ErrorCode::UnknownOperation,
@@ -1152,7 +1215,8 @@ fn the_capabilities_result_validates() {
         None,
         None,
         Ok(Output::Capabilities(Box::new(Catalog::current()))),
-    );
+    )
+    .unwrap();
     let value: Value = serde_json::from_str(&resp.to_json()).unwrap();
     check("capabilities.response", &value);
 }
@@ -1381,7 +1445,7 @@ fn request_status_applied_is_a_matching_success() {
     let status =
         |status: Value| json!({ "schema": "omnia.agent/1", "result": status, "warnings": [] });
     let change = json!({ "revision": 3, "added": [], "removed": [], "nets_changed": false });
-    let ok_undo = json!({ "schema": "omnia.agent/1", "revision": 3,
+    let ok_undo = json!({ "schema": "omnia.agent/1", "doc_id": "d1", "revision": 3,
         "result": { "change": change }, "warnings": [] });
     let good = status(json!({ "status": "applied", "op": "undo", "revision": 3,
         "response": ok_undo }));
@@ -1419,7 +1483,7 @@ fn mcp_arguments_carry_the_idempotency_key() {
     let a = envelope.parse::<Request>().unwrap();
     let b = Request::from_arguments(OpName::Apply, arguments.as_bytes()).unwrap();
     assert_eq!(a, b);
-    assert_eq!(a.idempotency_key.as_deref(), Some("k-1"));
+    assert_eq!(a.idempotency_key(), Some("k-1"));
     assert_eq!(a.to_arguments(), arguments);
     check("apply.arguments", &serde_json::from_str(arguments).unwrap());
     refuse("apply.params", &serde_json::from_str(arguments).unwrap());
@@ -1433,7 +1497,7 @@ fn mcp_arguments_carry_the_idempotency_key() {
         check(&format!("{op}.arguments"), &args);
         let text = serde_json::to_string(&args).unwrap();
         let req = Request::from_arguments(op, text.as_bytes()).unwrap();
-        assert_eq!(req.idempotency_key.as_deref(), Some("k"));
+        assert_eq!(req.idempotency_key(), Some("k"));
     }
     let inspect = json!({ "doc_id": "d1", "include": ["summary"], "idempotency_key": "k" });
     refuse("inspect.arguments", &inspect);
@@ -1535,7 +1599,8 @@ fn section_9_3_example_shapes() {
         Some(DocId(1)),
         Some(13),
         Ok(Output::Change(ChangeResult { change: dto })),
-    );
+    )
+    .unwrap();
     assert!(
         resp.to_json()
             .starts_with(r#"{"schema":"omnia.agent/1","doc_id":"d1","revision":13,"result":"#)
@@ -1545,7 +1610,7 @@ fn section_9_3_example_shapes() {
 
 #[test]
 fn responses_refuse_unknown_fields_and_wrong_shapes() {
-    let ok = r#"{"schema":"omnia.agent/1","result":{"discarded":true},"warnings":[]}"#;
+    let ok = r#"{"schema":"omnia.agent/1","doc_id":"d1","revision":2,"result":{"discarded":true},"warnings":[]}"#;
     assert!(Response::from_slice(OpName::Close, ok.as_bytes()).is_ok());
     for bad in [
         r#"{"schema":"omnia.agent/2","result":{"discarded":true},"warnings":[]}"#,
@@ -1568,7 +1633,8 @@ fn schema_checks_refuse_mutated_documents() {
         None,
         None,
         Ok(Output::Capabilities(Box::new(Catalog::current()))),
-    );
+    )
+    .unwrap();
     let mut v: Value = serde_json::from_str(&caps.to_json()).unwrap();
     v["result"]["operations"][0]["tool"] = 5.into();
     refuse("capabilities.response", &v);
@@ -1580,7 +1646,8 @@ fn schema_checks_refuse_mutated_documents() {
             expected: 12,
             actual: 14,
         })),
-    );
+    )
+    .unwrap();
     let good: Value = serde_json::from_str(&stale.to_json()).unwrap();
     check("undo.response", &good);
     let mut v = good.clone();
@@ -1621,4 +1688,216 @@ fn job_dtos_round_trip_before_they_are_published() {
     let text = serde_json::to_string(&args).unwrap();
     assert_eq!(text, r#"{"job_id":"j7"}"#);
     assert_eq!(serde_json::from_str::<JobArgs>(&text).unwrap(), args);
+}
+
+// ---- second review round -------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// Whatever the public API lets a caller build serializes to a document that decodes back to
+    /// the same value, in both request forms (review round 2, finding 2).
+    #[test]
+    fn every_request_the_api_builds_decodes_back((op, key) in loose_request()) {
+        if let Ok(req) = Request::new(op, key) {
+            let name = req.op().name();
+            prop_assert_eq!(&req.to_json().parse::<Request>().unwrap(), &req);
+            let args = Request::from_arguments(name, req.to_arguments().as_bytes());
+            prop_assert_eq!(&args.unwrap(), &req);
+        }
+    }
+
+    /// The same for responses: a response the API builds decodes back with every operation its
+    /// result answers (or every operation, for an error).
+    #[test]
+    fn every_response_the_api_builds_decodes_back((doc, revision, outcome) in loose_response()) {
+        if let Ok(resp) = Response::new(doc, revision, outcome) {
+            let text = resp.to_json();
+            let ops: Vec<OpName> = match resp.outcome() {
+                Ok(output) => OpName::ALL.iter().copied().filter(|&op| output.answers(op)).collect(),
+                Err(_) => OpName::ALL.to_vec(),
+            };
+            prop_assert!(!ops.is_empty());
+            for op in ops {
+                prop_assert_eq!(&Response::from_slice(op, text.as_bytes()).unwrap(), &resp);
+            }
+        }
+    }
+
+    /// The envelope and the MCP arguments run one order of checks: after any mutation the two
+    /// forms agree, with the same code, details and message for a fault; the JSON Pointer
+    /// differs only by the envelope's `/params` (review round 2, finding 3).
+    #[test]
+    fn both_request_forms_report_the_same_fault(
+        req in request(),
+        at in any::<Index>(),
+        m in mutation(),
+    ) {
+        let op = req.op().name();
+        let args = apply_mutation(&serde_json::from_str(&req.to_arguments()).unwrap(), at, &m);
+        // `request_status` has a params field named `idempotency_key`; it is never lifted.
+        let lifts = op != OpName::RequestStatus;
+        let mut params = args.clone();
+        let mut envelope = json!({ "op": op.as_str() });
+        if lifts
+            && let Some(key) = params.as_object_mut().and_then(|p| p.remove("idempotency_key"))
+        {
+            envelope["idempotency_key"] = key;
+        }
+        envelope["params"] = params;
+        let by_envelope = Request::from_envelope_value(envelope);
+        let by_arguments = Request::from_arguments_value(op, args);
+        match (by_envelope, by_arguments) {
+            (Ok(a), Ok(b)) => prop_assert_eq!(a, b),
+            (Err(a), Err(b)) => {
+                prop_assert_eq!(&a.message, &b.message);
+                let expected = match b.kind {
+                    ErrorKind::SchemaViolation { path } => {
+                        let own = lifts
+                            && (path == "/idempotency_key" || path.starts_with("/idempotency_key/"));
+                        let path = if own { path } else { format!("/params{path}") };
+                        ErrorKind::SchemaViolation { path }
+                    }
+                    other => other,
+                };
+                prop_assert_eq!(a.kind, expected);
+            }
+            (a, b) => prop_assert!(false, "the forms disagree: {:?} and {:?}", a, b),
+        }
+    }
+}
+
+/// Review round 2, finding 3: the cases the review found.
+#[test]
+fn both_forms_check_limits_first_and_report_in_byte_order() {
+    let limit = ErrorKind::LimitExceeded {
+        limit: Limit::PageSize,
+        value: 5_001,
+    };
+    let envelope = r#"{"op":"inspect","params":{"doc_id":"d1","include":["items"],"limit":5001},"idempotency_key":"k"}"#;
+    assert_eq!(code_of(envelope).1, limit);
+    let arguments = br#"{"doc_id":"d1","include":["items"],"limit":5001,"idempotency_key":"k"}"#;
+    let err = Request::from_arguments(OpName::Inspect, arguments).unwrap_err();
+    assert_eq!(err.kind, limit);
+    assert_eq!(
+        violation_at(r#"{"op":"new","params":{},"zzz":1,"idempotency_key":"k"}"#),
+        "/idempotency_key"
+    );
+    assert_eq!(
+        violation_at(r#"{"op":"new","params":{},"aaa":1,"idempotency_key":"k"}"#),
+        "/aaa"
+    );
+    assert_eq!(
+        violation_at(
+            r#"{"op":"undo","params":{"doc_id":"x","expected_revision":1},"idempotency_key":7}"#
+        ),
+        "/params/doc_id",
+        "`doc_id` sorts before `idempotency_key`, as in the arguments form"
+    );
+}
+
+/// Review round 2, finding 1: a document's result carries its handle and revision.
+#[test]
+fn a_documents_result_carries_its_handle_and_revision() {
+    let bare = r#"{"schema":"omnia.agent/1","result":{"dirty":false},"warnings":[]}"#;
+    let full = r#"{"schema":"omnia.agent/1","doc_id":"d1","revision":0,"result":{"dirty":false},"warnings":[]}"#;
+    for op in [OpName::New, OpName::Open] {
+        assert!(Response::from_slice(op, bare.as_bytes()).is_err(), "{op}");
+        refuse(
+            &format!("{op}.response"),
+            &serde_json::from_str(bare).unwrap(),
+        );
+        assert!(Response::from_slice(op, full.as_bytes()).is_ok(), "{op}");
+        check(
+            &format!("{op}.response"),
+            &serde_json::from_str(full).unwrap(),
+        );
+    }
+    refuse("response", &serde_json::from_str(bare).unwrap());
+    check("response", &serde_json::from_str(full).unwrap());
+    let info = || {
+        Ok(Output::Document(DocInfo {
+            path: None,
+            dirty: false,
+        }))
+    };
+    assert!(Response::new(None, Some(0), info()).is_err());
+    assert!(Response::new(Some(DocId(1)), None, info()).is_err());
+    assert!(Response::new(Some(DocId(1)), Some(0), info()).is_ok());
+    let caps = || Ok(Output::Capabilities(Box::new(Catalog::current())));
+    assert!(
+        Response::new(None, None, caps()).is_ok(),
+        "not a document's result"
+    );
+    let error = Err(AgentError::new(ErrorKind::DocumentNotFound));
+    let resp = Response::new(None, None, error).unwrap();
+    for op in available_ops() {
+        check(
+            &format!("{op}.response"),
+            &serde_json::from_str(&resp.to_json()).unwrap(),
+        );
+    }
+}
+
+#[test]
+fn every_result_knows_whether_it_belongs_to_a_document() {
+    let mut runner = proptest::test_runner::TestRunner::deterministic();
+    for &op in OpName::ALL {
+        let output = output_for(op, Just(RequestStatus::NotRun).boxed())
+            .new_tree(&mut runner)
+            .unwrap()
+            .current();
+        assert_eq!(output.is_doc_scoped(), spec(op).document, "{op}");
+    }
+}
+
+/// Review round 2, finding 2: a stored response must be a success of the operation it names.
+#[test]
+fn stored_responses_cannot_name_another_operation() {
+    let save = Response::new(
+        Some(DocId(1)),
+        Some(2),
+        Ok(Output::Saved(SaveResult {
+            path: "a.ron".into(),
+            saved_revision: 2,
+        })),
+    )
+    .unwrap();
+    assert!(StoredResponse::new(OpName::Undo, 2, save.clone()).is_err());
+    assert!(StoredResponse::new(OpName::Inspect, 2, save.clone()).is_err());
+    let failed = Response::new(None, None, Err(AgentError::new(ErrorKind::NothingToUndo))).unwrap();
+    assert!(StoredResponse::new(OpName::Undo, 2, failed).is_err());
+    let stored = StoredResponse::new(OpName::Save, 2, save.clone()).unwrap();
+    assert_eq!(
+        (stored.op(), stored.revision(), stored.response()),
+        (OpName::Save, 2, &save)
+    );
+}
+
+/// Review round 2, finding 4: `-0` is the integer 0; fractions and exponents stay refused.
+#[test]
+fn minus_zero_reads_as_zero() {
+    let req: Request = r#"{"op":"nets","params":{"doc_id":"d1","at":[-0,0]}}"#
+        .parse()
+        .unwrap();
+    let Operation::Nets(args) = req.op() else {
+        panic!("nets");
+    };
+    assert_eq!(args.at, Some(Point(Pt { x: 0, y: 0 })));
+    check(
+        "nets.params",
+        &serde_json::from_str(r#"{"doc_id":"d1","at":[-0,0]}"#).unwrap(),
+    );
+    for text in [
+        r#"{"op":"nets","params":{"doc_id":"d1","at":[-0.0,0]}}"#,
+        r#"{"op":"nets","params":{"doc_id":"d1","at":[0E0,0]}}"#,
+        r#"{"op":"nets","params":{"doc_id":"d1","at":[1e3,0]}}"#,
+    ] {
+        assert_eq!(code_of(text).0, ErrorCode::InvalidRequest, "{text}");
+    }
+    let quoted = r#"{"op":"open","params":{"path":"a-1.5e3\"x\\"}}"#;
+    assert!(
+        quoted.parse::<Request>().is_ok(),
+        "numbers inside strings are text"
+    );
 }

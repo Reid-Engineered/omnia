@@ -119,6 +119,9 @@ pub struct OpSpec {
     /// Whether the operation's milestone is delivered; only available operations are listed,
     /// dispatched and published.
     pub available: bool,
+    /// Whether its successful response belongs to a document and so carries `doc_id` and
+    /// `revision` (AD4).
+    pub document: bool,
     /// Static text (AD14).
     pub description: &'static str,
 }
@@ -158,7 +161,29 @@ const fn row(
         idempotent,
         idempotency_key,
         available: true,
+        document: document_scoped(op),
         description,
+    }
+}
+
+/// Whether `op`'s successful response belongs to a document. Exhaustive, with no wildcard arm.
+const fn document_scoped(op: OpName) -> bool {
+    match op {
+        OpName::New
+        | OpName::Open
+        | OpName::Close
+        | OpName::Inspect
+        | OpName::Query
+        | OpName::Nets
+        | OpName::Validate
+        | OpName::Preview
+        | OpName::Apply
+        | OpName::Undo
+        | OpName::Redo
+        | OpName::Save => true,
+        OpName::Capabilities | OpName::RequestStatus | OpName::JobStatus | OpName::JobCancel => {
+            false
+        }
     }
 }
 

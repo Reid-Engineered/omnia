@@ -206,7 +206,9 @@ impl From<&Change> for ChangeDto {
         };
         Self {
             revision: change.revision,
-            dirty: change.dirty.map(Bounds),
+            dirty: change
+                .dirty
+                .map(|r| Bounds::new(r).expect("a document's dirty rectangle lies inside K1")),
             added: sorted(&change.added),
             removed: sorted(&change.removed),
             nets_changed: change.nets_changed,
@@ -301,17 +303,75 @@ pub struct SaveResult {
     pub saved_revision: u64,
 }
 
+/// Why a response value cannot be built: it would serialize to a document its own decoder
+/// refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidResponse(&'static str);
+
+impl std::fmt::Display for InvalidResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for InvalidResponse {}
+
+/// The stored response of an applied request (section 11.2): a success of `op`, which is one
+/// of the operations that take an idempotency key. Fields are private, so a mismatch cannot be
+/// built; [`StoredResponse::new`] checks it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredResponse {
+    op: OpName,
+    revision: u64,
+    response: Box<Response>,
+}
+
+impl StoredResponse {
+    /// Checks that `op` takes an idempotency key and that `response` is a success of `op`.
+    pub fn new(op: OpName, revision: u64, response: Response) -> Result<Self, InvalidResponse> {
+        if !spec(op).idempotency_key {
+            return Err(InvalidResponse(
+                "only operations that take an idempotency key are stored",
+            ));
+        }
+        match &response.outcome {
+            Ok(output) if output.answers(op) => Ok(Self {
+                op,
+                revision,
+                response: Box::new(response),
+            }),
+            Ok(_) => Err(InvalidResponse(
+                "the stored response answers another operation",
+            )),
+            Err(_) => Err(InvalidResponse(
+                "an applied request has a successful response; a failure is `failed`",
+            )),
+        }
+    }
+
+    /// The stored request's operation.
+    pub fn op(&self) -> OpName {
+        self.op
+    }
+
+    /// The revision the request left.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// The stored response.
+    pub fn response(&self) -> &Response {
+        &self.response
+    }
+}
+
 /// The result of `request_status` (section 11.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestStatus {
     /// No request with this key ran.
     NotRun,
-    /// It ran and succeeded; `response` is the stored response, which answered `op`.
-    Applied {
-        op: OpName,
-        revision: u64,
-        response: Box<Response>,
-    },
+    /// It ran and succeeded.
+    Applied(StoredResponse),
     /// It ran and failed.
     Failed { error: AgentError },
 }
@@ -324,16 +384,12 @@ impl Serialize for RequestStatus {
                 s.serialize_field("status", "not_run")?;
                 s.end()
             }
-            Self::Applied {
-                op,
-                revision,
-                response,
-            } => {
+            Self::Applied(stored) => {
                 let mut s = serializer.serialize_struct("RequestStatus", 4)?;
                 s.serialize_field("status", "applied")?;
-                s.serialize_field("op", op)?;
-                s.serialize_field("revision", revision)?;
-                s.serialize_field("response", response)?;
+                s.serialize_field("op", &stored.op)?;
+                s.serialize_field("revision", &stored.revision)?;
+                s.serialize_field("response", &stored.response)?;
                 s.end()
             }
             Self::Failed { error } => {
@@ -372,16 +428,9 @@ impl<'de> Deserialize<'de> for RequestStatus {
                     )));
                 }
                 let response = Response::from_value(op, response).map_err(de::Error::custom)?;
-                if response.outcome.is_err() {
-                    return Err(de::Error::custom(
-                        "an applied request has a successful response; a failure is `failed`",
-                    ));
-                }
-                Ok(Self::Applied {
-                    op,
-                    revision,
-                    response: Box::new(response),
-                })
+                StoredResponse::new(op, revision, response)
+                    .map(Self::Applied)
+                    .map_err(de::Error::custom)
             }
             ("failed", None, None, None, Some(error)) => Ok(Self::Failed { error }),
             _ => Err(de::Error::custom(
@@ -471,6 +520,24 @@ impl Output {
         })
     }
 
+    /// Whether this result belongs to a document, so its response must carry `doc_id` and
+    /// `revision` (AD4). Exhaustive; a test checks it agrees with `OpSpec::document`.
+    pub const fn is_doc_scoped(&self) -> bool {
+        match self {
+            Self::Document(_)
+            | Self::Closed(_)
+            | Self::Inspect(_)
+            | Self::Query(_)
+            | Self::Nets(_)
+            | Self::Validated(_)
+            | Self::Preview(_)
+            | Self::Applied(_)
+            | Self::Change(_)
+            | Self::Saved(_) => true,
+            Self::Capabilities(_) | Self::RequestStatus(_) | Self::Job(_) => false,
+        }
+    }
+
     /// Whether this variant is the result of `op` (the same table as [`Self::decode`]).
     pub const fn answers(&self, op: OpName) -> bool {
         matches!(
@@ -513,30 +580,73 @@ impl Serialize for Output {
 }
 
 /// One response (section 9.1).
+///
+/// Fields are private, so a response that its decoder would refuse cannot be built: a
+/// successful result that belongs to a document carries `doc_id` and `revision` (AD4), and
+/// the schema string is always [`SCHEMA`] (AK7).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
-    /// Always [`SCHEMA`] (AK7).
-    pub schema: &'static str,
-    pub doc_id: Option<DocId>,
-    pub revision: Option<u64>,
-    pub outcome: Result<Output, AgentError>,
-    pub warnings: Vec<Warning>,
+    schema: &'static str,
+    doc_id: Option<DocId>,
+    revision: Option<u64>,
+    outcome: Result<Output, AgentError>,
+    warnings: Vec<Warning>,
 }
 
 impl Response {
-    /// A response of schema [`SCHEMA`] with no warnings.
+    /// A response of schema [`SCHEMA`] with no warnings. A document's result
+    /// ([`Output::is_doc_scoped`]) needs `doc_id` and `revision`.
     pub fn new(
         doc_id: Option<DocId>,
         revision: Option<u64>,
         outcome: Result<Output, AgentError>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, InvalidResponse> {
+        if let Ok(output) = &outcome
+            && output.is_doc_scoped()
+            && (doc_id.is_none() || revision.is_none())
+        {
+            return Err(InvalidResponse(
+                "a document's result carries its doc_id and revision",
+            ));
+        }
+        Ok(Self {
             schema: SCHEMA,
             doc_id,
             revision,
             outcome,
             warnings: Vec::new(),
-        }
+        })
+    }
+
+    /// The same response with these warnings.
+    pub fn with_warnings(mut self, warnings: Vec<Warning>) -> Self {
+        self.warnings = warnings;
+        self
+    }
+
+    /// Always [`SCHEMA`].
+    pub fn schema(&self) -> &'static str {
+        self.schema
+    }
+
+    /// The document the response is about, if any.
+    pub fn doc_id(&self) -> Option<DocId> {
+        self.doc_id
+    }
+
+    /// The document's revision after the request, if any.
+    pub fn revision(&self) -> Option<u64> {
+        self.revision
+    }
+
+    /// The result or the error.
+    pub fn outcome(&self) -> &Result<Output, AgentError> {
+        &self.outcome
+    }
+
+    /// The warnings.
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
     }
 
     /// The response as JSON text: fixed field order, no whitespace (AD8).
@@ -572,13 +682,9 @@ impl Response {
                 ));
             }
         };
-        Ok(Self {
-            schema: SCHEMA,
-            doc_id: wire.doc_id,
-            revision: wire.revision,
-            outcome,
-            warnings: wire.warnings,
-        })
+        Self::new(wire.doc_id, wire.revision, outcome)
+            .map(|r| r.with_warnings(wire.warnings))
+            .map_err(de::Error::custom)
     }
 }
 

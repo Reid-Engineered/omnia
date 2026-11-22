@@ -457,3 +457,17 @@ For A1.7, in addition to the entry above: when it lifts the JSON-lines `"id"` of
 must keep duplicate-key detection, so it parses the line with `parse_strict` and passes the
 rest to `Request::from_envelope_value`, never round-tripping through a plain JSON value first.
 Checks rerun locally; no dependency added; nothing measured.
+Second review round (a fresh independent review at 78db15f confirmed fixes 1 to 7 and found six
+more; all fixed and written into mcp-plan.md sections 9.1 and 9.5). (1) A document's success
+(`new`, `open` and the other document operations) now requires `doc_id` and `revision` in its
+schema, in `response.json` and in `Response::new`; an audit found no other result missing a
+field a client needs. (2) `Request`, `Response` and the new `StoredResponse` have private fields
+and checked constructors, and `Bounds` holds only valid rectangles, so the API cannot build a
+value its decoder refuses (for example an `applied` status tagged `undo` around a `save`
+response). Property tests build values from rule-breaking parts and check that whatever is
+accepted decodes back to itself. (3) Both request forms run one order of checks (limits before
+the schema; the envelope's `idempotency_key` and unknown fields ordered among the params fields
+by name), and a property test compares the two forms' errors on mutated inputs. (4) `-0` is
+read as `0`; a lexical scan still refuses fractions and exponents. (5) The validator compares
+integers exactly, also beyond 64 bits. (6) Union failures are ranked by pointer segment count,
+then first. 44 schema files re-blessed. Checks rerun locally.

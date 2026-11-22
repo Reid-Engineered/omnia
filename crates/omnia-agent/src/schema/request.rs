@@ -23,7 +23,7 @@ use super::codec::{
 };
 use super::{
     json::schema_value,
-    validate::{escape, validate},
+    validate::{Violation, escape, validate},
 };
 use crate::{
     EditOpName, ErrorKind, MAX_OPERATIONS, MAX_PAGE_SIZE, MAX_REQUEST_BYTES, OpName,
@@ -297,10 +297,12 @@ impl Operation {
     }
 }
 
+/// A schema violation at `path` in the request. The message does not repeat the path, so the
+/// two request forms report the same message for the same fault.
 fn violation(path: &str, message: &str) -> AgentError {
     AgentError::with_message(
         ErrorKind::SchemaViolation { path: path.into() },
-        format!("schema violation at `{path}`: {message}"),
+        format!("schema violation: {message}"),
     )
 }
 
@@ -329,10 +331,11 @@ fn check_limits(op: OpName, params: &Value) -> Result<(), AgentError> {
     Ok(())
 }
 
-/// Validates `value` against the schema `name`, reporting paths below `base`.
-fn conform(name: &str, value: &Value, base: &str) -> Result<(), AgentError> {
-    let schema = schema_value(name).expect("every operation has generated schemas");
-    validate(schema, value).map_err(|v| violation(&format!("{base}{}", v.path), &v.message))
+/// Validates tool arguments against `<op>.arguments`; the path is in arguments space.
+fn conform_arguments(op: OpName, args: &Value) -> Result<(), Violation> {
+    let schema =
+        schema_value(&spec(op).arguments_schema()).expect("every operation has generated schemas");
+    validate(schema, args)
 }
 
 /// Resolves an operation name the catalog lists; anything else is `unknown_operation`.
@@ -353,21 +356,58 @@ fn check_size(bytes: &[u8]) -> Result<(), AgentError> {
     Ok(())
 }
 
+/// The first reference token of a JSON Pointer, unescaped; `None` for the whole document.
+fn first_token(path: &str) -> Option<String> {
+    let rest = path.strip_prefix('/')?;
+    let token = rest.split('/').next().unwrap_or_default();
+    Some(token.replace("~1", "/").replace("~0", "~"))
+}
+
 /// One request (section 9.1).
 ///
 /// It has two wire forms with the same meaning. The envelope `{op, params, idempotency_key?}`
 /// is what `omnia call` and `omnia serve` read ([`Request::from_slice`]). The MCP form is a
 /// tool's `arguments` object: the params with `idempotency_key` beside them, on the operations
 /// section 11.2 names ([`Request::from_arguments`], schema `<op>.arguments`). Both decode to
-/// the same `Request`, and [`Request::to_json`] and [`Request::to_arguments`] write them.
+/// the same `Request` through one order of checks, so the same fault gives the same error code,
+/// details and message in both; only the JSON Pointer differs, by the envelope's `/params`.
+///
+/// Fields are private: a `Request` exists only if it decodes, so everything [`Request::to_json`]
+/// and [`Request::to_arguments`] write decodes back to the same value. Build one with
+/// [`Request::new`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
-    pub op: Operation,
-    /// Only on operations whose catalog row allows it (section 11.2).
-    pub idempotency_key: Option<String>,
+    op: Operation,
+    idempotency_key: Option<String>,
 }
 
 impl Request {
+    /// A request, checked by the decoder: the result is exactly what decoding its envelope
+    /// gives, or the error decoding reports.
+    pub fn new(op: Operation, idempotency_key: Option<String>) -> Result<Self, AgentError> {
+        let candidate = Self {
+            op,
+            idempotency_key,
+        };
+        let value = serde_json::to_value(&candidate).expect("requests always serialize");
+        Self::from_envelope_value(value)
+    }
+
+    /// The operation and its params.
+    pub fn op(&self) -> &Operation {
+        &self.op
+    }
+
+    /// The idempotency key, on the operations that take one (section 11.2).
+    pub fn idempotency_key(&self) -> Option<&str> {
+        self.idempotency_key.as_deref()
+    }
+
+    /// The operation and the key.
+    pub fn into_parts(self) -> (Operation, Option<String>) {
+        (self.op, self.idempotency_key)
+    }
+
     /// Decodes one envelope strictly (see the module docs).
     pub fn from_slice(bytes: &[u8]) -> Result<Self, AgentError> {
         check_size(bytes)?;
@@ -382,6 +422,12 @@ impl Request {
 
     /// Decodes an envelope already parsed by [`parse_strict`]. A value parsed any other way
     /// has lost its duplicate keys and so cannot be checked for them.
+    ///
+    /// The envelope is checked in the arguments form's order: `op` and `params` must be
+    /// present and `op` listed; then AK3 and AK4; then the params, with the envelope's
+    /// `idempotency_key` placed beside the params fields, against `<op>.arguments`. An unknown
+    /// envelope field is ordered among the params fields by name, and the first fault in byte
+    /// order of field names is reported.
     pub fn from_envelope_value(value: Value) -> Result<Self, AgentError> {
         let Value::Object(mut map) = value else {
             return Err(AgentError::with_message(
@@ -389,42 +435,70 @@ impl Request {
                 "a request is a JSON object",
             ));
         };
-        if let Some(key) = map
-            .keys()
-            .filter(|k| !matches!(k.as_str(), "op" | "params" | "idempotency_key"))
-            .min()
-        {
-            return Err(violation(&format!("/{}", escape(key)), "unknown field"));
-        }
         let op = match map.remove("op") {
             Some(Value::String(name)) => available(&name)?,
             Some(_) => return Err(violation("/op", "expected string")),
             None => return Err(violation("", "missing field `op`")),
         };
-        let idempotency_key = match map.remove("idempotency_key") {
-            None => None,
-            Some(_) if !spec(op).idempotency_key => {
-                return Err(violation("/idempotency_key", "unknown field"));
-            }
-            Some(Value::String(key)) => Some(key),
-            Some(_) => return Err(violation("/idempotency_key", "expected string")),
-        };
-        let params = map
+        let mut params = map
             .remove("params")
             .ok_or_else(|| violation("", "missing field `params`"))?;
         check_limits(op, &params)?;
-        conform(&spec(op).params_schema(), &params, "/params")?;
+        let key = map.remove("idempotency_key");
+        let mut unknown: Vec<String> = map.into_iter().map(|(k, _)| k).collect();
+        // The key joins the params fields, unless a params field already has its name
+        // (`request_status`); then it is an unknown envelope field like any other.
+        let merged = match (&key, params.as_object_mut()) {
+            (Some(k), Some(fields)) if !fields.contains_key("idempotency_key") => {
+                fields.insert("idempotency_key".to_owned(), k.clone());
+                true
+            }
+            (Some(_), Some(_)) => {
+                unknown.push("idempotency_key".to_owned());
+                false
+            }
+            _ => false,
+        };
+        unknown.sort();
+        let fault = conform_arguments(op, &params).err();
+        let to_envelope = |path: &str| {
+            let own_key = path == "/idempotency_key" || path.starts_with("/idempotency_key/");
+            if merged && own_key {
+                path.to_owned()
+            } else {
+                format!("/params{path}")
+            }
+        };
+        match (fault, unknown.first()) {
+            (None, None) => {}
+            (Some(f), first)
+                if first.is_none_or(|u| first_token(&f.path).is_none_or(|t| t <= *u)) =>
+            {
+                return Err(violation(&to_envelope(&f.path), &f.message));
+            }
+            (_, Some(u)) => return Err(violation(&format!("/{}", escape(u)), "unknown field")),
+            (Some(_), None) => unreachable!("handled by the arm above"),
+        }
+        let idempotency_key = if merged {
+            params
+                .as_object_mut()
+                .and_then(|m| m.remove("idempotency_key"))
+                .and_then(|k| k.as_str().map(str::to_owned))
+        } else {
+            None
+        };
         Ok(Self {
             op: Operation::decode(op, params, "/params")?,
             idempotency_key,
         })
     }
 
-    /// Decodes tool arguments already parsed by [`parse_strict`].
+    /// Decodes tool arguments already parsed by [`parse_strict`], in the same order of checks
+    /// as [`Self::from_envelope_value`].
     pub fn from_arguments_value(op: OpName, value: Value) -> Result<Self, AgentError> {
         let op = available(op.as_str())?;
         check_limits(op, &value)?;
-        conform(&spec(op).arguments_schema(), &value, "")?;
+        conform_arguments(op, &value).map_err(|f| violation(&f.path, &f.message))?;
         let mut params = value;
         // On the keyed operations the key sits beside the params; `request_status` has a
         // params field of the same name, which stays.
@@ -512,7 +586,7 @@ impl Serialize for Request {
 // ---- strict JSON ---------------------------------------------------------------------------
 
 /// Parses JSON refusing duplicate object keys and every number that is not a 64-bit integer
-/// written without fraction or exponent (`invalid_request`).
+/// written without fraction or exponent (`invalid_request`). `-0` is read as `0`.
 pub fn parse_strict(bytes: &[u8]) -> Result<Value, AgentError> {
     parse_strict_raw(bytes)
         .map_err(|e| AgentError::with_message(ErrorKind::InvalidRequest, e.to_string()))
@@ -520,10 +594,54 @@ pub fn parse_strict(bytes: &[u8]) -> Result<Value, AgentError> {
 
 /// [`parse_strict`] with the parser's own error.
 pub(crate) fn parse_strict_raw(bytes: &[u8]) -> Result<Value, serde_json::Error> {
+    check_number_spelling(bytes)?;
     let mut de = serde_json::Deserializer::from_slice(bytes);
     let value = StrictValue::deserialize(&mut de)?;
     de.end()?;
     Ok(value.0)
+}
+
+/// Refuses a number token with a fraction or an exponent, outside strings. The parser hands
+/// `-0` and integers beyond 64 bits to the visitor as doubles; after this scan a double can
+/// only be one of those, so the visitor can tell them apart.
+fn check_number_spelling(bytes: &[u8]) -> Result<(), serde_json::Error> {
+    let (mut i, mut in_string, mut escaped) = (0, false, false);
+    while let Some(&b) = bytes.get(i) {
+        if in_string {
+            match b {
+                _ if escaped => escaped = false,
+                b'\\' => escaped = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'-' | b'0'..=b'9' => {
+                let start = i;
+                while bytes
+                    .get(i)
+                    .is_some_and(|c| matches!(c, b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E'))
+                {
+                    i += 1;
+                }
+                if bytes[start..i]
+                    .iter()
+                    .any(|c| matches!(c, b'.' | b'e' | b'E'))
+                {
+                    return Err(de::Error::custom(
+                        "numbers are integers written without fraction or exponent (AD12)",
+                    ));
+                }
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Ok(())
 }
 
 struct StrictValue(Value);
@@ -555,10 +673,14 @@ impl<'de> Visitor<'de> for StrictVisitor {
         Ok(Value::Number(v.into()))
     }
 
-    fn visit_f64<E: de::Error>(self, _: f64) -> Result<Value, E> {
-        Err(E::custom(
-            "numbers are 64-bit integers without fraction or exponent (AD12)",
-        ))
+    /// After [`check_number_spelling`] a double is `-0`, read as `0`, or an integer outside the
+    /// 64-bit range, which is refused.
+    fn visit_f64<E: de::Error>(self, v: f64) -> Result<Value, E> {
+        if v == 0.0 {
+            Ok(Value::Number(0u64.into()))
+        } else {
+            Err(E::custom("numbers are 64-bit integers (AD12)"))
+        }
     }
 
     fn visit_str<E>(self, v: &str) -> Result<Value, E> {

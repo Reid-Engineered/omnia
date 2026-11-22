@@ -932,7 +932,9 @@
   "oneOf": [
     {
       "required": [
-        "result"
+        "result",
+        "doc_id",
+        "revision"
       ]
     },
     {

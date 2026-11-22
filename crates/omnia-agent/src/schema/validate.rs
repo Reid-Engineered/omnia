@@ -10,7 +10,8 @@
 //! quantifiers `*`, `+`, `?`, `{n}` and `{m,n}`. It never calls a codec.
 //!
 //! Errors are deterministic: object keys are visited in byte order, and when no alternative of a
-//! `oneOf` or `anyOf` matches, the reported failure is the deepest one (the first on a tie).
+//! `oneOf` or `anyOf` matches, the reported failure is the deepest one, by number of pointer
+//! segments, and the first on a tie. Integers compare exactly, also beyond 64 bits.
 
 use std::cmp::Ordering;
 
@@ -72,17 +73,31 @@ fn is_integer(v: &Value) -> bool {
     v.is_i64() || v.is_u64() || v.as_f64().is_some_and(|f| f.fract() == 0.0)
 }
 
-/// Compares two JSON numbers exactly when both are 64-bit integers, else as doubles.
+/// A JSON number as an exact integer: 64-bit integers, and doubles with no fraction inside
+/// the `i128` range (every such double is an exact integer).
+fn exact(v: &Value) -> Option<i128> {
+    const LIMIT: f64 = 1.7e38;
+    v.as_i64()
+        .map(i128::from)
+        .or_else(|| v.as_u64().map(i128::from))
+        .or_else(|| {
+            let f = v.as_f64()?;
+            // Every double of this size is an integer, so the cast is exact.
+            (f.fract() == 0.0 && f.abs() < LIMIT).then_some(f as i128)
+        })
+}
+
+/// Compares two JSON numbers exactly when both are integers, else as doubles.
 fn num_cmp(a: &Value, b: &Value) -> Option<Ordering> {
-    let exact = |v: &Value| {
-        v.as_i64()
-            .map(i128::from)
-            .or_else(|| v.as_u64().map(i128::from))
-    };
     match (exact(a), exact(b)) {
         (Some(x), Some(y)) => Some(x.cmp(&y)),
         _ => a.as_f64()?.partial_cmp(&b.as_f64()?),
     }
+}
+
+/// The number of reference tokens in a JSON Pointer.
+fn depth(path: &str) -> usize {
+    path.matches('/').count()
 }
 
 fn type_matches(ty: &str, v: &Value) -> bool {
@@ -247,7 +262,8 @@ fn check(root: &Value, schema: &Value, v: &Value, path: &mut String) -> Result<(
     Ok(())
 }
 
-/// Counts the passing alternatives and keeps the deepest failure (the first on a tie).
+/// Counts the passing alternatives and keeps the deepest failure by segment count (the first
+/// on a tie).
 fn alternatives_of(
     root: &Value,
     alternatives: &[Value],
@@ -260,7 +276,10 @@ fn alternatives_of(
         match check(root, alternative, v, path) {
             Ok(()) => passing += 1,
             Err(e) => {
-                if deepest.as_ref().is_none_or(|d| e.path.len() > d.path.len()) {
+                if deepest
+                    .as_ref()
+                    .is_none_or(|d| depth(&e.path) > depth(&d.path))
+                {
                     deepest = Some(e);
                 }
             }
@@ -468,7 +487,35 @@ pub fn decimal_up_to(max: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    #[test]
+    fn integers_compare_exactly_beyond_64_bits() {
+        let schema = json!({ "type": "integer", "minimum": 0, "maximum": u64::MAX });
+        assert!(validate(&schema, &json!(u64::MAX)).is_ok());
+        let over: Value = serde_json::from_str("18446744073709551616").unwrap();
+        assert!(validate(&schema, &over).is_err());
+        let minus_zero: Value = serde_json::from_str("-0").unwrap();
+        assert!(validate(&schema, &minus_zero).is_ok());
+        // The parsed double is compared exactly; a literal that a double parser rounds onto
+        // the bound is the parser's loss, and the strict decoder refuses such literals anyway.
+        let schema = json!({ "type": "integer", "minimum": i64::MIN });
+        let under: Value = serde_json::from_str("-10000000000000000000").unwrap();
+        assert!(validate(&schema, &under).is_err());
+    }
+
+    #[test]
+    fn unions_report_the_failure_with_most_segments() {
+        let schema = json!({ "oneOf": [
+            { "type": "object", "properties": { "long_field": { "type": "string" } } },
+            { "type": "object", "properties": { "a": { "type": "object",
+                "properties": { "b": { "type": "string" } } } } }
+        ] });
+        let v = json!({ "long_field": 1, "a": { "b": 1 } });
+        assert_eq!(validate(&schema, &v).unwrap_err().path, "/a/b");
+    }
 
     #[test]
     fn patterns_match_the_regular_expression_subset() {

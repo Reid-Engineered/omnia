@@ -1023,8 +1023,18 @@ const fn result_def(op: OpName) -> (&'static str, Build) {
     }
 }
 
+/// The `required` list of a successful envelope: a document's result carries `doc_id` and
+/// `revision` (AD4).
+fn success_required(document: bool) -> Value {
+    if document {
+        json!(["result", "doc_id", "revision"])
+    } else {
+        json!(["result"])
+    }
+}
+
 /// The envelope of section 9.1 with `result` as given.
-fn envelope(g: &mut Gen, result: Value) -> Value {
+fn envelope(g: &mut Gen, result: Value, document: bool) -> Value {
     let mut s = obj(
         vec![
             ("schema", konst(SCHEMA)),
@@ -1036,7 +1046,10 @@ fn envelope(g: &mut Gen, result: Value) -> Value {
         ],
         &["schema", "warnings"],
     );
-    s["oneOf"] = json!([{ "required": ["result"] }, { "required": ["error"] }]);
+    s["oneOf"] = json!([
+        { "required": success_required(document) },
+        { "required": ["error"] },
+    ]);
     s
 }
 
@@ -1051,7 +1064,7 @@ fn success(g: &mut Gen, op: OpName) -> Value {
             ("result", g.r(name, build)),
             ("warnings", array(g.r("Warning", warning))),
         ],
-        &["schema", "result", "warnings"],
+        &["schema", "doc_id", "revision", "result", "warnings"],
     )
 }
 
@@ -1094,18 +1107,41 @@ const fn success_def(op: OpName) -> Option<(&'static str, Build)> {
     }
 }
 
-/// The envelope of any available operation. `anyOf`, because two results may share a shape.
+/// The envelope of any available operation: an error, a document's result with `doc_id` and
+/// `revision`, or another result. `anyOf`, because two results may share a shape.
 fn response_any(g: &mut Gen) -> Value {
     let mut seen = Vec::new();
-    let mut results = Vec::new();
+    let (mut documents, mut others) = (Vec::new(), Vec::new());
     for &op in OpName::ALL.iter().filter(|&&op| spec(op).available) {
         let (name, build) = result_def(op);
         if !seen.contains(&name) {
             seen.push(name);
-            results.push(g.r(name, build));
+            let r = g.r(name, build);
+            if spec(op).document {
+                documents.push(r);
+            } else {
+                others.push(r);
+            }
         }
     }
-    envelope(g, json!({ "anyOf": results }))
+    let mut s = obj(
+        vec![
+            ("schema", konst(SCHEMA)),
+            ("doc_id", g.r("DocId", doc_id)),
+            ("revision", u64_()),
+            ("result", json!(true)),
+            ("error", g.r("Error", agent_error)),
+            ("warnings", array(g.r("Warning", warning))),
+        ],
+        &["schema", "warnings"],
+    );
+    s["not"] = json!({ "required": ["result", "error"] });
+    s["anyOf"] = json!([
+        { "required": ["error"] },
+        { "required": success_required(true), "properties": { "result": { "anyOf": documents } } },
+        { "required": success_required(false), "properties": { "result": { "anyOf": others } } },
+    ]);
+    s
 }
 
 // ---- files ---------------------------------------------------------------------------------
@@ -1144,7 +1180,7 @@ fn op_file(op: OpName, part: Part) -> Value {
         Part::Response => {
             let (name, build) = result_def(op);
             let result = g.r(name, build);
-            envelope(&mut g, result)
+            envelope(&mut g, result, spec(op).document)
         }
     };
     g.finish(root, &format!("{op}.{}", part.suffix()))

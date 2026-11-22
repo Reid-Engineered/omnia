@@ -312,27 +312,46 @@ On failure `result` is replaced by `error` (9.4). Requests through `omnia call` 
 serve` are `{"op": "<operation>", "params": { }, "idempotency_key": "..."}`; JSON-lines adds
 an `"id"` that the response echoes. All objects reject unknown fields.
 
-Decoding rules, fixed at A1.3 (2026-11-21; amended by its review the same day):
+Decoding rules, fixed at A1.3 (2026-11-21; amended by its two review rounds the same day):
 
 - Two wire forms, one meaning. The envelope above is what `omnia call` and `omnia serve` read;
   `params` is always present (`{}` for `capabilities` and `new`). Over MCP a tool's
   `arguments` are the params object itself, with `idempotency_key` beside the params fields on
   the operations section 11.2 names (schema `<op>.arguments`). Both decode to the same request.
   `idempotency_key` anywhere else is a `schema_violation`.
-- Order of checks: size over AK2 is `limit_exceeded`; malformed JSON, a duplicate object key,
-  or a number that is not a 64-bit integer written without fraction or exponent is
-  `invalid_request`; an operation the catalog does not list is `unknown_operation`; over AK3
-  or AK4 is `limit_exceeded`; then the request is validated against its published schema
-  (`<op>.params` or `<op>.arguments`) and any mismatch is `schema_violation {path}`. Only then
-  are the DTOs decoded.
+- Order of checks, the same for both forms: size over AK2 is `limit_exceeded`; malformed JSON,
+  a duplicate object key, or a number that is not a 64-bit integer written without fraction or
+  exponent is `invalid_request` (`-0` is read as `0`); in the envelope, a missing `op` or
+  `params` or a non-string `op` is `schema_violation`; an operation the catalog does not list
+  is `unknown_operation`; over AK3 or AK4 is `limit_exceeded`; then the params, with any
+  `idempotency_key` placed beside the params fields, are validated against `<op>.arguments` and
+  any mismatch is `schema_violation {path}`. Only then are the DTOs decoded. The envelope's
+  unknown fields are ordered among the params fields by name, so `{"op": "new", "params": {},
+  "zzz": 1, "idempotency_key": "k"}` reports `/idempotency_key`.
+- The two forms give the same error code, details and message for the same fault; the JSON
+  Pointer differs only by the envelope's `/params`. Messages do not repeat the path. A
+  property test decodes mutated inputs through both forms and compares the errors.
 - The decoder refuses everything the published schema refuses (nulls for optional fields,
   arrays in place of objects, out-of-range ids and numbers). Beyond the schema it checks only:
   the request size, duplicate keys, the integer spelling of numbers, and that bounds have
   `min <= max` on both axes. Property tests mutate valid requests and responses and check
   that the decoder and the published schema agree on every result but these.
 - `path` is a JSON Pointer to the first failure, found by visiting object keys in byte order;
-  when no alternative of a union matches, the deepest failure is reported. The same request
-  with its keys in another order gets the same error bytes (AINV5).
+  when no alternative of a union matches, the failure with the most pointer segments is
+  reported, the first on a tie. The same request with its keys in another order gets the same
+  error bytes (AINV5).
+- What the API can build, it can read back. `Request`, `Response` and the stored response of
+  `request_status` have private fields and checked constructors (`Request::new`,
+  `Response::new`, `StoredResponse::new`), and `Bounds` holds only a valid rectangle, so every
+  value serializes to a document its own decoder accepts. Property tests build values from
+  parts that may break the rules and check that whatever is accepted decodes back to itself.
+- A successful response whose result belongs to a document (`new`, `open`, `close`,
+  `inspect`, `query`, `nets`, `validate`, `preview`, `apply`, `undo`, `redo`, `save`) carries
+  `doc_id` and `revision`, which a client needs for AD4; the schema requires them and
+  `Response::new` refuses a result without them. Audited at the same time: no other result has
+  a field a client must have that the schema leaves optional (`path` is absent for a new
+  document, `next_cursor` on the last page, `dirty` for a no-op, and `inspect` returns only
+  what `include` names).
 - An absent optional field is omitted from responses, never `null`. Document ids are `d<n>` and
   job ids `j<n>`, in the canonical decimal of AD12's item ids; ids fit `u32` (items) or `u64`
   (documents, jobs).
@@ -434,7 +453,9 @@ in the envelope), `<op>.arguments.json` (its MCP `inputSchema`: the params plus
 on `serde_json` features. The schemas state the ranges the codecs hold: id patterns spell
 exactly `0..=4294967295` (items) or `0..=18446744073709551615` (documents, jobs), every 64-bit
 integer has its maximum, and bounds corners lie inside K1. The decoders validate against these
-same schemas with a hand-written validator for the keywords the module emits (section 9.1).
+same schemas with a hand-written validator for the keywords the module emits (section 9.1). It
+compares integers exactly, also beyond 64 bits. `response.json` ties each result to its
+envelope: a document's result requires `doc_id` and `revision` there too.
 After a deliberate change, `OMNIA_BLESS_SCHEMAS=1 cargo test -p omnia-agent ainv11` rewrites
 the directory; without the variable the test only compares. Property tests check that every
 serialized DTO validates against its published schema text, with no codec in the check.

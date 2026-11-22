@@ -24,9 +24,9 @@ pub use request::{
     parse_strict,
 };
 pub use response::{
-    ChangeDto, ChangeResult, CloseResult, Diff, DocInfo, EditResult, InspectResult, Item,
-    ItemsPage, JobPhase, JobState, LabelBody, LabelItem, LabelModified, Modified, Net, NetKey,
-    NetsResult, Output, PartBody, PartItem, PartModified, PinRef, PreviewResult, Progress,
-    RequestStatus, Response, SaveResult, Summary, ValidateResult, Warning, WireBody, WireItem,
-    WireModified,
+    ChangeDto, ChangeResult, CloseResult, Diff, DocInfo, EditResult, InspectResult,
+    InvalidResponse, Item, ItemsPage, JobPhase, JobState, LabelBody, LabelItem, LabelModified,
+    Modified, Net, NetKey, NetsResult, Output, PartBody, PartItem, PartModified, PinRef,
+    PreviewResult, Progress, RequestStatus, Response, SaveResult, StoredResponse, Summary,
+    ValidateResult, Warning, WireBody, WireItem, WireModified,
 };

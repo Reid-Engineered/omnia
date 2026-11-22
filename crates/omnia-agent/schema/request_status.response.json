@@ -26,6 +26,8 @@
       },
       "required": [
         "schema",
+        "doc_id",
+        "revision",
         "result",
         "warnings"
       ],
@@ -1171,6 +1173,8 @@
       },
       "required": [
         "schema",
+        "doc_id",
+        "revision",
         "result",
         "warnings"
       ],
@@ -1356,6 +1360,8 @@
       },
       "required": [
         "schema",
+        "doc_id",
+        "revision",
         "result",
         "warnings"
       ],
@@ -1406,6 +1412,8 @@
       },
       "required": [
         "schema",
+        "doc_id",
+        "revision",
         "result",
         "warnings"
       ],

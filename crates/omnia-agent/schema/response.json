@@ -26,6 +26,8 @@
       },
       "required": [
         "schema",
+        "doc_id",
+        "revision",
         "result",
         "warnings"
       ],
@@ -1632,6 +1634,8 @@
       },
       "required": [
         "schema",
+        "doc_id",
+        "revision",
         "result",
         "warnings"
       ],
@@ -1817,6 +1821,8 @@
       },
       "required": [
         "schema",
+        "doc_id",
+        "revision",
         "result",
         "warnings"
       ],
@@ -1893,6 +1899,8 @@
       },
       "required": [
         "schema",
+        "doc_id",
+        "revision",
         "result",
         "warnings"
       ],
@@ -1956,18 +1964,79 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "oneOf": [
-    {
-      "required": [
-        "result"
-      ]
-    },
+  "anyOf": [
     {
       "required": [
         "error"
       ]
+    },
+    {
+      "properties": {
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocInfo"
+            },
+            {
+              "$ref": "#/$defs/CloseResult"
+            },
+            {
+              "$ref": "#/$defs/InspectResult"
+            },
+            {
+              "$ref": "#/$defs/ItemsPage"
+            },
+            {
+              "$ref": "#/$defs/NetsResult"
+            },
+            {
+              "$ref": "#/$defs/ValidateResult"
+            },
+            {
+              "$ref": "#/$defs/PreviewResult"
+            },
+            {
+              "$ref": "#/$defs/EditResult"
+            },
+            {
+              "$ref": "#/$defs/ChangeResult"
+            },
+            {
+              "$ref": "#/$defs/SaveResult"
+            }
+          ]
+        }
+      },
+      "required": [
+        "result",
+        "doc_id",
+        "revision"
+      ]
+    },
+    {
+      "properties": {
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Catalog"
+            },
+            {
+              "$ref": "#/$defs/RequestStatus"
+            }
+          ]
+        }
+      },
+      "required": [
+        "result"
+      ]
     }
   ],
+  "not": {
+    "required": [
+      "result",
+      "error"
+    ]
+  },
   "properties": {
     "doc_id": {
       "$ref": "#/$defs/DocId"
@@ -1975,46 +2044,7 @@
     "error": {
       "$ref": "#/$defs/Error"
     },
-    "result": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/Catalog"
-        },
-        {
-          "$ref": "#/$defs/DocInfo"
-        },
-        {
-          "$ref": "#/$defs/CloseResult"
-        },
-        {
-          "$ref": "#/$defs/InspectResult"
-        },
-        {
-          "$ref": "#/$defs/ItemsPage"
-        },
-        {
-          "$ref": "#/$defs/NetsResult"
-        },
-        {
-          "$ref": "#/$defs/ValidateResult"
-        },
-        {
-          "$ref": "#/$defs/PreviewResult"
-        },
-        {
-          "$ref": "#/$defs/EditResult"
-        },
-        {
-          "$ref": "#/$defs/ChangeResult"
-        },
-        {
-          "$ref": "#/$defs/SaveResult"
-        },
-        {
-          "$ref": "#/$defs/RequestStatus"
-        }
-      ]
-    },
+    "result": true,
     "revision": {
       "maximum": 18446744073709551615,
       "minimum": 0,
