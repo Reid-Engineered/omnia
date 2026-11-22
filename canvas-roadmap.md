@@ -1726,15 +1726,18 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        covering the K9 boundary, below/at/above threshold runs, near-zoom
                        invariance, long wires composed of short collinear segments across
                        junctions, and zero allocations across far-zoom camera changes. Removed
-                       the B4 known limit from `canvas-plan.md` (§2.1, B4 row, K9, D4) and
-                       `canvas-roadmap.md` (T2.7 table), and froze a clean Orion gate script
+                       the B4 known limit from `canvas-plan.md` (§2.1, B4 row, D4) and
+                       `canvas-roadmap.md` (T2.7 table), added the 2.5 logical-px stub
+                       threshold to K9, and froze a clean Orion gate script
                        `docs/measurements/T2.9/gate.py` without `far_zoom`/`scope_known_limit`
                        (preserving `docs/measurements/T2.7-wire/gate.py` for archived T2.7
-                       replay). Updated `bench-baseline/1k-zoom.json` and
-                       `bench-baseline/10k-zoom.json` to tighten CI deterministic baselines
-                       (`10k-zoom` peak quads 28,279 -> 8,325, −70.6%; sweep quads −54.8%;
-                       `1k-zoom` sweep quads −24.0%; pan baselines byte-identical; all 4 cases
-                       pass `bench compare` against `main`). Non-reference Windows measurements
+                       replay). Deviation outside T2.9's Owns list (`bench-baseline/` belongs
+                       to T2.6, pending owner acceptance): tightened `bench-baseline/1k-zoom.json`
+                       and `bench-baseline/10k-zoom.json` to the new lower deterministic zoom
+                       counts (`10k-zoom` peak quads 28,279 -> 8,325, −70.6%; sweep quads
+                       −54.8%; `1k-zoom` sweep quads −24.0%; pan baselines byte-identical; all
+                       4 cases pass `bench compare` against `main`). Non-reference Windows
+                       measurements
                        (i7-14650HX, Intel UHD Graphics, Windows 11, 1920x1200 @ 165 Hz, 125%
                        scaling, AC, Silent; certifies no budget): `--features scene-counts` on
                        10k zoom at frames 376/420/461/500/545 gives quads before -> after at
