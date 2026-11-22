@@ -1,0 +1,1089 @@
+{
+  "$defs": {
+    "Blocker": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "pin"
+            },
+            "part": {
+              "$ref": "#/$defs/PartRef"
+            },
+            "pin": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "part",
+            "pin"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wire_end"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireRef"
+            }
+          },
+          "required": [
+            "kind",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wire_body"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireRef"
+            }
+          },
+          "required": [
+            "kind",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "overlap"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireRef"
+            }
+          },
+          "required": [
+            "kind",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "sheet"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DocId": {
+      "description": "A document id, never reused within a session.",
+      "pattern": "^d(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "Error": {
+      "additionalProperties": false,
+      "description": "A structured error (AD6, section 9.4).",
+      "oneOf": [
+        {
+          "properties": {
+            "code": {
+              "const": "invalid_request"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "schema_violation"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unknown_operation"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "limit_exceeded"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "enum": [
+                    "request_bytes",
+                    "file_bytes",
+                    "operations",
+                    "page_size",
+                    "open_documents"
+                  ],
+                  "type": "string"
+                },
+                "value": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "limit",
+                "value"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unsupported_in_mode"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "protocol_version_unsupported"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "document_not_found"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unknown_symbol"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unknown_item"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "out_of_bounds"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "invalid_wire"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "missing_item"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "item": {
+                  "$ref": "#/$defs/ItemRef"
+                }
+              },
+              "required": [
+                "item"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "duplicate_item"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "item": {
+                  "$ref": "#/$defs/ItemRef"
+                }
+              },
+              "required": [
+                "item"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "invalid_text_field"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "enum": [
+                    "designator",
+                    "value",
+                    "label"
+                  ],
+                  "type": "string"
+                },
+                "item": {
+                  "$ref": "#/$defs/ItemRef"
+                }
+              },
+              "required": [
+                "item",
+                "field"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "follow_no_route"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "blocker": {
+                  "$ref": "#/$defs/Blocker"
+                },
+                "from": {
+                  "$ref": "#/$defs/Point"
+                },
+                "to": {
+                  "$ref": "#/$defs/Point"
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "blocker"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "segment_blocked"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "blocker": {
+                  "$ref": "#/$defs/Blocker"
+                }
+              },
+              "required": [
+                "blocker"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "wire_capture"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "blocker": {
+                  "$ref": "#/$defs/Blocker"
+                },
+                "wire": {
+                  "$ref": "#/$defs/WireRef"
+                }
+              },
+              "required": [
+                "wire",
+                "blocker"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "off_lattice"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "at": {
+                  "$ref": "#/$defs/Point"
+                }
+              },
+              "required": [
+                "at"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "stale_revision"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "actual": {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "expected": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "expected",
+                "actual"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "preview_mismatch"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "idempotency_conflict"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "user_gesture_in_progress"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "nothing_to_undo"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "nothing_to_redo"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "approval_required"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "approval_id": {
+                  "type": "string"
+                },
+                "effect": {
+                  "enum": [
+                    "edit",
+                    "write_file",
+                    "overwrite_file",
+                    "discard_unsaved"
+                  ],
+                  "type": "string"
+                },
+                "effect_digest": {
+                  "type": "string"
+                },
+                "tier": {
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "approval_id",
+                "tier",
+                "effect",
+                "effect_digest"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "approval_denied"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "path_outside_root"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "file_exists"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "io_error"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unsupported_file_version"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "cancelled"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "job_not_found"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "internal"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            }
+          }
+        }
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "details": {
+          "type": "object"
+        },
+        "hint": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "details"
+      ],
+      "type": "object"
+    },
+    "ErrorCode": {
+      "enum": [
+        "invalid_request",
+        "schema_violation",
+        "unknown_operation",
+        "limit_exceeded",
+        "unsupported_in_mode",
+        "protocol_version_unsupported",
+        "document_not_found",
+        "unknown_symbol",
+        "unknown_item",
+        "out_of_bounds",
+        "invalid_wire",
+        "missing_item",
+        "duplicate_item",
+        "invalid_text_field",
+        "follow_no_route",
+        "segment_blocked",
+        "wire_capture",
+        "off_lattice",
+        "stale_revision",
+        "preview_mismatch",
+        "idempotency_conflict",
+        "user_gesture_in_progress",
+        "nothing_to_undo",
+        "nothing_to_redo",
+        "approval_required",
+        "approval_denied",
+        "path_outside_root",
+        "file_exists",
+        "io_error",
+        "unsupported_file_version",
+        "cancelled",
+        "job_not_found",
+        "internal"
+      ],
+      "type": "string"
+    },
+    "InspectResult": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "$ref": "#/$defs/ItemsPage"
+        },
+        "nets": {
+          "items": {
+            "$ref": "#/$defs/Net"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
+        }
+      },
+      "type": "object"
+    },
+    "Item": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/PartRef"
+            },
+            "part": {
+              "$ref": "#/$defs/PartBody"
+            }
+          },
+          "required": [
+            "id",
+            "part"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/WireRef"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireBody"
+            }
+          },
+          "required": [
+            "id",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/LabelRef"
+            },
+            "label": {
+              "$ref": "#/$defs/LabelBody"
+            }
+          },
+          "required": [
+            "id",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ItemRef": {
+      "description": "An item id, 0-based (AQ5).",
+      "pattern": "^(part|wire|label):(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "ItemsPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Item"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "LabelBody": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Point"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "text"
+      ],
+      "type": "object"
+    },
+    "LabelRef": {
+      "description": "A label id, 0-based (AQ5).",
+      "pattern": "^label:(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "Net": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/NetKey"
+        },
+        "labels": {
+          "items": {
+            "$ref": "#/$defs/LabelRef"
+          },
+          "type": "array"
+        },
+        "pins": {
+          "items": {
+            "$ref": "#/$defs/PinRef"
+          },
+          "type": "array"
+        },
+        "wires": {
+          "items": {
+            "$ref": "#/$defs/WireRef"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "pins",
+        "wires",
+        "labels"
+      ],
+      "type": "object"
+    },
+    "NetKey": {
+      "description": "Lowest pin, else lowest wire, else lowest label (AD8).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "pin"
+            },
+            "part": {
+              "$ref": "#/$defs/PartRef"
+            },
+            "pin": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "part",
+            "pin"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wire"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireRef"
+            }
+          },
+          "required": [
+            "kind",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "label"
+            },
+            "label": {
+              "$ref": "#/$defs/LabelRef"
+            }
+          },
+          "required": [
+            "kind",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Orient": {
+      "description": "An orientation (AD12).",
+      "enum": [
+        "identity",
+        "rot_90",
+        "rot_180",
+        "rot_270",
+        "flip_x",
+        "flip_x_rot_90",
+        "flip_y",
+        "flip_x_rot_270"
+      ],
+      "type": "string"
+    },
+    "PartBody": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Point"
+        },
+        "designator": {
+          "type": "string"
+        },
+        "orient": {
+          "$ref": "#/$defs/Orient"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "at",
+        "orient",
+        "designator",
+        "value"
+      ],
+      "type": "object"
+    },
+    "PartRef": {
+      "description": "A part id, 0-based (AQ5).",
+      "pattern": "^part:(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "PinRef": {
+      "additionalProperties": false,
+      "properties": {
+        "part": {
+          "$ref": "#/$defs/PartRef"
+        },
+        "pin": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "part",
+        "pin"
+      ],
+      "type": "object"
+    },
+    "Point": {
+      "description": "[x, y] in integer nanometres (AK8).",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "Summary": {
+      "additionalProperties": false,
+      "properties": {
+        "labels": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parts": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wires": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "parts",
+        "wires",
+        "labels"
+      ],
+      "type": "object"
+    },
+    "Warning": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "WireBody": {
+      "additionalProperties": false,
+      "properties": {
+        "a": {
+          "$ref": "#/$defs/Point"
+        },
+        "b": {
+          "$ref": "#/$defs/Point"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "type": "object"
+    },
+    "WireRef": {
+      "description": "A wire id, 0-based (AQ5).",
+      "pattern": "^wire:(0|[1-9][0-9]*)$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "oneOf": [
+    {
+      "required": [
+        "result"
+      ]
+    },
+    {
+      "required": [
+        "error"
+      ]
+    }
+  ],
+  "properties": {
+    "doc_id": {
+      "$ref": "#/$defs/DocId"
+    },
+    "error": {
+      "$ref": "#/$defs/Error"
+    },
+    "result": {
+      "$ref": "#/$defs/InspectResult"
+    },
+    "revision": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schema": {
+      "const": "omnia.agent/1"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/Warning"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "warnings"
+  ],
+  "title": "inspect.response",
+  "type": "object"
+}

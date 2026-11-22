@@ -133,7 +133,7 @@ own in turn.
 - Done when: for every built-in symbol under all 8 orientations, applying the command gives the
   world pins `Doc::pins` reports, equal to the `SymbolDef` pins transformed by `Orient::apply`.
 
-### A1.3 Agent crate, schema, errors, catalog · todo
+### A1.3 Agent crate, schema, errors, catalog · done
 - Lane: agent · Depends: A0.2 · Read: mcp-plan.md sections 4, 6, 9 and 14; AINV8, AINV10, AINV11
 - Owns: `crates/omnia-agent/` (`Cargo.toml`, `src/lib.rs`, `src/schema/`, `src/error.rs`,
   `src/catalog.rs`, `schema/`); the crate-list line of the INV12 test in `xtask/src/main.rs`
@@ -394,3 +394,38 @@ entry's per-era mapping of jobs onto 2025-11-25 Tasks. mcp-plan.md section 11.5 
 directly, without the conditional rule. Section 10.4 scopes progress and cancellation to the
 in-flight request, and A3.2 asserts AQ15 for each pinned revision. Independent review by a
 model other than the author. Docs only.
+
+2026-11-21 A1.3 done — new crate `crates/omnia-agent` (deps `omnia-doc`, `serde`, `serde_json`;
+dev `proptest`; all already in Cargo.lock and canvas plan section 10, so no licence to log).
+`lib.rs` holds `SCHEMA` (AK7) and the AK1 to AK6 constants. `schema/` has the codecs (`part:3`,
+`wire:7`, `label:2`, `d1`, `j1`, `pv-` plus 16 hex digits, points `[x, y]`, bounds
+`{min, max}`, the AD12 orientation names), the strict request decoder, the operation union and
+its params, the section 9.2 edit operations, every result DTO, and the hand-written JSON Schema
+module. `error.rs` has 33 codes with typed details; `command_error_kind` maps `CommandError`
+with no wildcard arm. `catalog.rs` is the dispatch table: `OpName::ALL` and `EditOpName::ALL`
+come from the same macro list as their enums, and `spec` gives each operation its tool name,
+tiers, annotations and schema names by exhaustive match. 34 committed schema files under
+`crates/omnia-agent/schema/`. Tests: AINV10 (one sample per `CommandError`, `FollowError` and
+`Blocker` variant, distinct codes); AINV11 (committed files equal generated, generation is
+deterministic and canonical, the catalog equals `OpName::ALL`, the decoder dispatches every
+catalog operation, every catalog schema name exists); property tests round-trip every request,
+response and error through JSON, validate each against its schema with a small test-only
+validator that refuses any keyword it does not implement, and re-parse with object keys
+reversed (AINV5's key-order clause); negative tests for unknown fields at each level, malformed
+JSON, floats, duplicate keys and the AK2 to AK4 limits. AINV8: the INV12 test's crate list now
+includes `omnia-agent`. Deviations, all written into mcp-plan.md: section 9.4 gains
+`wire_capture` and `off_lattice` (the wiring tasks added `CommandError::Capture` and
+`OffLattice` after the plan), makes `follow_no_route` and `segment_blocked` current, gives the
+item codes their ids, and adds `nothing_to_redo`; 9.1 records the decoding rules; 9.3 records
+that `modified` carries full item fields and the `validate`, `undo` and `redo` result shapes;
+9.5 the file names and the bless command; 10.1 adds `cursor?` and `limit?` to `omnia_query`
+(AK4 paging); section 2's `Command` row is updated. Choices the plan leaves open, for A1.4 and
+A1.5 to build on or amend in mcp-plan.md: `inspect` `include` is `summary`, `items` or `nets`;
+the summary is counts of parts, wires and labels; nets are keyed by `{"kind": "pin" | "wire" |
+"label", ..}`; `job_status` and `job_cancel` are in the catalog now because section 14's
+`Operation` lists them (until A3 the service can answer `job_not_found`), with no annotation set
+since 10.1 gives none. Known looseness: the decoder accepts `null` for an optional field, which
+the schemas leave out. For A1.7: the INV12 crate-list line must gain `omnia-cli` when that crate
+exists (the line is A1.3's, so A1.7 needs it in its **Owns**), and JSON-lines' `"id"` must be
+stripped before `Request::from_slice`, which rejects unknown envelope fields. No GUI dependency;
+nothing measured.

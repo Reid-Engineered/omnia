@@ -1,0 +1,26 @@
+{
+  "$defs": {
+    "DocId": {
+      "description": "A document id, never reused within a session.",
+      "pattern": "^d(0|[1-9][0-9]*)$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "doc_id": {
+      "$ref": "#/$defs/DocId"
+    },
+    "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "doc_id",
+    "expected_revision"
+  ],
+  "title": "undo.params",
+  "type": "object"
+}

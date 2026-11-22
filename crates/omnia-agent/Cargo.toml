@@ -1,0 +1,17 @@
+[package]
+name = "omnia-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# mcp-plan.md section 5: no GPUI and no async runtime (AINV8, extends INV12).
+[dependencies]
+omnia-doc = { path = "../omnia-doc" }
+# Canvas plan section 10 (MIT OR Apache-2.0); already in Cargo.lock.
+serde = { version = "1", features = ["derive"] }
+# Canvas plan section 10: the agent wire schema (MIT OR Apache-2.0); already in Cargo.lock.
+serde_json = "1"
+
+[dev-dependencies]
+proptest = "1"

@@ -1,0 +1,21 @@
+{
+  "$defs": {
+    "JobId": {
+      "description": "A job id.",
+      "pattern": "^j(0|[1-9][0-9]*)$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "job_id": {
+      "$ref": "#/$defs/JobId"
+    }
+  },
+  "required": [
+    "job_id"
+  ],
+  "title": "job_cancel.params",
+  "type": "object"
+}

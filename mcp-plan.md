@@ -71,7 +71,7 @@ Checked at `f4fd588`.
 | Fresh ids are allocated deterministically: arena append, geometry order for splits (D2) | `arena.rs`, `route.rs` | A full copy of a document allocates the same ids as the original. |
 | `Change.dirty` covers the old and new bounds of every touched item | `command.rs` (`Change` docs), `tests/change_contract.rs` | A diff can be computed exactly by querying `dirty` before and after. |
 | `Doc` derives only `Debug` and `Default`: no `Clone`, no fork, no `DocSnapshot` | `doc.rs` | Missing prerequisite for preview and for D8 background jobs: task A1.1. |
-| The code's `Command` has `Move { items, delta }` and `Delete(Vec<ItemId>)`; no `follow`, `with_wires`, `DragSegment` or `Paste` | `command.rs` | The canvas plan section 9 sketch is ahead of the code. Schema v1 follows the code; fields are added as W2.2, W3.2, W3.5 and T7.1 merge. |
+| The code's `Command` has `Move { items, delta }` and `Delete(Vec<ItemId>)`; no `follow`, `with_wires`, `DragSegment` or `Paste` | `command.rs` | The canvas plan section 9 sketch is ahead of the code. Schema v1 follows the code; fields are added as W2.2, W3.2, W3.5 and T7.1 merge. Updated at A1.3 (2026-11-21): `follow`, `with_wires` and `DragSegment` are now in the code; schema v1 still has exactly the section 9.2 operations, `invert_follow` and `with_wires` arrive with A2.2 and A2.3, and no task yet exposes `DragSegment`. |
 | No public type derives serde; only the private RON records in `io.rs` do | `io.rs` | The wire schema is a separate DTO layer. Internal types do not become a public contract. |
 | `PlacePart` needs the caller's `local_pins` and `local_bounds` | `command.rs` | A shared helper in `omnia-symbols` builds it from a symbol (A1.2). |
 | `render_to_image` exists on Windows only (G12) | AGENTS.md | Visual checks for agents use an SVG render, not a GPU screenshot (A2.4). |
@@ -312,6 +312,15 @@ On failure `result` is replaced by `error` (9.4). Requests through `omnia call` 
 serve` are `{"op": "<operation>", "params": { }, "idempotency_key": "..."}`; JSON-lines adds
 an `"id"` that the response echoes. All objects reject unknown fields.
 
+Decoding rules, fixed at A1.3 (2026-11-21): `params` is always present (`{}` for
+`capabilities` and `new`); `idempotency_key` is accepted only on the operations section 11.2
+names and is a `schema_violation` elsewhere. Malformed JSON, a duplicate object key or any
+non-integer number is `invalid_request`; an operation outside the catalog is
+`unknown_operation`; any other mismatch is `schema_violation {path}` with a JSON Pointer
+(`/params`, or `/params/operations/<i>` for the first edit operation that does not match). An
+absent optional field is omitted from responses, never `null`. Document ids are `d<n>` and job
+ids `j<n>`, in the canonical decimal of AD12's item ids.
+
 ### 9.2 Edit operations
 
 | Operation | Params | `Command` |
@@ -350,6 +359,11 @@ an `"id"` that the response echoes. All objects reject unknown fields.
 `apply` returns the same shape without `preview_id` and `base_revision`. The diff is paged by
 AK4; `truncated` says so.
 
+As built at A1.3: `before` and `after` of a modified item carry all of its fields (a part's
+`symbol`, `at`, `orient`, `designator` and `value`; a wire's `a` and `b`; a label's `at` and
+`text`); the example above abbreviates them. `change.dirty` is omitted for a validated no-op.
+`validate` returns `{base_revision, change}`; `undo` and `redo` return `{change}`.
+
 ### 9.4 Errors
 
 ```json
@@ -369,12 +383,23 @@ AK4; `truncated` says so.
 | --- | --- |
 | Protocol and schema | `invalid_request`, `schema_violation {path}`, `unknown_operation`, `limit_exceeded {limit, value}`, `unsupported_in_mode`, `protocol_version_unsupported` |
 | Resolution | `document_not_found`, `unknown_symbol`, `unknown_item` |
-| From `CommandError` | `out_of_bounds`, `invalid_wire`, `missing_item`, `duplicate_item`, `invalid_text_field`; later `follow_no_route {from, to, blocker}`, `segment_blocked {blocker}` |
-| Concurrency | `stale_revision {expected, actual}`, `preview_mismatch`, `idempotency_conflict`, `user_gesture_in_progress`, `nothing_to_undo` |
+| From `CommandError` | `out_of_bounds`, `invalid_wire`, `missing_item {item}`, `duplicate_item {item}`, `invalid_text_field {item, field}`, `follow_no_route {from, to, blocker}` (`Follow`), `segment_blocked {blocker}` (`Segment`), `wire_capture {wire, blocker}` (`Capture`), `off_lattice {at}` (`OffLattice`) |
+| Concurrency | `stale_revision {expected, actual}`, `preview_mismatch`, `idempotency_conflict`, `user_gesture_in_progress`, `nothing_to_undo`, `nothing_to_redo` |
 | Approval | `approval_required {approval_id, tier, effect, effect_digest}`, `approval_denied` |
 | Files | `path_outside_root`, `file_exists`, `io_error`, `unsupported_file_version` |
 | Jobs | `cancelled`, `job_not_found` |
 | Other | `internal` |
+
+Amended at A1.3 (2026-11-21), so the plan follows the code. The wiring tasks had already added
+`Segment`, `Follow`, `Capture` and `OffLattice` to `CommandError`, so all of them have codes
+now and AINV10's exhaustive mapping covers them; `Capture` and `OffLattice` gained the new codes
+`wire_capture` and `off_lattice`. The three item codes carry the ids `CommandError` already
+holds. `nothing_to_redo` is added for `omnia_redo`. `limit` is one of `request_bytes`,
+`file_bytes`, `operations`, `page_size`, `open_documents`; `effect` one of `edit`,
+`write_file`, `overwrite_file`, `discard_unsaved`. A `blocker` is
+`{"kind": "pin", "part", "pin"}`, `{"kind": "wire_end" | "wire_body" | "overlap", "wire"}` or
+`{"kind": "sheet"}`. Codes without details carry `"details": {}`. `retryable` is fixed per code:
+true for `stale_revision`, `user_gesture_in_progress`, `approval_required` and `io_error`.
 
 ### 9.5 Schema files
 
@@ -382,6 +407,14 @@ JSON Schemas for every request, response and operation are generated by a hand-w
 in `omnia-agent` and committed under `crates/omnia-agent/schema/`. A test regenerates them and
 fails on any difference (AINV11), the way `cargo xtask tokens` is checked. No schema crate is
 added (AQ3).
+
+As built at A1.3: dialect JSON Schema 2020-12; files `request.json` and `response.json` cover
+every operation, and each operation has `<op>.params.json` (its MCP `inputSchema`) and
+`<op>.response.json` (its envelope, the MCP `outputSchema`), each self-contained with `$defs`.
+Keys are printed sorted, so the bytes do not depend on `serde_json` features. After a deliberate
+change, `OMNIA_BLESS_SCHEMAS=1 cargo test -p omnia-agent ainv11` rewrites the directory; without
+the variable the test only compares. A property test checks that every serialized DTO validates
+against its schema.
 
 ## 10. MCP mapping
 
@@ -395,7 +428,7 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_new` | 0 | not destructive | A1 |
 | `omnia_open {path}` | 0 | read-only | A1 |
 | `omnia_inspect {doc_id, include, area?, cursor?, limit?}` | 0 | read-only, idempotent | A1 |
-| `omnia_query {doc_id, area, mode: envelope \| within \| touching}` | 0 | read-only, idempotent | A1 |
+| `omnia_query {doc_id, area, mode: envelope \| within \| touching, cursor?, limit?}` | 0 | read-only, idempotent | A1 |
 | `omnia_nets {doc_id, at? \| wire?}` | 0 | read-only, idempotent | A1 |
 | `omnia_validate {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |
 | `omnia_preview {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |

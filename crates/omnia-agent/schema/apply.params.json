@@ -1,0 +1,265 @@
+{
+  "$defs": {
+    "DocId": {
+      "description": "A document id, never reused within a session.",
+      "pattern": "^d(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "EditOp": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at": {
+              "$ref": "#/$defs/Point"
+            },
+            "designator": {
+              "type": "string"
+            },
+            "op": {
+              "const": "place_part"
+            },
+            "orient": {
+              "$ref": "#/$defs/Orient"
+            },
+            "symbol": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "symbol",
+            "at",
+            "orient",
+            "designator",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "add_wires"
+            },
+            "wires": {
+              "items": {
+                "items": false,
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/Point"
+                  },
+                  {
+                    "$ref": "#/$defs/Point"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "op",
+            "wires"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at": {
+              "$ref": "#/$defs/Point"
+            },
+            "op": {
+              "const": "add_label"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "at",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "delta": {
+              "$ref": "#/$defs/Point"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ItemRef"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "move"
+            }
+          },
+          "required": [
+            "op",
+            "items",
+            "delta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "by": {
+              "$ref": "#/$defs/Orient"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ItemRef"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "reorient"
+            },
+            "pivot": {
+              "$ref": "#/$defs/Point"
+            }
+          },
+          "required": [
+            "op",
+            "items",
+            "pivot",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ItemRef"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "delete"
+            }
+          },
+          "required": [
+            "op",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "enum": [
+                "designator",
+                "value",
+                "label"
+              ],
+              "type": "string"
+            },
+            "item": {
+              "$ref": "#/$defs/ItemRef"
+            },
+            "op": {
+              "const": "set_text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "item",
+            "field",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ItemRef": {
+      "description": "An item id, 0-based (AQ5).",
+      "pattern": "^(part|wire|label):(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "Orient": {
+      "description": "An orientation (AD12).",
+      "enum": [
+        "identity",
+        "rot_90",
+        "rot_180",
+        "rot_270",
+        "flip_x",
+        "flip_x_rot_90",
+        "flip_y",
+        "flip_x_rot_270"
+      ],
+      "type": "string"
+    },
+    "Point": {
+      "description": "[x, y] in integer nanometres (AK8).",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "PreviewId": {
+      "description": "A 64-bit preview hash (section 11.3); not a security token.",
+      "pattern": "^pv-[0-9a-f]{16}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "doc_id": {
+      "$ref": "#/$defs/DocId"
+    },
+    "expected_revision": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "operations": {
+      "items": {
+        "$ref": "#/$defs/EditOp"
+      },
+      "maxItems": 4096,
+      "minItems": 1,
+      "type": "array"
+    },
+    "preview_id": {
+      "$ref": "#/$defs/PreviewId"
+    }
+  },
+  "required": [
+    "doc_id",
+    "expected_revision",
+    "operations"
+  ],
+  "title": "apply.params",
+  "type": "object"
+}

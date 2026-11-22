@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "Bounds": {
+      "additionalProperties": false,
+      "description": "An axis-aligned rectangle; min <= max on both axes, inside the sheet limits.",
+      "properties": {
+        "max": {
+          "$ref": "#/$defs/Point"
+        },
+        "min": {
+          "$ref": "#/$defs/Point"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "DocId": {
+      "description": "A document id, never reused within a session.",
+      "pattern": "^d(0|[1-9][0-9]*)$",
+      "type": "string"
+    },
+    "Point": {
+      "description": "[x, y] in integer nanometres (AK8).",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "area": {
+      "$ref": "#/$defs/Bounds"
+    },
+    "cursor": {
+      "type": "string"
+    },
+    "doc_id": {
+      "$ref": "#/$defs/DocId"
+    },
+    "limit": {
+      "maximum": 5000,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "mode": {
+      "enum": [
+        "envelope",
+        "within",
+        "touching"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "doc_id",
+    "area",
+    "mode"
+  ],
+  "title": "query.params",
+  "type": "object"
+}

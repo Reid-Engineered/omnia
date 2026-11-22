@@ -1,0 +1,43 @@
+{
+  "$defs": {
+    "ApprovalEcho": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "effect_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "effect_digest"
+      ],
+      "type": "object"
+    },
+    "DocId": {
+      "description": "A document id, never reused within a session.",
+      "pattern": "^d(0|[1-9][0-9]*)$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "approval": {
+      "$ref": "#/$defs/ApprovalEcho"
+    },
+    "doc_id": {
+      "$ref": "#/$defs/DocId"
+    },
+    "path": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "doc_id"
+  ],
+  "title": "save.params",
+  "type": "object"
+}
