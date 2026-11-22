@@ -48,13 +48,13 @@
         "monochrome_sprites": 176033,
         "paths": 0,
         "polychrome_sprites": 0,
-        "quads": 1232510,
+        "quads": 936985,
         "shadows": 0,
         "subpixel_sprites": 0,
         "surfaces": 0,
         "underlines": 0
       },
-      "sweep_total": 1408543
+      "sweep_total": 1113018
     }
   }
 }

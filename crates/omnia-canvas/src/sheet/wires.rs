@@ -43,6 +43,11 @@ impl Segment {
         true
     }
 
+    /// On-screen length of this run in logical pixels (D4, INV8).
+    pub(super) fn length_px(self, camera: &Camera) -> f64 {
+        (i64::from(self.end) - i64::from(self.start)) as f64 * camera.scale()
+    }
+
     pub(super) fn bounds(self, camera: &Camera, sf: f32, width: u32) -> Bounds<Pixels> {
         let point = |along| {
             if self.vertical {
