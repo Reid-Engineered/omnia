@@ -1,0 +1,768 @@
+{
+  "$defs": {
+    "ApplyArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "expected_revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/EditOp"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "type": "array"
+        },
+        "preview_id": {
+          "$ref": "#/$defs/PreviewId"
+        }
+      },
+      "required": [
+        "doc_id",
+        "expected_revision",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "ApprovalEcho": {
+      "additionalProperties": false,
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "effect_digest": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approval_id",
+        "effect_digest"
+      ],
+      "type": "object"
+    },
+    "Bounds": {
+      "additionalProperties": false,
+      "description": "An axis-aligned rectangle inside the sheet limits. The decoder also requires min <= max on both axes (mcp-plan.md section 9.1).",
+      "properties": {
+        "max": {
+          "$ref": "#/$defs/SheetPoint"
+        },
+        "min": {
+          "$ref": "#/$defs/SheetPoint"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "CloseArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalEcho"
+        },
+        "discard_unsaved": {
+          "type": "boolean"
+        },
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        }
+      },
+      "required": [
+        "doc_id"
+      ],
+      "type": "object"
+    },
+    "DocId": {
+      "description": "A document id, never reused within a session.",
+      "pattern": "^d(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+      "type": "string"
+    },
+    "EditArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "expected_revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/EditOp"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "doc_id",
+        "expected_revision",
+        "operations"
+      ],
+      "type": "object"
+    },
+    "EditOp": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at": {
+              "$ref": "#/$defs/Point"
+            },
+            "designator": {
+              "type": "string"
+            },
+            "op": {
+              "const": "place_part"
+            },
+            "orient": {
+              "$ref": "#/$defs/Orient"
+            },
+            "symbol": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "symbol",
+            "at",
+            "orient",
+            "designator",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "add_wires"
+            },
+            "wires": {
+              "items": {
+                "items": false,
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "$ref": "#/$defs/Point"
+                  },
+                  {
+                    "$ref": "#/$defs/Point"
+                  }
+                ],
+                "type": "array"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "op",
+            "wires"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "at": {
+              "$ref": "#/$defs/Point"
+            },
+            "op": {
+              "const": "add_label"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "at",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "delta": {
+              "$ref": "#/$defs/Point"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ItemRef"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "move"
+            }
+          },
+          "required": [
+            "op",
+            "items",
+            "delta"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "by": {
+              "$ref": "#/$defs/Orient"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ItemRef"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "reorient"
+            },
+            "pivot": {
+              "$ref": "#/$defs/Point"
+            }
+          },
+          "required": [
+            "op",
+            "items",
+            "pivot",
+            "by"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "$ref": "#/$defs/ItemRef"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "delete"
+            }
+          },
+          "required": [
+            "op",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "enum": [
+                "designator",
+                "value",
+                "label"
+              ],
+              "type": "string"
+            },
+            "item": {
+              "$ref": "#/$defs/ItemRef"
+            },
+            "op": {
+              "const": "set_text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "item",
+            "field",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InspectArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "area": {
+          "$ref": "#/$defs/Bounds"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "include": {
+          "items": {
+            "enum": [
+              "summary",
+              "items",
+              "nets"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "limit": {
+          "maximum": 5000,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "doc_id",
+        "include"
+      ],
+      "type": "object"
+    },
+    "ItemRef": {
+      "description": "An item id, 0-based (AQ5).",
+      "pattern": "^(part|wire|label):(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-4]|4294967295)$",
+      "type": "string"
+    },
+    "KeyArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "idempotency_key"
+      ],
+      "type": "object"
+    },
+    "NetsArgs": {
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "at",
+          "wire"
+        ]
+      },
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Point"
+        },
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "wire": {
+          "$ref": "#/$defs/WireRef"
+        }
+      },
+      "required": [
+        "doc_id"
+      ],
+      "type": "object"
+    },
+    "NoArgs": {
+      "additionalProperties": false,
+      "properties": {},
+      "type": "object"
+    },
+    "OpenArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "Orient": {
+      "description": "An orientation (AD12).",
+      "enum": [
+        "identity",
+        "rot_90",
+        "rot_180",
+        "rot_270",
+        "flip_x",
+        "flip_x_rot_90",
+        "flip_y",
+        "flip_x_rot_270"
+      ],
+      "type": "string"
+    },
+    "Point": {
+      "description": "[x, y] in integer nanometres (AK8).",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "PreviewId": {
+      "description": "A 64-bit preview hash (section 11.3); not a security token.",
+      "pattern": "^pv-[0-9a-f]{16}$",
+      "type": "string"
+    },
+    "QueryArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "area": {
+          "$ref": "#/$defs/Bounds"
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "limit": {
+          "maximum": 5000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "envelope",
+            "within",
+            "touching"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "area",
+        "mode"
+      ],
+      "type": "object"
+    },
+    "RevArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "expected_revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "doc_id",
+        "expected_revision"
+      ],
+      "type": "object"
+    },
+    "SaveArgs": {
+      "additionalProperties": false,
+      "properties": {
+        "approval": {
+          "$ref": "#/$defs/ApprovalEcho"
+        },
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id"
+      ],
+      "type": "object"
+    },
+    "SheetPoint": {
+      "description": "[x, y] in integer nanometres inside the K1 sheet limits.",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "maximum": 1000000000,
+          "minimum": -1000000000,
+          "type": "integer"
+        },
+        {
+          "maximum": 1000000000,
+          "minimum": -1000000000,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "WireRef": {
+      "description": "A wire id, 0-based (AQ5).",
+      "pattern": "^wire:(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-4]|4294967295)$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "capabilities"
+        },
+        "params": {
+          "$ref": "#/$defs/NoArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "new"
+        },
+        "params": {
+          "$ref": "#/$defs/NoArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "open"
+        },
+        "params": {
+          "$ref": "#/$defs/OpenArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "close"
+        },
+        "params": {
+          "$ref": "#/$defs/CloseArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "inspect"
+        },
+        "params": {
+          "$ref": "#/$defs/InspectArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "query"
+        },
+        "params": {
+          "$ref": "#/$defs/QueryArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "nets"
+        },
+        "params": {
+          "$ref": "#/$defs/NetsArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "validate"
+        },
+        "params": {
+          "$ref": "#/$defs/EditArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "preview"
+        },
+        "params": {
+          "$ref": "#/$defs/EditArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "op": {
+          "const": "apply"
+        },
+        "params": {
+          "$ref": "#/$defs/ApplyArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "op": {
+          "const": "undo"
+        },
+        "params": {
+          "$ref": "#/$defs/RevArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "op": {
+          "const": "redo"
+        },
+        "params": {
+          "$ref": "#/$defs/RevArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "op": {
+          "const": "save"
+        },
+        "params": {
+          "$ref": "#/$defs/SaveArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "const": "request_status"
+        },
+        "params": {
+          "$ref": "#/$defs/KeyArgs"
+        }
+      },
+      "required": [
+        "op",
+        "params"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "request",
+  "type": "object"
+}

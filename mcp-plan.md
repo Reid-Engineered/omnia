@@ -71,7 +71,7 @@ Checked at `f4fd588`.
 | Fresh ids are allocated deterministically: arena append, geometry order for splits (D2) | `arena.rs`, `route.rs` | A full copy of a document allocates the same ids as the original. |
 | `Change.dirty` covers the old and new bounds of every touched item | `command.rs` (`Change` docs), `tests/change_contract.rs` | A diff can be computed exactly by querying `dirty` before and after. |
 | `Doc` derives only `Debug` and `Default`: no `Clone`, no fork, no `DocSnapshot` | `doc.rs` | Missing prerequisite for preview and for D8 background jobs: task A1.1. |
-| The code's `Command` has `Move { items, delta }` and `Delete(Vec<ItemId>)`; no `follow`, `with_wires`, `DragSegment` or `Paste` | `command.rs` | The canvas plan section 9 sketch is ahead of the code. Schema v1 follows the code; fields are added as W2.2, W3.2, W3.5 and T7.1 merge. |
+| The code's `Command` has `Move { items, delta }` and `Delete(Vec<ItemId>)`; no `follow`, `with_wires`, `DragSegment` or `Paste` | `command.rs` | The canvas plan section 9 sketch is ahead of the code. Schema v1 follows the code; fields are added as W2.2, W3.2, W3.5 and T7.1 merge. Updated at A1.3 (2026-11-21): `follow`, `with_wires` and `DragSegment` are now in the code; schema v1 still has exactly the section 9.2 operations, `invert_follow` and `with_wires` arrive with A2.2 and A2.3, and no task yet exposes `DragSegment`. |
 | No public type derives serde; only the private RON records in `io.rs` do | `io.rs` | The wire schema is a separate DTO layer. Internal types do not become a public contract. |
 | `PlacePart` needs the caller's `local_pins` and `local_bounds` | `command.rs` | A shared helper in `omnia-symbols` builds it from a symbol (A1.2). |
 | `render_to_image` exists on Windows only (G12) | AGENTS.md | Visual checks for agents use an SVG render, not a GPU screenshot (A2.4). |
@@ -312,6 +312,63 @@ On failure `result` is replaced by `error` (9.4). Requests through `omnia call` 
 serve` are `{"op": "<operation>", "params": { }, "idempotency_key": "..."}`; JSON-lines adds
 an `"id"` that the response echoes. All objects reject unknown fields.
 
+Decoding rules, fixed at A1.3 (2026-11-21; amended by its three review rounds the same day):
+
+- Two wire forms, one meaning. The envelope above is what `omnia call` and `omnia serve` read;
+  `params` is always present (`{}` for `capabilities` and `new`). Over MCP a tool's
+  `arguments` are the params object itself, with `idempotency_key` beside the params fields on
+  the operations section 11.2 names (schema `<op>.arguments`). Both decode to the same request.
+  `idempotency_key` anywhere else is a `schema_violation`.
+- Order of checks, the same for both forms: raw input over AK2 is `limit_exceeded`; malformed
+  JSON, a duplicate object key, or a number that is not a 64-bit integer written without
+  fraction or exponent is `invalid_request` (`-0` is read as `0`); in the envelope, a missing
+  `op` or `params` or a non-string `op` is `schema_violation`; an operation the catalog does
+  not list is `unknown_operation`; over AK3 or AK4 is `limit_exceeded`; an `idempotency_key`
+  on an operation that takes none is `schema_violation` at `/idempotency_key` ("unknown
+  field"), also on `request_status`, whose own params field of that name an envelope key never
+  fills; then the params, with any `idempotency_key` placed beside the params fields, are
+  validated against `<op>.arguments` and any mismatch is `schema_violation {path}`; then the
+  DTOs are decoded; last, AK2 on the canonical forms (below). In the envelope, an unknown field,
+  and an `idempotency_key` written inside the params of an operation whose params have no such
+  field (`/params/idempotency_key`), are ordered among the params fields by name; a fault on the
+  params object itself comes first, and the envelope's field wins a tie.
+- AK2 bounds the raw input and both canonical forms. A request is accepted, by either decoder
+  or by `Request::new`, only if `Request::to_json` and `Request::to_arguments` are both at most
+  8 MiB, so whatever is accepted or built can be sent in either form. The value reported is the
+  larger form's size; the envelope is always the larger. MCP arguments whose canonical
+  encoding is exactly 8 MiB are therefore refused, because the envelope they imply is longer;
+  raw input padded with whitespace to 8 MiB is still accepted when both canonical forms fit.
+- A refusal of well-formed JSON (a duplicate key, a number's spelling) has no position in its
+  message, so both forms report it alike. Malformed JSON keeps the parser's line and column,
+  which refer to the raw input.
+- The two forms give the same error code, details and message for the same fault; the JSON
+  Pointer differs only by the envelope's `/params`. Messages do not repeat the path. A
+  property test decodes mutated inputs through both forms and compares the errors.
+- The decoder refuses everything the published schema refuses (nulls for optional fields,
+  arrays in place of objects, out-of-range ids and numbers). Beyond the schema it checks only:
+  the request size, duplicate keys, the integer spelling of numbers, and that bounds have
+  `min <= max` on both axes. Property tests mutate valid requests and responses and check
+  that the decoder and the published schema agree on every result but these.
+- `path` is a JSON Pointer to the first failure, found by visiting object keys in byte order;
+  when no alternative of a union matches, the failure with the most pointer segments is
+  reported, the first on a tie. The same request with its keys in another order gets the same
+  error bytes (AINV5).
+- What the API can build, it can read back. `Request`, `Response` and the stored response of
+  `request_status` have private fields and checked constructors (`Request::new`,
+  `Response::new`, `StoredResponse::new`), and `Bounds` holds only a valid rectangle, so every
+  value serializes to a document its own decoder accepts. Property tests build values from
+  parts that may break the rules and check that whatever is accepted decodes back to itself.
+- A successful response whose result belongs to a document (`new`, `open`, `close`,
+  `inspect`, `query`, `nets`, `validate`, `preview`, `apply`, `undo`, `redo`, `save`) carries
+  `doc_id` and `revision`, which a client needs for AD4; the schema requires them and
+  `Response::new` refuses a result without them. Audited at the same time: no other result has
+  a field a client must have that the schema leaves optional (`path` is absent for a new
+  document, `next_cursor` on the last page, `dirty` for a no-op, and `inspect` returns only
+  what `include` names).
+- An absent optional field is omitted from responses, never `null`. Document ids are `d<n>` and
+  job ids `j<n>`, in the canonical decimal of AD12's item ids; ids fit `u32` (items) or `u64`
+  (documents, jobs).
+
 ### 9.2 Edit operations
 
 | Operation | Params | `Command` |
@@ -350,6 +407,11 @@ an `"id"` that the response echoes. All objects reject unknown fields.
 `apply` returns the same shape without `preview_id` and `base_revision`. The diff is paged by
 AK4; `truncated` says so.
 
+As built at A1.3: `before` and `after` of a modified item carry all of its fields (a part's
+`symbol`, `at`, `orient`, `designator` and `value`; a wire's `a` and `b`; a label's `at` and
+`text`); the example above abbreviates them. `change.dirty` is omitted for a validated no-op.
+`validate` returns `{base_revision, change}`; `undo` and `redo` return `{change}`.
+
 ### 9.4 Errors
 
 ```json
@@ -369,12 +431,24 @@ AK4; `truncated` says so.
 | --- | --- |
 | Protocol and schema | `invalid_request`, `schema_violation {path}`, `unknown_operation`, `limit_exceeded {limit, value}`, `unsupported_in_mode`, `protocol_version_unsupported` |
 | Resolution | `document_not_found`, `unknown_symbol`, `unknown_item` |
-| From `CommandError` | `out_of_bounds`, `invalid_wire`, `missing_item`, `duplicate_item`, `invalid_text_field`; later `follow_no_route {from, to, blocker}`, `segment_blocked {blocker}` |
-| Concurrency | `stale_revision {expected, actual}`, `preview_mismatch`, `idempotency_conflict`, `user_gesture_in_progress`, `nothing_to_undo` |
+| From `CommandError` | `out_of_bounds`, `invalid_wire`, `missing_item {item}`, `duplicate_item {item}`, `invalid_text_field {item, field}`, `follow_no_route {from, to, blocker}` (`Follow`), `segment_blocked {blocker}` (`Segment`), `wire_capture {wire, blocker}` (`Capture`), `off_lattice {at}` (`OffLattice`) |
+| Concurrency | `stale_revision {expected, actual}`, `preview_mismatch`, `idempotency_conflict`, `user_gesture_in_progress`, `nothing_to_undo`, `nothing_to_redo` |
 | Approval | `approval_required {approval_id, tier, effect, effect_digest}`, `approval_denied` |
 | Files | `path_outside_root`, `file_exists`, `io_error`, `unsupported_file_version` |
 | Jobs | `cancelled`, `job_not_found` |
 | Other | `internal` |
+
+Amended at A1.3 (2026-11-21), so the plan follows the code. The wiring tasks had already added
+`Segment`, `Follow`, `Capture` and `OffLattice` to `CommandError`, so all of them have codes
+now and AINV10's exhaustive mapping covers them; `Capture` and `OffLattice` gained the new codes
+`wire_capture` and `off_lattice`. The three item codes carry the ids `CommandError` already
+holds. `nothing_to_redo` is added for `omnia_redo`. `limit` is one of `request_bytes`,
+`file_bytes`, `operations`, `page_size`, `open_documents`; `effect` one of `edit`,
+`write_file`, `overwrite_file`, `discard_unsaved`. A `blocker` is
+`{"kind": "pin", "part", "pin"}`, `{"kind": "wire_end" | "wire_body" | "overlap", "wire"}` or
+`{"kind": "sheet"}`. Codes without details carry `"details": {}`. `retryable` is fixed per code:
+true for `stale_revision`, `user_gesture_in_progress`, `approval_required` and `io_error`. The
+schema pins it per code and the decoder refuses an error whose flag contradicts its code.
 
 ### 9.5 Schema files
 
@@ -382,6 +456,23 @@ JSON Schemas for every request, response and operation are generated by a hand-w
 in `omnia-agent` and committed under `crates/omnia-agent/schema/`. A test regenerates them and
 fails on any difference (AINV11), the way `cargo xtask tokens` is checked. No schema crate is
 added (AQ3).
+
+As built at A1.3: dialect JSON Schema 2020-12; files `request.json` and `response.json` cover
+every available operation, and each available operation has `<op>.params.json` (its `params`
+in the envelope), `<op>.arguments.json` (its MCP `inputSchema`: the params plus
+`idempotency_key` where 11.2 allows it) and `<op>.response.json` (its envelope, the MCP
+`outputSchema`), each self-contained with `$defs`. Operations the catalog does not list yet
+(the A3 job tools) have no committed files. Keys are printed sorted, so the bytes do not depend
+on `serde_json` features. The schemas state the ranges the codecs hold: id patterns spell
+exactly `0..=4294967295` (items) or `0..=18446744073709551615` (documents, jobs), every 64-bit
+integer has its maximum, and bounds corners lie inside K1. The decoders validate against these
+same schemas with a hand-written validator for the keywords the module emits (section 9.1). It
+compares integers exactly, also beyond 64 bits. `response.json` ties each result to its
+envelope: a document's result requires `doc_id` and `revision` there too. Every envelope schema
+forbids `result` and `error` together on its own (`not`), whatever its branches require.
+After a deliberate change, `OMNIA_BLESS_SCHEMAS=1 cargo test -p omnia-agent ainv11` rewrites
+the directory; without the variable the test only compares. Property tests check that every
+serialized DTO validates against its published schema text, with no codec in the check.
 
 ## 10. MCP mapping
 
@@ -395,7 +486,7 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_new` | 0 | not destructive | A1 |
 | `omnia_open {path}` | 0 | read-only | A1 |
 | `omnia_inspect {doc_id, include, area?, cursor?, limit?}` | 0 | read-only, idempotent | A1 |
-| `omnia_query {doc_id, area, mode: envelope \| within \| touching}` | 0 | read-only, idempotent | A1 |
+| `omnia_query {doc_id, area, mode: envelope \| within \| touching, cursor?, limit?}` | 0 | read-only, idempotent | A1 |
 | `omnia_nets {doc_id, at? \| wire?}` | 0 | read-only, idempotent | A1 |
 | `omnia_validate {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |
 | `omnia_preview {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |
@@ -406,10 +497,18 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_request_status {idempotency_key}` | 0 | read-only | A1 |
 | `omnia_route`, `omnia_snap`, `omnia_hit` | 0 | read-only, idempotent | A2 |
 | `omnia_render_svg {doc_id, area?, theme}` | 0 | read-only, idempotent | A2 |
-| `omnia_job_status`, `omnia_job_cancel` | 0 | — | A3 |
+| `omnia_job_status`, `omnia_job_cancel` | 0 | — | A3; not listed before A3.1 |
 
 Every tool declares an `inputSchema` and an `outputSchema`. A result carries
 `structuredContent` (the 9.1 envelope) and a text block with the same JSON.
+
+A tool's arguments are its operation's params, plus `idempotency_key` for `omnia_apply`,
+`omnia_undo`, `omnia_redo` and `omnia_save` (11.2); the `inputSchema` is `<op>.arguments` and
+the adapter decodes it with `Request::from_arguments`, which gives the same request as the
+envelope. `tools/list` is built from the catalog, and the catalog lists only operations whose
+milestone is delivered (`OpSpec::available`): an operation that is defined but not available
+keeps its DTOs, is refused as `unknown_operation`, and has no committed schema. The job tools
+are unavailable until A3.1 turns them on.
 
 Tool failures are results with `isError: true` and the structured error, so the model can read
 and correct them. Only malformed JSON-RPC messages and unknown tool names are JSON-RPC protocol
@@ -508,12 +607,16 @@ only the storage lifetime of those handles (11.1): they expire when it exits.
 
 ### 11.2 Idempotency
 
-- `idempotency_key` is optional on apply, undo, redo and save.
+- `idempotency_key` is optional on apply, undo, redo and save, and refused on every other
+  operation. In the envelope it sits beside `op` and `params`; in MCP tool arguments it sits
+  beside the params fields (9.1). `request_status` takes the key as its only param.
 - The session caches key, canonical request hash and full response for AK5 entries.
 - The same key with the same request returns the stored bytes and applies nothing (AINV7). The
   same key with another request is refused with `idempotency_conflict`.
-- After a lost reply, `omnia_request_status(key)` answers `not_run`, `applied {revision,
-  response}` or `failed {error}`.
+- After a lost reply, `omnia_request_status(key)` answers `not_run`, `applied {op, revision,
+  response}` or `failed {error}`. `op` names the stored request's operation, one of apply,
+  undo, redo and save, and `response` is a successful response of that operation; a request
+  that failed is reported as `failed`. Schema and decoder both refuse any other combination.
 - `expected_revision` alone already makes a blind retry safe: it is refused as stale and never
   applies twice.
 
@@ -661,14 +764,38 @@ pub trait DocHost {                       // headless store in A1; Entity<Doc> a
 
 pub struct CallContext<'a> { pub cancel: &'a CancelToken, pub progress: &'a mut dyn ProgressSink }
 
-pub struct Request { pub op: Operation, pub idempotency_key: Option<String> }
+pub struct Request { /* private: built only by decoding (9.1) */ }
+impl Request {
+    pub fn new(op: Operation, idempotency_key: Option<String>) -> Result<Request, AgentError>;
+    pub fn from_slice(bytes: &[u8]) -> Result<Request, AgentError>;            // envelope
+    pub fn from_arguments(op: OpName, bytes: &[u8]) -> Result<Request, AgentError>; // MCP
+    pub fn op(&self) -> &Operation;
+    pub fn idempotency_key(&self) -> Option<&str>;
+    pub fn to_json(&self) -> String;
+    pub fn to_arguments(&self) -> String;
+}
 pub enum Operation { Capabilities, New, Open(OpenArgs), Close(CloseArgs), Inspect(InspectArgs),
                      Query(QueryArgs), Nets(NetsArgs), Validate(EditArgs), Preview(EditArgs),
                      Apply(ApplyArgs), Undo(RevArgs), Redo(RevArgs), Save(SaveArgs),
                      RequestStatus(KeyArgs), JobStatus(JobArgs), JobCancel(JobArgs) }
-pub struct Response { pub schema: &'static str, pub doc_id: Option<DocId>,
-                      pub revision: Option<u64>, pub outcome: Result<Output, AgentError>,
-                      pub warnings: Vec<Warning> }
+pub struct Response { /* private: schema, doc_id, revision, outcome, warnings */ }
+impl Response {
+    pub fn new(doc_id: Option<DocId>, revision: Option<u64>,
+               outcome: Result<Output, AgentError>) -> Result<Response, InvalidResponse>;
+    pub fn with_warnings(self, warnings: Vec<Warning>) -> Response;
+    pub fn from_slice(op: OpName, bytes: &[u8]) -> Result<Response, serde_json::Error>;
+    pub fn schema(&self) -> &'static str;
+    pub fn doc_id(&self) -> Option<DocId>;
+    pub fn revision(&self) -> Option<u64>;
+    pub fn outcome(&self) -> &Result<Output, AgentError>;
+    pub fn warnings(&self) -> &[Warning];
+    pub fn to_json(&self) -> String;
+}
+pub enum RequestStatus { NotRun, Applied(StoredResponse), Failed { error: AgentError } }
+impl StoredResponse {                     // a success of a keyed operation, checked
+    pub fn new(op: OpName, revision: u64, response: Response)
+        -> Result<StoredResponse, InvalidResponse>;
+}
 ```
 
 Files:

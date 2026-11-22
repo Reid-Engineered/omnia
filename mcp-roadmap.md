@@ -133,7 +133,7 @@ own in turn.
 - Done when: for every built-in symbol under all 8 orientations, applying the command gives the
   world pins `Doc::pins` reports, equal to the `SymbolDef` pins transformed by `Orient::apply`.
 
-### A1.3 Agent crate, schema, errors, catalog · todo
+### A1.3 Agent crate, schema, errors, catalog · done
 - Lane: agent · Depends: A0.2 · Read: mcp-plan.md sections 4, 6, 9 and 14; AINV8, AINV10, AINV11
 - Owns: `crates/omnia-agent/` (`Cargo.toml`, `src/lib.rs`, `src/schema/`, `src/error.rs`,
   `src/catalog.rs`, `schema/`); the crate-list line of the INV12 test in `xtask/src/main.rs`
@@ -394,3 +394,99 @@ entry's per-era mapping of jobs onto 2025-11-25 Tasks. mcp-plan.md section 11.5 
 directly, without the conditional rule. Section 10.4 scopes progress and cancellation to the
 in-flight request, and A3.2 asserts AQ15 for each pinned revision. Independent review by a
 model other than the author. Docs only.
+
+2026-11-21 A1.3 done — new crate `crates/omnia-agent` (deps `omnia-doc`, `serde`, `serde_json`;
+dev `proptest`; all already in Cargo.lock and canvas plan section 10, so no licence to log).
+`lib.rs` holds `SCHEMA` (AK7) and the AK1 to AK6 constants. `schema/` has the codecs (`part:3`,
+`wire:7`, `label:2`, `d1`, `j1`, `pv-` plus 16 hex digits, points `[x, y]`, bounds
+`{min, max}`, the AD12 orientation names), the strict request decoder, the operation union and
+its params, the section 9.2 edit operations, every result DTO, and the hand-written JSON Schema
+module. `error.rs` has 33 codes with typed details; `command_error_kind` maps `CommandError`
+with no wildcard arm. `catalog.rs` is the dispatch table: `OpName::ALL` and `EditOpName::ALL`
+come from the same macro list as their enums, and `spec` gives each operation its tool name,
+tiers, annotations and schema names by exhaustive match. 34 committed schema files under
+`crates/omnia-agent/schema/`. Tests: AINV10 (one sample per `CommandError`, `FollowError` and
+`Blocker` variant, distinct codes); AINV11 (committed files equal generated, generation is
+deterministic and canonical, the catalog equals `OpName::ALL`, the decoder dispatches every
+catalog operation, every catalog schema name exists); property tests round-trip every request,
+response and error through JSON, validate each against its schema with a small test-only
+validator that refuses any keyword it does not implement, and re-parse with object keys
+reversed (AINV5's key-order clause); negative tests for unknown fields at each level, malformed
+JSON, floats, duplicate keys and the AK2 to AK4 limits. AINV8: the INV12 test's crate list now
+includes `omnia-agent`. Deviations, all written into mcp-plan.md: section 9.4 gains
+`wire_capture` and `off_lattice` (the wiring tasks added `CommandError::Capture` and
+`OffLattice` after the plan), makes `follow_no_route` and `segment_blocked` current, gives the
+item codes their ids, and adds `nothing_to_redo`; 9.1 records the decoding rules; 9.3 records
+that `modified` carries full item fields and the `validate`, `undo` and `redo` result shapes;
+9.5 the file names and the bless command; 10.1 adds `cursor?` and `limit?` to `omnia_query`
+(AK4 paging); section 2's `Command` row is updated. Choices the plan leaves open, for A1.4 and
+A1.5 to build on or amend in mcp-plan.md: `inspect` `include` is `summary`, `items` or `nets`;
+the summary is counts of parts, wires and labels; nets are keyed by `{"kind": "pin" | "wire" |
+"label", ..}`; `job_status` and `job_cancel` are in the catalog now because section 14's
+`Operation` lists them (until A3 the service can answer `job_not_found`), with no annotation set
+since 10.1 gives none. Known looseness: the decoder accepts `null` for an optional field, which
+the schemas leave out. For A1.7: the INV12 crate-list line must gain `omnia-cli` when that crate
+exists (the line is A1.3's, so A1.7 needs it in its **Owns**), and JSON-lines' `"id"` must be
+stripped before `Request::from_slice`, which rejects unknown envelope fields. No GUI dependency;
+nothing measured.
+
+2026-11-21 A1.3 done (review fixes) — independent review (a model other than the author)
+requested changes; findings 1 to 7 fixed on the same branch, all written into mcp-plan.md
+sections 9.1, 9.4, 9.5, 10.1 and 11.2. (1) MCP tool arguments are the params with
+`idempotency_key` beside them on apply, undo, redo and save: new committed `<op>.arguments`
+schemas are the `inputSchema`, `Request::from_arguments` and `to_arguments` decode and write
+them, and both forms give the same request (ATC-edit-03); the envelope is unchanged. (2, 3) The
+decoders now validate against the published schema before typed decoding, through a new
+`schema/validate.rs`: a validator for exactly the emitted keywords and a small matcher for the
+emitted pattern subset, with no codec shortcut. So nulls for optional fields, positional arrays
+and `"error": null` are refused. Error paths are JSON Pointers found in byte order of keys,
+with the deepest failing alternative, so error bytes do not depend on `preserve_order`. Only
+the request size, duplicate keys, integer spelling and bounds corner ordering are
+decoder-only. Property tests mutate valid requests (both forms) and responses and check that
+the decoder agrees with the published schema text, and that reversed key order gives the same
+error bytes. (4) `request_status` `applied {op, revision, response}`: `op` is one of the four
+keyed operations, and `response` is a success of that operation, in the schema (per-op
+success definitions) and in the decoder; the strategies can only generate such pairs.
+(5) Schemas encode the representable ranges: exact decimal patterns up to `u32::MAX` and
+`u64::MAX`, a maximum on every `u64`, and K1 bounds corners. (6) `AgentError` no longer stores
+`retryable`; the wire flag comes from the code, the schema pins it per code, and the decoder
+refuses a contradiction. (7) `OpSpec::available`: `job_status` and `job_cancel` keep their DTOs
+but are not listed, not dispatched (`unknown_operation`) and have no committed schema until
+A3.1 sets them available; A1.8's `tools/list` builds on the catalog. 44 committed schema files.
+For A1.7, in addition to the entry above: when it lifts the JSON-lines `"id"` off a line, it
+must keep duplicate-key detection, so it parses the line with `parse_strict` and passes the
+rest to `Request::from_envelope_value`, never round-tripping through a plain JSON value first.
+Checks rerun locally; no dependency added; nothing measured.
+Second review round (a fresh independent review at 78db15f confirmed fixes 1 to 7 and found six
+more; all fixed and written into mcp-plan.md sections 9.1 and 9.5). (1) A document's success
+(`new`, `open` and the other document operations) now requires `doc_id` and `revision` in its
+schema, in `response.json` and in `Response::new`; an audit found no other result missing a
+field a client needs. (2) `Request`, `Response` and the new `StoredResponse` have private fields
+and checked constructors, and `Bounds` holds only valid rectangles, so the API cannot build a
+value its decoder refuses (for example an `applied` status tagged `undo` around a `save`
+response). Property tests build values from rule-breaking parts and check that whatever is
+accepted decodes back to itself. (3) Both request forms run one order of checks (limits before
+the schema; the envelope's `idempotency_key` and unknown fields ordered among the params fields
+by name), and a property test compares the two forms' errors on mutated inputs. (4) `-0` is
+read as `0`; a lexical scan still refuses fractions and exponents. (5) The validator compares
+integers exactly, also beyond 64 bits. (6) Union failures are ranked by pointer segment count,
+then first. 44 schema files re-blessed. Checks rerun locally.
+Third review round (a third independent review at f2277b1 confirmed round two and found two
+blockers and three minor points; all fixed, written into mcp-plan.md sections 9.1, 9.5 and 14).
+(1) AK2 now bounds the raw input and both canonical forms: either decoder and `Request::new`
+accept a request only if `to_json` and `to_arguments` are both at most 8 MiB, so an accepted or
+built request can be sent in either form. MCP arguments whose canonical encoding is exactly 8 MiB
+are refused, since the envelope they imply is longer (raw input padded to 8 MiB passes when both
+canonical forms fit). Boundary tests sit at exactly the limit and one byte over, for
+both forms. (2) Every per-operation envelope schema forbids `result` and `error` together on its
+own, apart from the document-handle rule; a differential property test grafts errors, results
+and removed handles onto valid responses and checks every per-operation schema against
+`Response::from_slice` (and `response.json`). Minor: duplicate-key and number refusals carry no
+position, so both forms report them alike, while malformed JSON keeps the raw input's line and
+column. A key on an operation that takes none is refused right after the limits in both forms,
+so `request_status` with a misplaced outer key gets the MCP form's `/idempotency_key` refusal,
+and a key written inside a keyed operation's params is `/params/idempotency_key`. Section 14's
+sketch shows the constructors and accessors. Ownership: `crates/omnia-agent/proptest-regressions/`
+is outside the subpaths A1.3's **Owns** line lists; it is read as included, since it sits inside
+the owned crate and `omnia-doc` commits its regression seeds the same way (the line itself is
+unchanged). The branch is updated from `main` (T2.9, #86). Checks rerun locally.
