@@ -401,7 +401,7 @@ of the `canvas` lane.
 
 ## Milestone 3: text and goldens
 
-### T3.1 Labels · todo
+### T3.1 Labels · done
 - Lane: canvas · Depends: T2.7 · Read: D6, K8, K9, K11, G14, G15
 - Owns: `crates/omnia-canvas/src/sheet/text.rs`
 - Do: designators, values, net labels and pin numbers. One cached `ShapedLine` per label
@@ -1716,3 +1716,37 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        replays byte-identically (exit 0). T2.9 remains planned for balanced/
                        powersave laptop headroom and to remove the B4 known limit.
                        Evidence: docs/measurements/T2.7-wire/orion-2026-11-20-performance/.
+2026-11-21 T3.1 done — Added cached horizontal schematic labels (`crates/omnia-canvas/src/sheet/text.rs`)
+                       for part designators and values (K8/Q3: Inter SemiBold 17 px, `stage/ink`, 22 px
+                       stacked step), net labels (Inter Medium 13 px, `stage/ink-secondary`), and pin
+                       numbers on multi-pin symbols (Inter Medium 13 px, `stage/ink-secondary`). One
+                       cached `ShapedLine` per label and K11 0.5 px size bucket (capped at 128 px per
+                       plan section 11; K11 updated in `canvas-plan.md` per rule 12), reshaped only
+                       when bucket, text, or scale factor changes, with pin numbers shared per
+                       `(symbol, pin)` across parts. Enforced K9 LOD hiding (< 6.5 px text floor;
+                       pin numbers also hidden when K9 hides junction dots < 2.5 px) and K9's 700-label
+                       per-frame cap (smallest hidden first deterministically via bounded in-place
+                       selection, ties broken by kind, world `(y, x)`, id and pin index). Direct glyph
+                       emission via `Window::paint_glyph` / `paint_emoji` in one `paint_layer` with
+                       device-pixel origin snapping (D4, D6, G14, G15, S5). Wired into `sheet.rs`
+                       reusing `Doc::query` slices (zero re-query) and added `sheet/text.rs` to the
+                       INV7 source check; no colour literals (INV6) and no `#[allow]` added.
+                       Verification (Windows 11 dev machine — Intel Core i7-14650HX, NVIDIA RTX 5060
+                       Laptop GPU + Intel UHD Graphics; non-certifying per Q4 / Hard Rule 3):
+                       `sheet_text_alloc` reports 0 Omnia allocations per frame once warm across 120
+                       fixed-zoom pan frames and 60 zoom-sweep frames on the 1,000-part `text` stress
+                       sheet (B10); `sheet_text_render` verifies rendering at 1.0/1.25/1.5, K9 LOD
+                       hiding (0.45x / 0.35x), K9 700-label cap, fractional-pan tile stability, and
+                       exact glyph-atlas stability across two full K4 zoom sweeps (pass 1 = 14 pages /
+                       24,362,993 B / 335 tiles; pass 2 = 14 pages / 24,362,993 B / 335 tiles).
+                       Headless bench gate (`bench.yml` cases `1k-pan`, `1k-zoom`, `10k-pan`,
+                       `10k-zoom`): `allocs_per_frame.ours.max == 0` and all 24 metrics within 10%
+                       (+0 to +2 `paint_operations` for the single text layer). Deviations outside
+                       T3.1 Owns: minimal wiring in `crates/omnia-canvas/src/sheet.rs`, dev-dep
+                       `gpui/bench-support` (already in `Cargo.lock`, zero new crates) and test entry
+                       in `crates/omnia-canvas/Cargo.toml`, K11 128 px cap note in `canvas-plan.md`,
+                       bundled Inter font registration in `tests/golden/tests/sheet.rs`, and
+                       regenerated `tests/golden/inverting-amp-{graphite,gray}-{100,125,150}.png`
+                       goldens (as flagged in T3.2's log). Note for T3.4: `omnia-bench/src/harness.rs`
+                       currently registers Inter only for S5 spike runs, not `Sheet::Stress(_)` runs;
+                       register bundled Inter Medium and SemiBold there before gating `text` on Orion.
