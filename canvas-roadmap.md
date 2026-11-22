@@ -363,7 +363,7 @@ of the `canvas` lane.
   | --- | --- | --- |
   | B2 | `bench start --sheet 1k` minus `bench start` | < 300 ms |
   | B3, B5 | `bench run --sheet 1k --script pan` and `zoom` | p99 < 16.7 ms, 0 missed refreshes (no present interval > 1.5 refreshes, compositor-side ones excluded per plan 2.1), max ≤ 33.3 ms |
-  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes (compositor-side ones excluded per plan 2.1; 10k zoom far-zoom intervals reported as the known limit until T2.9), max ≤ 50 ms |
+  | B4, B5 | `bench run --sheet 10k --script pan` and `zoom` | p99 < 33.3 ms, no present interval > 2.5 refreshes (compositor-side ones excluded per plan 2.1), max ≤ 50 ms |
   | B9 | `memory_mb` in the `10k` run | < 300 |
   | B10 | all reports | `allocs_per_frame.ours == 0` |
 
@@ -371,7 +371,7 @@ of the `canvas` lane.
   record and set `needs-human`. If B4 misses, apply the "fails at 70k" row of the outcome
   table before reporting.
 
-### T2.9 Far-zoom wire stubs · todo
+### T2.9 Far-zoom wire stubs · needs-human
 - Lane: canvas · Depends: T2.7 · Read: D4, D5, K9, plan 2.1 "B4 known limit",
   `docs/measurements/T2.7-wire.md`, G3, G12
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `crates/omnia-canvas/src/sheet/lod.rs`,
@@ -1716,3 +1716,34 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        replays byte-identically (exit 0). T2.9 remains planned for balanced/
                        powersave laptop headroom and to remove the B4 known limit.
                        Evidence: docs/measurements/T2.7-wire/orion-2026-11-20-performance/.
+2026-11-21 T2.9 needs-human — D4, D5, K9. Added `lod::MIN_WIRE_RUN_PX = 2.5` and
+                       `lod::wire_run(length_px) -> bool` (hidden below 2.5 logical px, drawn at
+                       or above) in `crates/omnia-canvas/src/sheet/lod.rs`, `Segment::length_px`
+                       in `wires.rs` (i64 subtraction before f64 scaling, INV8), and per-frame
+                       zero-allocation filtering of merged runs in the far-zoom branch of
+                       `DocumentCache::draw` in `sheet.rs` (`MergedSegments` cache, near-zoom
+                       path, junctions, boxes and sprite layer unchanged). Added unit tests
+                       covering the K9 boundary, below/at/above threshold runs, near-zoom
+                       invariance, long wires composed of short collinear segments across
+                       junctions, and zero allocations across far-zoom camera changes. Removed
+                       the B4 known limit from `canvas-plan.md` (§2.1, B4 row, K9, D4) and
+                       `canvas-roadmap.md` (T2.7 table), and froze a clean Orion gate script
+                       `docs/measurements/T2.9/gate.py` without `far_zoom`/`scope_known_limit`
+                       (preserving `docs/measurements/T2.7-wire/gate.py` for archived T2.7
+                       replay). Updated `bench-baseline/1k-zoom.json` and
+                       `bench-baseline/10k-zoom.json` to tighten CI deterministic baselines
+                       (`10k-zoom` peak quads 28,279 -> 8,325, −70.6%; sweep quads −54.8%;
+                       `1k-zoom` sweep quads −24.0%; pan baselines byte-identical; all 4 cases
+                       pass `bench compare` against `main`). Non-reference Windows measurements
+                       (i7-14650HX, Intel UHD Graphics, Windows 11, 1920x1200 @ 165 Hz, 125%
+                       scaling, AC, Silent; certifies no budget): `--features scene-counts` on
+                       10k zoom at frames 376/420/461/500/545 gives quads before -> after at
+                       1920x1080 (s100): 2944->2944, 16070->1214, 28279->8325, 16791->1273,
+                       3072->3072; at 1536x864 (s125): 1951->1951, 12906->978, 28279->8325,
+                       13379->1011, 1985->1985 (sprites unchanged on every frame); full
+                       600-warmup + 600-frame 10k zoom runs report `allocs_per_frame.ours == 0`
+                       (B10) at both viewports. Standard checks (fmt, workspace clippy,
+                       feature-enabled bench clippy, workspace tests, Windows goldens unchanged,
+                       cargo deny) pass locally. Awaiting the full Orion gate run via
+                       `docs/measurements/T2.9/gate.py` at 100% and 125%.
+                       Evidence: docs/measurements/T2.9.md.
