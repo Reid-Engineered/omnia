@@ -1997,15 +1997,16 @@ mod tests {
             unreachable!()
         };
 
-        // 2. Place a vertical resistor (RightCenter label overhanging rightward, `or > ol`) just
-        //    off the left edge of the panned viewport so its body is outside `camera.visible()`
-        //    while its right-hand designator/value still extend into the viewport.
+        // 2. Place a vertical resistor (RightCenter label overhanging rightward, `or > ol`) far
+        //    enough off the left edge of the panned viewport that its indexed bounds miss both
+        //    `camera.visible()` AND any unmirrored `ol + extra_nm` padding, while its long
+        //    right-hand designator still extends into the viewport.
         let mut camera = Camera::new(Pt::ZERO, 1.0, bounds);
         // Pan right by 2*20 + 12 = 52 logical px so `label_anchor` sits at screen x = -12 px
         // (`left_x = -10 px`: `"I"` is ~4–8 px wide -> offscreen; `"WW"` is ~20 px wide -> visible).
         camera.pan_by(point(-52.0, 0.0));
         let view = camera.visible();
-        let edge_part_x = view.min.x - 3 * GRID_NM;
+        let edge_part_x = view.min.x - 5 * GRID_NM;
         let part_add = doc
             .apply(Command::PlacePart {
                 part: Part {
@@ -2015,7 +2016,7 @@ mod tests {
                         y: 4 * GRID_NM,
                     },
                     orient: Orient::ROT_90,
-                    designator: "REDGE1".into(),
+                    designator: "REDGE_LONG_LABEL".into(),
                     value: "100kOhm".into(),
                 },
                 local_pins: resistor.pins.iter().map(|p| p.at).collect(),
@@ -2083,6 +2084,14 @@ mod tests {
             // Frame 2 at panned camera: `"I"` is discovered by expanded query (still cached) and
             // culled as off-screen; off-left part's rightward-overhanging labels ARE visible!
             let area = cache.expanded_query_area(&camera, buckets).unwrap();
+            let left_expansion = view.min.x - area.min.x;
+            let right_expansion = area.max.x - view.max.x;
+            assert!(
+                left_expansion >= cache.max_part_overhang_nm.1
+                    && left_expansion > right_expansion,
+                "rightward part overhang must expand min.x (left={left_expansion}, right={right_expansion}, overhang={:?})",
+                cache.max_part_overhang_nm
+            );
             doc.query(area, &mut cache.query_buf);
             assert!(
                 cache.query_buf.contains(&ItemId::Label(label_id)),
