@@ -371,7 +371,7 @@ of the `canvas` lane.
   record and set `needs-human`. If B4 misses, apply the "fails at 70k" row of the outcome
   table before reporting.
 
-### T2.9 Far-zoom wire stubs · blocked (Orion gate 2026-11-21 fail: B3 1k attribution)
+### T2.9 Far-zoom wire stubs · needs-human
 - Lane: canvas · Depends: T2.7 · Read: D4, D5, K9, plan 2.1 "B4 known limit",
   `docs/measurements/T2.7-wire.md`, G3, G12
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `crates/omnia-canvas/src/sheet/lod.rs`,
@@ -1783,5 +1783,8 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        the B3 result: the owner decides whether to schedule a fresh section
                        2.1 campaign at the desk with apps closed (a new campaign, not a
                        retry of this one) or to rule on these 1k misses. T2.9 is not done.
+                       Owner decision (2026-11-21): keep status `needs-human` (matching T1.6
+                       precedent) and merge PR #86 with this Orion evidence recorded,
+                       deferring the clean §2.1 desk run (apps/Baloo idle) to certify T2.9.
                        Evidence: docs/measurements/T2.9.md,
                        docs/measurements/T2.9/orion-2026-11-21/.
