@@ -104,6 +104,16 @@ fn main() {
     }
 
     let build = move |_: &mut Window, cx: &mut App| -> Entity<Probe> {
+        cx.text_system()
+            .add_fonts(vec![
+                std::borrow::Cow::Borrowed(
+                    include_bytes!("../../../vendor/fonts/inter/Inter-Medium.ttf").as_slice(),
+                ),
+                std::borrow::Cow::Borrowed(
+                    include_bytes!("../../../vendor/fonts/inter/Inter-SemiBold.ttf").as_slice(),
+                ),
+            ])
+            .expect("register bundled Inter fonts");
         let documents = docs
             .into_iter()
             .map(|doc| SheetDocument::new(cx.new(|_| doc)))

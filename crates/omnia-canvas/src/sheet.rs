@@ -19,6 +19,7 @@
 
 mod lod;
 mod symbols;
+mod text;
 mod wires;
 
 use std::{cell::RefCell, rc::Rc};
@@ -125,6 +126,7 @@ impl SheetDocument {
 #[derive(Debug)]
 struct DocumentCache {
     masks: symbols::Masks,
+    text: RefCell<text::TextCache>,
     scratch: RefCell<Scratch>,
 }
 
@@ -132,6 +134,7 @@ impl Default for DocumentCache {
     fn default() -> Self {
         Self {
             masks: symbols::Masks::new(),
+            text: RefCell::new(text::TextCache::new()),
             scratch: RefCell::default(),
         }
     }
@@ -140,6 +143,8 @@ impl Default for DocumentCache {
 #[derive(Debug, Default)]
 struct Scratch {
     items: Vec<ItemId>,
+    parts_end: usize,
+    wires_end: usize,
     segments: wires::MergedSegments,
     junctions: Vec<Pt>,
 }
@@ -208,6 +213,8 @@ impl DocumentCache {
         let mut scratch = self.scratch.borrow_mut();
         let Scratch {
             items,
+            parts_end,
+            wires_end,
             segments,
             junctions,
         } = &mut *scratch;
@@ -234,8 +241,9 @@ impl DocumentCache {
             ItemId::Wire(id) => (1, id.0),
             ItemId::Label(id) => (2, id.0),
         });
-        let parts_end = items.partition_point(|id| matches!(id, ItemId::Part(_)));
-        let wires_end = items.partition_point(|id| !matches!(id, ItemId::Label(_)));
+        *parts_end = items.partition_point(|id| matches!(id, ItemId::Part(_)));
+        *wires_end = items.partition_point(|id| !matches!(id, ItemId::Label(_)));
+        let (parts_end, wires_end) = (*parts_end, *wires_end);
         let part_shapes = || {
             items[..parts_end].iter().filter_map(|id| match *id {
                 ItemId::Part(id) => self.masks.symbol(doc.part(id)?, camera, sf),
@@ -366,30 +374,36 @@ impl SheetView {
                     scope.omnia(|| {
                         let mut camera = self.camera.clone();
                         camera.set_viewport(bounds);
+                        let doc = document.doc.read(cx);
                         let ink = gpui_color(self.theme.stage_ink);
-                        document.cache.draw(
-                            document.doc.read(cx),
-                            &camera,
-                            scale_factor,
-                            |_, emit| {
-                                scope.gpui(|| {
-                                    window.paint_layer(|window| {
-                                        scope.omnia(|| {
-                                            emit(&mut |mark| {
-                                                paint_mark(
-                                                    window,
-                                                    cx,
-                                                    mark,
-                                                    scale_factor,
-                                                    ink,
-                                                    scope,
-                                                );
-                                            });
+                        let ink_secondary = gpui_color(self.theme.stage_ink_secondary);
+                        document.cache.draw(doc, &camera, scale_factor, |_, emit| {
+                            scope.gpui(|| {
+                                window.paint_layer(|window| {
+                                    scope.omnia(|| {
+                                        emit(&mut |mark| {
+                                            paint_mark(window, cx, mark, scale_factor, ink, scope);
                                         });
                                     });
                                 });
-                            },
-                        );
+                            });
+                        });
+                        let scratch = document.cache.scratch.borrow();
+                        let text_frame = text::TextFrame {
+                            doc,
+                            parts: &scratch.items[..scratch.parts_end],
+                            labels: &scratch.items[scratch.wires_end..],
+                            camera: &camera,
+                            viewport: bounds,
+                            scale_factor,
+                            ink,
+                            ink_secondary,
+                        };
+                        document
+                            .cache
+                            .text
+                            .borrow_mut()
+                            .paint(&text_frame, window, scope);
                     });
                 }
             });
@@ -586,6 +600,7 @@ mod tests {
             include_str!("sheet/wires.rs"),
             include_str!("sheet/symbols.rs"),
             include_str!("sheet/lod.rs"),
+            include_str!("sheet/text.rs"),
         ];
         for source in sources {
             assert!(!source.contains(concat!("paint_", "path")));
