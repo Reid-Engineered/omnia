@@ -1046,6 +1046,8 @@ fn envelope(g: &mut Gen, result: Value, document: bool) -> Value {
         ],
         &["schema", "warnings"],
     );
+    // Mutual exclusion holds on its own, whatever a branch requires besides.
+    s["not"] = json!({ "required": ["result", "error"] });
     s["oneOf"] = json!([
         { "required": success_required(document) },
         { "required": ["error"] },

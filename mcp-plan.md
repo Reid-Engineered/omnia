@@ -312,22 +312,34 @@ On failure `result` is replaced by `error` (9.4). Requests through `omnia call` 
 serve` are `{"op": "<operation>", "params": { }, "idempotency_key": "..."}`; JSON-lines adds
 an `"id"` that the response echoes. All objects reject unknown fields.
 
-Decoding rules, fixed at A1.3 (2026-11-21; amended by its two review rounds the same day):
+Decoding rules, fixed at A1.3 (2026-11-21; amended by its three review rounds the same day):
 
 - Two wire forms, one meaning. The envelope above is what `omnia call` and `omnia serve` read;
   `params` is always present (`{}` for `capabilities` and `new`). Over MCP a tool's
   `arguments` are the params object itself, with `idempotency_key` beside the params fields on
   the operations section 11.2 names (schema `<op>.arguments`). Both decode to the same request.
   `idempotency_key` anywhere else is a `schema_violation`.
-- Order of checks, the same for both forms: size over AK2 is `limit_exceeded`; malformed JSON,
-  a duplicate object key, or a number that is not a 64-bit integer written without fraction or
-  exponent is `invalid_request` (`-0` is read as `0`); in the envelope, a missing `op` or
-  `params` or a non-string `op` is `schema_violation`; an operation the catalog does not list
-  is `unknown_operation`; over AK3 or AK4 is `limit_exceeded`; then the params, with any
-  `idempotency_key` placed beside the params fields, are validated against `<op>.arguments` and
-  any mismatch is `schema_violation {path}`. Only then are the DTOs decoded. The envelope's
-  unknown fields are ordered among the params fields by name, so `{"op": "new", "params": {},
-  "zzz": 1, "idempotency_key": "k"}` reports `/idempotency_key`.
+- Order of checks, the same for both forms: raw input over AK2 is `limit_exceeded`; malformed
+  JSON, a duplicate object key, or a number that is not a 64-bit integer written without
+  fraction or exponent is `invalid_request` (`-0` is read as `0`); in the envelope, a missing
+  `op` or `params` or a non-string `op` is `schema_violation`; an operation the catalog does
+  not list is `unknown_operation`; over AK3 or AK4 is `limit_exceeded`; an `idempotency_key`
+  on an operation that takes none is `schema_violation` at `/idempotency_key` ("unknown
+  field"), also on `request_status`, whose own params field of that name an envelope key never
+  fills; then the params, with any `idempotency_key` placed beside the params fields, are
+  validated against `<op>.arguments` and any mismatch is `schema_violation {path}`; then the
+  DTOs are decoded; last, AK2 on the canonical forms (below). In the envelope, an unknown field,
+  and an `idempotency_key` written inside the params of an operation whose params have no such
+  field (`/params/idempotency_key`), are ordered among the params fields by name; a fault on the
+  params object itself comes first, and the envelope's field wins a tie.
+- AK2 bounds the raw input and both canonical forms. A request is accepted, by either decoder
+  or by `Request::new`, only if `Request::to_json` and `Request::to_arguments` are both at most
+  8 MiB, so whatever is accepted or built can be sent in either form. The value reported is the
+  larger form's size; the envelope is always the larger. MCP arguments of exactly 8 MiB are
+  therefore refused, because the envelope they imply is longer.
+- A refusal of well-formed JSON (a duplicate key, a number's spelling) has no position in its
+  message, so both forms report it alike. Malformed JSON keeps the parser's line and column,
+  which refer to the raw input.
 - The two forms give the same error code, details and message for the same fault; the JSON
   Pointer differs only by the envelope's `/params`. Messages do not repeat the path. A
   property test decodes mutated inputs through both forms and compares the errors.
@@ -455,7 +467,8 @@ exactly `0..=4294967295` (items) or `0..=18446744073709551615` (documents, jobs)
 integer has its maximum, and bounds corners lie inside K1. The decoders validate against these
 same schemas with a hand-written validator for the keywords the module emits (section 9.1). It
 compares integers exactly, also beyond 64 bits. `response.json` ties each result to its
-envelope: a document's result requires `doc_id` and `revision` there too.
+envelope: a document's result requires `doc_id` and `revision` there too. Every envelope schema
+forbids `result` and `error` together on its own (`not`), whatever its branches require.
 After a deliberate change, `OMNIA_BLESS_SCHEMAS=1 cargo test -p omnia-agent ainv11` rewrites
 the directory; without the variable the test only compares. Property tests check that every
 serialized DTO validates against its published schema text, with no codec in the check.
@@ -750,14 +763,38 @@ pub trait DocHost {                       // headless store in A1; Entity<Doc> a
 
 pub struct CallContext<'a> { pub cancel: &'a CancelToken, pub progress: &'a mut dyn ProgressSink }
 
-pub struct Request { pub op: Operation, pub idempotency_key: Option<String> }
+pub struct Request { /* private: built only by decoding (9.1) */ }
+impl Request {
+    pub fn new(op: Operation, idempotency_key: Option<String>) -> Result<Request, AgentError>;
+    pub fn from_slice(bytes: &[u8]) -> Result<Request, AgentError>;            // envelope
+    pub fn from_arguments(op: OpName, bytes: &[u8]) -> Result<Request, AgentError>; // MCP
+    pub fn op(&self) -> &Operation;
+    pub fn idempotency_key(&self) -> Option<&str>;
+    pub fn to_json(&self) -> String;
+    pub fn to_arguments(&self) -> String;
+}
 pub enum Operation { Capabilities, New, Open(OpenArgs), Close(CloseArgs), Inspect(InspectArgs),
                      Query(QueryArgs), Nets(NetsArgs), Validate(EditArgs), Preview(EditArgs),
                      Apply(ApplyArgs), Undo(RevArgs), Redo(RevArgs), Save(SaveArgs),
                      RequestStatus(KeyArgs), JobStatus(JobArgs), JobCancel(JobArgs) }
-pub struct Response { pub schema: &'static str, pub doc_id: Option<DocId>,
-                      pub revision: Option<u64>, pub outcome: Result<Output, AgentError>,
-                      pub warnings: Vec<Warning> }
+pub struct Response { /* private: schema, doc_id, revision, outcome, warnings */ }
+impl Response {
+    pub fn new(doc_id: Option<DocId>, revision: Option<u64>,
+               outcome: Result<Output, AgentError>) -> Result<Response, InvalidResponse>;
+    pub fn with_warnings(self, warnings: Vec<Warning>) -> Response;
+    pub fn from_slice(op: OpName, bytes: &[u8]) -> Result<Response, serde_json::Error>;
+    pub fn schema(&self) -> &'static str;
+    pub fn doc_id(&self) -> Option<DocId>;
+    pub fn revision(&self) -> Option<u64>;
+    pub fn outcome(&self) -> &Result<Output, AgentError>;
+    pub fn warnings(&self) -> &[Warning];
+    pub fn to_json(&self) -> String;
+}
+pub enum RequestStatus { NotRun, Applied(StoredResponse), Failed { error: AgentError } }
+impl StoredResponse {                     // a success of a keyed operation, checked
+    pub fn new(op: OpName, revision: u64, response: Response)
+        -> Result<StoredResponse, InvalidResponse>;
+}
 ```
 
 Files:

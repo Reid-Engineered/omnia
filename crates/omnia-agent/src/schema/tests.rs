@@ -1785,7 +1785,7 @@ fn both_forms_check_limits_first_and_report_in_byte_order() {
     );
     assert_eq!(
         violation_at(r#"{"op":"new","params":{},"aaa":1,"idempotency_key":"k"}"#),
-        "/aaa"
+        "/idempotency_key"
     );
     assert_eq!(
         violation_at(
@@ -1900,4 +1900,199 @@ fn minus_zero_reads_as_zero() {
         quoted.parse::<Request>().is_ok(),
         "numbers inside strings are text"
     );
+}
+
+// ---- third review round --------------------------------------------------------------------
+
+/// A valid response, a sample error and a sample result of the same operation, for grafting.
+fn graftable() -> impl Strategy<Value = (OpName, Response, AgentError, Output)> {
+    response().prop_flat_map(|(op, resp)| {
+        (
+            Just(op),
+            Just(resp),
+            agent_error(),
+            output_for(op, request_status()),
+        )
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    /// Every per-operation response schema agrees with `Response::from_slice` on mutated
+    /// envelopes, including ones with both `result` and `error`, or without the document
+    /// handle (review round 3, finding 2).
+    #[test]
+    fn per_op_response_schemas_agree_with_the_decoder(
+        (op, resp, err, output) in graftable(),
+        graft in 0u8..6,
+        mutate in any::<bool>(),
+        at in any::<Index>(),
+        m in mutation(),
+    ) {
+        prop_assume!(spec(op).available);
+        let mut doc: Value = serde_json::from_str(&resp.to_json()).unwrap();
+        let fields = doc.as_object_mut().unwrap();
+        match graft {
+            1 => {
+                fields.insert("error".into(), serde_json::to_value(&err).unwrap());
+            }
+            2 => {
+                fields.insert("result".into(), serde_json::to_value(&output).unwrap());
+            }
+            3 => {
+                fields.remove("doc_id");
+            }
+            4 => {
+                fields.remove("revision");
+            }
+            5 => {
+                fields.remove("doc_id");
+                fields.remove("revision");
+                fields.insert("error".into(), serde_json::to_value(&err).unwrap());
+                fields.insert("result".into(), serde_json::to_value(&output).unwrap());
+            }
+            _ => {}
+        }
+        if mutate {
+            doc = apply_mutation(&doc, at, &m);
+        }
+        let text = serde_json::to_string(&doc).unwrap();
+        let decoded = Response::from_slice(op, text.as_bytes());
+        let schema_ok = conforms(&format!("{op}.response"), &doc);
+        match &decoded {
+            Ok(_) => prop_assert!(schema_ok, "decoder accepts what the schema refuses: {}", text),
+            Err(e) => prop_assert!(
+                !schema_ok || decoder_only(&e.to_string()),
+                "the schema accepts what the decoder refuses: {} -> {}", text, e
+            ),
+        }
+        if schema_ok {
+            prop_assert!(conforms("response", &doc), "response.json refuses {}", text);
+        }
+    }
+}
+
+/// Review round 3, finding 2: the case the review found.
+#[test]
+fn a_response_with_both_result_and_error_is_refused() {
+    let doc = json!({ "schema": "omnia.agent/1", "result": { "dirty": false },
+        "error": { "code": "invalid_request", "message": "m", "retryable": false, "details": {} },
+        "warnings": [] });
+    for op in [OpName::New, OpName::Open] {
+        refuse(&format!("{op}.response"), &doc);
+        let text = serde_json::to_string(&doc).unwrap();
+        assert!(Response::from_slice(op, text.as_bytes()).is_err(), "{op}");
+    }
+    refuse("response", &doc);
+}
+
+/// Review round 3, finding 1: AK2 bounds the raw input and both canonical forms, so whatever
+/// is accepted or built can be sent in either form. Exactly at the limit and one byte over.
+#[test]
+fn ak2_bounds_both_canonical_forms() {
+    let max = usize::try_from(crate::MAX_REQUEST_BYTES).unwrap();
+    let limit = |value: usize| ErrorKind::LimitExceeded {
+        limit: Limit::RequestBytes,
+        value: value as u64,
+    };
+    let open = |path: &str| Operation::Open(OpenArgs { path: path.into() });
+    let envelope_overhead = r#"{"op":"open","params":{"path":""}}"#.len();
+    let arguments_overhead = r#"{"path":""}"#.len();
+
+    // The envelope, the larger form, exactly at the limit: built, and decoded by both forms.
+    let at_limit = "a".repeat(max - envelope_overhead);
+    let req = Request::new(open(&at_limit), None).unwrap();
+    assert_eq!(req.to_json().len(), max);
+    assert!(req.to_arguments().len() < max);
+    assert_eq!(req.to_json().parse::<Request>().unwrap(), req);
+    let back = Request::from_arguments(OpName::Open, req.to_arguments().as_bytes()).unwrap();
+    assert_eq!(back, req);
+
+    // One byte over: refused by the constructor and by both decoders.
+    let over = format!("{at_limit}a");
+    assert_eq!(
+        Request::new(open(&over), None).unwrap_err().kind,
+        limit(max + 1)
+    );
+    let envelope = format!(r#"{{"op":"open","params":{{"path":"{over}"}}}}"#);
+    assert_eq!(envelope.len(), max + 1);
+    assert_eq!(code_of(&envelope).1, limit(max + 1));
+    let arguments = format!(r#"{{"path":"{over}"}}"#);
+    assert!(arguments.len() < max, "the raw arguments fit");
+    let err = Request::from_arguments(OpName::Open, arguments.as_bytes()).unwrap_err();
+    assert_eq!(
+        err.kind,
+        limit(max + 1),
+        "but the envelope they imply does not"
+    );
+
+    // Raw arguments of exactly AK2 bytes imply a larger envelope, so they are refused too.
+    let path = "a".repeat(max - arguments_overhead);
+    let raw = format!(r#"{{"path":"{path}"}}"#);
+    assert_eq!(raw.len(), max);
+    let err = Request::from_arguments(OpName::Open, raw.as_bytes()).unwrap_err();
+    assert_eq!(err.kind, limit(path.len() + envelope_overhead));
+    // And raw input over AK2 is refused on its own size, before parsing.
+    let raw_over = format!("{raw} ");
+    let err = Request::from_arguments(OpName::Open, raw_over.as_bytes()).unwrap_err();
+    assert_eq!(err.kind, limit(max + 1));
+    let spaced = format!("{} ", req.to_json());
+    assert_eq!(code_of(&spaced).1, limit(max + 1));
+}
+
+/// Review round 3, diagnostics: a duplicate key reads the same in both forms; malformed JSON
+/// keeps the raw input's line and column.
+#[test]
+fn duplicate_keys_report_alike_in_both_forms() {
+    let envelope = r#"{"op":"undo","params":{"doc_id":"d1","doc_id":"d1","expected_revision":1}}"#;
+    let arguments = br#"{"doc_id":"d1","doc_id":"d1","expected_revision":1}"#;
+    let a = envelope.parse::<Request>().unwrap_err();
+    let b = Request::from_arguments(OpName::Undo, arguments).unwrap_err();
+    assert_eq!(a, b);
+    assert_eq!(a.message, "duplicate key `doc_id`");
+    let malformed = r#"{"op":"undo","params":{"#.parse::<Request>().unwrap_err();
+    assert!(
+        malformed.message.contains("line 1 column"),
+        "{}",
+        malformed.message
+    );
+}
+
+/// Review round 3: a key outside the params of an operation that takes none is the same
+/// refusal the MCP form gives, also on `request_status`, whose params have a field of that
+/// name; and a key written inside the params of a keyed operation is an unknown params field.
+#[test]
+fn misplaced_keys_are_refused_as_such() {
+    for envelope in [
+        r#"{"op":"request_status","params":{},"idempotency_key":"k"}"#,
+        r#"{"op":"request_status","params":{"idempotency_key":"a"},"idempotency_key":"k"}"#,
+        r#"{"op":"inspect","params":{"doc_id":"x","include":[]},"idempotency_key":"k"}"#,
+    ] {
+        assert_eq!(violation_at(envelope), "/idempotency_key", "{envelope}");
+    }
+    let mcp = Request::from_arguments(
+        OpName::Inspect,
+        br#"{"doc_id":"x","include":[],"idempotency_key":"k"}"#,
+    )
+    .unwrap_err();
+    assert_eq!(
+        (mcp.kind, mcp.message.as_str()),
+        (
+            ErrorKind::SchemaViolation {
+                path: "/idempotency_key".into()
+            },
+            "schema violation: unknown field"
+        )
+    );
+    assert_eq!(
+        violation_at(
+            r#"{"op":"undo","params":{"doc_id":"d1","expected_revision":1,"idempotency_key":"k"}}"#
+        ),
+        "/params/idempotency_key"
+    );
+    let ok: Request = r#"{"op":"request_status","params":{"idempotency_key":"k"}}"#
+        .parse()
+        .unwrap();
+    assert_eq!(ok.idempotency_key(), None);
 }

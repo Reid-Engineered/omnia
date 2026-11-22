@@ -356,6 +356,20 @@ fn check_size(bytes: &[u8]) -> Result<(), AgentError> {
     Ok(())
 }
 
+/// The fault for an `idempotency_key` on an operation that takes none (section 11.2). Both
+/// forms report it right after the limits, before the params are checked.
+fn refused_key() -> AgentError {
+    violation("/idempotency_key", "unknown field")
+}
+
+/// Whether the params of `op` have a field `name` (only `request_status` has
+/// `idempotency_key`).
+fn params_field(op: OpName, name: &str) -> bool {
+    schema_value(&spec(op).params_schema())
+        .and_then(|s| s.get("properties"))
+        .is_some_and(|p| p.get(name).is_some())
+}
+
 /// The first reference token of a JSON Pointer, unescaped; `None` for the whole document.
 fn first_token(path: &str) -> Option<String> {
     let rest = path.strip_prefix('/')?;
@@ -424,10 +438,11 @@ impl Request {
     /// has lost its duplicate keys and so cannot be checked for them.
     ///
     /// The envelope is checked in the arguments form's order: `op` and `params` must be
-    /// present and `op` listed; then AK3 and AK4; then the params, with the envelope's
-    /// `idempotency_key` placed beside the params fields, against `<op>.arguments`. An unknown
-    /// envelope field is ordered among the params fields by name, and the first fault in byte
-    /// order of field names is reported.
+    /// present and `op` listed; then AK3 and AK4; then a key on an operation that takes none is
+    /// refused; then the params, with the envelope's `idempotency_key` placed beside the params
+    /// fields, against `<op>.arguments`. An unknown envelope field is ordered among the params
+    /// fields by name (a fault on the params object itself comes first, and the envelope's
+    /// field wins a tie), and the first fault is reported. Last, AK2 on the canonical forms.
     pub fn from_envelope_value(value: Value) -> Result<Self, AgentError> {
         let Value::Object(mut map) = value else {
             return Err(AgentError::with_message(
@@ -445,21 +460,33 @@ impl Request {
             .ok_or_else(|| violation("", "missing field `params`"))?;
         check_limits(op, &params)?;
         let key = map.remove("idempotency_key");
-        let mut unknown: Vec<String> = map.into_iter().map(|(k, _)| k).collect();
-        // The key joins the params fields, unless a params field already has its name
-        // (`request_status`); then it is an unknown envelope field like any other.
+        if key.is_some() && !spec(op).idempotency_key {
+            return Err(refused_key());
+        }
+        // Envelope-only faults, each with the field name it is ordered by.
+        let mut own: Vec<(String, String)> = map
+            .into_iter()
+            .map(|(k, _)| (k.clone(), format!("/{}", escape(&k))))
+            .collect();
+        // A key written inside the params, where the params have no such field, is an unknown
+        // params field; it must not stand in for the envelope's key.
+        if let Some(fields) = params.as_object_mut()
+            && !params_field(op, "idempotency_key")
+            && fields.remove("idempotency_key").is_some()
+        {
+            own.push((
+                "idempotency_key".to_owned(),
+                "/params/idempotency_key".to_owned(),
+            ));
+        }
+        own.sort();
         let merged = match (&key, params.as_object_mut()) {
-            (Some(k), Some(fields)) if !fields.contains_key("idempotency_key") => {
+            (Some(k), Some(fields)) => {
                 fields.insert("idempotency_key".to_owned(), k.clone());
                 true
             }
-            (Some(_), Some(_)) => {
-                unknown.push("idempotency_key".to_owned());
-                false
-            }
             _ => false,
         };
-        unknown.sort();
         let fault = conform_arguments(op, &params).err();
         let to_envelope = |path: &str| {
             let own_key = path == "/idempotency_key" || path.starts_with("/idempotency_key/");
@@ -469,14 +496,14 @@ impl Request {
                 format!("/params{path}")
             }
         };
-        match (fault, unknown.first()) {
+        match (fault, own.first()) {
             (None, None) => {}
             (Some(f), first)
-                if first.is_none_or(|u| first_token(&f.path).is_none_or(|t| t <= *u)) =>
+                if first.is_none_or(|(name, _)| first_token(&f.path).is_none_or(|t| t < *name)) =>
             {
                 return Err(violation(&to_envelope(&f.path), &f.message));
             }
-            (_, Some(u)) => return Err(violation(&format!("/{}", escape(u)), "unknown field")),
+            (_, Some((_, path))) => return Err(violation(path, "unknown field")),
             (Some(_), None) => unreachable!("handled by the arm above"),
         }
         let idempotency_key = if merged {
@@ -487,10 +514,11 @@ impl Request {
         } else {
             None
         };
-        Ok(Self {
+        Self {
             op: Operation::decode(op, params, "/params")?,
             idempotency_key,
-        })
+        }
+        .within_size()
     }
 
     /// Decodes tool arguments already parsed by [`parse_strict`], in the same order of checks
@@ -498,6 +526,12 @@ impl Request {
     pub fn from_arguments_value(op: OpName, value: Value) -> Result<Self, AgentError> {
         let op = available(op.as_str())?;
         check_limits(op, &value)?;
+        if !spec(op).idempotency_key
+            && !params_field(op, "idempotency_key")
+            && value.get("idempotency_key").is_some()
+        {
+            return Err(refused_key());
+        }
         conform_arguments(op, &value).map_err(|f| violation(&f.path, &f.message))?;
         let mut params = value;
         // On the keyed operations the key sits beside the params; `request_status` has a
@@ -510,10 +544,26 @@ impl Request {
         } else {
             None
         };
-        Ok(Self {
+        Self {
             op: Operation::decode(op, params, "")?,
             idempotency_key,
-        })
+        }
+        .within_size()
+    }
+
+    /// AK2 on the canonical forms: a request is accepted only if both [`Self::to_json`] and
+    /// [`Self::to_arguments`] fit, so whatever the API accepts or builds can be sent in either
+    /// form and decoded again. The value reported is the larger form's size.
+    fn within_size(self) -> Result<Self, AgentError> {
+        let len = self.to_json().len().max(self.to_arguments().len());
+        let len = u64::try_from(len).unwrap_or(u64::MAX);
+        if len > MAX_REQUEST_BYTES {
+            return Err(AgentError::new(ErrorKind::LimitExceeded {
+                limit: Limit::RequestBytes,
+                value: len,
+            }));
+        }
+        Ok(self)
     }
 
     /// The envelope as JSON text, in the canonical field order.
@@ -587,9 +637,24 @@ impl Serialize for Request {
 
 /// Parses JSON refusing duplicate object keys and every number that is not a 64-bit integer
 /// written without fraction or exponent (`invalid_request`). `-0` is read as `0`.
+///
+/// A refusal of well-formed JSON (a duplicate key, a number) has a message with no position,
+/// so the two request forms report it alike. Malformed JSON keeps the parser's line and
+/// column, which refer to the raw input.
 pub fn parse_strict(bytes: &[u8]) -> Result<Value, AgentError> {
     parse_strict_raw(bytes)
-        .map_err(|e| AgentError::with_message(ErrorKind::InvalidRequest, e.to_string()))
+        .map_err(|e| AgentError::with_message(ErrorKind::InvalidRequest, describe(&e)))
+}
+
+fn describe(e: &serde_json::Error) -> String {
+    let text = e.to_string();
+    if e.classify() == serde_json::error::Category::Data {
+        let at = format!(" at line {} column {}", e.line(), e.column());
+        if let Some(bare) = text.strip_suffix(&at) {
+            return bare.to_owned();
+        }
+    }
+    text
 }
 
 /// [`parse_strict`] with the parser's own error.

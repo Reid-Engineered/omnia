@@ -471,3 +471,21 @@ by name), and a property test compares the two forms' errors on mutated inputs. 
 read as `0`; a lexical scan still refuses fractions and exponents. (5) The validator compares
 integers exactly, also beyond 64 bits. (6) Union failures are ranked by pointer segment count,
 then first. 44 schema files re-blessed. Checks rerun locally.
+Third review round (a third independent review at f2277b1 confirmed round two and found two
+blockers and three minor points; all fixed, written into mcp-plan.md sections 9.1, 9.5 and 14).
+(1) AK2 now bounds the raw input and both canonical forms: either decoder and `Request::new`
+accept a request only if `to_json` and `to_arguments` are both at most 8 MiB, so an accepted or
+built request can be sent in either form. MCP arguments of exactly 8 MiB are refused, since the
+envelope they imply is longer. Boundary tests sit at exactly the limit and one byte over, for
+both forms. (2) Every per-operation envelope schema forbids `result` and `error` together on its
+own, apart from the document-handle rule; a differential property test grafts errors, results
+and removed handles onto valid responses and checks every per-operation schema against
+`Response::from_slice` (and `response.json`). Minor: duplicate-key and number refusals carry no
+position, so both forms report them alike, while malformed JSON keeps the raw input's line and
+column. A key on an operation that takes none is refused right after the limits in both forms,
+so `request_status` with a misplaced outer key gets the MCP form's `/idempotency_key` refusal,
+and a key written inside a keyed operation's params is `/params/idempotency_key`. Section 14's
+sketch shows the constructors and accessors. Ownership: `crates/omnia-agent/proptest-regressions/`
+is outside the subpaths A1.3's **Owns** line lists; it is read as included, since it sits inside
+the owned crate and `omnia-doc` commits its regression seeds the same way (the line itself is
+unchanged). The branch is updated from `main` (T2.9, #86). Checks rerun locally.
