@@ -34,8 +34,10 @@ Status words are the other plans': **DECIDED**, **DEFAULT**, **HYPOTHESIS**, **G
   nothing from a PROPOSED entry before HC1. Every entry below is PROPOSED until HC1 is held.
 
 The Model Context Protocol is named as an open protocol standard (AQ8), and SPICE as the open
-netlist language already named in [ROADMAP.md](ROADMAP.md). No other company or product is
-named (AGENTS rule 1).
+netlist language already named in [ROADMAP.md](ROADMAP.md). Operating systems appear only as
+AGENTS.md names them for machines. No other company is named in the plan text; section 16
+lists the sources behind the research claims, with links, as citations only. Citations are
+written `[S1]`.
 
 ### Why this exists
 
@@ -45,17 +47,17 @@ is R3 connected to?" it must page items, fetch nets (which are not paged and cov
 document) and join the two itself. Two facts shape everything below:
 
 1. **Agent time is round trips and bytes, not engine time.** One tool call costs a model turn
-   measured in seconds; the stdio transport costs well under a millisecond; the engine costs
-   microseconds. The engine must therefore answer common questions in one call, within a small
+   measured in seconds; the stdio transport costs well under a millisecond (an estimate, to be
+   measured in C2.3); the engine costs microseconds. The engine must therefore answer common questions in one call, within a small
    byte budget.
 2. **Models read stated attributes reliably and joins unreliably.** A 2026 netlist
-   question-answering benchmark (arXiv 2608.12197) found six current models reading device
-   parameters and terminal lists at 99 to 100%, but answering "what attaches to this node" at
-   15 to 98% and "what are this terminal's neighbours" at 2 to 97%. Graph-encoding studies
-   (arXiv 2310.04560; hypergraph encodings, arXiv 2410.10083) agree: listing each node's
-   connections on one line, and naming the net on each membership, beat edge lists by wide
-   margins, and models almost never infer an absence that is not stated. Accuracy also falls as
-   input grows, well inside advertised context windows (arXiv 2502.05167, 2510.05381).
+   question-answering benchmark [S1] found six current models reading device parameters and
+   terminal lists at 99 to 100%, but answering "what attaches to this node" at 15 to 98% and
+   "what are this terminal's neighbours" at 2 to 97%. Graph-encoding studies [S2, S3] agree:
+   listing each node's connections on one line, and naming the net on each membership, beat
+   edge lists by wide margins, and models almost never infer an absence that is not stated
+   [S2]. Accuracy also falls as input grows, well inside advertised context windows [S4, S5],
+   and facts in the middle of a long input are used worst [S6].
 
 So the engine does the joins, states the absences, caps the hubs and returns the deltas, so
 that any model only ever has to read explicit attributes.
@@ -95,7 +97,7 @@ Checked at `3224084`.
 | A `NetId` "is valid until the next edit": ids are reused, and nets are renumbered on merge and split. | `crates/omnia-doc/src/connectivity.rs` | Agents need keys that survive unrelated edits (CD3). |
 | The agent read layer keys a net by its lowest member by id (AD8, `NetKey`). That key is canonical for one document state but changes with insertion order and edit history. | `mcp-plan.md` AD8; `crates/omnia-agent/src/schema/response.rs` | The circuit key (CK1) is a separate type with a different rule; AD8's `NetKey` is unchanged. |
 | Connectivity is incremental: union-by-size on wire add; on removal an O(1) leaf path, otherwise a two-ended search that moves only the disconnected piece. Equal label text joins nets. `Connectivity::rebuild_with_parts` rebuilds the pin-aware state on load; an independent randomized-test oracle checks INV10. | `connectivity.rs` | The algorithmic base is right and stays (section 11.1). |
-| Every case in the certified command-boundary campaign passed the < 1 ms gate statistic (median of ten run p99s). The worst, a 20k-wire chain split, had median 0.924 ms with run p99s from 0.872 to 1.051 ms. A full connectivity rebuild of `10k` measured about 9 ms on a Windows development machine (not certifying). | `docs/measurements/command-boundary/reference-2026-11-17/README.md`, `T2.8.md` | `Doc::apply` has about 0.08 ms of headroom on its worst case. The engine therefore updates after `apply` returns, under its own budget (CB1), and the net delta recording in `apply` is measured against the existing boundary (C1.1). |
+| Every case in the certified command-boundary campaign passed the < 1 ms gate statistic (median of ten run p99s). The worst, a 20k-wire chain split, had median 0.924 ms with run p99s from 0.872 to 1.051 ms. A full connectivity rebuild of `10k` measured about 9 ms on a Windows development machine (not certifying). | `docs/measurements/command-boundary/reference-2026-11-17/README.md`, `T2.8.md` [S20] | `Doc::apply` has about 0.08 ms of headroom on its worst case. The engine therefore updates after `apply` returns, under its own budget (CB1), and the net delta recording in `apply` is measured against the existing boundary (C1.1). |
 | `omnia_symbols::Pin` is `{at, number}`; six symbols exist, one of them a ground symbol. | `crates/omnia-symbols/src/lib.rs` | Without the parts plan, the engine knows pin numbers only (role `unspecified`, CK3). |
 | `Part` is `{symbol, at, orient, designator, value}`, the value being free text. The parts plan adds `def`, typed `params`, and embedded definitions with pin name and role (PD5, PD6, PD8; PR #85, open). | `crates/omnia-doc/src/doc.rs`; `parts-plan.md` | Electrical findings wait for the parts plan's milestone P2 (task C3.1). |
 | Labels are one kind: global by text across the sheet. | `doc.rs`, `connectivity.rs` | Name priority is simple today (CK2) and grows with label kinds. |
@@ -126,7 +128,7 @@ other machines and at 100,000 parts are recorded and labelled, never gating.
 | CB12 | Round trips: orientation in 1 call; any question in the circuit question set's local families in at most 2 calls; checking an edit needs no call beyond the edit itself (CD14) | the question-set CI proxy (section 10) |
 
 CB11 assumes roughly 4 bytes per token, so 12 KB is about 3,000 tokens and 32 KB stays under
-the smallest client warning threshold found (10,000 tokens). The ratio is a HYPOTHESIS until
+the smallest client warning threshold found (10,000 tokens) [S31]. The ratio is a HYPOTHESIS until
 C2.4 measures it on the question set.
 
 ## 4. Constants
@@ -134,20 +136,20 @@ C2.4 measures it on the question set.
 | ID | Constant | Value |
 | --- | --- | --- |
 | CK1 | Circuit key (stable identity; a type distinct from AD8's `NetKey`) | A pure function of the net's members at the current revision, chosen by document content first so that insertion order cannot change it. If the net has labels: `net:"<text>"`, the lowest label text by byte order. Otherwise, if it has pins: the **anchor pin** is the member pin lowest by (designator in natural order, pin number in natural order), then by pin world position (x, then y), then by (part id, pin index); the key is `net:pin:<part id>.<pin index>`. Otherwise (a bare wire island): the anchor is the wire lowest by (lower endpoint x, then y), then by id; the key is `net:wire:<wire id>`. Keys never contain a `NetId`. |
-| CK2 | Display name | Label nets: the key's label text. Unlabelled nets: `N(<designator>.<pin number>)` from the anchor pin, for example `N(R3.2)`; a bare wire island `N(wire:7)`. Generated names are never valid document text in the line form, because document text with parentheses is always quoted (CK9), so a label `N(R3.2)` cannot be mistaken for one. Every other label text on the net is kept as a candidate name. When label kinds arrive, the priority is: global label, power symbol, local label, hierarchical label, sheet pin, anchor-pin name; ties by lowest text, then lowest id. |
+| CK2 | Display name | Label nets: the key's label text. Unlabelled nets: `N(<designator>.<pin number>)` from the anchor pin, for example `N(R3.2)`; a bare wire island `N(wire:7)`. Generated names are never valid document text in the line form, because document text with parentheses is always quoted (CK9), so a label `N(R3.2)` cannot be mistaken for one. Every other label text on the net is kept as a candidate name. When label kinds arrive, the priority is: global label, power symbol, local label, hierarchical label, sheet pin, anchor-pin name; ties by lowest text, then lowest id. This order is the established convention [S25]. |
 | CK3 | Pin roles | The parts plan's seven (PD5: `passive`, `input`, `output`, `bidir`, `power`, `ground`, `no_connect`), plus `unspecified` for parts without a definition (RON v2 sheets). Fields reserved, absent until their plans add them: unit, alternate function, swap group, model-pin index, instance no-connect marker, hierarchical instance path. |
 | CK4 | Net kinds | `signal`, `power`, `ground`, each with the evidence that set it (CK6). `is_ground_reference` is set only by a ground part or a `ground`-role pin, never by a name. |
 | CK5 | Finding tiers | 0: per pin or per net, maintained in the edit. 1: over one net's multiset of pin roles, maintained in the edit. 2: traversals across components, computed lazily per revision. 3: heuristics that need part knowledge. Ids and default severities are in section 9.4. |
 | CK6 | Evidence tiers | `declared` (drawn in the document), `exact` (a role-correct structural match), `derived` (an exact match whose values satisfy the structure's predicates), `heuristic` (name-based or approximate), `suggested` (statistical). No numeric confidence. |
 | CK7 | Hub nets | A net is a hub if its kind is `power` or `ground`, or it has more than 32 pins. Views never list a hub's members inline: they show `GND (412 pins)` and a handle. Inline member lists stop at 16 pins. |
-| CK8 | Journal | Entries for at most the last 1,024 revisions and at most 262,144 facts in total, preallocated; the oldest entries are evicted first. No entry is ever truncated: one very large edit evicts more history instead. |
-| CK9 | Line form | ASCII only; one record per line; every line starts with a fixed tag (section 9.2). A document string (designator, value, label text, pin name) is written bare only if it matches `[A-Za-z0-9_+.-]{1,64}` and is not a tag; otherwise it is quoted with `"`, and inside quotes `\` and `"` are escaped as `\\` and `\"`, and every character outside printable ASCII (controls, newlines, non-ASCII) is written as `\u{hex}`. The separators `:` `=` `|` `(` `)` appear only outside quotes. |
-| CK10 | Byte budgets | `budget` is per request, default 12,288 bytes, maximum 32,768 (CB11). A view's minimum share is its header and elision line. |
+| CK8 | Journal | Entries for at most the last 1,024 revisions and at most 262,144 facts in total, preallocated; the oldest entries are evicted first, and no entry is ever truncated. The journal keeps a **base revision**: the revision at open or rebuild, advanced to the revision just before the oldest retained entry on each eviction. `since r` is answerable exactly when base ≤ r ≤ now. An entry larger than the whole capacity is stored alone, evicting every older entry (an allocation CINV6 excludes), so the base becomes the revision just before it and its own delta stays answerable and pageable until the next edit evicts it. |
+| CK9 | Line form | ASCII only; one record per line; every line starts with a fixed tag (section 9.2). A document string (designator, value, label text, pin name or number) is written bare only if it matches `[A-Za-z0-9_+-]{1,64}` and is not a tag; otherwise it is quoted with `"`. Inside quotes, `\` and `"` are escaped as `\\` and `\"`, and every character outside printable ASCII (controls, newlines, non-ASCII) is written as `\u{hex}`; every other character, separators included, is literal. Outside quotes the characters `.` `:` `=` `|` `(` `)` `,` and space are structural only. Compound fields: a pin reference is `<designator>.<pin>`, each part in this string form, so `"A.B".C` and `A."B.C"` differ; a pin-to-net pair is `<pin>:<net name>`; a generated name is `N(<pin reference>)` or `N(wire:<id>)`, always bare, and no document string can produce it bare because `(` forces quoting. Section 9.2 gives the grammar per record. |
+| CK10 | Byte budgets | `budget` is per request, default 12,288 bytes, maximum 32,768 (CB11). A request holds at most 8 views. Each view gets an equal share of the budget, and a share a view does not use passes to the next view in order. A view whose share is below CK15's minimum is not run: it returns only an elision line whose cursor runs it alone. |
 | CK11 | Recognition limits | 10,000 search steps per anchor, after which the result says `truncated`. Pattern radius at most 3 hops, hubs excluded (CD12). |
 | CK12 | Schema | The `context` operation is an optional addition to `omnia.agent/1` (AK7 allows adding an operation as a minor change). The line grammar has its own version, `lines/1`, stated in each view's legend. The operation adds three error codes to 9.4 of mcp-plan.md: `stale_cursor`, `unknown_revision` and `ambiguous_handle {candidates}`. |
-| CK13 | Handles | Typed handles are unambiguous: item ids (`part:3`, `wire:7`, `label:2`, AQ5), pins `part:3#1` (pin index), and circuit keys (`net:"VCC"`, `net:pin:3.1`). Names are aliases, resolved in this order: designator (`R3`), designator and pin number (`R3.2`), net display name (`VCC`, `N(R3.2)`). An alias that matches more than one entity (duplicate designators, a label equal to another name) is refused with the sorted candidates as typed handles; it is never bound silently. An unknown handle lists the closest valid names. A pin whose part has no library metadata for it (a legacy sheet whose stored pins differ from the symbol) is shown by index as `R3#1`. |
-| CK14 | Cursors | Opaque. A cursor binds the view request, its arguments and the revision. Used at another revision it is the tool error `stale_cursor` with a hint to re-run the view; a document's pages are lossless within one revision. Cursors are valid while the document is open. |
-| CK15 | Page minimum | A request budget below 1,024 bytes is raised to 1,024. A record longer than a page is split into continuation lines (tag `+`) and the cursor points inside it, so every page makes progress. |
+| CK13 | Handles | Typed handles are unambiguous: item ids (`part:3`, `wire:7`, `label:2`, AQ5), pins `part:3#1` (pin index), and circuit keys (`net:"VCC"`, `net:pin:3.1`). Names are aliases. Resolution collects **every** entity of the types the argument accepts whose alias matches (designators `R3`, pin references `R3.2`, net display names and candidate names `VCC`, `N(R3.2)`); exactly one match binds, more than one is refused with all candidates as typed handles sorted by their handle text, so the error is the same whichever index finds a match first; it is never bound silently. The name index maps each alias to a sorted list of entities. An unknown handle lists the closest valid names. A pin whose part has no library metadata for it (a legacy sheet whose stored pins differ from the symbol) is shown by index as `R3#1`. |
+| CK14 | Cursors | Opaque. A cursor binds the view, its arguments and the revision, and is passed back as `{"cursor": "<c>"}` in place of a view. Used at another revision it is the tool error `stale_cursor` with a hint to re-run the view; a document's pages are lossless within one revision. Cursors are valid while the document is open. Moving to a different view uses a typed handle (CK13), not a cursor: `focus` gives `net:"GND"`, and `{"net": {"name": "net:\"GND\""}}` starts the member pages. |
+| CK15 | Page minimum and long records | A view's share below 2,048 bytes is not run (CK10); a request budget below 4,096 bytes is raised to 4,096. In both formats a record is split, never dropped: in `lines` a long record continues on lines tagged `+`; in `json` a long row is split into fragments with the same `key` and `part: n of m`, whose list fields (pins, members) concatenate in order. A document string longer than 1,024 bytes is shown as its first 256 bytes plus `+<n> bytes` and a `text` handle, and `{"text": {"of": "<handle>", "cursor"?}}` pages the whole string, so every page makes progress and no fragment exceeds the minimum share. |
 
 ## 5. Architecture
 
@@ -199,7 +201,7 @@ equals the document's; otherwise the host updates or rebuilds first (CINV5).
 - The derived model has one level of dependency (connectivity, then circuit facts, then
   findings and structure) and a fixed schema, so the incremental machinery is hand-written:
   revision stamps, early cutoff and signed deltas, borrowed as ideas from query-based
-  incremental computation and dataflow systems. No incremental-computation framework is
+  incremental computation and dataflow systems [S11, S22, S23, S24]. No incremental-computation framework is
   adopted: each brings a runtime and memo tables onto a path that must stay allocation-free.
 
 ### CD2 The document reports a net delta. PROPOSED
@@ -212,11 +214,16 @@ equals the document's; otherwise the host updates or rebuilds first (CINV5).
     members came from;
   - `moved`: every pin, wire and label whose logical net changed, with its before and after
     `NetId` (absent for an item added or removed by the command);
-  - `labels`: labels whose text changed, which can rename a net without moving any member.
+  - `labels`: labels whose text changed, which can rename a net without moving any member;
+  - `renumbered`: logical nets whose membership is unchanged but whose `NetId` changed (the
+    free list can swap ids when an isolated part is detached and reattached), so a reader
+    indexed by `NetId` can remap without comparing members.
 - `Change` also gains `modified`: the ids of parts, wires and labels whose stored fields
   changed (designator, value, position, orientation, text), so readers need not search `dirty`.
-- `nets_changed` keeps its D2 meaning. C1.1 proves `nets_changed == !net_delta.is_empty()`; if
-  a case breaks that, C1.1 amends D2 in canvas-plan.md rather than weakening the test.
+- `nets_changed` keeps its D2 meaning and its current value everywhere, including the agent
+  boundary, so existing responses keep their bytes. `net_delta` describes the final state
+  only: a batch that changes a label from `A` to `B` and back sets `nets_changed` with an empty
+  delta. C1.1 proves the one-way rule `!net_delta.is_empty() ⇒ nets_changed`.
 - Connectivity already knows these facts when it unions and splits; reporting them is
   bookkeeping, not search. C1.1 fixes the exact types and proves CINV12.
 
@@ -247,43 +254,59 @@ equals the document's; otherwise the host updates or rebuilds first (CINV5).
 - Every derived record (net row, pin row, finding, recognised structure) stores `changed_at`.
   A recomputed record equal to the old one keeps its old stamp, so a wire re-route that changes
   no membership never appears in `since`.
-- Invalidation after an edit, in order:
-  1. Nets in `net_delta` (`retired`, `created`, `mapping`, the nets of `moved` items, nets of
-     `labels`): recompute members, key, name and kind.
-  2. Parts in `added`, `removed` and `modified`: recompute their rows; a designator change also
-     marks every net one of their pins belongs to, because the anchor and display name can
-     change; a designator or value change updates the designator and name indexes.
-  3. Every net whose key or display name changed marks the outline line of every member part,
-     because those lines show the net's name.
-  4. Findings: per-pin and per-net findings of the marked pins and nets; grouped findings by
-     their group (a designator change re-checks `designator.duplicate` for the old and the new
-     designator, including untouched parts that share either).
-- Each rule has an incremental-against-rebuild fixture, including its undo (CTC-key-04,
-  CTC-find-03).
+- Invalidation is derived from what each record reads, not listed case by case:
+
+  | Record | Reads | Marked when |
+  | --- | --- | --- |
+  | Net membership | connectivity | its `NetId` is in `net_delta` |
+  | Net key and anchor | members' designators, pin numbers, pin world positions, ids; label texts; for wire islands, wire endpoints | membership changes; any member part in `added`, `removed` or `modified`; any member label in `labels`; any member wire in `modified` |
+  | Display name, candidates, kind | key, anchor's designator, label texts and kinds, member roles | the key, anchor or any of those inputs is marked |
+  | Part row and outline line | designator, value, symbol, roles, each pin's net name | the part is in `added`, `removed` or `modified`; any of its pins' nets has a marked name |
+  | Designator group | the set of parts with one designator | a part enters or leaves it (added, removed, or renamed: both the old and the new group) |
+  | Findings | per their rule's inputs | any input record is marked; grouped findings with their group |
+
+  Marks are processed in table order, so a part move that keeps membership still re-checks
+  its nets' anchors (two pins with the same designator and number can swap order by
+  position), and adding or deleting a duplicate designator re-checks every untouched part in
+  that group.
+- Each row has an incremental-against-rebuild fixture, including its undo (CTC-key-04,
+  CTC-key-05, CTC-find-03).
 - Change tiers: geometry and wires (tier 0); part and pin properties (tier 1); library
   definitions (tier 2). A tier-0 edit never revisits role-only work on nets it did not touch.
 
 ### CD6 The journal stores signed facts in stable keys. PROPOSED
 
 - Each revision appends a sorted vector of `(fact, +1 | -1)` records. Facts are circuit
-  facts, never geometry: `PinOnNet(pin, key)`, `LabelOnNet(label, key)`, `NetName(key, name)`,
-  `NetKind(key, kind)`, `PartField(part, field, value)` and `Finding(id, handles)`. Pins and
+  facts, never geometry: `PinOnNet(pin, key)`, `LabelOnNet(label, key)`,
+  `LabelText(label, text)`, `NetName(key, name)`, `NetKind(key, kind)`,
+  `PartField(part, field, value)` and `Finding(id, handles)`. `LabelText` records every label
+  text, so renaming a secondary label (one that is neither the key nor the display name) is
+  still a change. Pins and
   labels are named by item id; keys by CK1. Wire membership is geometry and is not journaled:
   a split or merge is visible through the pins and labels that moved, and a net with no pins
   or labels is reported by the finding `net.no_pins`, not by events.
 - `since {revision}` is the **net effect** between the state at `revision` and now: a k-way
   merge of the sorted entries after `revision` that sums and drops zeros, in O(F log k) for F
   facts over k entries. An edit followed by its undo consolidates to nothing. There is no
-  separate lineage: events are derived from the net effect at query time. Members leaving key
-  A for key B is `moved`; every member of A moving to B is `A merged into B`; members of one
-  key spreading to several is `A split into B, C`; a key whose members are unchanged but whose
-  key or name changed is `renamed`. Example lines: `E move R3.2 N(R3.2) -> GND`,
-  `E merge N7 -> GND`, `E value R3 10k -> 4k7`.
-- Responses at the edges: `revision` equal to now gives an empty view; `revision` ahead of now
-  is the tool error `unknown_revision`; `revision` older than the oldest retained entry, or
-  older than the open or rebuild that started the journal, gives `history truncated at <r>`
-  followed by the summary view, never a partial delta. Opening or rebuilding a document starts
-  an empty journal at the current revision.
+  separate lineage: events are derived from before-and-after membership at query time, by
+  these rules in order, each member used once:
+  1. `split`: the members of one before-key now lie in two or more after-keys, each holding at
+     least two of them or the original key; one event names all after-keys.
+  2. `merge`: two or more before-keys, each with at least two members, now share one
+     after-key; one event names the before-keys.
+  3. `rename`: a key whose members are unchanged but whose key or display name changed.
+  4. `move`: any remaining member whose key changed, one event per member. A lone pin joining
+     a net is therefore a `move`, not a merge.
+  5. Field events: `value`, `designator`, `label`, `add`, `remove`, `finding`.
+
+  Example lines: `E move R3.2 N(R3.2) -> GND`, `E merge N7 N9 -> GND`,
+  `E split N(R1.2) -> N(R1.2) N(R2.1)`, `E value R3 10k -> 4k7`.
+- Responses at the edges, with `base` as CK8 defines it: `revision` equal to now gives an
+  empty view; `revision` ahead of now is the tool error `unknown_revision`; `revision` below
+  `base` gives `history truncated at <base>` followed by the summary view, never a partial
+  delta. Opening or rebuilding sets `base` to the current revision, so the first edit after
+  open is answerable from `base` (and CD14 works on it). C1.4 tests each boundary right after
+  open, after a rebuild and after an eviction.
 - Test oracle (CINV4): the diff of two full fact-set snapshots, kept by tests only.
 
 ### CD7 Layout for speed. PROPOSED
@@ -307,27 +330,29 @@ equals the document's; otherwise the host updates or rebuilds first (CINV5).
 ### CD8 Views are pre-joined, budgeted and lossless. PROPOSED
 
 - Every view starts with counts, lists records in incidence form (each pin names its net; each
-  net lists its pins), and ends with handles to fetch more. Absences are stated as findings,
-  because models do not infer them.
-- Hub nets (CK7) appear inside other views as a count and a handle. The `net` view is the one
-  direct, pageable member list: for a hub it pages the members instead of listing them inline,
-  so the handle always leads somewhere that makes progress.
+  net lists its pins) [S2, S3], and ends with handles to fetch more, so the summary and the
+  next steps sit at the ends of the input, where they are used best [S6]. Absences are stated
+  as findings, because models do not infer them [S2].
+- Hub nets (CK7) appear inside other views as a count and a typed handle. The `net` view is the
+  one direct, pageable member list: for a hub it pages the members instead of listing them
+  inline, so the handle always leads somewhere that makes progress (CK14).
 - When a view does not fit its budget, it stops at a record boundary (or splits one record,
   CK15) and ends with an elision line: what was left out, how many, and the cursor that fetches
   it. At one revision, following every cursor reconstructs the unbudgeted view exactly
   (CINV7); across an edit the cursor is refused (CK14), so pages never skip or repeat rows.
 - Two formats with the same content: `lines` (CK9, the default, for models to read) and `json`
   (typed rows, for programs). Agents write JSON arguments and never have to produce the line
-  form: studies of compact notations found accuracy falls when models must write them.
+  form: a study of compact notations found accuracy falls when models must write them [S7].
 
 ### CD9 One composite agent operation. PROPOSED
 
 - `context {doc_id, views, budget?, format?}` takes a list of views (section 9) and answers all
   of them against one revision in one call. Its MCP tool `omnia_context` carries one to five
   worked examples in its description, because examples measurably improve argument accuracy on
-  complex parameters.
+  complex parameters [S30]. Few consolidated tools with concise responses and meaningful
+  names are the published practice [S29].
 - The tool set stays fixed and in a fixed order (the 2026-07-28 revision requires that tools
-  not change as a side effect of other requests). No tool groups unlock during a session.
+  not change as a side effect of other requests [S19]). No tool groups unlock during a session.
 - `omnia_inspect`, `omnia_query` and `omnia_nets` stay as built in A1, and their descriptions
   point to `omnia_context` for circuit questions (CQ4).
 
@@ -339,9 +364,13 @@ equals the document's; otherwise the host updates or rebuilds first (CINV5).
   `outputSchema` is the union of the two, so the structured result always validates, as every
   pinned revision requires. The text block is the `lines` joined by newlines; for
   `format: "json"` it is the serialized JSON, as 10.1 says.
+- Errors keep mcp-plan.md 9.4 and 10.1 unchanged: `isError: true`, `structuredContent` is the
+  9.4 error envelope (including CK12's three codes), and the text block is its serialized JSON,
+  in both formats. The `outputSchema` covers success only, as 10.1 already does for other
+  tools.
 - Reason: clients reportedly differ on which channel reaches the model (some forward only the
-  structured object, others only text). Every pinned revision makes the serialized-JSON text
-  copy a SHOULD, kept for compatibility, not a MUST. Putting the compact lines in both is
+  structured object, others only text) [S32, S33]. Every pinned revision makes the
+  serialized-JSON text copy a SHOULD, kept for compatibility, not a MUST [S17, S18, S19]. Putting the compact lines in both is
   correct whichever channel is used. This departs from that SHOULD and from mcp-plan.md 10.1
   for this tool and format only (CQ3).
 - Bytes: both channels travel, so the wire carries about twice the view; the model sees one.
@@ -361,28 +390,33 @@ equals the document's; otherwise the host updates or rebuilds first (CINV5).
 - Matching runs on the bipartite part-and-net graph. Edges carry pin role classes rather than
   pin numbers (both resistor pins are class `P`), so interchangeable pins match without trying
   every order. Symmetric patterns are de-duplicated by requiring lowest-id order among
-  interchangeable parts, which is also the tie-break.
+  interchangeable parts, after ordering them by designator and position, which is also the
+  tie-break (CINV3).
 - Every search is anchored at the pattern's rarest part kind and step-capped (CK11).
   Subgraph matching is hard by structure, not size: small real instances can defeat every
-  solver, so a capped search reports `truncated` rather than dropping results.
+  solver [S15], so a capped search reports `truncated` rather than dropping results.
 - Hub nets are labelled terminals the search never walks through. With hubs excluded, a pattern
   of radius r can only change within r hops of an edit, so rematching after an edit re-seeds
   only that neighbourhood (CB8). A change in a net's hub status rematches every pattern that
   used it.
 - Repeated channels are found by a fixed, versioned Weisfeiler-Lehman hash written in the crate
-  (about 100 lines), and each hash group is confirmed by the matcher before it is called
-  identical: such hashes can collide. Two levels are reported: `same topology` (values ignored)
+  (about 100 lines) [S16], and each hash group is confirmed by the matcher before it is called
+  identical: such hashes can collide, and one library's hash values changed between its
+  versions [S27]. Two levels are reported: `same topology` (values ignored)
   and `identical` (values equal); a channel differing in one value is reported as such.
 - Learned classifiers are excluded: in published comparisons, plain pattern matching was as
-  accurate (precision about 0.96, recall about 0.99 in one study), learned output can differ
-  across hardware, and only a match explains itself. Community detection is excluded from facts;
-  if ever offered, it is seeded, debounced and labelled `suggested`.
+  accurate (precision about 0.96, recall about 0.99 in one study [S13]; a learned annotator at
+  90.9% accuracy in another [S14]; the reference open flow uses matching for primitives [S12]),
+  learned output can differ across hardware, and only a match explains itself. Community
+  detection is excluded from facts: it is reproducible only with a fixed seed and
+  implementation [S28]; if ever offered, it is seeded, debounced and labelled `suggested`.
 
 ### CD13 Ground and power come from declarations. PROPOSED
 
 - The ground reference is set by a ground part or a `ground`-role pin, never by matching names
-  like `GND`. A net named `AGND` with no ground part is not a reference; a name match may raise
-  a `heuristic` finding.
+  like `GND`. SPICE requires the reference to be node `0` [S21], and a netlister that maps
+  only certain names to it leaves a net named `AGND` floating [S26]. A net named `AGND` with
+  no ground part is not a reference; a name match may raise a `heuristic` finding.
 - Rails are recognised in evidence order: declared (power symbols, `power`-role pins), then
   name heuristics, then structure (a regulator output, many decoupling capacitors).
 
@@ -393,17 +427,24 @@ equals the document's; otherwise the host updates or rebuilds first (CINV5).
   it is absent, the request and the response bytes are exactly as today, so existing strict
   decoders are unaffected. An agent can verify an edit ("R3.2 is now on GND") with no extra
   call (CB12). Both are optional fields, a minor change under AK7.
-- A validated no-op returns an empty `circuit` view. `preview` computes it on the fork, and
-  AINV2 extends to it: the preview's `circuit` equals the apply's. An idempotent replay
-  returns the stored bytes, `circuit` included (AINV7).
+- A validated no-op returns an empty `circuit` view. `preview` computes it on the fork. The
+  `circuit` option is not part of the operations a `preview_id` binds (11.3 of mcp-plan.md):
+  an `apply` with a `preview_id` may ask for a different format or none. When `preview` and
+  `apply` ask for the same format and budget from the same revision, their `circuit` fields
+  are byte-identical (AINV2 extended). An idempotent replay returns the stored bytes,
+  `circuit` included, and a replay with a different `circuit` option is
+  `idempotency_conflict` (AINV7).
 
 ### CD15 Determinism is proved, not assumed. PROPOSED
 
 - Every public output (keys, names, journal facts, finding order, rendered bytes) is a pure
   function of the current document, plus the journal for `since`.
 - Proved by three property tests: incremental equals rebuild (CINV2); the same document built
-  in shuffled insert orders renders byte-identical views up to the id mapping, as AINV5 states
-  for the agent surface (CINV3); journal consolidation equals the snapshot diff (CINV4).
+  in shuffled insert orders renders the views CINV3 defines; journal consolidation equals the
+  snapshot diff (CINV4).
+- Every visible order and tie (outline order, member order, anchor, path ties, symmetric
+  pattern order) uses document content and geometry before ids, so only id-bearing tokens can
+  differ between insertion orders.
 
 ### CD16 Understanding is measured. PROPOSED
 
@@ -428,7 +469,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 | --- | --- |
 | CINV1 | `omnia-circuit` never mutates a `Doc` and does not depend on GPUI, an async runtime or `omnia-agent`; `omnia-doc` does not depend on it. [C1.2] |
 | CINV2 | After every step of a random sequence of commands (including `SetText` renames and duplicate designators), undos and redos, the incrementally updated circuit equals `Circuit::build` on the same document: graph, keys, names, outline cache, tier 0 and 1 findings. [C1.3, C1.6, C3.1] |
-| CINV3 | A document rebuilt with its items inserted in another order renders identical views after replacing every item id with its counterpart under the id mapping; display names, anchors and every line without an id are byte-identical. [C1.5] |
+| CINV3 | A document rebuilt with its items inserted in another order renders identical views after replacing every id-bearing token (item ids, `net:pin:` and `net:wire:` keys, `N(wire:<id>)` names, cursors) with its counterpart under the id mapping. Items that agree in every content and geometry field render identical lines, so their relative order cannot show. [C1.5] |
 | CINV4 | For any r0 < r1 within the retained journal, the consolidated journal over (r0, r1] equals the diff of the two snapshots' fact sets; an edit followed by its undo consolidates to nothing. [C1.4] |
 | CINV5 | No view is answered from a circuit whose revision differs from the document's. [C1.3, C2.1] |
 | CINV6 | Allocation proof, counting `alloc` and `realloc`, each test with a negative control that must count above zero. Warm means: after `build`, plus one pass of the same fixed case set. Then query and render paths allocate nothing; a rerun of the same fixed edit cases through `update` allocates nothing (the journal is preallocated, CK8; CSR slices have the spare capacity the warm pass gave them). Excluded and stated: the first computation of a lazy tier 2 result per revision, compaction (which runs only on idle), and edits that introduce new strings. [C1.7] |
@@ -437,7 +478,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 | CINV9 | For arbitrary label, designator and value text, the line form parses back to the same records, and no text can produce a line that is not its own record. [C1.5] |
 | CINV10 | No output depends on hash-map iteration order: enforced by the crate's `clippy.toml` and checked by CINV3. [C1.2] |
 | CINV11 | No `context` response exceeds the CB11 ceiling, and no default response exceeds the default. [C2.1] |
-| CINV12 | After every `apply`, `undo` and `redo`, `net_delta` applied to the previous logical partition of pins, wires and labels reproduces the partition a full rebuild gives, and `modified` lists exactly the items whose stored fields changed. [C1.1] |
+| CINV12 | After every `apply`, `undo` and `redo`, `net_delta` applied to the previous logical partition of pins, wires and labels, with `NetId`s remapped through `renumbered`, reproduces the partition and the `NetId`s `Doc` reports; `modified` lists exactly the items whose stored fields changed; `!net_delta.is_empty() ⇒ nets_changed`. [C1.1] |
 | CINV13 | An alias that matches more than one entity is refused with `ambiguous_handle` and the sorted candidates; it is never bound to one of them. [C1.5] |
 
 ## 8. Scenarios
@@ -447,28 +488,35 @@ Each is a test with the required result. Agent transcripts live beside the A1 on
 
 | ID | Setup and action | Expected result |
 | --- | --- | --- |
-| CTC-key-01 | Resistors R1 (`part:0`) and R2 (`part:1`); one wire from R1 pin 2 to R2 pin 1; no labels. Delete the wire | Before: one net, anchor R1.2, key `net:pin:0.1`, name `N(R1.2)`. After: two nets, `N(R1.2)` (key unchanged) and `N(R2.1)` (key `net:pin:1.0`); `since` shows `E split N(R1.2) -> N(R1.2), N(R2.1)` |
+| CTC-key-01 | Resistors R1 (`part:0`) and R2 (`part:1`); one wire from R1 pin 2 to R2 pin 1; no labels. Delete the wire | Before: the joined net has anchor R1.2, key `net:pin:0.1`, name `N(R1.2)` (R1.1 and R2.2 are single-pin nets, unchanged throughout). After: the joined net becomes `N(R1.2)` (key unchanged) and `N(R2.1)` (key `net:pin:1.0`); `since` shows `E move R2.1 N(R1.2) -> N(R2.1)`: only one member left, so CD6 rule 4 applies, not a split |
+| CTC-key-06 | R1.2, R2.1 and R3.1 on one unlabelled net (wire R1.2 to R2.1, wire R2.1 to R3.1); delete the first wire | The original key `net:pin:0.1` survives on R1.2; R2.1 and R3.1 form `N(R2.1)`; `since` shows `E split N(R1.2) -> N(R1.2) N(R2.1)` |
 | CTC-key-02 | Net labelled `VCC`; move an unrelated part | Key `net:"VCC"` unchanged; `since` empty |
 | CTC-key-03 | Build the CTC-key-01 sheet with R2 inserted before R1 | Name `N(R1.2)` in both; views identical after the id mapping (CINV3) |
+| CTC-key-05 | Two parts both designated `R3` on one unlabelled net through pin 1; move them so their pin positions swap, membership unchanged; then undo | The anchor follows the pin with the lower position; key and name change as CK1 says; incremental equals rebuild after the move and after the undo |
 | CTC-key-04 | CTC-key-01 before the delete; rename R1 to R9 with `SetText`, then undo | After the rename: anchor R2.1, name `N(R2.1)`, R2's outline line shows the new name although R2 was not edited; `since` shows a rename; after undo, incremental equals rebuild and `since` from before the rename is empty |
 | CTC-since-01 | Re-wire R3 pin 2 from an unlabelled net to `GND` | `since` holds one event: `R3.2 moved N(R3.2) -> GND` |
 | CTC-since-02 | Any edit, then undo; `since` the pre-edit revision | Empty |
-| CTC-since-03 | 1,100 edits; `since` revision 1 | `history truncated at <r>` and the current summary, never a partial delta |
+| CTC-since-03 | 1,100 edits; `since` revision 1 | `history truncated at <base>` and the current summary, never a partial delta |
+| CTC-since-04 | Open a document at revision 42; one edit; `since 42`. Then fill the journal until an eviction and ask `since base` and `since base - 1` | `since 42` returns the edit (CD14 works on the first edit); `since base` answers, `since base - 1` is truncated |
+| CTC-since-05 | Net `A` with a second label `Z1`; rename `Z1` to `Z2` | `since` holds `E label <label id> Z1 -> Z2`; key and display name unchanged |
+| CTC-since-06 | One edit that re-keys more than 262,144 pin facts | The edit's own `since` answers, paged by cursor; every older revision is truncated |
 | CTC-name-01 | Labels `VCC` and `V3V3` shorted by a wire | One net, key `net:"V3V3"`, display name `V3V3` (lowest by byte order), candidate `VCC`; finding `names.multiple` naming both labels |
 | CTC-gnd-01 | A net labelled `GND` with no ground part | `is_ground_reference` false; finding `ground.name_only` at `heuristic` |
 | CTC-find-01 | A part pin alone on its net | Finding `pin.unconnected` naming the pin |
 | CTC-find-02 | An op-amp input pin with no driver (after C3.1) | Finding `input.undriven` naming the pin and its net |
-| CTC-find-03 | Parts R1 and R2; rename R2 to R1 with `SetText`, then undo | `designator.duplicate` names both parts, including the unedited one; after undo it is gone; incremental equals rebuild at each step |
+| CTC-find-03 | Parts R1 and R2; rename R2 to R1 with `SetText`, then undo; then place a third part R1 and delete it | `designator.duplicate` names every part in the group, including the unedited ones, after each step; it is gone after the undo and after the delete; incremental equals rebuild at each step |
+| CTC-order-01 | Two parts both `R3`, values `1k` and `2k`, built in both insertion orders | Identical outline bytes: the `1k` line first in both (CINV3) |
 | CTC-view-01 | `focus R3` on `10k` | One call; ≤ 1 KB; each pin's net and that net's other members (hubs as count and handle) |
 | CTC-view-02 | `outline` of `10k` at the default budget, then follow every cursor | Pages concatenate to the unbudgeted outline (CINV7); each page ≤ CB11 |
-| CTC-view-03 | `net` on a 400-pin hub at a 1,024-byte budget, following every cursor; then an edit between two pages; then a part whose quoted value is longer than a page | Pages reconstruct all 400 members; the cursor after the edit is refused with `stale_cursor`; the long record arrives as continuation lines across pages |
-| CTC-hub-01 | A ground part and a label `GND` on a 400-pin net; `focus` on a part tied to it | `GND (400 pins)` and a cursor into the `net` view; no inline member list |
-| CTC-handle-01 | Two parts both designated `R3`, and a label with text `R3` | `focus R3` is refused with `ambiguous_handle` listing `part:<a>`, `part:<b>` and the net key; `focus part:<a>` succeeds |
-| CTC-inj-01 | Label text containing a newline, `|`, quotes and an instruction-like sentence | One quoted, escaped token; parses back to the same text (CINV9) |
+| CTC-view-03 | `net` on a 400-pin hub at a 4,096-byte budget, following every cursor; then an edit between two pages; then a part with a 5,000-byte value, in both formats | Pages reconstruct all 400 members; the cursor after the edit is refused with `stale_cursor`; the value shows 256 bytes plus a `text` handle whose pages return all 5,000 bytes; JSON fragments concatenate to the unbudgeted row |
+| CTC-view-04 | 8 views at a 4,096-byte budget | Views whose share is below 2,048 bytes return one elision line each with a cursor that runs them alone; following them reconstructs every view |
+| CTC-hub-01 | A ground part and a label `GND` on a 400-pin net; `focus` on a part tied to it | `GND (400 pins)` and the typed handle `net:"GND"`; no inline member list; `{"net": {"name": "net:\"GND\""}}` pages the members |
+| CTC-handle-01 | Two parts both designated `R3`, and a label with text `R3` | `focus R3` is refused with `ambiguous_handle` listing `net:"R3"`, `part:<a>` and `part:<b>`, sorted by handle text; `focus part:<a>` succeeds |
+| CTC-inj-01 | Label text containing a newline, `|`, `.`, `:`, quotes, non-ASCII and an instruction-like sentence; a designator `A.B` with pin `C` and a designator `A` with pin name `B.C` | Each is one quoted, escaped token; `"A.B".C` and `A."B.C"` stay distinct; everything parses back to the same text (CINV9) |
 | CTC-rec-01 | Two resistors in series from a declared rail to ground, tap to an op-amp input | Divider at `exact`, ratio at `derived`, citing both resistors and three nets |
 | CTC-rec-02 | Eight RC channels, one with a different resistor value | One `same topology` group of 8; `identical` group of 7; the odd channel named with its differing value |
-| CTC-mcp-01 | `omnia_context` with `outline` and `findings` over MCP | Exact transcript; `structuredContent.lines` joined equals the text block (CD10) |
-| CTC-apply-01 | `apply` with `circuit: {}` a wire joining R1.2 to `VCC`; then the same request without `circuit` | First result's `circuit` field holds `E move R1.2 N(R1.2) -> VCC`; the second result has no `circuit` field and is byte-identical in shape to today's |
+| CTC-mcp-01 | `omnia_context` with `outline` and `findings` over MCP, in both formats, plus one request that fails with each CK12 error, in all three AK1 revisions | Exact transcripts; for `lines`, the `structuredContent.result.views[*].lines` joined equal the text block; results validate against the `outputSchema`; errors carry the 9.4 envelope; each channel's serialized length is within CB11 (CD10) |
+| CTC-apply-01 | From one starting revision on two forks: `preview` then `apply` with `circuit: {}` a wire joining R1.2 to `VCC`; and the same `apply` without `circuit`; then a no-op; then an idempotent replay | Preview and apply `circuit` fields are byte-identical and hold `E move R1.2 N(R1.2) -> VCC`; the request without `circuit` returns exactly today's bytes; the no-op gives an empty view; the replay returns the stored bytes |
 
 ## 9. Views
 
@@ -478,7 +526,8 @@ Each is a test with the required result. Agent transcripts live beside the A1 on
 { "op": "context", "params": {
     "doc_id": "d1",
     "views": [
-      { "outline":  { "cursor": "R40", "limit": 200 } },
+      { "outline":  { "limit": 200 } },
+      { "cursor":   "c7f1" },
       { "focus":    { "at": "U1", "depth": 2 } },
       { "net":      { "name": "VCC" } },
       { "since":    { "revision": 12 } },
@@ -491,13 +540,15 @@ Each is a test with the required result. Agent transcripts live beside the A1 on
 
 | View | Answers | Order |
 | --- | --- | --- |
-| `outline` | Every part, one line each, with each pin's net | Designator natural order (`R2` before `R10`), then part id |
+| `outline` | Every part, one line each, with each pin's net | Designator natural order (`R2` before `R10`), then value, symbol, position (x, then y), then part id |
 | `net` | One net: name, key, kind, candidate names, members; the pageable member list for hubs | Members by (designator, pin number), then (part id, pin index) |
 | `focus` | A part or net and its neighbourhood to `depth` (default 1, at most 3), never through hubs | Breadth-first, then as above |
 | `since` | Circuit events after `revision` | Fact order (CD6) |
 | `findings` | Findings, filterable by tier and handle | Severity, then rule id, then first handle |
-| `path` | The shortest part-and-net path between two handles, hubs excluded | Shortest, ties by lowest ids |
+| `path` | The shortest part-and-net path between two handles, hubs excluded | Shortest; ties by the sequence of designators and net names, then positions, then ids |
 | `check` | A yes or no for "pin X is on net Y" or "X and Y share a net", with the evidence | — |
+| `text` | The whole of one long document string (CK15), paged | Byte order |
+| `{"cursor": c}` | The next page of the view the cursor came from (CK14) | As that view |
 
 An empty `views` array is a summary: counts, rails, the ten largest non-hub nets, and finding
 counts by tier.
@@ -539,7 +590,7 @@ P R42 resistor "4.7 k" | 1:"In \u{2192} buffer" 2:GND
 # lines/1 net: N name key kind pins ; A alias ; M members ; tokens after the tag are data
 = net rev=42
 N VCC net:"VCC" power 37 hub
-A "+5V"
+A +5V
 M C1.1 C2.1 C3.1 R40.2 R41.1 U1.5 U2.5 U3.5
 . 29 more members; next net cursor=a91c
 ```
@@ -611,21 +662,24 @@ filters, op-amp stages, channel arrays) whose answers a person has checked.
 
 ### 11.1 Connectivity stays as it is
 
-A 2025 experimental study of published fully dynamic connectivity structures (arXiv
-2501.02278) found large constants, high memory and pathological cases, and judged them not ready
-to deploy as is. Omnia's union-by-size plus two-ended search, where the smaller side moves, is
-the classic bounded-relabelling approach and stays. Two cheap refinements are planned only if
+A 2025 experimental study of published fully dynamic connectivity structures [S8] found large
+constants, high memory and pathological cases, and judged them not ready to deploy as is.
+Omnia's union-by-size plus two-ended search, where the smaller side moves, is the classic
+bounded-relabelling approach [S9] and stays. Two cheap refinements are planned only if
 measurement asks for them (C5.2):
 
-- A spanning-forest bit per wire: set when an insert merges two components, clear when it
-  closes a cycle. Deleting a wire with the bit clear can never split a net and needs no search.
+- A spanning-forest bit per wire, over geometric connectivity (wires and the points they
+  join): set when an insert joins two components, including a wire that extends a component
+  to a previously unoccupied endpoint; clear when both ends were already in one component,
+  that is, when it closes a cycle. Deleting a wire with the bit clear can never split a net
+  and needs no search [S8].
   The bit is only correct if replacements are promoted: when deleting a tree wire leaves the
   component connected, the search must mark one wire that crosses between the two sides as a
   tree wire. Otherwise, in a four-wire cycle, deleting a tree wire and then the old closing
   wire would skip a real split. If the search cannot name such a wire cheaply, the shortcut is
   not built. The two-delete cycle case joins the INV10 and CINV12 tests.
 - Multi-wire commands (paste, delete selection) run all unions first, then one multi-source
-  search per affected component.
+  search per affected component, as batch-dynamic work does at far larger scale [S10].
 
 ### 11.2 Rows, CSR and caches
 
@@ -663,7 +717,8 @@ impl Circuit {
     pub fn update(&mut self, doc: &Doc, symbols: &SymbolLibrary, change: &Change); // CB1
     pub fn revision(&self) -> u64;
     pub fn net_of_pin(&self, part: PartId, pin: u32) -> NetRef;                   // CB3
-    pub fn net_by_name(&self, name: &str) -> Option<NetRef>;                      // CB3
+    pub fn resolve(&self, handle: &str, allowed: Kinds) -> Resolution<'_>;        // CB3, CK13
+                                         // Resolution::{One(Entity), Many(&[Entity]), None(near)}
     pub fn render(&self, req: &ViewRequest, budget: usize, format: Format,
                   out: &mut Vec<u8>) -> Rendered;                                 // CB4, CB5
     pub fn since(&self, revision: u64) -> Since<'_>;                              // CD6
@@ -735,3 +790,55 @@ Applied by C0.2 after HC1, for the decisions HC1 keeps:
 | canvas-plan.md section 10 | Use column: `rustc-hash`, `smallvec`, `serde_json`, `hdrhistogram` in `omnia-circuit` |
 | canvas-plan.md section 9 (`Change`) and D2 | `net_delta` and `modified` (CD2), once C1.1 fixes their shape; any amendment to `nets_changed`'s meaning |
 | parts-plan.md (once merged) | Section 1: the netlister reads pin-to-net bindings from `omnia-circuit` (CQ9); section 13: CQ2 raised as a parts question if the owner wants it |
+
+## 16. Sources
+
+The research behind this plan was gathered on 2026-11-23. Each claim above cites one or more
+of these. Numbers quoted from a source are that source's, on its own hardware or models; none
+is an Omnia measurement. A source marked *(user report)* is not documentation and is treated
+as a hint to check, not a fact.
+
+### 16.1 Papers and standards
+
+| Id | Source |
+| --- | --- |
+| S1 | Ma et al., "NetlistBench", arXiv 2608.12197, August 2026. <https://arxiv.org/pdf/2608.12197> |
+| S2 | Fatemi, Halcrow, Perozzi, "Talk like a Graph: Encoding Graphs for Large Language Models", ICLR 2024, arXiv 2310.04560. <https://arxiv.org/pdf/2310.04560> |
+| S3 | Feng et al., "Beyond Graphs: Can Large Language Models Comprehend Hypergraphs?", ICLR 2025, arXiv 2410.10083. <https://arxiv.org/html/2410.10083v1> |
+| S4 | Modarressi et al., "NoLiMa: Long-Context Evaluation Beyond Literal Matching", ICML 2025, arXiv 2502.05167. <https://arxiv.org/html/2502.05167v3> |
+| S5 | Du et al., "Context Length Alone Hurts LLM Performance Despite Perfect Retrieval", Findings of EMNLP 2025, arXiv 2510.05381. <https://arxiv.org/abs/2510.05381v1> |
+| S6 | Liu et al., "Lost in the Middle: How Language Models Use Long Contexts", TACL 2024, arXiv 2307.03172. <https://arxiv.org/pdf/2307.03172> |
+| S7 | Kutschka and Geiger, "Notation Matters", arXiv 2605.29676, June 2026. <https://arxiv.org/pdf/2605.29676> |
+| S8 | Chen, Böhlen, Helmer, "An experimental comparison of tree-data structures for connectivity queries on fully-dynamic undirected graphs", arXiv 2501.02278, January 2025. <https://arxiv.org/abs/2501.02278> |
+| S9 | Even and Shiloach, "An On-Line Edge-Deletion Problem", Journal of the ACM 28(1), 1981. Read through secondary excerpts only. |
+| S10 | De Man, Dhulipala, Karczmarz, Łącki, Shun, Wang, "Towards Scalable and Practical Batch-Dynamic Connectivity", VLDB 2025, arXiv 2411.11781. <https://arxiv.org/abs/2411.11781> |
+| S11 | Budiu et al., "DBSP: Automatic Incremental View Maintenance for Rich Query Languages", PVLDB 16, 2023. <https://www.vldb.org/pvldb/vol16/p1601-budiu.pdf> |
+| S12 | Kunal et al., ALIGN open analog layout flow, arXiv 2008.10682. <https://arxiv.org/abs/2008.10682> |
+| S13 | Politecnico di Torino master's thesis on analog sub-circuit annotation (pattern matching precision 0.9641, recall 0.9860). <https://webthesis.biblio.polito.it/28628/1/tesi.pdf> |
+| S14 | Li et al., "The Application of Graph Attention Mechanism in the Automation of Analog Circuit Design", ACCV 2024 Workshops. <https://openaccess.thecvf.com/content/ACCV2024W/MLCSA2024/html/Li_The_Application_of_Graph_Attention_Mechanism_in_the_Automation_of_ACCVW_2024_paper.html> |
+| S15 | Solnon, "Experimental Evaluation of Subgraph Isomorphism Solvers", GbR 2019. <https://iapr.org/archives/gbr2019/data/pages/gbrsolnon.pdf> |
+| S16 | Shervashidze et al., "Weisfeiler-Lehman Graph Kernels", JMLR 12, 2011. <https://jmlr.org/papers/v12/shervashidze11a.html> |
+| S17 | Model Context Protocol specification, revision 2025-06-18, Tools. <https://modelcontextprotocol.io/specification/2025-06-18/server/tools> |
+| S18 | Model Context Protocol specification, revision 2025-11-25, Tools. <https://modelcontextprotocol.io/specification/2025-11-25/server/tools> |
+| S19 | Model Context Protocol specification, revision 2026-07-28, Tools; Pagination; Caching. <https://modelcontextprotocol.io/specification/2026-07-28/server/tools>, <https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/pagination>, <https://modelcontextprotocol.io/specification/2026-07-28/server/utilities/caching> |
+| S20 | Omnia's own measurements: `docs/measurements/T2.8.md` and `docs/measurements/command-boundary/reference-2026-11-17/README.md`. |
+| S21 | SPICE simulator manual (the open engine named in ROADMAP.md): ground node `0`, value suffixes. <https://ngspice.sourceforge.io/docs/ngspice-html-manual/manual.xhtml> |
+
+### 16.2 Software documentation, source code and reports
+
+Cited only as evidence for the claim named; no product is endorsed or depended on.
+
+| Id | Source | Supports |
+| --- | --- | --- |
+| S22 | Query-based incremental computation library book, "The red-green algorithm". <https://salsa-rs.github.io/salsa/reference/algorithm.html> | CD1: revision stamps, backdating, durability |
+| S23 | Rust compiler development guide, incremental compilation. <https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation.html> | CD1: early cutoff by result fingerprints |
+| S24 | Differential dataflow README. <https://github.com/TimelyDataflow/differential-dataflow> | CD1: changes as signed records |
+| S25 | Open-source schematic editor manual, version 9, and its connection-graph source. <https://docs.kicad.org/9.0/en/eeschema/eeschema.html>, <https://gitlab.com/kicad/code/kicad/-/raw/master/eeschema/connection_graph.cpp> | CK2: label priority and ties |
+| S26 | The same editor's SPICE netlist exporter source. <https://gitlab.com/kicad/code/kicad/-/raw/master/eeschema/netlist_exporters/netlist_exporter_spice.cpp> | CD13: only some names map to node `0` |
+| S27 | Open-source graph library, Weisfeiler-Lehman hash source and notes. <https://networkx.org/documentation/stable/_modules/networkx/algorithms/graph_hashing.html> | CD12: hash values changed between versions |
+| S28 | Open-source network analysis library, Leiden clustering reference. <https://search.r-project.org/CRAN/refmans/igraph/html/cluster_leiden.html> | CD12: reproducible only with a fixed seed |
+| S29 | AI lab engineering article, "Writing effective tools for agents". <https://www.anthropic.com/engineering/writing-tools-for-agents> | CD8, CD9: consolidated tools, concise responses, meaningful names |
+| S30 | AI lab engineering article, "Advanced tool use". <https://www.anthropic.com/engineering/advanced-tool-use> | CD9: input examples raised complex-parameter accuracy from 72% to 90% |
+| S31 | A coding agent's MCP documentation: tool-output warning at 10,000 tokens and default cap at 25,000. <https://code.claude.com/docs/en/mcp> | CB11 |
+| S32 | *(user report)* Issue: text block dropped when `structuredContent` is present. <https://claudeissues.com/issue/79944-mcp-tool-response-text-content-block-dropped-when-structuredcontent-is-also-pres> | CD10 |
+| S33 | *(user report)* Editor forum: results with only `structuredContent` silently dropped. <https://forum.cursor.com/t/mcp-tool-results-containing-only-structuredcontent-are-silently-dropped/167346> | CD10 |

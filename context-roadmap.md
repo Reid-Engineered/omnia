@@ -67,7 +67,8 @@ As in AGENTS.md: `cargo fmt --all --check`, `cargo clippy --workspace --all-targ
 | C3.1 | parts P2 (embedded definitions with pin roles in `Doc`) | after C1.8 and P2 |
 | C4.1 | C3.1 (role-correct matches need pin roles) | after C3.1 |
 | C4.3 | parts P2 (test-only regulator definitions are embedded through it) | after C4.2 |
-| C5.1 | A3.1 or A4.1 | when either needs a snapshot |
+| C3.3 | A1.9 (the agent contract it extends) | after C3.2 and A1.9 |
+| C5.1 | A3.1 or A4.1 | after C1.8, when either needs a snapshot |
 
 ## Dependency overview
 
@@ -76,9 +77,9 @@ C0.1 -> C0.2 [HC1]
 HC1 -> C1.1 (doc), C1.2 (circuit)
 C1.1 + C1.2 -> C1.3 -> C1.4 -> C1.5 -> C1.6 -> C1.7 -> C1.8 [HC2]
 C1.8 + A1.8 -> C2.1 -> C2.2 -> C2.3 -> C2.4;  C2.4 + A1.9 -> C2.5 [HC3]
-C1.8 + parts P2 -> C3.1 -> C3.2 -> C3.3 [HC4]
+C1.8 + parts P2 -> C3.1 -> C3.2;  C3.2 + A1.9 -> C3.3 [HC4]
 C3.1 -> C4.1 -> C4.2 -> C4.3 -> C4.4 [HC5]
-A3.1 or A4.1 -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.2
+C1.8 + (A3.1 or A4.1) -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.2
 ```
 
 ## Human checkpoints
@@ -152,7 +153,9 @@ A3.1 or A4.1 -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.2
 - Owns: `crates/omnia-circuit/src/journal.rs`
 - Do: signed facts per revision, the ring, checkpoints, consolidation, truncation; key-churn
   counter for CQ1.
-- Done when: CINV4 holds under property test; CTC-key-01, CTC-key-02, CTC-since-01 to 03 pass.
+- Done when: CINV4 holds under property test; CTC-key-01, CTC-key-02, CTC-key-06 and
+  CTC-since-01 to 06 pass, including the base-revision boundaries after open, rebuild and
+  eviction.
 
 ### C1.5 Views and rendering · todo
 - Lane: circuit · Depends: C1.4 · Read: section 9; CD8, CD17, CK7, CK9, CK10, CK13 to CK15,
@@ -162,13 +165,14 @@ A3.1 or A4.1 -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.2
   JSON, with budgets, cursors, continuation, elisions, hub capping, handle resolution and the
   outline cache.
 - Done when: CINV3, CINV7, CINV9 and CINV13 hold under property tests; CTC-key-03,
-  CTC-view-01 to 03, CTC-hub-01, CTC-handle-01 and CTC-inj-01 pass.
+  CTC-order-01, CTC-view-01 to 04, CTC-hub-01, CTC-handle-01 and CTC-inj-01 pass, in both
+  formats.
 
 ### C1.6 Tier 0 findings · todo
 - Lane: circuit · Depends: C1.3, C1.5 · Read: CD11, CK5, section 9.4, CINV8
 - Owns: `crates/omnia-circuit/src/findings.rs`; the `findings` view
 - Do: the tier 0 rows of section 9.4, maintained in `update`.
-- Done when: CINV8 holds; CTC-key-04, CTC-find-01, CTC-find-03 and CTC-gnd-01 pass; tier 0
+- Done when: CINV8 holds; CTC-key-04, CTC-key-05, CTC-find-01, CTC-find-03 and CTC-gnd-01 pass; tier 0
   findings and the outline cache are in CINV2.
 
 ### C1.7 Benches and allocation proofs · todo
@@ -202,10 +206,15 @@ A3.1 or A4.1 -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.2
 
 ### C2.2 Circuit delta on `apply` and `preview` · todo
 - Lane: agent · Depends: C2.1 · Read: CD14, AD3, AINV2
-- Owns: the `circuit` field in `src/schema/response.rs` and its schema; the service's apply and
-  preview paths
-- Do: render `since` for the edit into the result; preview computes it on the fork.
-- Done when: AINV2 still holds with the field; CTC-apply-01 passes.
+- Owns: the optional `circuit` request field in `src/schema/request.rs` (`EditArgs`, `ApplyArgs`)
+  and the `circuit` result field in `src/schema/response.rs`, with their schema files and the
+  `<op>.arguments` schemas; the service's apply and preview paths
+- Do: render `since` for the edit into the result when asked; preview computes it on the
+  fork; the option stays outside the operations a `preview_id` binds (CD14).
+- Done when: CTC-apply-01 passes: a request without `circuit` gives exactly today's bytes from
+  the same starting revision; a no-op gives an empty view; preview and apply with the same
+  option give byte-identical `circuit` fields (AINV2); an idempotent replay returns the stored
+  bytes and a replay with a different option is `idempotency_conflict` (AINV7).
 
 ### C2.3 `omnia_context` over MCP · todo
 - Lane: agent · Depends: C2.2 · Read: CD10, CQ3; mcp-plan.md 10 and 10.5
@@ -245,13 +254,15 @@ A3.1 or A4.1 -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.2
 
 ### C3.2 Tier 2 findings · todo
 - Lane: circuit · Depends: C3.1 · Read: CD11, CB7
-- Owns: `crates/omnia-circuit/src/findings_lazy.rs`
+- Owns: `crates/omnia-circuit/src/findings_lazy.rs`; the CB7 cases in
+  `crates/omnia-bench/benches/circuit.rs`
 - Do: the tier 2 rows of section 9.4, computed lazily and cached per revision.
 - Done when: each rule has a positive and a negative fixture; CB7 recorded on a development
   machine.
 
 ### C3.3 Gate: milestone C3 · todo → HC4
-- Lane: bench · Depends: C3.2 · Owns: `docs/measurements/C3.3.md` and `docs/measurements/C3.3/`
+- Lane: bench · Depends: C3.2, A1.9 · Owns: `docs/measurements/C3.3.md` and
+  `docs/measurements/C3.3/`; the findings section of `docs/agent/omnia-agent.md`
 - Do: prepare the CB1 and CB7 reference campaign as one command; record development-machine
   numbers; list the new findings in the agent contract.
 - Done when: the owner has run HC4, or the task is `needs-human` with the script ready.
@@ -260,7 +271,8 @@ A3.1 or A4.1 -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.2
 
 ### C4.1 Patterns and matcher · todo
 - Lane: circuit · Depends: C3.1 · Read: CD12, CK6, CK11, CB8, CINV8
-- Owns: `crates/omnia-circuit/src/recognise.rs`, `src/patterns/`
+- Owns: `crates/omnia-circuit/src/recognise.rs`, `src/patterns/`; the CB8 cases in
+  `crates/omnia-bench/benches/circuit.rs`
 - Do: the anchored, step-capped matcher over role classes with hub exclusion and local
   rematch; patterns: divider, RC and LC filter, pull-up and pull-down, decoupling, op-amp
   inverting, non-inverting and follower.
@@ -290,7 +302,7 @@ A3.1 or A4.1 -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.2
 ## Milestone C5: as needed
 
 ### C5.1 Snapshots · todo
-- Lane: circuit · Depends: A3.1 or A4.1 · Read: section 11.3
+- Lane: circuit · Depends: C1.8, and A3.1 or A4.1 · Read: section 11.3
 - Owns: `crates/omnia-circuit/src/snapshot.rs`
 - Do: chunked copy-on-write publication on first read after a revision change.
 - Done when: CINV6 still holds for `apply`; a reader on another thread sees one consistent
@@ -320,8 +332,9 @@ structure recognition, model accuracy on graph and netlist encodings, and MCP to
 Built on the parts plan's decided pin roles (PD5) and typed values (PD6) instead of
 re-planning them; CQ2 records the roles some checks would need. Applied context-plan.md
 section 15's C0.1 rows: AGENTS.md sources of truth and id prefixes, ROADMAP.md link, canvas
-roadmap Lanes row `circuit`. Rule-1 scan done: no company or product named; MCP and SPICE named
-as open standards; research citations given by arXiv number only. Nothing measured.
+roadmap Lanes row `circuit`. Rule-1 scan done: no company named in the plan text; MCP and
+SPICE named as open standards; Windows named only as AGENTS.md names machines. Nothing
+measured.
 
 2026-11-23 C0.1 review — independent review (different model) requested changes: 5 blockers,
 10 important, 1 nit. Fixed in the plan: CK1 anchor chosen by designator, then geometry, then
@@ -336,3 +349,19 @@ CK13 typed handles and `ambiguous_handle` (CINV13); CB1 moved out of `Doc::apply
 opt-in; CK9 tagged, escaped line grammar; roadmap dependencies, ownership, HC4 and HC5.
 The review also flagged the commit trailer and PR footer, which name the authoring tool, under
 rule 1; the owner confirmed on 2026-11-23 that authoring-tool attribution is an exception.
+
+2026-11-23 C0.1 re-review — second independent review (different model) of b6a69b4 requested
+changes: 2 blockers, 10 important, 3 nits. Fixed: CK8 base revision (the first edit after open
+is answerable) and single oversized entries kept alone; CD6 journals every label text, and
+event rules got a fixed precedence (a lone pin joining a net is a `move`), with CTC-since-04
+to 06 and CTC-key-06; CD2 `renumbered` for NetId swaps with unchanged membership, and
+`nets_changed` keeps its current value with only the one-way rule proved; CD5 invalidation
+derived from what each record reads (CTC-key-05, CTC-find-03 widened); visible order and ties
+by content and geometry before ids (CTC-order-01, CINV3 restated); CK10, CK14 and CK15
+composite budgets, cursor views, typed handles between views, JSON fragments and a `text`
+view (CTC-view-03, CTC-view-04); CK9 grammar per field (CTC-inj-01 widened); CK13 resolution
+collects all candidates; CD10 error envelope; CD14 preview_id interaction; C2.2, C3.2, C3.3,
+C4.1 and C5.1 ownership and dependencies. Also, at the owner's request, every research claim
+now cites a source listed in context-plan.md section 16, with links. Section 16.2 links to
+product documentation and user reports as citations only; the owner decides whether that is
+acceptable under rule 1.
