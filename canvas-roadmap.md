@@ -431,7 +431,7 @@ of the `canvas` lane.
   difference. Set `needs-human`; after the owner approves, commit the renders as goldens
   and set `done`.
 
-### T3.4 Gate: milestone 3 · needs-human
+### T3.4 Gate: milestone 3 · done
 - Lane: bench · Depends: T3.3
 - Do: `bench run --sheet text --script pan` and `zoom`: p99 < 16.7 ms (B3). Re-run the whole
   T2.7 table with text on. Run the golden tests.
@@ -1920,3 +1920,24 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        1.68 ms, `total` allocs max 10, 0 late, 12/12 goldens 0 differing px.
                        Standard checks pass locally. Status stays `needs-human` pending Orion
                        re-run. No new dependencies.
+2026-11-23 T3.4 done — Orion reference campaign 2 (`3224084`, binary SHA-256
+                       `faea6b7fdc52be5b40ae5aa4aea252eeca8f8947b0fc5a404a82f11ca1ba0744`,
+                       160/160 runs on i5-7300U / HD Graphics 620 / Wayland eDP-1 1920x1080
+                       @ 60 Hz, AC, performance governor, `kde-inhibit --power --screenSaver`,
+                       archived in `docs/measurements/T3.4/orion-2026-11-23-v2/`) certified
+                       PASS on every budget at both 100% (`s100`) and 125% (`s125`) with
+                       zero over-limit frames across all 120 motion runs (72,000 frames).
+                       `B2` startup delta 38.307 / 43.105 ms (< 300); `B3` `text-pan` p99
+                       2.081 / 1.299 ms (worst 4.424 / 4.964 ms, 10/10), `text-zoom` p99
+                       3.064 / 2.486 ms (worst 3.990 / 3.781 ms, 10/10), `1k-pan` p99
+                       1.814 / 1.461 ms (worst 4.493 / 3.254 ms, 10/10), `1k-zoom` p99
+                       2.849 / 2.209 ms (worst 4.305 / 5.345 ms, 10/10); `B4` `10k-pan` p99
+                       2.075 / 1.635 ms (worst 5.345 / 5.181 ms, 10/10), `10k-zoom` p99
+                       4.975 / 4.901 ms (worst 13.107 / 8.077 ms, 10/10); `B9` `10k` private
+                       memory 150.242–173.492 MB (`s100`) and 149.070–171.189 MB (`s125`, all
+                       < 300 MB); `B10` `allocs_per_frame.ours.max == 0` across all 120 runs.
+                       Windows golden suite (`cargo test -p omnia-golden`): 12/12 images
+                       matched with 0 differing pixels on `3224084`. Unlocks T4.3 (Milestone 4).
+                       (This clean 10/10 pass also covers the full no-known-limit T2.7 table
+                       required by T2.9; T2.9 left for its own status update.) No new
+                       dependencies.
