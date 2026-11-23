@@ -142,6 +142,7 @@ fact no longer matches, stop and log it.
 | UG12 | `set_window_title`, `toggle_fullscreen`, `is_fullscreen`, `window_bounds`, `appearance()`, `observe_window_appearance`, `scale_factor()`. | `window.rs` | Title, Full screen, Match system, window restore. |
 | UG13 | GPUI has no text-field element. `examples/input.rs` builds one from `EntityInputHandler` and `ElementInputHandler`. | `gpui/examples/input.rs` | UD16. |
 | UG14 | `Application::with_assets(impl AssetSource)` serves bytes to `svg()`; SVGs rasterise once per size into the atlas (G4). | `app.rs` `with_assets`; `assets.rs` | Icons (UD17). |
+| UG15 | `Window::focus` calls `refresh()`, and a refreshing window re-renders every cached view (`!window.refreshing` in the cache check). A mouse-down on a focusable element focuses it. | `window.rs` `focus`; `view.rs` | Pointer input in the chrome must not move focus (UQ14). Found by U4.2. |
 
 Not settled by reading, so measured in section 9: whether a `deferred` child of a `.cached()` view
 replays and occludes correctly (US2); what our render code allocates for a view whose only child
@@ -857,21 +858,25 @@ names and recovery ids use the process id, time and a counter instead of a UUID 
 
 Each has a default. Build to the default; the owner's dated answer replaces it here.
 
-| ID | Question | Default until answered |
-| --- | --- | --- |
-| UQ1 | `text/muted` (2.32 to 3.88:1) and Gray `text/secondary` on backdrop (4.25) and inset (4.43) are below 4.5:1. Change the tokens, or change where they are used? | The shell uses the next stronger token wherever a pair it draws would fail (muted → secondary, secondary → primary); UH2 lists every substitution next to the mockup. |
-| UQ2 | Command palette? | No. Menus, F10 and Alt+letter cover keyboard reach. |
-| UQ3 | Standalone files or a project container (ROADMAP open decision)? | Standalone `.omnia` files, one sheet each. Home's "Projects" are folders. |
-| UQ4 | Tab label: file name or a design title stored in the file? | File name without extension. |
-| UQ5 | Autosave recovery copies on by default, every 60 s? | Yes. |
-| UQ6 | Shell colours not in the `Theme` collection: logo tile, mark, oscilloscope screen, "running" pill, focus ring. | Add to the overlay token file, same value in both themes: `brand/tile` `#F2F2F2`, `brand/mark` `#111112`, `instrument/screen` `#0E0F11`, `focus/ring` = `stage/select`; the pill uses `stage/tag-bg`, `stage/tag-text`, `accent/mint`. A token that appears in `omnia.figcraft` wins. |
-| UQ7 | Home sidebar items for features that do not exist (Templates, Part libraries, Simulation results, account footer)? | Shown disabled with "Not available yet"; the footer omitted. |
-| UQ8 | Keep T1.5's cursor readout, which the mockup's status bar does not show? | Keep it, before grid. |
-| UQ9 | First boot sections 3 and 4 (libraries, simulator) before those features exist? | Reserved rows listing only what this build has. |
-| UQ10 | Guard against two instances editing the same file? | No lock; last save wins. |
-| UQ11 | The mockup shows command-key glyphs; the targets are Windows and Linux. | Show "Ctrl+N" style text. |
-| UQ12 | IEC symbol preference before an IEC symbol set is compiled? | Stored only; the sheet keeps the built-in set. |
-| UQ13 | Print (toolbar, File)? | Shown disabled; no print plan exists. |
+UH0 was signed on 2026-11-23. The owner delegated the sign-off to the coordinating agent, which
+kept every default and approved section 14 as written.
+
+| ID | Question | Default until answered | Answer |
+| --- | --- | --- | --- |
+| UQ1 | `text/muted` (2.32 to 3.88:1) and Gray `text/secondary` on backdrop (4.25) and inset (4.43) are below 4.5:1. Change the tokens, or change where they are used? | The shell uses the next stronger token wherever a pair it draws would fail (muted → secondary, secondary → primary); UH2 lists every substitution next to the mockup. | Default kept (UH0, 2026-11-23). |
+| UQ2 | Command palette? | No. Menus, F10 and Alt+letter cover keyboard reach. | Default kept (UH0, 2026-11-23). |
+| UQ3 | Standalone files or a project container (ROADMAP open decision)? | Standalone `.omnia` files, one sheet each. Home's "Projects" are folders. | Default kept (UH0, 2026-11-23). |
+| UQ4 | Tab label: file name or a design title stored in the file? | File name without extension. | Default kept (UH0, 2026-11-23). |
+| UQ5 | Autosave recovery copies on by default, every 60 s? | Yes. | Default kept (UH0, 2026-11-23). |
+| UQ6 | Shell colours not in the `Theme` collection: logo tile, mark, oscilloscope screen, "running" pill, focus ring. | Add to the overlay token file, same value in both themes: `brand/tile` `#F2F2F2`, `brand/mark` `#111112`, `instrument/screen` `#0E0F11`, `focus/ring` = `stage/select`; the pill uses `stage/tag-bg`, `stage/tag-text`, `accent/mint`. A token that appears in `omnia.figcraft` wins. | Default kept (UH0, 2026-11-23). |
+| UQ7 | Home sidebar items for features that do not exist (Templates, Part libraries, Simulation results, account footer)? | Shown disabled with "Not available yet"; the footer omitted. | Default kept (UH0, 2026-11-23). |
+| UQ8 | Keep T1.5's cursor readout, which the mockup's status bar does not show? | Keep it, before grid. | Default kept (UH0, 2026-11-23). |
+| UQ9 | First boot sections 3 and 4 (libraries, simulator) before those features exist? | Reserved rows listing only what this build has. | Default kept (UH0, 2026-11-23). |
+| UQ10 | Guard against two instances editing the same file? | No lock; last save wins. | Default kept (UH0, 2026-11-23). |
+| UQ11 | The mockup shows command-key glyphs; the targets are Windows and Linux. | Show "Ctrl+N" style text. | Default kept (UH0, 2026-11-23). |
+| UQ12 | IEC symbol preference before an IEC symbol set is compiled? | Stored only; the sheet keeps the built-in set. | Default kept (UH0, 2026-11-23). |
+| UQ13 | Print (toolbar, File)? | Shown disabled; no print plan exists. | Default kept (UH0, 2026-11-23). |
+| UQ14 | At the pinned revision `Window::focus` calls `refresh()`, which re-renders every cached view, and a mouse-down focuses a focusable element (UG15). Chrome clicks and popovers that take focus would therefore repaint `SheetView`, against UINV2, UB3, UTC-menu-keys and UTC-instrument. Accept the repaint and reword those, or keep pointer input in the chrome from moving focus? | None (raised by U4.2 after UH0's draft). | 2026-11-23 (UH0): keep UINV2, UB3, UTC-menu-keys and UTC-instrument as written. No pointer action in the chrome calls `Window::focus`: chrome controls take focus only from the keyboard (Tab, F6, UINV12), and open menus and popovers handle Esc, arrows, Enter and Tab through actions in the workspace root's key context while focus stays where it was. A keyboard focus move is not a shell-only change under UINV2. If U1.5 finds this cannot be built at the pinned revision, it is set to `blocked (UQ14)` and returns to the owner; the invariants are not reworded to fit. |
 
 ## 14. Changes to the canvas and wiring plans
 
