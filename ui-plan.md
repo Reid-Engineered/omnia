@@ -57,7 +57,9 @@ simulation internals, models, netlists, instrument signal processing and result 
 shell reserves their places and the states idle, running, paused, failed); a component library
 browser and property inspector beyond what placement needs (the data model is in
 [parts-plan.md](parts-plan.md); Part Libraries and inspector UI will consume
-`omnia-parts::Catalog` and `Doc::part_defs`); printing; packaging, installers and updates; multiple
+`omnia-parts::Catalog` and `Doc::part_defs`; placement goes through `Catalog::place_symbol`,
+wired by whichever of parts `P2.4` and U5.2 ships second, and File > Open calls
+`SymbolLibrary::check_doc`, wired by whichever of parts `P2.3` and U2.3 ships second); printing; packaging, installers and updates; multiple
 top-level workspace windows; multi-sheet designs and project containers (UQ3).
 
 Repository facts this plan builds on:

@@ -281,6 +281,7 @@ primary_param = "resistance"
 
 [symbol]
 builtin = "Resistor-IEEE-Standard"
+default = true
 
 [[pins]]
 number = "1"
@@ -325,6 +326,7 @@ designator_prefix = "U"
 
 [symbol]
 builtin = "IC-COM-OpAmp"
+default = true             # default definition for this symbol (PD11)
 
 [[pins]]
 number = "3"
@@ -357,6 +359,10 @@ file = "models/opamps/opamp-generic.lib"
 entry = "OPAMP_GENERIC"
 # SPICE terminal order, matching `.subckt OPAMP_GENERIC inp inn vcc vee out`
 pins = ["3", "2", "8", "4", "1"]
+
+[sim.supply]
+pins = ["8", "4"]          # positive, then negative supply terminal
+implicit = ["15", "-15"]   # optional implicit-supply fallback voltages (V)
 
 [license]
 spdx = "CC0-1.0"
@@ -401,6 +407,15 @@ Rules enforced by the schema parser (`#[serde(deny_unknown_fields)]`):
   primitive arity or the port count parsed from the embedded deck. A definition that lists the
   same number of pins in a different order maps to different terminals, and tests prove it
   (`PTC-pin-order`).
+- **Supply terminals** (added 2026-11-23, cross-plan request from sim #104 and context #100). A
+  `model` or `subckt` binding may declare `[sim.supply]`: `pins`, the positive and negative
+  supply pins (two distinct pins with role `power`, both in the terminal list), and optionally
+  `implicit`, the positive and negative voltages of an implicit-supply fallback (`PK4` values in
+  volts, positive above negative). The embedded binding stores it as
+  `supply: Option<SupplyDecl>`. This is the one declaration that simulation lowering (`S1.2`) and
+  the model-required supply check `ERC008` (`S1.3`) read; what happens when only one of the two
+  supply pins is connected (an error, with no partial fallback) is the simulation plan's rule.
+  `opamp-generic` declares pins `8`/`4` and the `SQ8` fallback of ±15 V.
 - **Pin role vs symbol class** (`XD5`). Per-pin electrical roles here and the simulation plan's
   per-symbol class (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`, task `S1.1`) are
   two separate types. A placed part's embedded definition is authoritative for its pin roles
@@ -493,12 +508,14 @@ amended decision:
     default-valued override is refused rather than normalised);
   - if `def.primary_param` is set, `Part::value` equals the `raw` text of the resolved primary
     parameter (override, else default), which is what `PD6` sync maintains.
-- **`UpdatePartDef` refreshes display values.** For each moved part, overrides are kept and
-  validated against `to`. If `to` has a `primary_param` and the part has no override of it,
-  `Part::value` becomes the `raw` text of `to`'s default for it in the same transaction (so a
-  default changing from `10k` to `22k` shows `22k`); if the part has an override, `Part::value`
-  is unchanged. If `to` has no `primary_param`, `Part::value` is unchanged. Undo restores the old
-  text with the old definition (`PTC-update-value`).
+- **`UpdatePartDef` refreshes display values** (amended 2026-11-23, fourth review of #85). For
+  each moved part, overrides are kept and validated against `to`. If `to` has a `primary_param`,
+  `Part::value` becomes, in the same transaction and in every case, the `raw` text of `to`'s
+  resolved primary parameter for that part: its override if it has one, else `to`'s default.
+  So a default changing from `10k` to `22k` shows `22k` on a part without an override, and a
+  primary that moves from parameter `a` to parameter `b` shows the part's existing `b` override.
+  If `to` has no `primary_param`, `Part::value` is unchanged. Undo restores the old text with the
+  old definition (`PTC-update-value`).
 - **Symbol ids are checked where symbols are known.** `omnia-doc` cannot see the symbol library,
   so a v3 (or v2) file can name a `SymbolId` that does not exist. `omnia-symbols` provides
   `SymbolLibrary::try_get(id) -> Option<&SymbolDef>` and
@@ -627,6 +644,15 @@ amended decision:
   because v2 files and goldens store raw ids.
 - The existing v2 goldens stay unchanged. The simulation plan builds its own modelled Wien
   oscillator fixture (`S2.2`, `XD1`).
+- **Default definition per symbol** (added 2026-11-23, cross-plan request, `XD3`). A built-in
+  part may mark itself `[symbol] default = true`; `xtask parts --check` refuses two defaults for
+  one symbol. `Catalog::place_symbol` is the shared placement helper: it embeds the default
+  definition for the symbol whenever one exists (`PlaceDef::Embed`, value from the resolved
+  primary), and falls back to `PlaceDef::Unmodelled` only when none exists. So a generic op-amp
+  placed from the symbol picker gets its default binding at placement. The U4.2 picker, U5.2
+  placement and the agent's `place_part` go through it rather than building
+  `PlaceDef::Unmodelled` themselves (section 14). The starter defaults are `resistor`,
+  `potentiometer`, `capacitor`, `ground`, `diode-signal` and `opamp-generic`.
 - Supply-rail part definitions (`rail` primitive, `dc` parameter, symbol class `PowerRail`) are
   added with their rail symbols by `S1.1`, through this library (`XD3`, `XD5`).
 - **Stress sheets stay fixed** (added 2026-11-23, re-review of #85). The `omnia-bench` stress
@@ -693,8 +719,9 @@ The simulation and context plans record their own amendments in their own tasks.
   open task owns those files. `SetParam` and every instance an `UpdatePartDef` touches appear in
   `Change`, undo/redo, context invalidation and `since`, and SD11 stale-result handling, even
   when topology and display text are unchanged.
-  *Update 2026-11-23 (sim `S0.2`, pull request #104):* `S1.1` no longer owns any `omnia-doc`
-  file, so the order for `doc.rs`/`command.rs`/`undo.rs`/`io.rs` is parts `P2.1`–`P2.3`, then
+  *Update 2026-11-23 (sim `S0.2`, pull request #104; context #100):* `S1.1` no longer owns any
+  `omnia-doc` file, and context `C1.9` adds a lineage token to `doc.rs`, so the order for
+  `doc.rs`/`command.rs`/`undo.rs`/`io.rs` is parts `P2.1`–`P2.3`, then context `C1.9`, then
   context `C1.1`.
   *In this plan:* `PD8` (change visibility), parts-roadmap Lanes.
 - **XD8 Crates and agent surface.** `omnia-parts` (catalog, import), `omnia-circuit` (derived
@@ -730,7 +757,7 @@ Each scenario is an automated test with this expected result.
 
 | ID | Steps | Expected |
 | --- | --- | --- |
-| PTC-builtin-load | Construct `Catalog::builtin()` and query `resistor`, `diode-signal`, `opamp-generic` | All present, valid `SymbolId`, pin counts match `omnia-symbols`, hashes match `PK5`, zero filesystem reads. |
+| PTC-builtin-load | Construct `Catalog::builtin()` and query `resistor`, `diode-signal`, `opamp-generic` | All present, valid `SymbolId`, pin counts match `omnia-symbols`, hashes match `PK5`, zero filesystem reads. `opamp-generic` carries `SupplyDecl { pos: 8's index, neg: 4's index, implicit: ±15 V }`; each starter default is the only default for its symbol. |
 | PTC-place-dedup | Place 50 `resistor` parts and 10 `opamp-generic` parts via `Doc::apply` | `doc.part_defs().count() == 2`; the resistor record carries no SPICE text (`PINV6`); the op-amp record embeds its resolved `.subckt` once (`PINV5`). |
 | PTC-param-sync | Place `resistor` (default `10k`), apply `SetParam("resistance", "4.7k")`, then `SetText(Value, "2.2k")`, then `undo` twice | `Part::value` reads `"4.7k"`, then `"2.2k"`, then `"4.7k"`, then `"10k"`; the override map is empty after the second undo; each step lists the part in `Change::modified`. |
 | PTC-param-refuse | Apply `SetParam("resistance", "-5")` (below `min = 1e-6`), `SetParam("bogus", "1")` and a real whose parse is not finite (`1e999`) | All refused with `CommandError::InvalidParam`; `Doc` unchanged under `PartialEq` (`PINV7`). |
@@ -739,7 +766,7 @@ Each scenario is an automated test with this expected result.
 | PTC-offline-omnia | Place a custom `.opart` part, save, drop `Catalog`, load | Loads cleanly; `load(save(doc)) == doc`; all metadata, pin roles, param overrides and SPICE `.subckt` intact; ids unchanged (`PINV4`). |
 | PTC-def-lifecycle | Place a modelled part (definition id 1) and delete it: call this state `D`. Branch A: save `D`, load it as `L`, then place the same definition in both `D` and `L`. Branch B: rebuild `D` on a fresh document by replaying the same place and delete (a fork of `D` has no history to undo), then undo the delete and place the same definition again | A: the saved file has `None` at id 1 and the same arena length; `L == D` under `PartialEq`; both placements allocate the same new id 2, since neither document has a referenced record at 1 (`PD8`, `PINV4`). B: undo restores the part with `def == 1` and an equal record (`PINV7`); the new placement reuses id 1 because it is referenced again. |
 | PTC-instance-refuse | Load v3 files whose part records hold (a) an override below its `min`, (b) an undeclared override name, (c) an override of the wrong kind, (d) an override equal to its default; (e) a real override with `raw = "10M"` and `value = 0.01`, (f) a resistor whose `Part::value` differs from its resolved `resistance` text; apply `PlacePart { def: Existing(id) }` whose `local_pins` are the definition's pins with two swapped (same count) | Each file refused at load with an error naming the part and parameter; the command refused with `InvalidInstance`; `Doc` unchanged (`PD8`, `PINV12`). |
-| PTC-update-value | Place two resistors (default `10k`), give the second an override `4.7k`, then `UpdatePartDef` to a definition whose default is `22k`; undo | After the update the first shows `22k` and the second `4.7k`; both are in `Change::modified`; undo restores `10k` and `4.7k` (`PD8`). |
+| PTC-update-value | Place two resistors (default `10k`), give the second an override `4.7k`, then `UpdatePartDef` to a definition whose default is `22k`; undo. Then, with a definition pair whose primary moves from parameter `a` to parameter `b`, update a part that already overrides `b` | After the first update the parts show `22k` and `4.7k`; both are in `Change::modified`; undo restores `10k` and `4.7k`. After the second update the part shows its `b` override's `raw` text, and undo restores its old `a` text (`PD8`). |
 | PTC-unknown-symbol | Open a v3 file whose part names `SymbolId(999)` through the agent file host; call `SymbolLibrary::check_doc` and `Catalog::diff_embedded` on the loaded `Doc` | The host refuses the file with a clear error; `check_doc` returns `UnknownSymbol`; `diff_embedded` reports `UnknownSymbol` and does not panic (`PD8`, `PD9`). |
 | PTC-no-lossy-save | Between `P2.2` and `P2.3`: place a part with `PlaceDef::Embed`, or apply `SetParam`, then call `save`; and save a document of unmodelled parts | The first two saves are refused with `InvalidData` and write nothing usable as a v2 file; the unmodelled document saves byte-identical to before. From `P2.3` the same documents save as v3 and `PINV4` holds (`PD8`). |
 | PTC-batch-intern-refused | Apply a `Batch` of `PlacePart { def: Embed(new) }` followed by an invalid `SetParam` | Refused; the definition arena length, every record, every part, revision and history are unchanged (`PINV7`). |
@@ -788,7 +815,9 @@ impl Catalog {
     pub fn resolve(&self, source_id: &str) -> Result<Arc<PartDef>, LibraryError>; // reads model, verifies PK5 (PD9)
     pub fn to_embedded(&self, source_id: &str) -> Result<Arc<omnia_doc::EmbeddedPartDef>, LibraryError>;
     pub fn place_command(&self, source_id: &str, at: Pt, orient: Orient,
-                         designator: Arc<str>) -> Result<omnia_doc::Command, LibraryError>; // PlaceDef::Embed; value from primary_param default
+                         designator: Arc<str>) -> Result<omnia_doc::Command, LibraryError>; // PlaceDef::Embed; value from resolved primary
+    pub fn place_symbol(&self, symbol: SymbolId, at: Pt, orient: Orient,
+                        designator: Arc<str>) -> omnia_doc::Command; // default definition if any, else Unmodelled (PD11)
     pub fn diff_embedded(&self, doc: &omnia_doc::Doc) -> Vec<DefUpdateAvailable>;
 }
 
@@ -851,8 +880,13 @@ pub enum PrimitiveKind {
 pub enum EmbeddedSimBinding {
     None,
     Primitive { kind: PrimitiveKind, terminals: Vec<u16> },               // stored pin indices
-    Model { spice_prefix: char, entry: Arc<str>, terminals: Vec<u16>, spice: Arc<str> },
-    Subckt { entry: Arc<str>, terminals: Vec<u16>, spice: Arc<str> },
+    Model { spice_prefix: char, entry: Arc<str>, terminals: Vec<u16>, spice: Arc<str>,
+            supply: Option<SupplyDecl> },
+    Subckt { entry: Arc<str>, terminals: Vec<u16>, spice: Arc<str>, supply: Option<SupplyDecl> },
+}
+pub struct SupplyDecl {                    // PD5: read by sim lowering and ERC008
+    pub pos: u16, pub neg: u16,            // stored pin indices, both in `terminals`
+    pub implicit: Option<(FiniteF64, FiniteF64)>, // fallback volts (pos, neg), pos > neg
 }
 
 pub struct EmbeddedPartDef {               // Eq; validated by validate() on every ingress (PD10)
@@ -963,7 +997,8 @@ Each has a default. All `PQ1`–`PQ8` defaults were accepted by the owner at `HP
 | `AGENTS.md` | Add `parts-plan.md` / `parts-roadmap.md` to the sources-of-truth table, register the `P`-prefixed ids, add `HP*` to hard rule 4. | P0.2 (applied; merged with the simulation registration 2026-11-23) |
 | `ROADMAP.md` | Link `parts-plan.md` in the intro and Stage 2; Stage 3 cites the parts plan for definitions and bindings and the simulation plan for lowering. | P0.2 (applied; updated 2026-11-23) |
 | `canvas-plan.md` section 9 | Comments: `Part` unchanged with `def`/`params` on `StoredPart`; `PlacePart` gains `def: PlaceDef`; `SetParam`, `UpdatePartDef`; `Change::modified`; new `Doc` queries and equality; RON v3 with v2 migration. | P0.2 (applied; updated 2026-11-23). `P2.1`–`P2.3` turn the comments into signatures when they land. |
-| `ui-plan.md` section 1 | Out-of-scope note: Part Libraries and the inspector will consume `omnia-parts::Catalog` and the `Doc` definition queries. `UD15` and `UD19` are not changed: Part libraries stays disabled and the U4.2 picker keeps placing unmodelled definitions until a UI task adopts the catalog. | P0.2 (applied) |
+| `ui-plan.md` section 1 | Out-of-scope note: Part Libraries and the inspector will consume `omnia-parts::Catalog` and the `Doc` definition queries. `UD15` and `UD19` are not changed: Part libraries stays disabled. Handoffs (updated 2026-11-23): placement from the U4.2 picker and U5.2 goes through `Catalog::place_symbol` (`PD11`), wired by whichever of `P2.4` and `U5.2` ships second; File > Open calls `SymbolLibrary::check_doc` (`PD8`), wired by whichever of `P2.3` and `U2.3` (File actions) ships second. | P0.2 (applied; handoff sentence added 2026-11-23) |
+| `omnia-agent` `place_part` | Builds its command through `Catalog::place_symbol` so agent-placed parts get the default definition (`XD3`). | The agent-lane task that adopts `omnia-parts`, after `P2.4` (handoff) |
 | `mcp-plan.md` section 9.2 | Note future minor schema additions (`set_param`, `list_parts`, `update_part_def`) on the existing preview/apply path (`XD8`). | P0.2 (applied; updated 2026-11-23) |
 | `docs/file-format-proposal.md` | Reserve section kind `PART_DEFS` for the definition table and per-part `def` + `params`. | P0.2 (applied) |
 | `ui-plan.md` (`UTC-open-bad` `version:3` → `version:4`; "RON version 2" facts) and `mcp-plan.md` (`AQ12` and other "RON v2" mentions) | Record that documents are RON v3 with v2 read by migration. | P2.3, in the same pull request as the code (`XD1`) |
