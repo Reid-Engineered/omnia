@@ -34,9 +34,11 @@ circuit-engine code exists yet.
 Status words are the other plans': **DECIDED**, **DEFAULT**, **HYPOTHESIS**, **GATED**, and:
 
 - **PROPOSED**: written by the plan author. Becomes DECIDED, or is amended, at HC1. Build
-  nothing from a PROPOSED entry before HC1. Every entry below is PROPOSED until HC1 is held,
-  except the cross-plan decisions in section 6.1 and the parts of entries they decide, which
-  are DECIDED (coordinator, owner-delegated, 2026-11-23).
+  nothing from a PROPOSED entry before HC1.
+
+HC1 was held on 2026-11-23: the owner delegated the sign-off to the coordinating agent, which
+kept every CQ default, with CQ9 already answered by XD4 (section 14), and turned every PROPOSED budget, constant and decision into
+DECIDED as written, without reopening section 6.1. No entry is PROPOSED.
 
 The Model Context Protocol is named as an open protocol standard (AQ8), and SPICE as the open
 netlist language already named in [ROADMAP.md](ROADMAP.md). Operating systems appear only as
@@ -122,7 +124,7 @@ Checked at `3224084`; the parts and simulation rows rechecked at `9d4b844` (part
 ## 3. Budgets
 
 Measured on the reference machine under canvas plan section 2.1. All other plans' budgets still
-apply; these are added. All are PROPOSED chosen figures, set or amended at HC1. Latencies are
+apply; these are added. All are chosen figures, DECIDED at HC1 (2026-11-23) as written. Latencies are
 in-process on the `10k` sheet (10,000 parts, 20,000 wires) and exclude transport. Figures on
 other machines and at 100,000 parts are recorded and labelled, never gating.
 
@@ -219,7 +221,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 
 ## 6. Decisions
 
-### CD1 A separate, derived crate. PROPOSED
+### CD1 A separate, derived crate. DECIDED (HC1, 2026-11-23)
 
 - `omnia-circuit` reads a `Doc` through its public API and the `Change` records `apply` returns.
   It never edits. Commands stay the only way to change a document (AD2).
@@ -229,7 +231,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   incremental computation and dataflow systems [Ref11, Ref22, Ref23, Ref24]. No incremental-computation framework is
   adopted: each brings a runtime and memo tables onto a path that must stay allocation-free.
 
-### CD2 The document reports a net delta. PROPOSED
+### CD2 The document reports a net delta. DECIDED (HC1, 2026-11-23)
 
 - `Change` gains a transaction-level `net_delta` (one per `apply`, `undo` or `redo`, covering
   every step of a batch), with:
@@ -259,7 +261,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 - Connectivity already knows these facts when it unions and splits; reporting them is
   bookkeeping, not search. C1.1 fixes the exact types and proves CINV12.
 
-### CD3 Net keys are a function of the document, not of its history. PROPOSED
+### CD3 Net keys are a function of the document, not of its history. DECIDED (HC1, 2026-11-23)
 
 - Keys follow CK1. A rule such as "the larger side keeps the key" is cheaper to maintain but
   depends on edit order, so the same final document could carry different keys. That breaks
@@ -274,14 +276,14 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 - Label keys use the lowest text, not the "best" by priority, so that adding a power label to a
   net never re-keys it unless its text sorts lower; the display name (CK2) uses priority.
 
-### CD4 Names are shown, never silently resolved. PROPOSED
+### CD4 Names are shown, never silently resolved. DECIDED (HC1, 2026-11-23)
 
 - Every label text on a net is a candidate name, kept with its kind. Two different texts on one
   net is the finding `names.multiple`; texts that differ only in case is `names.case`.
 - Designator-derived names (`N(R3.2)`) are presentation. They change when parts are renumbered,
   and are never used as keys.
 
-### CD5 Revision stamps, backdating and change tiers. PROPOSED
+### CD5 Revision stamps, backdating and change tiers. DECIDED (HC1, 2026-11-23)
 
 - Every derived record (net row, pin row, finding, recognised structure) stores `changed_at`.
   A recomputed record equal to the old one keeps its old stamp, so a wire re-route that changes
@@ -310,7 +312,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   revisits role-only work on nets it did not touch. A parameter or definition edit bumps the
   revision, so it reaches `since` and stale-binding checks even when no net changes (XD7).
 
-### CD6 The journal stores signed facts in stable keys. PROPOSED
+### CD6 The journal stores signed facts in stable keys. DECIDED (HC1, 2026-11-23)
 
 - Each revision appends a sorted vector of `(fact, +1 | -1)` records. Facts are circuit
   facts, never geometry: `PinOnNet(pin, key)`, `LabelOnNet(label, key)`,
@@ -355,7 +357,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   Independently classify events from the complete endpoint memberships and names from those
   snapshots and compare the event stream, including CTC-key-06 and CTC-key-07.
 
-### CD7 Layout for speed. PROPOSED
+### CD7 Layout for speed. DECIDED (HC1, 2026-11-23)
 
 - Document ids map to dense `u32` rows; columns are stored separately (struct of arrays).
 - Net membership is compressed sparse rows: an offset array and one flat pin array, each net's
@@ -373,7 +375,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 - Each component's outline line is cached as a byte range in an arena and marked dirty by
   `update`; a whole-sheet outline copies cached ranges (CB6).
 
-### CD8 Views are pre-joined, budgeted and lossless. PROPOSED
+### CD8 Views are pre-joined, budgeted and lossless. DECIDED (HC1, 2026-11-23)
 
 - Every view starts with counts, lists records in incidence form (each pin names its net; each
   net lists its pins) [Ref2, Ref3], and ends with handles to fetch more, so the summary and the
@@ -390,7 +392,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   (typed rows, for programs). Agents write JSON arguments and never have to produce the line
   form: a study of compact notations found accuracy falls when models must write them [Ref7].
 
-### CD9 One composite agent operation. PROPOSED
+### CD9 One composite agent operation. DECIDED (HC1, 2026-11-23)
 
 - `context {doc_id, views, budget?, format?}` takes a list of views (section 9) and answers all
   of them against one revision in one call. Its MCP tool `omnia_context` carries one to five
@@ -402,7 +404,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 - `omnia_inspect`, `omnia_query` and `omnia_nets` stay as built in A1, and their descriptions
   point to `omnia_context` for circuit questions (CQ4).
 
-### CD10 Both result channels carry the compact view. PROPOSED
+### CD10 Both result channels carry the compact view. DECIDED (HC1, 2026-11-23)
 
 - For `omnia_context` only, `structuredContent` is the 9.1 envelope whose `result` is
   `{views: [{view, revision, counts, elided?, lines: [string]}]}` for `format: "lines"`, or
@@ -428,7 +430,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   metadata and at least one fragment with a continuation when needed, return a bounded `limit_exceeded` before committing the edit.
   Use fixed-size error metadata and omit echoed input when needed to meet the ceiling.
 
-### CD11 Findings run where their cost allows. PROPOSED
+### CD11 Findings run where their cost allows. DECIDED (HC1, 2026-11-23)
 
 - Tier 0 and tier 1 (CK5) are maintained inside `update`, within CB1.
 - Tier 2 runs lazily on the first request after a revision and is cached for that revision
@@ -439,7 +441,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   crosswalk in section 9.4 (XD6).
 - Every finding names at least one handle and the rule that produced it (CINV8).
 
-### CD12 Structure is recognised by rules and patterns, not by learning. PROPOSED
+### CD12 Structure is recognised by rules and patterns, not by learning. DECIDED (HC1, 2026-11-23)
 
 - Matching runs on the bipartite part-and-net graph. Edges carry pin role classes rather than
   pin numbers (both resistor pins are class `P`), so interchangeable pins match without trying
@@ -465,7 +467,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   detection is excluded from facts: it is reproducible only with a fixed seed and
   implementation [Ref28]; if ever offered, it is seeded, debounced and labelled `suggested`.
 
-### CD13 Ground and power come from declarations. PROPOSED (ground evidence DECIDED by XD4)
+### CD13 Ground and power come from declarations. DECIDED (HC1, 2026-11-23) (ground evidence DECIDED by XD4)
 
 - The ground reference is set only by declared ground evidence (CK4): a `Ground`-class part or
   a label whose text is exactly `0`, which is sim SQ3's default (XD4). Names like `GND` never
@@ -478,7 +480,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 - Name and topology heuristics feed findings, views and recognition only. They never change
   C1.9's bindings or ground evidence, so they never change solver connectivity (XD4).
 
-### CD14 Every edit returns its own circuit delta. PROPOSED
+### CD14 Every edit returns its own circuit delta. DECIDED (HC1, 2026-11-23)
 
 - `preview` and `apply` gain an optional request field `circuit: {format?, budget?}`. When it
   is present, the result gains a `circuit` field: the `since` view for exactly that edit. When
@@ -508,7 +510,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 - The parts plan's `set_param` and `update_part_def` operations are edits on the same path, so
   they take the same `circuit` option and report `param` and `def` events (XD8).
 
-### CD15 Determinism is proved, not assumed. PROPOSED
+### CD15 Determinism is proved, not assumed. DECIDED (HC1, 2026-11-23)
 
 - Every public output (keys, names, journal facts, finding order, rendered bytes) is a pure
   function of the current document, plus the journal for `since`.
@@ -519,14 +521,14 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   pattern order) uses document content and geometry before ids, so only id-bearing tokens can
   differ between insertion orders.
 
-### CD16 Understanding is measured. PROPOSED
+### CD16 Understanding is measured. DECIDED (HC1, 2026-11-23)
 
 - A circuit question set (section 10) is the acceptance test for "understanding". In CI, a
   scripted call plan per question must surface the answer explicitly within CB11 and CB12. At
   HC3 the owner runs the set with a model through an MCP client and records accuracy, tokens and
   calls per question family, with and without the context tool.
 
-### CD17 Document text stays data. PROPOSED
+### CD17 Document text stays data. DECIDED (HC1, 2026-11-23)
 
 - Extends AD14. Designators, values and label text appear only in the CK9 string form in the
   line form, bare only when they are plain identifiers, and as string fields in JSON. Each
@@ -534,7 +536,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   controls, quotes and separators force quoting and escaping, document text cannot end a line,
   start a record, imitate a generated name or the legend (CINV9).
 
-### CD18 Bindings are bound to one exact document state and ordered by content. PROPOSED
+### CD18 Bindings are bound to one exact document state and ordered by content. DECIDED (HC1, 2026-11-23)
 
 - **State identity.** A revision number alone does not name a document state: two forks of one
   document (A1.1, AD3) start at the same revision, take different edits and reach equal
@@ -1005,21 +1007,22 @@ column to `omnia-circuit`. A crate not listed there needs its licence logged fir
 
 ## 14. Open questions
 
-Each has a default. Build to the default; the owner's dated answer replaces it here.
+Each has a default. Build to the default; the owner's dated answer replaces it here. HC1 was held
+on 2026-11-23 (owner-delegated): every default is kept; CQ9 was already answered by XD4.
 
-| ID | Question | Default |
-| --- | --- | --- |
-| CQ1 | Persist net keys in the document, so unlabelled nets keep their key when their anchor pin leaves? | No: anchor rule (CK1), derived. Revisit with churn numbers from C1.4. |
-| CQ2 | Ask the parts plan to extend PD5's roles (separate power input and power output, open collector and emitter, tri-state, free, unspecified)? Without a power-source role, `power.undriven` cannot be checked. | Build to PD5's seven roles plus engine-only `unspecified`; `power.undriven` stays off; the owner raises it against the parts plan. XD5 (2026-11-23) keeps this default; symbol class (sim S1.1) is a separate type and does not answer it. |
-| CQ3 | For `omnia_context`, put the compact lines in both result channels instead of a JSON text copy (CD10)? | Yes, for successful lines responses from this tool only. |
-| CQ4 | Retire or alias `omnia_inspect`, `omnia_query` and `omnia_nets` once `omnia_context` exists? | Keep them as built; decide after the HC3 run. |
-| CQ5 | Line syntax: `1:VCC` or `1->VCC`; designators or ids as handles? | ASCII `:`; designators and net names as handles, ids accepted in arguments. |
-| CQ6 | Byte budgets 12 KB default, 32 KB ceiling? | Yes; re-set from C2.4's token measurement. |
-| CQ7 | Add the spanning-forest bit and batched search to connectivity (11.1)? | Only if C1.1 or C1.8 shows split tails, on any net with many wires, including wire-only nets that CK7's pin count does not call hubs. |
-| CQ8 | Hub threshold: more than 32 pins, or kind `power` or `ground`? | Yes. |
-| CQ9 | Does stage 3 lowering take pin-to-net bindings and the ground reference from this engine, rather than a second derivation? | **Answered 2026-11-23 by XD4** (coordinator, owner-delegated): yes. The stage 3 lowering is `omnia-sim`'s (`CircuitIr`, node ordering, device expansion, source maps, diagnostics mapping, SPICE text; sim S1.2) and consumes C1.9's revision-matched bindings and declared ground evidence. There is no parts-plan netlister: the parts plan supplies definitions (roles, terminal order, parameters) only. Ground evidence follows sim SQ3's default (CK4); CD13's heuristics never reach the bindings. |
-| CQ10 | May C1.1 change `Change`, `undo.rs` and connectivity while W2.2 is `needs-human` (its measurement only) and W3.4 to W3.6 are open? | The order is fixed by XD7 (2026-11-23, updated by sim PR #104: S1.1 owns no `omnia-doc` file): parts P2.1–P2.3, then C1.9's lineage token in `doc.rs`, then C1.1. C1.1 starts only after those are `done` and when no other open task owns `doc.rs`, `command.rs`, `undo.rs`, `io.rs` or `connectivity.rs`; the owner confirms at HC1 which wiring tasks still hold them. |
-| CQ11 | Use a graph library for the matcher? | No: a hand-written matcher in the crate, so determinism and step caps stay under our control. |
+| ID | Question | Default | Answer |
+| --- | --- | --- | --- |
+| CQ1 | Persist net keys in the document, so unlabelled nets keep their key when their anchor pin leaves? | No: anchor rule (CK1), derived. Revisit with churn numbers from C1.4. | Default kept (HC1, 2026-11-23). |
+| CQ2 | Ask the parts plan to extend PD5's roles (separate power input and power output, open collector and emitter, tri-state, free, unspecified)? Without a power-source role, `power.undriven` cannot be checked. | Build to PD5's seven roles plus engine-only `unspecified`; `power.undriven` stays off; the owner raises it against the parts plan. XD5 (2026-11-23) keeps this default; symbol class (sim S1.1) is a separate type and does not answer it. | Default kept (HC1, 2026-11-23). |
+| CQ3 | For `omnia_context`, put the compact lines in both result channels instead of a JSON text copy (CD10)? | Yes, for successful lines responses from this tool only. | Default kept (HC1, 2026-11-23). |
+| CQ4 | Retire or alias `omnia_inspect`, `omnia_query` and `omnia_nets` once `omnia_context` exists? | Keep them as built; decide after the HC3 run. | Default kept (HC1, 2026-11-23). |
+| CQ5 | Line syntax: `1:VCC` or `1->VCC`; designators or ids as handles? | ASCII `:`; designators and net names as handles, ids accepted in arguments. | Default kept (HC1, 2026-11-23). |
+| CQ6 | Byte budgets 12 KB default, 32 KB ceiling? | Yes; re-set from C2.4's token measurement. | Default kept (HC1, 2026-11-23). |
+| CQ7 | Add the spanning-forest bit and batched search to connectivity (11.1)? | Only if C1.1 or C1.8 shows split tails, on any net with many wires, including wire-only nets that CK7's pin count does not call hubs. | Default kept (HC1, 2026-11-23). |
+| CQ8 | Hub threshold: more than 32 pins, or kind `power` or `ground`? | Yes. | Default kept (HC1, 2026-11-23). |
+| CQ9 | Does stage 3 lowering take pin-to-net bindings and the ground reference from this engine, rather than a second derivation? | **Answered 2026-11-23 by XD4** (coordinator, owner-delegated): yes. The stage 3 lowering is `omnia-sim`'s (`CircuitIr`, node ordering, device expansion, source maps, diagnostics mapping, SPICE text; sim S1.2) and consumes C1.9's revision-matched bindings and declared ground evidence. There is no parts-plan netlister: the parts plan supplies definitions (roles, terminal order, parameters) only. Ground evidence follows sim SQ3's default (CK4); CD13's heuristics never reach the bindings. | Answered by XD4; confirmed (HC1, 2026-11-23). |
+| CQ10 | May C1.1 change `Change`, `undo.rs` and connectivity while W2.2 is `needs-human` (its measurement only) and W3.4 to W3.6 are open? | The order is fixed by XD7 (2026-11-23, updated by sim PR #104: S1.1 owns no `omnia-doc` file): parts P2.1–P2.3, then C1.9's lineage token in `doc.rs`, then C1.1. C1.1 starts only after those are `done` and when no other open task owns `doc.rs`, `command.rs`, `undo.rs`, `io.rs` or `connectivity.rs`; the owner confirms at HC1 which wiring tasks still hold them. | Default kept (HC1, 2026-11-23). Tasks still holding the files: W2.2 (`blocked` on WB3; `command.rs`, `undo.rs`), W3.4 (`doing`, doc half done, tool half open; `doc.rs` for `Doc::query_within` and `Doc::query_touching`) and W3.5 (`doing`, doc half done, tool half open; `command.rs` `with_wires`). W3.6 owns `follow.rs` and `tool/label.rs`, none of these files, and does not gate C1.1. C1.1 waits until each listed task is `done` or releases its file; no open task holds `connectivity.rs` or `io.rs` apart from parts P2.1–P2.3. |
+| CQ11 | Use a graph library for the matcher? | No: a hand-written matcher in the crate, so determinism and step caps stay under our control. | Default kept (HC1, 2026-11-23). |
 
 ## 15. Changes to other files
 
@@ -1031,16 +1034,16 @@ Applied by C0.1 (registration only):
 | ROADMAP.md | Links the circuit-context plan and roadmap |
 | canvas-roadmap.md, Lanes | Row `circuit` |
 
-Applied by C0.2 after HC1, for the decisions HC1 keeps:
+Applied by C0.2 after HC1 (2026-11-23), for the decisions HC1 keeps; the Status column says what C0.2 did:
 
-| Where | Change |
-| --- | --- |
-| mcp-plan.md 9.2, 9.3, 9.4 | The `context` operation; the optional `circuit` request and result fields on `apply` and `preview` (CD14); the error codes of CK12 |
-| mcp-plan.md 10.1, 10.2 | `omnia_context` and its result channels (CD10); `omnia://doc/{doc_id}/context`, the summary view as a cacheable resource (built by C2.3) |
-| mcp-plan.md 13 | The safe loop orients with `omnia_context` and verifies with the `circuit` delta |
-| canvas-plan.md section 10 | Use column: `rustc-hash`, `smallvec`, `serde_json`, `hdrhistogram` in `omnia-circuit` |
-| canvas-plan.md section 9 (`Change`) and D2 | `net_delta`, `edited_parts`, `modified_wires` and `modified_labels` beside P2.2's `modified` (CD2), once C1.1 fixes their shape; any amendment to `nets_changed`'s meaning |
-| parts-plan.md (once merged) | Section 13: CQ2 raised as a parts question if the owner wants it. (Its "definitions and bindings" wording and XD4 are already in PR #85.) Its XD7 order line `P2.3 -> context C1.1` gains C1.9's lineage token before C1.1 (CD18) |
+| Where | Change | Status |
+| --- | --- | --- |
+| mcp-plan.md 9.2, 9.3, 9.4 | The `context` operation; the optional `circuit` request and result fields on `apply` and `preview` (CD14); the error codes of CK12 | Applied by C0.2 |
+| mcp-plan.md 10.1, 10.2 | `omnia_context` and its result channels (CD10); `omnia://doc/{doc_id}/context`, the summary view as a cacheable resource (built by C2.3) | Applied by C0.2 |
+| mcp-plan.md 13 | The safe loop orients with `omnia_context` and verifies with the `circuit` delta | Applied by C0.2 |
+| canvas-plan.md section 10 | Use column: `rustc-hash`, `smallvec`, `serde_json`, `hdrhistogram` in `omnia-circuit` | Applied by C0.2 |
+| canvas-plan.md section 9 (`Change`) and D2 | `net_delta`, `edited_parts`, `modified_wires` and `modified_labels` beside P2.2's `modified` (CD2), once C1.1 fixes their shape; any amendment to `nets_changed`'s meaning | Moved to C1.1, which fixes the shape |
+| parts-plan.md | Section 13: CQ2 raised as a parts question if the owner wants it. Its XD7 order line `P2.3 -> context C1.1` gains C1.9's lineage token before C1.1 (CD18) | XD7 line already in parts-roadmap.md (PR #85); CQ2 not raised (default kept) |
 
 Recorded for the other plans' own tasks (XD1–XD9 say each plan records its own amendments;
 this plan edits neither file):
