@@ -1,0 +1,2 @@
+4d6ac45570b3c81a191389dd5811dfdec3bcb14227eb3d0b3df5e3870f833e96  /home/marcus/omnia/target/release/deps/follow_command-214e85a1ab50960b
+HEAD=6729f8e10bd3fab6c7c8f28fa39d12ad12e9dce6
