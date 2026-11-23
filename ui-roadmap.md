@@ -243,21 +243,21 @@ without being drawn.
   the router, so no pointer path or dismissal moves GPUI focus. Suppress GPUI's mouse-down defaults in the
   capture phase (a stateful `Div`'s pressed-state handler can refresh in bubble before a custom
   `on_mouse_down` runs); a click-outside dismissal that lands on the sheet must not let the sheet's
-  mouse-down take focus while another chrome control holds it. UG17's modality refresh is UQ15:
-  if a check fails only because of it, set `blocked (UQ15)`. The 36 px row with logo, menus, title and window controls per UD1 and US1's outcome; menus
+  mouse-down take focus while another chrome control holds it. UG17's modality refresh is UQ15
+  (accepted): count it as `modality_paints <= modality_switches`, separately from shell paints. The 36 px row with logo, menus, title and window controls per UD1 and US1's outcome; menus
   from the registry with shortcut text from the live keymap; F10, Alt+letter, arrows, Enter,
   Esc; the close button goes through the close path (U2.4 completes it; until then it closes).
 - Done when: UTC-menu-keys and UTC-menu-mouse pass headless with the menu bar and a focused
-  `SheetCanvas` mounted under a test root that installs the `KeyTarget` router; the menu's paint
-  count on `SheetView` is 0; opening and driving the part picker and analysis picker by pointer and
-  keys, including closing them by second press, Esc and click-outside, leaves `SheetView`'s paint
-  count at 0; Esc closes an open menu with the sheet focused and with a Tab-focused toolbar
+  `SheetCanvas` mounted under a test root that installs the `KeyTarget` router; the menu's shell-caused
+  paints on `SheetView` are 0 (UQ15; modality paints counted separately, at most one per switch); opening and driving the part picker and analysis picker by pointer and
+  keys, including closing them by second press, Esc and click-outside, leaves `SheetView`'s
+  shell-caused paints at 0 (UQ15); Esc closes an open menu with the sheet focused and with a Tab-focused toolbar
   control focused; Enter activates the open menu's item (not the button) with a Tab-focused
   toolbar button focused, and Enter, Esc and arrows reach an open menu with a `TextField` focused;
   pointer press and release on a chrome button, and opening, driving and dismissing the part picker
   by pointer (second press, click-outside, Esc; place flag off, so no row starts placement) with
-  GPUI focus on another chrome control, leave that focus unchanged and `SheetView`'s paint count
-  at 0 across press and release; the UINV4 conflict test
+  GPUI focus on another chrome control, leave that focus unchanged and `SheetView`'s shell-caused
+  paints at 0 across press and release (UQ15); the UINV4 conflict test
   passes with the `Nav*` bindings; `debug_bounds` of the
   bar matches UK2.
 - Note (2026-11-23, U4.2): Place > Part is built from `parts::picker::part_menu()` (categories in
@@ -283,7 +283,7 @@ without being drawn.
   modified dot and the three panel toggles; the Toolbox and bottom docks with stub panels,
   splitters and UK11 limits. Every region is a cached view (UD4).
 - Done when: the real `Workspace` installs U1.5's `KeyTarget` router and UTC-menu-keys passes
-  again against it; UINV2's test passes for chrome hover, toggles and strip hover (sheet paint count 0);
+  again against it; UINV2's test passes for chrome hover, toggles and strip hover (shell-caused sheet paints 0, UQ15);
   UTC-dock passes headless (a splitter drag paints the sheet at most once per frame); `debug_bounds` matches UK4, UK5, UK11
   at 1440x900.
 
@@ -485,7 +485,8 @@ without being drawn.
 - Do: `InstrumentLayer` and `FloatingFrame` per UD5: open from the strip with a static stub body,
   drag by the header, raise and make the key target on click without moving GPUI focus (UQ14),
   Esc returns the key target to the sheet, close, clamping after resizes.
-- Done when: UTC-instrument passes headless (sheet paint count 0 throughout).
+- Done when: UTC-instrument passes headless (shell-caused sheet paints 0 throughout; at most one modality
+  paint at the Esc after the click, UQ15).
 
 ### U4.2 Part picker · done
 - Lane: shell · Depends: U1.6 · Read: UD2, UK3, T2.3's symbol list
@@ -559,8 +560,10 @@ without being drawn.
   shell-only change, and this costs at most one sheet repaint. With the sheet already focused no
   focus call is made. The In use count updates after placement.
 - Done when: a headless test places a resistor from the toolbar and from Place > Part, and Ctrl+Z
-  removes it; with the sheet focused beforehand, choosing the part paints the sheet 0 times
-  before the placement preview; with a toolbar control focused, at most once.
+  removes it; with the sheet focused beforehand, choosing the part causes 0 shell or focus sheet
+  paints before the placement preview; with a toolbar control focused, at most one focus-caused
+  paint (the move into the sheet). In both cases modality paints are counted separately under
+  UQ15 (`modality_paints <= modality_switches`, e.g. a Tab then a pointer choice is one switch).
 
 ### U5.3 Clipboard · todo
 - Lane: shell · Depends: T7.1, U5.1 · Read: T7.1
@@ -743,4 +746,7 @@ development machine.
 2026-11-23 U4.2 done — Part picker (UD2, UD4, UK3, UINV5). New `crates/omnia-app/src/parts/picker.rs` (`parts/mod.rs`, a `lib.rs` mod line, and an `omnia-symbols` path dependency in `crates/omnia-app/Cargo.toml`). `PartPicker` is a cached view holding the twelve place-strip buttons and the "In use · N parts" picker. Each non-empty category opens a popover of its built-in symbols from T2.3's library, and empty categories are disabled buttons. The "In use" list is `in_use_entries(doc)`: symbol, display name and count, ordered by name then lowest id. Its counts sum to `Doc::part_count`, and it is disabled while the document is empty. Choosing a row dispatches `PlacePart { symbol }`, gated by `place_part_enabled` (`CanvasEdits::place`, off until U5.2). With the flag off, every row is disabled and a direct `choose` re-checks `enabled` first, so nothing is dispatched (UINV5). Chosen, not in the plan: the symbol-to-category table `SYMBOL_CATALOG` (resistor, potentiometer and capacitor under Basic; diode under Diodes; op-amp under Analog; ground under Sources), with a test that keeps it complete. Place > Part is not built yet (U1.5 owns the menu bar); `part_menu()` and `in_use_entries()` are the data it must read so the menu and the popovers stay identical. Outside the owned files: `crates/omnia-app/src/chrome/toolbar.rs` (U1.6, done; U4.3 not started) now embeds `PartPicker` with `.cached(..)` at `PART_PICKER_WIDTH` in place of its disabled strip and "In use" button. `in_use_label` and the in-use count moved to the picker, and its tests were updated to match. Headless tests: every category and the "In use" picker open by mouse and by keyboard (Enter and Space; Esc returns focus to the button); a second press closes without reopening; the rows match `part_menu` and the document; flag off dispatches nothing, flag on dispatches once and closes; the picker renders on a place-flag flip only while a popover is open; hover across an open popover and the strip never re-renders a cached sibling. GPUI fact for the owner (pinned revision): `Window::focus` calls `refresh()`, and a refreshing window re-renders every cached view (`view.rs`, `!window.refreshing`). GPUI also focuses a focusable element on mouse-down. So any click on a focusable chrome control (the existing toolbar buttons too) and any popover that takes focus for Esc and Tab re-renders `SheetView`. This conflicts with UINV2 ("menu open"), UTC-instrument ("sheet paint count 0 throughout") and UTC-menu-keys as written. It needs an owner decision, recorded as a new UG fact, before U1.5, U4.1 and U4.5. Visuals use plain text rows (no symbol thumbnails) until the U3.7/U4.7 goldens. All five standard checks pass on a Windows development machine (certifies nothing).
 2026-11-23 U4.2 review fixes — Independent review (GPT-6.2 Sol, PR #96). Fixed: (1) a second press that closes a popover through click-outside now leaves focus on its button, so Enter reopens it (before, focus stayed on the removed panel); (2) focus leaving an open popover closes it (`on_focus_out`, notify deferred past the draw), so Tab past disabled rows no longer strands an open popover out of Esc's reach; (3) the module comment no longer claims open and close spare the sheet, and states the GPUI focus-refresh fact instead. Regression tests for (1) and (2). Pending integrations recorded as notes on U1.5 (Place > Part reads `part_menu`/`in_use_entries`) and U2.2 (feed `follow_document` from the active document). Not changed: the same-tick suppression reset (a separate press before the executor ticks is swallowed; real input always crosses a tick, and the toolbar's analysis picker uses the same pattern); the PR attribution footer.
 2026-11-23 U0.1 done — Owner review (UH0). The owner delegated every pending sign-off to the coordinating agent on 2026-11-23. ui-plan.md section 13 now has an Answer column: UQ1 to UQ13 keep their defaults, dated. Section 14 is approved as written, so U0.2 can start. New UQ14 records the decision U4.2 asked for: UINV2, UB3, UTC-menu-keys and UTC-instrument stay as written; pointer input in the chrome never calls `Window::focus`; open menus and popovers take their keys through the workspace root's key context; a keyboard focus move is not a shell-only change. Review (GPT-6.2 Sol) found instrument clicks and F10 still moved focus; UD2, UD3, UD5, UTC-menu-keys, UTC-instrument and U4.1 now use a workspace key target with `capture_action` routing instead, paint counts unchanged. A second review asked for the routing to be specified and owned: UD3 now binds the overlay keys in `Workspace` and captures deeper actions such as `Sheet`'s Esc; U1.5 owns `key_target.rs` and migrates the part and analysis pickers; U1.7 re-runs UTC-menu-keys on the real workspace; U4.5 notes that only keyboard focus moves. A third review found the overlay bindings would fail the UINV4 validator and that Esc relied on a `Sheet` binding T5.2 has not made: navigation keys are now bound once in `Shell` to `Nav*` actions routed by the `KeyTarget` router, Esc leaves `Sheet` (T5.2 provides `SheetCanvas::cancel`, section 14 row updated), and U1.5 also owns the `Nav*` registry and keymap changes and the pickers' dismissal paths. A fourth review added: the router captures `Nav*` on the root so an open overlay wins over a Tab-focused button; `Nav*` actions live in `default_bindings()`, not `ACTIONS`; U1.5 suppresses mouse-down focus in `widgets/button.rs`; U5.2 focuses the sheet only when focus is elsewhere. A fifth review added: `Div::on_click` refreshes on press and release (new UG16), so chrome buttons activate from their own mouse handlers; a focused `TextField` yields navigation keys while an overlay is the key target; UQ14 records starting a canvas tool from outside the sheet (U5.2) as the one pointer-driven focus move; U1.5's check separates picker dismissal from placement. A sixth review found GPUI refreshes the whole window on every switch between mouse and keyboard input (new UG17), which no chrome design can avoid; that is recorded as UQ15 for the owner, with the invariants unchanged and affected tasks to go `blocked (UQ15)`. Its two nits (capture-phase suppression, click-outside over the sheet) are added to U1.5. If U1.5 cannot build that at the pinned GPUI revision it goes `blocked (UQ14)` and returns to the owner. UG15 records the GPUI fact behind it (from U4.2's log; sections 4, 6, 8 and 12 and U4.1 are outside U0.1's Owns line and is edited here because the U4.2 log asked for the fact to be recorded with the decision). Docs only; nothing measured.
+2026-11-23 UQ15 answered — The owner accepted GPUI's input-modality refresh (UG17): a switch between mouse and keyboard input may paint `SheetView` at most once. Shell-caused paints stay 0. ui-plan.md UQ15, UB3, UINV2, UTC-menu-keys, UTC-instrument and the architecture note, and U1.5 here, now count these as `modality_paints <= modality_switches`, separately. GPUI is not patched. Docs only.
+2026-11-23 UQ15 review fixes — An independent review found U1.5, U1.7, U4.1, UTC-menu-mouse and UTC-menu-keys still counted total sheet paints in scripts that switch input modality. They now count shell-caused paints (0) with modality paints bounded separately; the UQ15 answer defines the term once. UTC-menu-keys states that a fresh headless window starts in mouse modality at the pinned GPUI, so F10 is one switch.
+2026-11-23 UQ15 review fixes (2) — U5.2's placement case now caps focus-caused paints at one and counts modality paints separately, so a Tab, then a pointer choice, is not double-counted.
 2026-11-23 U0.5 done — Orion reference campaign (owner-approved, run remotely by the coordinating agent; canvas plan 2.1): frozen `run.sh` at `main` `0507b1c`, 10 rotating passes × 4 cases, AC and `performance` governor verified in all 80 snapshots, Baloo suspended. UB10 passes on Orion: `save_10k` median p99 27.314 ms (range 22.617–54.223) < 33.3 ms. `load_10k` median p99 111.4 ms (background executor per D8/UD7). Evidence in `docs/measurements/U0.5/orion-2026-11-23/`. U0.6 needs no `DocSnapshot` request for US4.
