@@ -274,7 +274,10 @@ when input switches between mouse and keyboard (UG17). The owner accepted that r
   context of `Sheet` (the canvas has focus), `Panel`, `Dialog`, `Home`, `FirstBoot`, or a chrome
   control reached by Tab (UINV12); `TextField` nests inside `Dialog`, `Home` or `Panel`. Menus,
   popovers and instrument frames are not focused contexts: they are key targets held by the
-  workspace (UQ14).
+  Shell root (UQ14). `KeyContext::Menu` and `KeyContext::Instrument` are therefore not focused
+  contexts: U1.5 removes those variants from `KeyContext` in `actions.rs` and from
+  `VALID_CONTEXT_STACKS` and `UNMODIFIED_ALLOWED_CONTEXTS` in `keymap.rs`, so UINV4 allows
+  unmodified keys only in `Sheet`, `Dialog` and `TextField`.
 - Who binds what:
   - `Shell` and `Workspace` bind every modifier shortcut: Ctrl+N, O, S, Shift+S, W, Q, Z, Y,
     Shift+Z, X, C, V, A, comma, =, -, 0, 1, 2, 3, Tab, Shift+Tab, F1, F10, F11, and Delete.
@@ -294,6 +297,10 @@ when input switches between mouse and keyboard (UG17). The owner accepted that r
     No other context binds these keys;
     `Dialog`, a Tab-focused chrome control and the `Home` menu handle the `Nav*` actions with
     `on_action`, which runs before `Shell`'s handler because they are deeper on the dispatch path.
+    The `KeyTarget` router below is hosted by `Shell` (the window root), not by `Workspace`, so
+    the same router serves `Workspace`, `Home` and `FirstBoot` stacks: U1.5 builds it at the
+    `Shell` root, U1.7 runs the workspace under it, and U3.4 and U3.5 reuse the `Shell`-hosted
+    router on the `Home` and `FirstBoot` stacks outside any `Workspace`.
     Space on a Tab-focused chrome control is handled by that control's own key-down listener, not
     by a binding.
   - Key target routing (UQ14). Chrome buttons and popover rows suppress GPUI's automatic
@@ -364,7 +371,7 @@ when input switches between mouse and keyboard (UG17). The owner accepted that r
   layer; the sheet replays (G6), and T-replay already showed replay is cheaper than repaint. A
   click raises a frame to the top and makes it the key target (`Instrument(id)`, UQ14) without
   moving GPUI focus, so the sheet is not refreshed; Esc returns the key target to the sheet. Tab
-  and F6 may move GPUI focus into a frame (UINV12); that keyboard move is not a shell-only
+  may move GPUI focus into a frame (UINV12); that keyboard move is not a shell-only
   change, and Esc from a frame that holds real focus also returns GPUI focus to the sheet. Frames are clamped so their header stays inside the sheet area, and they are clamped
   again after a window or dock resize. The strip button for an open instrument shows UK4's dot
   and raises it.
@@ -623,7 +630,7 @@ Each has a test; the task that adds it is in brackets.
 | UINV1 | `omnia-app` contains no colour literal: no hex colour and no call to `rgb`, `rgba` or `hsla` in `crates/omnia-app/src` (INV6 extended to the shell). [U1.1] |
 | UINV2 | A shell-only change does not notify `SheetView`: menu open, hover and close; toolbar and tab-strip hover; `CommandState` flips; status message, hint and readout updates; toasts; instrument frame open, drag, raise and close. A dock resize paints the sheet at most once per frame. GPUI's own input-modality refresh (UG17) is not a shell notification: it may paint the sheet at most once per switch between mouse and keyboard input (UQ15), and tests count those paints separately from the zero above. [U1.7, U4.1] |
 | UINV3 | Every registry action appears in a menu, and every action reachable by mouse has a menu path or a binding. [U1.4] |
-| UINV4 | No two bindings share a keystroke in key contexts that can be active together. A letter, digit or Space without a modifier is bound only in `Sheet`, `Menu`, `Dialog` and `TextField`. [U1.4] |
+| UINV4 | No two bindings share a keystroke in key contexts that can be active together. A letter, digit or Space without a modifier is bound only in `Sheet`, `Dialog` and `TextField`. `Menu` is not a focused context after UQ14 (UD3), so it is not an allowed context here. [U1.4] |
 | UINV5 | Invoking a disabled action changes nothing: document revision, files on disk, documents open and `CommandState` are unchanged. Menus and toolbar show exactly `enabled(state)`. [U1.4, U2.5] |
 | UINV6 | A document is shown modified exactly when its history cursor differs from its saved cursor; the tab dot, title and `CommandState` agree in the same frame. [U2.1, U2.2] |
 | UINV7 | No path loses work silently: closing or quitting with a modified document always passes through the unsaved-changes dialog; Cancel changes nothing; a failed save neither marks the document saved nor alters the existing file. [U2.3, U2.4] |
@@ -631,7 +638,7 @@ Each has a test; the task that adds it is in brackets.
 | UINV9 | No repeating timer or animation-frame request exists while nothing changes. The autosave timer exists only while a document has unsaved, un-autosaved changes; the toast timer only while a toast is shown. [U2.7, U1.10] |
 | UINV10 | Shell files are deterministic: `prefs.ron`, `recent.ron` and `window.ron` round-trip byte for byte, and the same state writes the same bytes. [U2.6] |
 | UINV11 | Contrast in both themes: each text-on-background pair the shell uses is ≥ 4.5:1 and each meaningful icon or indicator is ≥ 3:1, computed from `omnia-theme` tokens over the list of pairs the shell declares. [U3.6] |
-| UINV12 | Focus order is defined and visible: Tab and Shift+Tab cycle menu bar, toolbar, sheet, instrument frames, strip, tabs, toggles, status bar; Esc closes the topmost layer (menu, popover, dialog, instrument focus) and returns focus to the element focused before it. [U4.5] |
+| UINV12 | Focus order is defined and visible: Tab and Shift+Tab cycle menu bar, toolbar, sheet, instrument frames, strip, tabs, toggles, status bar, and every stop stays reachable by Tab; Esc closes the topmost layer (menu, popover, dialog, instrument frame) and returns the key target to where it was before that layer opened (UQ14), and, when keyboard traversal had moved real GPUI focus into a frame or dialog, also returns GPUI focus to the sheet. [U4.5] |
 | UINV13 | While a dialog is open, no action outside its context runs and no mouse event reaches what is beneath. [U2.4] |
 | UINV14 | The shell edits documents only through `SheetCanvas` methods, or `Doc::undo` and `Doc::redo` before U5.1: `omnia-app` outside its tests never calls `Doc::apply` (INV4 holds unchanged). [U2.5] |
 
@@ -661,7 +668,7 @@ runs in CI; "golden" means a Windows golden; "bench" means a reference-machine r
 | UTC-menu-keys | F10, Right ×2, Down, Enter on View > Zoom In | View opened by keyboard; Zoom In ran once; GPUI focus stays on the sheet throughout; `SheetView` paints once for the zoom plus at most one modality paint (UQ15): a fresh window starts in mouse modality at the pinned GPUI, so F10 is one switch; 0 modality paints if setup establishes keyboard modality before measurement, and `MenuBar` renders for each move. Headless. |
 | UTC-menu-mouse | Hover across all nine menu labels with a menu open, then Esc | Each opens in the next frame; shell-caused sheet paints 0, plus at most one modality paint at the Esc (UQ15). Headless; UB2/UB3 bench. |
 | UTC-disabled | With no selection, invoke Delete, Cut, Copy by key, menu and toolbar | Nothing changes (UINV5); items shown disabled. Headless. |
-| UTC-type-r | Open the threshold field in Preferences, type "R" and "Ctrl+Z" | The field receives the text; no rotate, no document undo. Headless. |
+| UTC-type-r | Open the threshold field in Preferences, type "R" and "Ctrl+Z"; with the key target `Sheet`, move in the field with the arrows and press Enter and Esc; then open a menu or popover and, with the field still focused, press the arrows, Enter and Esc again | The field receives the text; no rotate, no document undo. With the key target `Sheet` the arrows, Enter and Esc keep their text-field editing meaning; while a menu or popover is the key target the same keys yield to that overlay instead (UD3, UQ14). Headless. |
 | UTC-dock | Ctrl+1, Ctrl+2, Ctrl+3, drag the bottom splitter 100 px over 20 frames | Each toggle drawn next frame; the drag paints the sheet ≤ once per frame; sheet never below 320x240. Headless; bench. |
 | UTC-small | Resize to 960x600 at 1.0 and 1.5 | Toolbar collapses in UD12's order; tabs scroll; nothing overlaps (`debug_bounds`). Headless; golden. |
 | UTC-theme | Switch Graphite → Gray → Match system with the system dark | Every view re-renders once per switch; each open sheet repaints once; the golden equals a fresh start in that theme. Headless; golden; UB7 bench. |
@@ -744,7 +751,7 @@ gpui::actions!(omnia, [NewDocument, Open, Save, SaveAs, CloseTab, Quit, ShowHome
 #[derive(Clone, PartialEq, gpui::Action)] pub struct ToggleInstrument { pub kind: InstrumentKind }
 #[derive(Clone, PartialEq, gpui::Action)] pub struct PlacePart { pub symbol: omnia_symbols::SymbolId }
 
-pub enum KeyContext { Shell, Workspace, Sheet, Panel, Instrument, Menu, Dialog, Home, FirstBoot, TextField }
+pub enum KeyContext { Shell, Workspace, Sheet, Panel, Dialog, Home, FirstBoot, TextField } // Menu/Instrument removed by U1.5 (UQ14, UD3)
 pub struct Binding { pub keys: &'static str, pub context: KeyContext }
 pub enum MenuPlace { None, At { menu: TopMenu, group: u8, order: u8 } }
 pub struct ActionSpec {
@@ -926,7 +933,7 @@ kept every default and approved section 14 as written.
 | UQ11 | The mockup shows command-key glyphs; the targets are Windows and Linux. | Show "Ctrl+N" style text. | Default kept (UH0, 2026-11-23). |
 | UQ12 | IEC symbol preference before an IEC symbol set is compiled? | Stored only; the sheet keeps the built-in set. | Default kept (UH0, 2026-11-23). |
 | UQ13 | Print (toolbar, File)? | Shown disabled; no print plan exists. | Default kept (UH0, 2026-11-23). |
-| UQ14 | At the pinned revision `Window::focus` calls `refresh()`, which re-renders every cached view, and a mouse-down focuses a focusable element (UG15). Chrome clicks and popovers that take focus would therefore repaint `SheetView`, against UINV2, UB3, UTC-menu-keys and UTC-instrument. Accept the repaint and reword those, or keep pointer input in the chrome from moving focus? | None (raised by U4.2 after UH0's draft). | 2026-11-23 (UH0): keep UINV2, UB3 and their paint counts. Neither a pointer action in the chrome nor F10/Alt+letter calls `Window::focus`; mouse-down focus is suppressed on chrome controls (UG15). The workspace root holds a key target (`Sheet`, `Menu`, `Instrument(id)`); menus, popovers and instrument frames become the key target, not the focused element, and receive arrows, Enter, Esc and Tab through `Nav*` actions bound once in `Shell` and routed by the root's `KeyTarget` router (Esc is no longer a `Sheet` binding; T5.2 provides `SheetCanvas::cancel` instead) (UD2, UD3, UD5; UTC-menu-keys and UTC-instrument reworded to say GPUI focus stays on the sheet, paint counts unchanged). Chrome controls activate from their own mouse-down and mouse-up handlers, never `Div::on_click` (UG16). A focused text field yields navigation keys while an overlay is the key target. GPUI focus moves only for keyboard traversal (Tab, F6, UINV12), for dialogs and text fields, which need the input handler, and when a command starts a canvas tool while focus is outside the sheet (U5.2's `PlacePart`: the tool needs `Sheet`'s bindings; at most one sheet repaint). None of these is a shell-only change under UINV2. If U1.5 finds this cannot be built at the pinned revision, it is set to `blocked (UQ14)` and returns to the owner; the invariants are not reworded to fit. |
+| UQ14 | At the pinned revision `Window::focus` calls `refresh()`, which re-renders every cached view, and a mouse-down focuses a focusable element (UG15). Chrome clicks and popovers that take focus would therefore repaint `SheetView`, against UINV2, UB3, UTC-menu-keys and UTC-instrument. Accept the repaint and reword those, or keep pointer input in the chrome from moving focus? | None (raised by U4.2 after UH0's draft). | 2026-11-23 (UH0): keep UINV2, UB3 and their paint counts. Neither a pointer action in the chrome nor F10/Alt+letter calls `Window::focus`; mouse-down focus is suppressed on chrome controls (UG15). The Shell root holds a key target (`Sheet`, `Menu`, `Popover(id)`, `Instrument(id)`); menus, popovers and instrument frames become the key target, not the focused element, and receive arrows, Enter, Esc and Tab through `Nav*` actions bound once in `Shell` and routed by the root's `KeyTarget` router (Esc is no longer a `Sheet` binding; T5.2 provides `SheetCanvas::cancel` instead) (UD2, UD3, UD5; UTC-menu-keys and UTC-instrument reworded to say GPUI focus stays on the sheet, paint counts unchanged). Chrome controls activate from their own mouse-down and mouse-up handlers, never `Div::on_click` (UG16). A focused text field yields navigation keys while an overlay is the key target. GPUI focus moves only for keyboard traversal (Tab, UINV12), for dialogs and text fields, which need the input handler, and when a command starts a canvas tool while focus is outside the sheet (U5.2's `PlacePart`: the tool needs `Sheet`'s bindings; at most one sheet repaint). None of these is a shell-only change under UINV2. If U1.5 finds this cannot be built at the pinned revision, it is set to `blocked (UQ14)` and returns to the owner; the invariants are not reworded to fit. |
 | UQ15 | GPUI refreshes the whole window when input switches between mouse and keyboard (UG17), so a click then Esc (UTC-instrument), mouse input then F10 (UTC-menu-keys), or Tab then a pointer move repaints `SheetView` once, whatever the chrome does. Accept one sheet repaint per input-modality switch and say so in UINV2, UB3, UTC-menu-keys and UTC-instrument, or patch the pinned GPUI so a modality change refreshes only views that style on it? | Neither: UINV2, UB3 and the UTC rows stay as written. A task whose acceptance check fails only because of the UG17 refresh is set to `blocked (UQ15)`, records the counts with and without the modality-switch frame, and returns to the owner. | 2026-11-23, owner: accept. A switch between mouse and keyboard input may paint `SheetView` at most once (GPUI's refresh, UG17); shell-caused paints stay 0. UINV2, UB3, UTC-menu-keys and UTC-instrument say so, and every test and bench counts these as `modality_paints`, separately from shell paints, asserting `modality_paints <= modality_switches`. "Shell-caused sheet paints" means sheet paints minus modality paints; every roadmap check that says a sheet paint count is 0 means shell-caused paints, with modality paints bounded as above. GPUI is not patched. |
 
 ## 14. Changes to the canvas and wiring plans
