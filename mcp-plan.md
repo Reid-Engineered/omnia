@@ -412,11 +412,12 @@ use the existing preview/apply edit path, and their effects appear in change del
 other edit (cross-plan decision XD8, 2026-11-23). `list_parts` is a read operation: it reads the
 document's definitions and the catalog, changes nothing, and has no preview or apply step.
 
-Added at context C0.2 (HC1, 2026-11-23), both minor changes under AK7 (context-plan.md CK12),
-available from context C2.1: the read operation `context {doc_id, views, budget?, format?}`
-answers the views of context-plan.md section 9 against one revision in one call (CD9); and
-`preview` and `apply` take an optional request field `circuit: {format?, budget?}`. When the
-field is absent, request and response bytes are exactly as before.
+Added at context C0.2 (HC1, 2026-11-23), both minor changes under AK7 (context-plan.md CK12):
+the read operation `context {doc_id, views, budget?, format?}`, available from context C2.1,
+answers the views of context-plan.md section 9 against one revision in one call (CD9); and,
+from context C2.2, `preview` and `apply` take an optional request field
+`circuit: {format?, budget?}`. When the field is absent, request and response bytes are exactly
+as before.
 
 `invert_follow` means exactly what holding Alt at commit means (WK3), applied to the session's
 `WiringPrefs` (WK10). It exists only once W2.2 has added `FollowPolicy` to the code.
@@ -426,9 +427,7 @@ field is absent, request and response bytes are exactly as before.
 `preview` and `apply` return the result below. With the optional `circuit` request field
 (9.2, context-plan.md CD14) the result also carries `circuit`: the `since` view for exactly
 that edit, byte-identical between a preview and its matching apply at the same format and
-budget, and part of the stored idempotent replay (AINV2, AINV7).
-
-`preview` and `apply` return:
+budget, and part of the stored idempotent replay (AINV2, AINV7). Otherwise they return:
 
 ```json
 {
@@ -559,8 +558,8 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_query {doc_id, area, mode: envelope \| within \| touching, cursor?, limit?}` | 0 | read-only, idempotent | A1 |
 | `omnia_nets {doc_id, at? \| wire?}` | 0 | read-only, idempotent | A1 |
 | `omnia_validate {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |
-| `omnia_preview {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |
-| `omnia_apply {doc_id, expected_revision, operations, preview_id?, idempotency_key?}` | 1 | not destructive, not idempotent | A1 |
+| `omnia_preview {doc_id, expected_revision, operations, circuit?}` | 0 | read-only, idempotent | A1 |
+| `omnia_apply {doc_id, expected_revision, operations, preview_id?, idempotency_key?, circuit?}` | 1 | not destructive, not idempotent | A1 |
 | `omnia_undo`, `omnia_redo {doc_id, expected_revision}` | 1 | not destructive | A1 |
 | `omnia_save {doc_id, path?, approval?}` | 2 or 3 | destructive | A1 |
 | `omnia_close {doc_id, discard_unsaved?, approval?}` | 0 or 3 | destructive | A1 |
@@ -568,12 +567,14 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_route`, `omnia_snap`, `omnia_hit` | 0 | read-only, idempotent | A2 |
 | `omnia_render_svg {doc_id, area?, theme}` | 0 | read-only, idempotent | A2 |
 | `omnia_job_status`, `omnia_job_cancel` | 0 | — | A3; not listed before A3.1 |
-| `omnia_context {doc_id, views, budget?, format?}` | 0 | read-only, idempotent | context C2 |
+| `omnia_context {doc_id, views, budget?, format?}` | 0 | read-only, idempotent | context C2.1 (`circuit?` on preview and apply: C2.2) |
 
 Every tool declares an `inputSchema` and an `outputSchema`. A result carries
 `structuredContent` (the 9.1 envelope) and a text block with the same JSON. One exception
-(context-plan.md CD10, CQ3): a successful `omnia_context` response in `lines` format carries the
-compact lines in both channels; its errors and every other tool keep the serialized JSON text.
+(context-plan.md CD10, CQ3): for a successful `omnia_context` response in `lines` format,
+`structuredContent` is still the 9.1 envelope (its views hold `lines: [string]`) and the text
+block is those lines joined by newlines instead of the serialized JSON. `format: "json"`
+responses, errors and every other tool keep the serialized JSON text.
 
 A tool's arguments are its operation's params, plus `idempotency_key` for `omnia_apply`,
 `omnia_undo`, `omnia_redo` and `omnia_save` (11.2); the `inputSchema` is `<op>.arguments` and

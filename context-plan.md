@@ -37,7 +37,7 @@ Status words are the other plans': **DECIDED**, **DEFAULT**, **HYPOTHESIS**, **G
   nothing from a PROPOSED entry before HC1.
 
 HC1 was held on 2026-11-23: the owner delegated the sign-off to the coordinating agent, which
-kept every CQ default (section 14) and turned every PROPOSED budget, constant and decision into
+kept every CQ default, with CQ9 already answered by XD4 (section 14), and turned every PROPOSED budget, constant and decision into
 DECIDED as written, without reopening section 6.1. No entry is PROPOSED.
 
 The Model Context Protocol is named as an open protocol standard (AQ8), and SPICE as the open
@@ -1008,7 +1008,7 @@ column to `omnia-circuit`. A crate not listed there needs its licence logged fir
 ## 14. Open questions
 
 Each has a default. Build to the default; the owner's dated answer replaces it here. HC1 was held
-on 2026-11-23 (owner-delegated): every default is kept.
+on 2026-11-23 (owner-delegated): every default is kept; CQ9 was already answered by XD4.
 
 | ID | Question | Default | Answer |
 | --- | --- | --- | --- |
@@ -1021,7 +1021,7 @@ on 2026-11-23 (owner-delegated): every default is kept.
 | CQ7 | Add the spanning-forest bit and batched search to connectivity (11.1)? | Only if C1.1 or C1.8 shows split tails, on any net with many wires, including wire-only nets that CK7's pin count does not call hubs. | Default kept (HC1, 2026-11-23). |
 | CQ8 | Hub threshold: more than 32 pins, or kind `power` or `ground`? | Yes. | Default kept (HC1, 2026-11-23). |
 | CQ9 | Does stage 3 lowering take pin-to-net bindings and the ground reference from this engine, rather than a second derivation? | **Answered 2026-11-23 by XD4** (coordinator, owner-delegated): yes. The stage 3 lowering is `omnia-sim`'s (`CircuitIr`, node ordering, device expansion, source maps, diagnostics mapping, SPICE text; sim S1.2) and consumes C1.9's revision-matched bindings and declared ground evidence. There is no parts-plan netlister: the parts plan supplies definitions (roles, terminal order, parameters) only. Ground evidence follows sim SQ3's default (CK4); CD13's heuristics never reach the bindings. | Answered by XD4; confirmed (HC1, 2026-11-23). |
-| CQ10 | May C1.1 change `Change`, `undo.rs` and connectivity while W2.2 is `needs-human` (its measurement only) and W3.4 to W3.6 are open? | The order is fixed by XD7 (2026-11-23, updated by sim PR #104: S1.1 owns no `omnia-doc` file): parts P2.1–P2.3, then C1.9's lineage token in `doc.rs`, then C1.1. C1.1 starts only after those are `done` and when no other open task owns `doc.rs`, `command.rs`, `undo.rs`, `io.rs` or `connectivity.rs`; the owner confirms at HC1 which wiring tasks still hold them. | Default kept (HC1, 2026-11-23). Tasks still holding the files: W2.2 (`blocked` on WB3; `command.rs`, `undo.rs`), W3.4 (tool half; `Doc::query_within`), W3.5 (tool half; `command.rs` `with_wires`) and W3.6 (`follow.rs`). C1.1 waits until each is `done` or releases its file; no open task holds `connectivity.rs` or `io.rs` apart from parts P2.1–P2.3. |
+| CQ10 | May C1.1 change `Change`, `undo.rs` and connectivity while W2.2 is `needs-human` (its measurement only) and W3.4 to W3.6 are open? | The order is fixed by XD7 (2026-11-23, updated by sim PR #104: S1.1 owns no `omnia-doc` file): parts P2.1–P2.3, then C1.9's lineage token in `doc.rs`, then C1.1. C1.1 starts only after those are `done` and when no other open task owns `doc.rs`, `command.rs`, `undo.rs`, `io.rs` or `connectivity.rs`; the owner confirms at HC1 which wiring tasks still hold them. | Default kept (HC1, 2026-11-23). Tasks still holding the files: W2.2 (`blocked` on WB3; `command.rs`, `undo.rs`), W3.4 (`doing`, doc half done, tool half open; `doc.rs` for `Doc::query_within` and `Doc::query_touching`) and W3.5 (`doing`, doc half done, tool half open; `command.rs` `with_wires`). W3.6 owns `follow.rs` and `tool/label.rs`, none of these files, and does not gate C1.1. C1.1 waits until each listed task is `done` or releases its file; no open task holds `connectivity.rs` or `io.rs` apart from parts P2.1–P2.3. |
 | CQ11 | Use a graph library for the matcher? | No: a hand-written matcher in the crate, so determinism and step caps stay under our control. | Default kept (HC1, 2026-11-23). |
 
 ## 15. Changes to other files

@@ -501,10 +501,15 @@ at `c6b6f2e`. Rule-1 scan of the diff: no company or product name added. Nothing
 2026-11-23 C0.2 done (HC1). The owner delegated every pending sign-off to the coordinating agent on
 2026-11-23. Section 14 gains an Answer column: CQ1–CQ8 and CQ11 keep their defaults, CQ9 stays
 answered by XD4, and CQ10 keeps its default and names the tasks still holding the `omnia-doc`
-files (W2.2 `blocked` on WB3; W3.4, W3.5 and W3.6 tool halves). Every CB, CK and CD entry is
+files (W2.2 `blocked` on WB3; the open tool halves of W3.4 and W3.5; W3.6 holds none of them). Every CB, CK and CD entry is
 DECIDED as written; section 6.1 is not reopened. Section 15's C0.2 rows are applied to
 mcp-plan.md (9.2 `context` operation and the optional `circuit` field, 9.3, 9.4 CK12 codes,
 10.1 `omnia_context`, 10.2 the context resource, 13 the safe loop) and canvas-plan.md section 10;
 the `Change` row moves to C1.1, which fixes the shape; parts' XD7 line was already applied in
 PR #85. C1 tasks may start once their dependencies are done. Documentation only; rule-1 scan
 clean.
+
+2026-11-23 C0.2 review fixes. An independent review found CQ10 wrongly listed W3.6 (it owns
+`follow.rs` and `tool/label.rs`, none of the five guarded files) and that mcp-plan.md 9.2 gave
+the `circuit` field to C2.1 (C2.2 owns it). Both fixed; mcp-plan.md 10.1 also lists `circuit?`
+on `omnia_preview` and `omnia_apply` and states the CD10 exception precisely.
