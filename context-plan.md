@@ -15,7 +15,8 @@ UI and simulation plans; `P` ids are in the parts plan. Section 15 lists the cha
 makes to other files.
 
 Written 2026-11-23, against `main` at `3224084`. Updated 2026-11-23 against `main` at
-`9d4b844` for the cross-plan decisions XD1–XD9. No circuit-engine code exists yet.
+`c6b6f2e` for the cross-plan decisions XD1–XD9 and the section 16.2 rule-1 fix. No
+circuit-engine code exists yet.
 
 ## How to read this file
 
@@ -40,7 +41,8 @@ Status words are the other plans': **DECIDED**, **DEFAULT**, **HYPOTHESIS**, **G
 The Model Context Protocol is named as an open protocol standard (AQ8), and SPICE as the open
 netlist language already named in [ROADMAP.md](ROADMAP.md). Operating systems appear only as
 AGENTS.md names them for machines. No other company is named in the plan text; section 16
-lists the sources behind the research claims, with links, as citations only. Citations are
+lists the sources behind the research claims as citations only (section 16.1 with links;
+section 16.2 by feature description, without product-identifying destinations). Citations are
 written `[Ref1]`; the `Ref` prefix keeps them apart from canvas spikes `S1`–`S8` and simulation
 ids (XD9).
 
@@ -498,8 +500,8 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   before apply and after live revisions advance. A different edit at the same starting revision
   has a different identity.
 - Retain the result for as long as any AK5 cache entry can replay it, including through
-  `request_status`. For results without that protection, retain the most recent AK5 results
-  per session by creation order. Eviction, session end or document close invalidates the
+  `request_status`. For results without that protection, retain the most recent 256 (AK5)
+  results per session by creation order. Eviction, session end or document close invalidates the
   cursor with `stale_cursor`. On close, keep replay bytes under the existing idempotency rules.
   Continuation ends at the final frozen fragment. Record retained memory and page preparation
   cost in C2.2 diagnostics without changing any budget threshold.
@@ -1083,21 +1085,24 @@ as a hint to check, not a fact.
 
 ### 16.2 Software documentation, source code and reports
 
-The source labels describe the cited features. Ref25–Ref26 and Ref29–Ref33 retain
-product-identifying destinations for traceability. The owner decides at HC1 whether those
-links may remain under AGENTS.md hard rule 1.
+The source labels describe the cited features only. Under AGENTS.md hard rule 1, no
+product-identifying destination (URL or link) is retained for Ref22–Ref33; each entry is
+cited by its feature or document description, so the claim it supports stays traceable to
+the described source without naming a company or product. This replaces the earlier
+deferral of that decision to HC1: HC1 no longer carries a rule-1 disposition for section
+16.2.
 
 | Id | Source | Supports |
 | --- | --- | --- |
-| Ref22 | Query-based incremental computation library book, "The red-green algorithm". <https://salsa-rs.github.io/salsa/reference/algorithm.html> | CD1: revision stamps, backdating, durability |
-| Ref23 | Rust compiler development guide, incremental compilation. <https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation.html> | CD1: early cutoff by result fingerprints |
-| Ref24 | Differential dataflow README. <https://github.com/TimelyDataflow/differential-dataflow> | CD1: changes as signed records |
-| Ref25 | Schematic label precedence. [Source](https://docs.kicad.org/9.0/en/eeschema/eeschema.html), [Source](https://gitlab.com/kicad/code/kicad/-/raw/master/eeschema/connection_graph.cpp) | CK2: label priority and ties |
-| Ref26 | Ground mapping during export. [Source](https://gitlab.com/kicad/code/kicad/-/raw/master/eeschema/netlist_exporters/netlist_exporter_spice.cpp) | CD13: only some names map to node `0` |
-| Ref27 | Open-source graph library, Weisfeiler-Lehman hash source and notes. <https://networkx.org/documentation/stable/_modules/networkx/algorithms/graph_hashing.html> | CD12: hash values changed between versions |
-| Ref28 | Open-source network analysis library, Leiden clustering reference. <https://search.r-project.org/CRAN/refmans/igraph/html/cluster_leiden.html> | CD12: reproducible only with a fixed seed |
-| Ref29 | Consolidated tool design. [Source](https://www.anthropic.com/engineering/writing-tools-for-agents) | CD8, CD9: consolidated tools, concise responses, meaningful names |
-| Ref30 | Tool input examples. [Source](https://www.anthropic.com/engineering/advanced-tool-use) | CD9: input examples raised complex-parameter accuracy from 72% to 90% |
-| Ref31 | Tool-output size guidance. [Source](https://code.claude.com/docs/en/mcp) | CB11 |
-| Ref32 | Text-channel delivery report. [Source](https://claudeissues.com/issue/79944-mcp-tool-response-text-content-block-dropped-when-structuredcontent-is-also-pres) | CD10 |
-| Ref33 | Structured-channel delivery report. [Source](https://forum.cursor.com/t/mcp-tool-results-containing-only-structuredcontent-are-silently-dropped/167346) | CD10 |
+| Ref22 | Query-based incremental computation library book, "The red-green algorithm". | CD1: revision stamps, backdating, durability |
+| Ref23 | Rust compiler development guide, incremental compilation. | CD1: early cutoff by result fingerprints |
+| Ref24 | Differential dataflow README. | CD1: changes as signed records |
+| Ref25 | Schematic label precedence: schematic editor documentation and its connection-graph source. | CK2: label priority and ties |
+| Ref26 | Ground mapping during export: SPICE netlist exporter source. | CD13: only some names map to node `0` |
+| Ref27 | Open-source graph library, Weisfeiler-Lehman hash source and notes. | CD12: hash values changed between versions |
+| Ref28 | Open-source network analysis library, Leiden clustering reference. | CD12: reproducible only with a fixed seed |
+| Ref29 | Consolidated tool design guide. | CD8, CD9: consolidated tools, concise responses, meaningful names |
+| Ref30 | Tool input examples guide. | CD9: input examples raised complex-parameter accuracy from 72% to 90% |
+| Ref31 | Tool-output size guidance for the protocol. | CB11 |
+| Ref32 | Text-channel delivery report *(user report)*. | CD10 |
+| Ref33 | Structured-channel delivery report *(user report)*. | CD10 |

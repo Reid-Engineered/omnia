@@ -489,3 +489,11 @@ next-revision updates. Section 15 assigns the lineage and revision check at lowe
 to sim S1.2. The ERC003 crosswalk names the shared PK4 parse predicate and refers missing
 models to ERC009. CD11 includes ERC009 and ERC010 in the Run gate. Rule-1 scan found no
 company or product names introduced in body text. Nothing measured.
+
+2026-11-23 C0.1 rule-1 fix — independent re-review (different model) of `eee05c4` requested
+changes on one blocker: section 16.2 retained product-identifying URLs for Ref22–Ref33 and
+deferred the hard-rule-1 decision to HC1. Fixed by stripping every product-identifying
+destination from Ref22–Ref33 (cited by feature description only, Ref32–Ref33 marked
+*(user report)*) and removing the HC1 deferral; HC1 carries no rule-1 disposition for
+section 16.2. Nits: CD14 spells out AK5 as 256 entries; the plan header now cites `main`
+at `c6b6f2e`. Rule-1 scan of the diff: no company or product name added. Nothing measured.
