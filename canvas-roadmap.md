@@ -65,6 +65,7 @@ Tasks in different lanes own different files and can run at the same time.
 | `canvas` | `crates/omnia-canvas/`, `crates/omnia-app/` | Yes |
 | `bench` | `crates/omnia-bench/`, `.github/`, `tests/golden/`, `docs/` | Yes |
 | `agent` | `crates/omnia-agent/`, `crates/omnia-cli/`, `docs/agent/`, `mcp-plan.md`, `mcp-roadmap.md` ([mcp-roadmap.md](mcp-roadmap.md)) | No |
+| `circuit` | `crates/omnia-circuit/`, `context-plan.md`, `context-roadmap.md` ([context-roadmap.md](context-roadmap.md)) | No |
 
 ## Milestones
 
