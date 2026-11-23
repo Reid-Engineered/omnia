@@ -383,7 +383,7 @@ without being drawn.
 
 ## Milestone U3: Home, First boot, preferences and theme
 
-### U3.1 Text field · todo
+### U3.1 Text field · done
 - Lane: shell · Depends: U1.3 · Read: UD16, UG13, `gpui/examples/input.rs`
 - Owns: `crates/omnia-app/src/widgets/text_field.rs`, `THIRD_PARTY.md` (attribution)
 - Do: a single-line field per UD16 in key context `TextField`.
@@ -689,3 +689,17 @@ sizes/gaps/order at 1440x900, and click tests cover dispatch, disabled no-ops an
 Esc close. All five standard checks pass on a Windows development machine (certifies no reference
 budget); `cargo run -p omnia-app -- --frames 60` exits 0. Deviations: the toolbar is not yet embedded
 in the window (workspace layout is U1.7, as with U1.3/U1.4); U4.3 owns overflow at small sizes.
+
+2026-11-22 U3.1 done — Added the single-line `TextField` (UD16, UG13) with a themed
+placeholder and focus ring (UINV1), horizontal caret scrolling, keyboard and mouse selection,
+clipboard editing, and GPUI IME composition with UTF-16 ranges. Line separators become spaces.
+`TextFieldEvent::Changed` reports committed edits. Enter and Escape emit `Submit` and `Cancel`.
+Updated UD3 to record that the focused field handles its editing keystrokes before keymap dispatch.
+This keeps the shared bindings in the registry (UINV4). UTC-type-r verifies that lower- and
+uppercase input reach the field while Rotate and document Undo/Redo remain inactive.
+Attributed the GPUI input example in `THIRD_PARTY.md`.
+Headless tests cover typing, navigation, selection, clipboard, deletion and IME composition.
+The allocation test observed zero allocations in warmed Omnia paint code for both the placeholder
+and populated text, with a caret and a selection. Formatting, workspace Clippy, bench Clippy with
+`scene-counts,readback`, app tests, workspace tests and `cargo deny check` all passed on a Windows
+development machine.

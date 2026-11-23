@@ -263,8 +263,9 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
     Shift+Z, X, C, V, A, comma, =, -, 0, 1, 2, 3, Tab, Shift+Tab, F1, F10, F11, and Delete.
   - `Sheet` binds the single-key canvas tools from T5.2 (R, X, Y, W, Esc, and Space as T1.5 and
     T6.2 use it), so typing in a text field can never rotate a part.
-  - `TextField` binds its own editing keys (Ctrl+A, Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+Z, arrows,
-    Backspace, Delete), which win because it is deeper.
+  - The focused `TextField` handles its editing keystrokes before keymap dispatch (Ctrl+A,
+    Ctrl+C, Ctrl+V, Ctrl+X, arrows, Backspace, Delete). It consumes document undo and redo
+    keystrokes while focused. Text insertion goes through GPUI's input handler.
   - `Menu` and `Dialog` bind arrows, Enter, Esc and Tab.
 - Undo, Redo, Cut, Copy, Paste, Delete and Select All are shell actions. Their handlers call the
   active canvas's public methods (`undo`, `redo`, `cut`, `copy`, `paste`, `delete_selection`,
