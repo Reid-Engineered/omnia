@@ -1,0 +1,128 @@
+Orion: Intel(R) Core(TM) i5-7300U CPU @ 2.60GHz, Linux orion-laptop 7.2.7-arch1-1 #1 SMP PREEMPT_DYNAMIC Mon, 21 Sep 2026 18:51:14 +0000 x86_64 GNU/Linux, wayland, eDP-1, source b14702700bdfce2f8aa60194416fa2d941c1225b, binary SHA-256 faea6b7fdc52be5b40ae5aa4aea252eeca8f8947b0fc5a404a82f11ca1ba0744
+Vulkan device and driver: [('Intel(R) HD Graphics 620 (KBL GT2)', 'Intel open-source Mesa driver')]
+
+s100: scale 1.0, [1920, 1080], native 1920x1080 at 60 Hz, AC power
+CPU governors, power profile and platform profile: [(('performance',), None, ())]
+PASS B2 startup delta 49.064 [20.511, 89.735] ms (< 300)
+PASS B3 1k-pan frame p99 2.249 [1.747, 2.873] ms (< 16.7)
+PASS B3 1k-pan attribution 10/10 passed
+PASS B5 1k-pan worst frame 4.870 ms (<= 33.3)
+PASS B10 1k-pan max Omnia allocations/frame 0 (= 0)
+PASS B3 1k-zoom frame p99 2.785 [2.734, 3.639] ms (< 16.7)
+PASS B3 1k-zoom attribution 10/10 passed
+PASS B5 1k-zoom worst frame 6.107 ms (<= 33.3)
+PASS B10 1k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B4 10k-pan frame p99 2.646 [2.181, 2.959] ms (< 33.3)
+PASS B4 10k-pan attribution 10/10 passed
+PASS B5 10k-pan worst frame 5.845 ms (<= 50)
+PASS B10 10k-pan max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan private memory 149.334 [148.559, 150.363] MB (all < 300)
+PASS B4 10k-zoom frame p99 5.016 [4.952, 5.186] ms (< 33.3)
+PASS B4 10k-zoom attribution 10/10 passed
+PASS B5 10k-zoom worst frame 7.287 ms (<= 50)
+PASS B10 10k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-zoom private memory 172.652 [172.195, 174.574] MB (all < 300)
+
+s125: scale 1.25, [1536, 864], native 1920x1080 at 60 Hz, AC power
+CPU governors, power profile and platform profile: [(('performance',), None, ())]
+PASS B2 startup delta 50.545 [42.937, 54.672] ms (< 300)
+PASS B3 1k-pan frame p99 1.339 [1.165, 1.648] ms (< 16.7)
+PASS B3 1k-pan attribution 10/10 passed
+PASS B5 1k-pan worst frame 2.875 ms (<= 33.3)
+PASS B10 1k-pan max Omnia allocations/frame 0 (= 0)
+PASS B3 1k-zoom frame p99 2.222 [2.116, 2.281] ms (< 16.7)
+PASS B3 1k-zoom attribution 10/10 passed
+PASS B5 1k-zoom worst frame 3.793 ms (<= 33.3)
+PASS B10 1k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B4 10k-pan frame p99 1.797 [1.538, 2.218] ms (< 33.3)
+PASS B4 10k-pan attribution 10/10 passed
+PASS B5 10k-pan worst frame 3.922 ms (<= 50)
+PASS B10 10k-pan max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan private memory 148.209 [147.281, 149.023] MB (all < 300)
+PASS B4 10k-zoom frame p99 4.893 [4.850, 8.217] ms (< 33.3)
+PASS B4 10k-zoom attribution 10/10 passed
+PASS B5 10k-zoom worst frame 10.707 ms (<= 50)
+PASS B10 10k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-zoom private memory 169.713 [168.977, 171.344] MB (all < 300)
+
+Missed-refresh attribution
+s100/1k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
