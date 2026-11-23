@@ -1,11 +1,15 @@
 //! Part picker: the place-strip category popovers and the "In use" picker (U4.2; UD2, UD4,
 //! UK3, UINV5).
 //!
-//! [`PartPicker`] is its own view, embedded by the toolbar with `.cached(..)` (UD4). Opening a
-//! popover, moving between its items or changing the "In use" list notifies the picker only.
-//! GPUI then re-runs the render of the picker's ancestors (the toolbar and the window root,
-//! `Window::mark_view_dirty`), which replay every other cached child, so the sheet never
-//! re-renders or repaints for it (UINV2).
+//! [`PartPicker`] is its own view, embedded by the toolbar with `.cached(..)` (UD4). Hovering,
+//! a place-flag flip and an "In use" change notify the picker only; GPUI re-runs the render of
+//! its ancestors (the toolbar and the window root, `Window::mark_view_dirty`), which replay every
+//! other cached child, so the sheet does not re-render for them (UINV2).
+//!
+//! Opening, closing and choosing move focus (Esc and Tab need it, UINV12), and at the pinned
+//! GPUI revision `Window::focus` calls `refresh()`, which re-renders every cached view for one
+//! draw, the sheet included. That is recorded in the U4.2 log entry for an owner decision; it is
+//! not isolated here.
 //!
 //! - Each of the twelve place-strip buttons opens a popover listing that category's built-in
 //!   symbols (T2.3's library). A category with no built-in symbol is a disabled button.
@@ -193,6 +197,9 @@ pub struct PartPicker {
     category_focus: Vec<FocusHandle>,
     in_use_focus: FocusHandle,
     popover_focus: FocusHandle,
+    /// Closes the open popover when focus leaves it (registered at first render, which has
+    /// the window).
+    focus_out: Option<Subscription>,
     renders: u64,
     _state_subscription: Subscription,
 }
@@ -230,6 +237,7 @@ impl PartPicker {
             category_focus: PLACE_CATEGORIES.iter().map(|_| cx.focus_handle()).collect(),
             in_use_focus: cx.focus_handle(),
             popover_focus: cx.focus_handle(),
+            focus_out: None,
             renders: 0,
             _state_subscription: subscription,
         }
@@ -307,6 +315,9 @@ impl PartPicker {
     /// A mouse press on a trigger: toggles, unless this press already closed it.
     fn press(&mut self, popover: PickerPopover, window: &mut Window, cx: &mut Context<Self>) {
         if self.suppress_press.take() == Some(popover) {
+            // This press closed the popover through click-outside, which leaves focus alone;
+            // the trigger stops propagation, so put focus on it here (keyboard reopens it).
+            window.focus(self.trigger_focus(popover), cx);
             return;
         }
         self.toggle(popover, window, cx);
@@ -541,8 +552,20 @@ impl PartPicker {
 }
 
 impl Render for PartPicker {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        if self.focus_out.is_none() {
+            // Focus leaving an open popover (Tab past its last enabled row, or to anywhere
+            // else) closes it, so Esc can never be left without a popover to reach.
+            let handle = self.popover_focus.clone();
+            self.focus_out = Some(cx.on_focus_out(&handle, window, |this, _, window, cx| {
+                if this.open.take().is_some() {
+                    // Focus listeners run inside a draw, where a notify does not schedule
+                    // another frame; notify once the draw is over.
+                    cx.defer_in(window, |_, _, cx| cx.notify());
+                }
+            }));
+        }
         let mut strip = ButtonGroup::new("toolbar-place-strip").aria_label("Place parts");
         for (index, category) in PLACE_CATEGORIES.iter().enumerate() {
             strip = strip.child(self.category_trigger(index, *category, cx));
@@ -1187,5 +1210,52 @@ mod tests {
             cx.run_until_parked();
             assert_eq!(renders(cx, &h).0 - before, expected, "{name}");
         }
+    }
+
+    #[gpui::test]
+    fn closing_by_a_second_press_leaves_focus_on_the_button(cx: &mut TestAppContext) {
+        // Review of #96: the press that closes a popover through click-outside must leave
+        // focus on its button, so Enter reopens it.
+        let (h, cx) = harness(cx, false);
+        let mut doc = Doc::new();
+        let resistor = h.library.by_name("Resistor-IEEE-Standard").unwrap();
+        place(&mut doc, &h.library, resistor, 0);
+        let library = h.library.clone();
+        cx.update(|_, cx| {
+            h.picker
+                .update(cx, |picker, cx| picker.follow_document(&doc, &library, cx))
+        });
+        cx.run_until_parked();
+        for (trigger, popover) in [
+            ("toolbar-in-use", PickerPopover::InUse),
+            ("toolbar-place-basic", PickerPopover::Category(1)),
+        ] {
+            click(cx, trigger);
+            assert_eq!(open(cx, &h), Some(popover), "{trigger} opens");
+            click(cx, trigger);
+            assert_eq!(open(cx, &h), None, "{trigger} second press closes");
+            assert!(trigger_focused(cx, &h, popover), "{trigger} keeps focus");
+            press_key(cx, "enter");
+            assert_eq!(open(cx, &h), Some(popover), "{trigger}: Enter reopens");
+            press_key(cx, "escape");
+            assert_eq!(open(cx, &h), None);
+        }
+    }
+
+    #[gpui::test]
+    fn focus_leaving_an_open_popover_closes_it(cx: &mut TestAppContext) {
+        // Review of #96: with placing off every row is disabled, so Tab leaves the panel;
+        // the popover must not stay open where Esc can no longer reach it.
+        let (h, cx) = harness(cx, false);
+        // GPUI dispatches focus listeners only for an active window.
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        focus_trigger(cx, &h, PickerPopover::Category(1));
+        press_key(cx, "enter");
+        assert_eq!(open(cx, &h), Some(PickerPopover::Category(1)));
+        cx.update(|window, cx| window.focus_next(cx));
+        cx.run_until_parked();
+        assert_eq!(open(cx, &h), None, "focus left, popover closed");
+        assert!(cx.debug_bounds("toolbar-place-basic-popover").is_none());
     }
 }
