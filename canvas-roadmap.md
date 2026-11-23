@@ -2007,13 +2007,25 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        components), deduplicates across hover and multi-wire selection in
                        canonical ascending `WireId` order, re-resolves on `on_doc_change`, and
                        paints the net in `stage/net-highlight` (INV6, no colour literals).
-                       `NetHighlight` tests verify deterministic resolution across label bridges
-                       and net merges/splits; `inv11_net_highlight_never_repaints_sheet` verifies
-                       0 `SheetView` paints/notifies across hover, selection, and off-screen
-                       net-extending edits (D7, INV11). Added `overlay-net-highlight` (both
-                       themes, 100%/125%/150%) and updated `overlay-selected` goldens in
-                       `tests/golden/tests/overlay.rs`; all 12/12 sheet and 24/24 overlay
-                       goldens match with 0 differing pixels on Windows. Standard checks pass
-                       locally on Windows (fmt, workspace clippy, bench-features clippy,
-                       workspace tests, golden tests, cargo deny). No budgets measured; no new
-                       dependencies.
+                       Deviations from T4.4's **Owns** (`overlay/net.rs`): minimal integration
+                       edits in `overlay.rs` and `lib.rs`, plan signatures in `canvas-plan.md`,
+                       and golden coverage in `tests/golden/tests/overlay.rs` + PNGs (T4.3 is
+                       `done`). Behaviour update from T4.3: a hovered, unselected wire now
+                       draws its Layer 2 stroke via `net::paint_wires` in `stage/net-highlight`
+                       with the Layer 1 hover halo marking the hovered segment (rather than a
+                       solid `stage/hover` stroke); `overlay-selected` goldens updated because
+                       the fixture selects `WireId(4)`, so its full net (`Wires 4–7`) now
+                       highlights. `NetHighlight` tests verify deterministic resolution across
+                       label bridges and net merges/splits; `inv11_net_highlight_never_repaints_sheet`
+                       verifies every overlay frame paints while `SheetView` stays at 0 extra
+                       paints/notifies across hover, selection, off-screen net merge/split, and
+                       clear (D7, INV11). Review follow-up (Claude Opus 5.5): removed both
+                       `#[allow(clippy::too_many_arguments)]` attributes (Hard Rule 2) by
+                       grouping paint inputs into `OverlayPaintContext` / `WirePaintParams`,
+                       avoided double-sync in `on_doc_change`, added per-step overlay paint
+                       checks and an off-screen delete/split step, compared only `(nets, wires)`
+                       in `NetHighlight::PartialEq`, and dropped the untested no-alloc comment.
+                       All 12/12 sheet and 24/24 overlay goldens match with 0 differing pixels
+                       on Windows; standard checks pass locally (fmt, workspace clippy,
+                       bench-features clippy, workspace tests, golden tests, cargo deny). No
+                       budgets measured; no new dependencies.

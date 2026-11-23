@@ -425,13 +425,17 @@ impl OverlayView {
         if self.sync_net_highlight(cx) {
             update.visual_changed = true;
         }
-        self.apply_update(update, cx);
+        self.emit_and_notify(update, cx);
     }
 
     fn apply_update(&mut self, update: SelectionUpdate, cx: &mut Context<Self>) {
         if update.visual_changed || update.selection_changed {
             self.sync_net_highlight(cx);
         }
+        self.emit_and_notify(update, cx);
+    }
+
+    fn emit_and_notify(&mut self, update: SelectionUpdate, cx: &mut Context<Self>) {
         if update.selection_changed {
             cx.emit(OverlayEvent::SelectionChanged);
         }
@@ -585,16 +589,14 @@ impl Element for OverlayLayer {
             let sf = window.scale_factor();
             let view = overlay.read(cx);
             let doc = self.doc.read(cx);
-            paint_overlay(
+            let ctx = OverlayPaintContext {
                 doc,
-                &view.state,
-                &view.net_highlight,
-                &camera,
+                camera: &camera,
                 bounds,
                 sf,
-                self.theme,
-                window,
-            );
+                theme: self.theme,
+            };
+            paint_overlay(&view.state, &view.net_highlight, &ctx, window);
         }
 
         if self.dragging {
@@ -900,17 +902,27 @@ fn item_world_bounds(doc: &Doc, item: ItemId) -> Option<Rect> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn paint_overlay(
-    doc: &Doc,
-    state: &SelectionState,
-    net_highlight: &NetHighlight,
-    camera: &Camera,
+struct OverlayPaintContext<'a> {
+    doc: &'a Doc,
+    camera: &'a Camera,
     bounds: Bounds<Pixels>,
     sf: f32,
     theme: &'static Theme,
+}
+
+fn paint_overlay(
+    state: &SelectionState,
+    net_highlight: &NetHighlight,
+    ctx: &OverlayPaintContext<'_>,
     window: &mut Window,
 ) {
+    let OverlayPaintContext {
+        doc,
+        camera,
+        bounds,
+        sf,
+        theme,
+    } = *ctx;
     let hovered = state.hovered();
     let selection = state.selection();
     let band = state.rubber_band().filter(|b| b.is_visible());
@@ -1025,17 +1037,15 @@ fn paint_overlay(
         // Layer 2: crisp net highlights, outlines, wire highlights, corner handles, and rubber-band border.
         window.paint_layer(|window| {
             // T4.4: whole-net wire highlight in `stage/net-highlight` (underneath selection handles).
-            net::paint_wires(
-                doc,
-                net_highlight.wires(),
+            let wire_paint = net::WirePaintParams {
                 camera,
                 visible_padded,
                 sf,
-                wire_select_dev,
+                width_dev: wire_select_dev,
                 clip,
                 theme,
-                window,
-            );
+            };
+            net::paint_wires(doc, net_highlight.wires(), &wire_paint, window);
 
             // Hovered item outline (hovered wires are painted by `net::paint_wires` above, with
             // their Layer 1 hover halo indicating the hovered segment).
@@ -1592,8 +1602,19 @@ mod tests {
         });
 
         let initial_sheet_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
-        let initial_overlay_paints = cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
+        let mut prev_overlay_paints = cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
         assert_eq!(initial_sheet_paints, 1);
+
+        let assert_overlay_painted =
+            |cx: &mut gpui::VisualTestContext, prev: &mut u64, step: &str| {
+                let now = cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
+                assert!(
+                    now > *prev,
+                    "T4.4: expected overlay frame to paint after {step} (prev={}, now={now})",
+                    *prev
+                );
+                *prev = now;
+            };
 
         // Hover Wire(0): whole Net A ([0, 1, 2]) highlights in overlay; SheetView does not repaint.
         let w0_pos = screen_of(&overlay, cx, Pt { x: -5 * g, y: 0 });
@@ -1610,12 +1631,12 @@ mod tests {
             cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
             vec![WireId(0), WireId(1), WireId(2)]
         );
-        let paints_after_hover = cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
-        assert!(paints_after_hover > initial_overlay_paints);
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "hover Wire(0)");
 
         // Hover empty space: highlight clears.
         cx.simulate_mouse_move(empty_pos, None, Modifiers::none());
         assert!(cx.update(|_, cx| overlay.read(cx).highlighted_wires().is_empty()));
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "unhover to empty space");
 
         // Click Wire(1) to select it: Net A highlights.
         let w1_pos = screen_of(
@@ -1632,6 +1653,7 @@ mod tests {
             cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
             vec![WireId(0), WireId(1), WireId(2)]
         );
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "select Wire(1)");
 
         // Hover Wire(3) while Wire(1) is selected: both Net A and Net B highlight.
         let w3_pos = screen_of(
@@ -1647,8 +1669,9 @@ mod tests {
             cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
             vec![WireId(0), WireId(1), WireId(2), WireId(3)]
         );
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "hover Wire(3)");
 
-        // Off-screen label edit merges Wire(4) into Net A: OverlayView re-resolves without
+        // Off-screen label edit merges `off_wid` into Net A: OverlayView re-resolves without
         // repainting SheetView (D7).
         let off_wire = cx.update(|_, cx| {
             doc.update(cx, |doc, _| {
@@ -1688,6 +1711,14 @@ mod tests {
                 .unwrap()
             })
         });
+        let off_lid = off_label
+            .added
+            .iter()
+            .find_map(|item| match *item {
+                ItemId::Label(id) => Some(id),
+                _ => None,
+            })
+            .unwrap();
         cx.update(|_, cx| {
             overlay.update(cx, |v, cx| v.on_doc_change(&off_label, cx));
         });
@@ -1696,11 +1727,36 @@ mod tests {
             cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
             vec![WireId(0), WireId(1), WireId(2), WireId(3), off_wid]
         );
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "off-screen net merge");
+
+        // Deleting the off-screen bridging label splits `off_wid` back out of Net A via
+        // `on_doc_change`, updating the overlay without repainting SheetView.
+        let split_change = cx.update(|_, cx| {
+            doc.update(cx, |doc, _| {
+                doc.apply(Command::Delete {
+                    items: vec![ItemId::Label(off_lid)],
+                    with_wires: false,
+                })
+                .unwrap()
+            })
+        });
+        cx.update(|_, cx| {
+            overlay.update(cx, |v, cx| v.on_doc_change(&split_change, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2), WireId(3)]
+        );
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "off-screen net split");
 
         // Clear selection and move hover away: net highlight clears.
         cx.simulate_mouse_move(empty_pos, None, Modifiers::none());
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "hover away before clear");
         cx.update(|_, cx| overlay.update(cx, |v, cx| v.clear_selection(cx)));
+        cx.run_until_parked();
         assert!(cx.update(|_, cx| overlay.read(cx).highlighted_wires().is_empty()));
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "clear selection");
 
         assert_eq!(
             cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),

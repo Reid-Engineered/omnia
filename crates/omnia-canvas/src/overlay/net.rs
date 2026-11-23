@@ -10,20 +10,28 @@
 //! highlighted net happens solely inside [`crate::OverlayView`] and never notifies `SheetView`
 //! (D7, INV11).
 
-use super::{DevRect, gpui_color, item_world_bounds, wire_rect_dev};
+use super::{gpui_color, item_world_bounds, wire_rect_dev};
 use crate::camera::Camera;
 use gpui::{Window, fill};
 use omnia_doc::{Doc, ItemId, NetId, Rect, WireId};
 use omnia_theme::Theme;
 
 /// Resolved net highlight state derived from the current hovered and selected wires (D7).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default)]
 pub struct NetHighlight {
     nets: Vec<NetId>,
     wires: Vec<WireId>,
     prev_wires: Vec<WireId>,
     scratch: Vec<WireId>,
 }
+
+impl PartialEq for NetHighlight {
+    fn eq(&self, other: &Self) -> bool {
+        self.nets == other.nets && self.wires == other.wires
+    }
+}
+
+impl Eq for NetHighlight {}
 
 impl NetHighlight {
     pub fn new() -> Self {
@@ -54,9 +62,8 @@ impl NetHighlight {
         true
     }
 
-    /// Re-resolves highlighted nets and wires from `hovered` and `selection` against `doc`.
-    /// Returns whether the highlighted wire set changed. Allocates nothing once capacities
-    /// are warm.
+    /// Re-resolves highlighted nets and wires from `hovered` and `selection` against `doc`,
+    /// reusing internal buffers. Returns whether the highlighted wire set changed.
     pub fn sync(&mut self, doc: &Doc, hovered: Option<ItemId>, selection: &[ItemId]) -> bool {
         self.nets.clear();
         if let Some(ItemId::Wire(id)) = hovered
@@ -87,32 +94,43 @@ impl NetHighlight {
     }
 }
 
+/// Shared geometry and theme parameters for painting net-highlighted wires.
+pub(super) struct WirePaintParams<'a> {
+    pub camera: &'a Camera,
+    pub visible_padded: Rect,
+    pub sf: f32,
+    pub width_dev: u32,
+    pub clip: (f64, f64, f64, f64),
+    pub theme: &'static Theme,
+}
+
 /// Paints every visible wire in `wires` in `theme.stage_net_highlight` (INV6).
-#[allow(clippy::too_many_arguments)]
 pub(super) fn paint_wires(
     doc: &Doc,
     wires: &[WireId],
-    camera: &Camera,
-    visible_padded: Rect,
-    sf: f32,
-    width_dev: u32,
-    clip: (f64, f64, f64, f64),
-    theme: &'static Theme,
+    params: &WirePaintParams<'_>,
     window: &mut Window,
 ) {
     if wires.is_empty() {
         return;
     }
-    let color = gpui_color(theme.stage_net_highlight);
+    let color = gpui_color(params.theme.stage_net_highlight);
     for &id in wires {
-        if !item_world_bounds(doc, ItemId::Wire(id)).is_some_and(|r| r.intersects(visible_padded)) {
+        if !item_world_bounds(doc, ItemId::Wire(id))
+            .is_some_and(|r| r.intersects(params.visible_padded))
+        {
             continue;
         }
         if let Some(&wire) = doc.wire(id)
-            && let Some(rect) = wire_rect_dev(wire, camera, sf, width_dev, clip)
+            && let Some(rect) = wire_rect_dev(
+                wire,
+                params.camera,
+                params.sf,
+                params.width_dev,
+                params.clip,
+            )
         {
-            let _typed: DevRect = rect;
-            window.paint_quad(fill(rect.bounds(sf), color));
+            window.paint_quad(fill(rect.bounds(params.sf), color));
         }
     }
 }
