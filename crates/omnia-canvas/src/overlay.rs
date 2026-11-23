@@ -21,6 +21,11 @@ use std::{cell::Cell, rc::Rc};
 
 use crate::{
     camera::Camera,
+    camera_anim::{
+        CameraAnimation, ViewAnimation, fit_rect_camera, fit_sheet_camera, viewport_center,
+        zoom_to_selection_camera,
+    },
+    input::wheel_factor,
     selection::{RubberBand, SelectionState, SelectionUpdate},
     sheet::{SheetDocument, SheetView},
     snap_px::{centered_square, device_rect, round_device, stroke_device_px, to_device},
@@ -32,7 +37,10 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style, StyleRefinement,
     Styled, WeakEntity, Window, div, fill, point, px, relative,
 };
-use omnia_doc::{Change, Doc, ItemId, NetId, Pt, Rect, Wire, WireId, prefs::SelectMode};
+use omnia_doc::{
+    Change, Doc, ItemId, NetId, Pt, Rect, Wire, WireId,
+    prefs::{SelectMode, WiringPrefs},
+};
 use omnia_theme::Theme;
 
 /// K5 wire stroke width in world nanometres, matching `sheet/wires.rs`.
@@ -197,6 +205,8 @@ pub struct OverlayView {
     state: SelectionState,
     net_highlight: NetHighlight,
     focus: FocusHandle,
+    viewport: Bounds<Pixels>,
+    anim: Option<ViewAnimation>,
     renders: u64,
     paints: Rc<Cell<u64>>,
 }
@@ -210,6 +220,17 @@ impl OverlayView {
         theme: &'static Theme,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::with_prefs(doc, camera, theme, &WiringPrefs::default(), cx)
+    }
+
+    /// Creates an [`OverlayView`] whose initial rubber-band mode comes from `prefs` (WD8, WD12).
+    pub fn with_prefs(
+        doc: Entity<Doc>,
+        camera: Camera,
+        theme: &'static Theme,
+        prefs: &WiringPrefs,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let document = SheetDocument::new(doc.clone());
         let sheet = cx.new(|_| CachedSheet::new(camera.clone(), theme, Some(document)));
         Self {
@@ -217,9 +238,11 @@ impl OverlayView {
             sheet,
             camera,
             theme,
-            state: SelectionState::default(),
+            state: SelectionState::from_prefs(prefs),
             net_highlight: NetHighlight::new(),
             focus: cx.focus_handle(),
+            viewport: Bounds::default(),
+            anim: None,
             renders: 0,
             paints: Rc::new(Cell::new(0)),
         }
@@ -231,6 +254,19 @@ impl OverlayView {
 
     pub fn camera(&self) -> &Camera {
         &self.camera
+    }
+
+    pub fn viewport(&self) -> Bounds<Pixels> {
+        self.viewport
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.anim.is_some()
+    }
+
+    /// Cancels any active view animation immediately from the current camera position (K13).
+    pub fn cancel_animation(&mut self) -> bool {
+        self.anim.take().is_some()
     }
 
     pub fn theme(&self) -> &'static Theme {
@@ -293,6 +329,13 @@ impl OverlayView {
     /// Sets the WD8 rubber-band mode (never notifies `SheetView`).
     pub fn set_select_mode(&mut self, mode: SelectMode, cx: &mut Context<Self>) {
         if self.state.set_select_mode(mode) {
+            cx.notify();
+        }
+    }
+
+    /// Applies wiring preferences (`select_mode`) to the overlay (WD8, WD12; never notifies `SheetView`).
+    pub fn apply_prefs(&mut self, prefs: &WiringPrefs, cx: &mut Context<Self>) {
+        if self.state.apply_prefs(prefs) {
             cx.notify();
         }
     }
@@ -367,8 +410,61 @@ impl OverlayView {
         }
     }
 
+    /// Starts a 150 ms ease-out view animation (K13) from the current camera to `target`.
+    pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>) {
+        let anim = CameraAnimation::new(self.camera.clone(), target, self.viewport);
+        if anim.is_noop() {
+            self.anim = None;
+            return;
+        }
+        self.anim = Some(ViewAnimation::start(anim, cx));
+        self.sheet.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
+    /// Animates the camera to fit `rect` in the current viewport with default margins.
+    pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>) {
+        self.animate_to(fit_rect_camera(rect, self.viewport), cx);
+    }
+
+    /// Animates the camera to fit all items in the sheet (or origin at 100% if empty).
+    pub fn fit_sheet(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let target = fit_sheet_camera(Some(self.doc.read(cx)), self.viewport);
+        self.animate_to(target, cx);
+    }
+
+    /// Animates the camera to fit the current selection. Returns `false` if nothing live is
+    /// selected.
+    pub fn zoom_to_selection(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(target) =
+            zoom_to_selection_camera(self.doc.read(cx), self.state.selection(), self.viewport)
+        else {
+            return false;
+        };
+        self.animate_to(target, cx);
+        true
+    }
+
+    /// Animates a K4 zoom of `steps` notches about the viewport centre (`ui-plan.md` section 14).
+    pub fn zoom_step(&mut self, steps: i32, _window: &mut Window, cx: &mut Context<Self>) {
+        if steps == 0 {
+            return;
+        }
+        let mut target = self
+            .anim
+            .as_ref()
+            .map_or_else(|| self.camera.clone(), |a| a.target().clone());
+        target.set_viewport(self.viewport);
+        target.zoom_about(
+            viewport_center(self.viewport),
+            wheel_factor(f64::from(steps)),
+        );
+        self.animate_to(target, cx);
+    }
+
     /// Updates the camera and invalidates both the cached sheet and the overlay when changed (D7).
     pub fn set_camera(&mut self, camera: Camera, cx: &mut Context<Self>) {
+        self.anim = None;
         if self.camera.zoom() == camera.zoom()
             && self.camera.world_to_screen(Pt::ZERO) == camera.world_to_screen(Pt::ZERO)
             && self.camera.visible() == camera.visible()
@@ -398,6 +494,7 @@ impl OverlayView {
 
     /// Replaces the displayed document, clearing transient state and invalidating both views.
     pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>) {
+        self.anim = None;
         let document = SheetDocument::new(doc.clone());
         self.doc = doc;
         let had_selection = !self.state.selection().is_empty();
@@ -450,6 +547,7 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.viewport = bounds;
         self.camera.set_viewport(bounds);
         let update = self
             .state
@@ -464,6 +562,7 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.viewport = bounds;
         self.camera.set_viewport(bounds);
         let update = self
             .state
@@ -483,6 +582,7 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.viewport = bounds;
         self.camera.set_viewport(bounds);
         let update = self.state.mouse_up(self.doc.read(cx), &self.camera, event);
         self.apply_update(update, cx);
@@ -491,8 +591,30 @@ impl OverlayView {
 }
 
 impl Render for OverlayView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        if let Some(anim) = &self.anim {
+            let (next_cam, finished) = anim.step(self.viewport, cx);
+            self.camera = next_cam.clone();
+            self.sheet.update(cx, |sheet, _| {
+                sheet.camera = next_cam;
+            });
+            if finished {
+                self.anim = None;
+            } else {
+                window.request_animation_frame();
+                let overlay = cx.entity().downgrade();
+                let sheet = self.sheet.clone();
+                window.on_next_frame(move |_, cx| {
+                    if overlay
+                        .read_with(cx, |o, _| o.is_animating())
+                        .unwrap_or(false)
+                    {
+                        sheet.update(cx, |_, cx| cx.notify());
+                    }
+                });
+            }
+        }
         div()
             .relative()
             .size_full()
@@ -566,7 +688,10 @@ impl Element for OverlayLayer {
     ) -> Self::PrepaintState {
         // Keep the overlay's camera viewport aligned with layout bounds without notifying.
         self.overlay
-            .update(cx, |overlay, _| overlay.camera.set_viewport(bounds))
+            .update(cx, |overlay, _| {
+                overlay.viewport = bounds;
+                overlay.camera.set_viewport(bounds);
+            })
             .ok();
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
@@ -1202,11 +1327,18 @@ mod tests {
     }
 
     fn open_overlay(cx: &mut TestAppContext) -> (OverlayFixture, &mut VisualTestContext) {
+        open_overlay_with_prefs(cx, WiringPrefs::default())
+    }
+
+    fn open_overlay_with_prefs(
+        cx: &mut TestAppContext,
+        prefs: WiringPrefs,
+    ) -> (OverlayFixture, &mut VisualTestContext) {
         let doc = cx.new(|_| test_doc());
         let doc_clone = doc.clone();
         let (overlay, cx) = cx.add_window_view(move |window, cx| {
             let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
-            let view = OverlayView::new(doc_clone, camera, &GRAPHITE, cx);
+            let view = OverlayView::with_prefs(doc_clone, camera, &GRAPHITE, &prefs, cx);
             // Focus the sheet once at open so clicks on the active sheet do not trigger GPUI's
             // focus-change `window.refresh()` (which bypasses `.cached()` for that frame).
             window.focus(view.focus_handle(), cx);
@@ -1539,6 +1671,309 @@ mod tests {
             paints_1,
             "INV11: clicks once focused must not repaint SheetView"
         );
+    }
+
+    fn drag_rubber_band(
+        overlay: &Entity<OverlayView>,
+        cx: &mut VisualTestContext,
+        start: Pt,
+        end: Pt,
+        shift: bool,
+    ) {
+        let mods = if shift {
+            Modifiers::shift()
+        } else {
+            Modifiers::none()
+        };
+        let s0 = screen_of(overlay, cx, start);
+        let s1 = screen_of(overlay, cx, end);
+        let mid = point((s0.x + s1.x) * 0.5, (s0.y + s1.y) * 0.5);
+        cx.simulate_mouse_down(s0, MouseButton::Left, mods);
+        cx.simulate_mouse_move(mid, MouseButton::Left, mods);
+        cx.simulate_mouse_move(s1, MouseButton::Left, mods);
+        assert!(
+            cx.update(|_, cx| overlay.read(cx).rubber_band().unwrap().is_visible()),
+            "rubber band must become visible after drag move"
+        );
+        cx.simulate_mouse_up(s1, MouseButton::Left, mods);
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).rubber_band()), None);
+    }
+
+    fn run_tc_band_half_part(
+        cx: &mut TestAppContext,
+        mode: SelectMode,
+        start_world: Pt,
+        end_world: Pt,
+    ) {
+        let prefs = WiringPrefs::new(true, 10, mode, false).unwrap();
+        let (
+            OverlayFixture {
+                overlay,
+                sheet_notifies,
+                selection_events,
+                ..
+            },
+            cx,
+        ) = open_overlay_with_prefs(cx, prefs);
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).select_mode()), mode);
+        let initial_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+
+        drag_rubber_band(&overlay, cx, start_world, end_world, false);
+
+        match mode {
+            SelectMode::Intersecting => {
+                assert_eq!(
+                    cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+                    vec![ItemId::Part(PartId(0))]
+                );
+                assert_eq!(selection_events.get(), 1);
+            }
+            SelectMode::Enclosed => {
+                assert!(cx.update(|_, cx| overlay.read(cx).selection().is_empty()));
+                assert_eq!(selection_events.get(), 0);
+            }
+        }
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            initial_paints
+        );
+        assert_eq!(sheet_notifies.get(), 0);
+    }
+
+    // Half-covering box over R1 (body x in [-8g, -4g], y in [-2g, 2g]): x in [-10g, -6g], y in [-4g, 4g].
+    #[gpui::test]
+    fn tc_band_01_nw_to_se_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_02_se_to_nw_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_03_ne_to_sw_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_04_sw_to_ne_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_05_nw_to_se_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_06_se_to_nw_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_07_ne_to_sw_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_08_sw_to_ne_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_09_shift_adds_to_existing_selection(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        let (
+            OverlayFixture {
+                overlay,
+                sheet_notifies,
+                selection_events,
+                ..
+            },
+            cx,
+        ) = open_overlay(cx);
+        let initial_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).select_mode()),
+            SelectMode::Intersecting
+        );
+
+        // Existing selection: Label(0) at (0, 4g).
+        let label_pos = screen_of(&overlay, cx, Pt { x: 0, y: 4 * g });
+        cx.simulate_mouse_down(label_pos, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(label_pos, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Label(LabelId(0))]
+        );
+
+        // Shift-drag half-box over R1 in default Intersecting mode -> adds Part(0).
+        drag_rubber_band(
+            &overlay,
+            cx,
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+            true,
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Part(PartId(0)), ItemId::Label(LabelId(0))]
+        );
+
+        // Switch preference to Enclosed via apply_prefs; Shift-drag half-box over C1 -> keeps existing selection.
+        let enclosed_prefs = WiringPrefs::new(true, 10, SelectMode::Enclosed, false).unwrap();
+        cx.update(|_, cx| {
+            overlay.update(cx, |v, cx| v.apply_prefs(&enclosed_prefs, cx));
+        });
+        drag_rubber_band(
+            &overlay,
+            cx,
+            Pt {
+                x: 6 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: 10 * g,
+                y: 4 * g,
+            },
+            true,
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Part(PartId(0)), ItemId::Label(LabelId(0))]
+        );
+
+        // Shift-drag full box enclosing C1 ([3g..10g] x [-4g..4g], avoiding Wire(0) wholly) -> adds Part(1).
+        drag_rubber_band(
+            &overlay,
+            cx,
+            Pt {
+                x: 10 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: 3 * g,
+                y: -4 * g,
+            },
+            true,
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![
+                ItemId::Part(PartId(0)),
+                ItemId::Part(PartId(1)),
+                ItemId::Label(LabelId(0)),
+            ]
+        );
+        assert_eq!(selection_events.get(), 3);
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            initial_paints
+        );
+        assert_eq!(sheet_notifies.get(), 0);
     }
 
     #[gpui::test]

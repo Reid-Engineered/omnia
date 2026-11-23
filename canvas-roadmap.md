@@ -492,7 +492,7 @@ of the `canvas` lane.
 - Done when: the `SheetView` paint counter does not move when the highlight changes; a
   golden shows a highlighted net.
 
-### T4.5 View animations · todo
+### T4.5 View animations · done
 - Lane: canvas · Depends: T4.3 · Read: K13, G16
 - Owns: `crates/omnia-canvas/src/camera_anim.rs`
 - Do: fit-to-sheet and zoom-to-selection, 150 ms ease-out driven by
@@ -1997,6 +1997,35 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        run; it is kept in `orion-2026-11-23/aborted-attempt/`. Evidence in
                        `docs/measurements/T2.9/orion-2026-11-23/`; `gate.py summarize`
                        reproduces the summary.
+2026-11-23 T4.5 done — implemented `crates/omnia-canvas/src/camera_anim.rs` (`VIEW_ANIM_DURATION`
+                       150 ms K13, `FIT_FILL_FRACTION` 0.9, `ease_out`, `doc_bounds`,
+                       `selection_bounds`, `fit_rect_camera`, `fit_area_camera`,
+                       `fit_sheet_camera`, `zoom_to_selection_camera`, `CameraAnimation`,
+                       `ViewAnimation`), re-exported from `crates/omnia-canvas/src/lib.rs`, and
+                       wired into `SheetCanvas` (`input.rs`) and `OverlayView` (`overlay.rs`)
+                       plus `canvas-plan.md` section 9 (rule 12). Fixed-pivot geometric-zoom
+                       interpolation keeps world coordinates in `i32`/`i64`/`f64` (INV8) and
+                       lands bit-for-bit on the target at `>= 150 ms`. Driven via
+                       `window.request_animation_frame()` (G16) with clock from
+                       `cx.background_executor().now()`, stopping requests immediately on
+                       completion or cancellation (`OverlayView` also gates its next-frame
+                       `CachedSheet` invalidation on active animation and leaves INV11 intact).
+                       Any pan or zoom input in `SheetCanvas` (`ScrollDelta::Lines`,
+                       `ScrollDelta::Pixels`, `PinchEvent`, middle-drag, Space+left-drag) or
+                       external `set_camera`/`set_document` cancels immediately from the current
+                       camera position with no jump. Ownership deviation: added minimal wiring
+                       in `lib.rs`, `input.rs`, and `overlay.rs` to expose `fit_sheet`,
+                       `zoom_to_selection`, `zoom_step` (`ui-plan.md` section 14), and input
+                       cancellation. Unit, proptest, and GPUI simulated-input tests (in
+                       `camera_anim.rs`) pass (56/56 `omnia-canvas` lib tests), proving exact
+                       target landing, zero-jump mid-way cancellation across all pan/zoom
+                       inputs, and 0 animation frames 1 s after completion or cancellation.
+                       Standard checks pass locally on Windows (`cargo fmt --all --check`,
+                       workspace clippy, `omnia-bench` `--features scene-counts,readback`
+                       clippy, `cargo test --workspace -j 2` (`-j 2` for Windows MSVC memory
+                       headroom), `cargo deny check`), and `cargo run --release -p omnia-bench
+                       -- idle --seconds 2` reported `frames: 0, renders: 0`. No budgets
+                       certified; no new dependencies.
 2026-11-23 T4.4 done — implemented `crates/omnia-canvas/src/overlay/net.rs` (`NetHighlight` and
                        `paint_wires`), integrated into `crates/omnia-canvas/src/overlay.rs`
                        (`OverlayView::highlighted_nets`, `OverlayView::highlighted_wires`, and
