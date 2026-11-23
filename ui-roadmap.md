@@ -171,7 +171,7 @@ without being drawn.
 - Done when: the file states sheet paints during the hover (expected 0), whether the popover
   occludes the sheet's hitbox, and allocations per frame of our code in the readout path.
 
-### U0.5 Spike US4: save and load timing · needs-human
+### U0.5 Spike US4: save and load timing · done
 - Lane: bench · Depends: none · Read: UB10, D8, T2.4
 - Owns: `crates/omnia-bench/benches/doc_io.rs`, `docs/measurements/U0.5.md`
 - Do: criterion benches of `Doc::save` into a `Vec<u8>` and `Doc::load` from bytes for `1k` and
@@ -759,3 +759,4 @@ development machine.
 2026-11-23 UQ15 answered — The owner accepted GPUI's input-modality refresh (UG17): a switch between mouse and keyboard input may paint `SheetView` at most once. Shell-caused paints stay 0. ui-plan.md UQ15, UB3, UINV2, UTC-menu-keys, UTC-instrument and the architecture note, and U1.5 here, now count these as `modality_paints <= modality_switches`, separately. GPUI is not patched. Docs only.
 2026-11-23 UQ15 review fixes — An independent review found U1.5, U1.7, U4.1, UTC-menu-mouse and UTC-menu-keys still counted total sheet paints in scripts that switch input modality. They now count shell-caused paints (0) with modality paints bounded separately; the UQ15 answer defines the term once. UTC-menu-keys states that a fresh headless window starts in mouse modality at the pinned GPUI, so F10 is one switch.
 2026-11-23 UQ15 review fixes (2) — U5.2's placement case now caps focus-caused paints at one and counts modality paints separately, so a Tab, then a pointer choice, is not double-counted.
+2026-11-23 U0.5 done — Orion reference campaign (owner-approved, run remotely by the coordinating agent; canvas plan 2.1): frozen `run.sh` at `main` `0507b1c`, 10 rotating passes × 4 cases, AC and `performance` governor verified in all 80 snapshots, Baloo suspended. UB10 passes on Orion: `save_10k` median p99 27.314 ms (range 22.617–54.223) < 33.3 ms. `load_10k` median p99 111.4 ms (background executor per D8/UD7). Evidence in `docs/measurements/U0.5/orion-2026-11-23/`. U0.6 needs no `DocSnapshot` request for US4.
