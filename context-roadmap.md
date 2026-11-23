@@ -136,18 +136,20 @@ HC2 + (A3.1 or A4.1) -> C5.1          HC2 + measured split tails (CQ7) -> C5.2
   CD2, CINV12, section 6.1 (XD7); parts-plan.md PD8 (change visibility); T2.8 measurements
 - Owns: `Change` and `ChangeAcc` in `crates/omnia-doc/src/command.rs`; the `Change` that
   `undo` and `redo` build in `crates/omnia-doc/src/undo.rs`; delta recording in
-  `crates/omnia-doc/src/connectivity.rs`; `crates/omnia-doc/tests/net_delta.rs`
+  `crates/omnia-doc/src/connectivity.rs`; `crates/omnia-doc/tests/net_delta.rs`.
+  Mechanical update only: the `Change` literal in
+  `crates/omnia-agent/src/schema/tests.rs` (`section_9_3_example_shapes`).
 - Do: add the transaction-level `net_delta` (`retired`, `created`, `mapping`, `moved` for pins,
   wires and labels, `labels`, `renumbered`); add `edited_parts`, `modified_wires` and
   `modified_labels` beside P2.2's `modified`, which keeps PD8's meaning unchanged (CD2). Fix the types in
   context-plan.md section 12 and canvas-plan.md section 9; amend D2 there if `nets_changed`
-  needs it.
+  needs it. Initialize the new fields in the agent fixture and keep its existing JSON assertion.
 - Done when: CINV12 holds over the T5.1 random generator, including batches, undo and
   redo, `SetParam` and `UpdatePartDef`; P2.2's `Change::modified` tests pass unchanged and
   `modified` never lists a part whose only change is designator, value text, position or
   orientation; `edited_parts`, `modified_wires` and `modified_labels` list exactly the items
-  whose fields of that kind changed; the
-  one-way rule `!net_delta.is_empty() ⇒ nets_changed` holds (CD2); the command-boundary
+  whose fields of that kind changed. The agent fixture's JSON assertion passes unchanged.
+  The one-way rule `!net_delta.is_empty() ⇒ nets_changed` holds (CD2); the command-boundary
   cases are re-run paired (delta off, delta on) on a development machine and recorded,
   labelled non-certifying, and the reference re-run is requested at HC2.
 
@@ -185,13 +187,15 @@ journal and the views, so that sim S1.2 can start.
   section 15), and C2.1 checks that the `context` DTOs keep CK1 keys and `NetKey` distinct.
 
 ### C1.3 Incremental update · todo
-- Lane: circuit · Depends: C1.1, C1.2, C1.9 · Read: CD5, CINV2, CINV5, CINV14
+- Lane: circuit · Depends: C1.1, C1.2, C1.9 · Read: CD5, CD18, CINV2, CINV5, CINV14
 - Owns: `crates/omnia-circuit/src/update.rs`
-- Do: `Circuit::update` from `Change` and `net_delta`: recompute only touched nets, backdate
-  unchanged ones, keep revision agreement; keep the bindings and ground evidence current (CD5).
+- Do: use the same-lineage revision transition in CD18 to apply `Change` and `net_delta`.
+  Recompute only touched nets, backdate unchanged ones and keep bindings and ground evidence
+  current (CD5).
 - Done when: CINV2 holds over the T5.1 random generator with undo and redo, `SetParam` and
-  `UpdatePartDef`; CINV14 holds after incremental updates; CINV5 has a test that a stale
-  circuit refuses to answer.
+  `UpdatePartDef`; CINV14 holds after incremental updates. In CTC-bind-01, valid successive
+  changes advance bindings without rebuilding. Check that a same-revision no-op leaves the
+  circuit unchanged, a skipped revision triggers a rebuild, and stale reads fail (CINV5).
 
 ### C1.4 Journal and `since` · todo
 - Lane: circuit · Depends: C1.3 · Read: CD6, CK8, CINV4
@@ -473,3 +477,15 @@ now also waits for parts P2.3 before adding the lineage token to `doc.rs`; secti
 parts plan to show C1.9 before C1.1 in its order line. Section 9.4's crosswalk gains ERC009
 (no simulation model) and ERC010 (conflicting rail voltage) as sim-only rows, and the ERC001
 row names `ground.missing`'s non-`Ground`-part condition, which sim ERC001 now uses.
+
+2026-11-23 C0.1 review fixes — merged `main` at 0507b1c and checked the edits against
+cross-plan decisions XD1–XD9 (coordinator, owner-delegated, 2026-11-23). C1.1 owns the
+mechanical agent `Change` fixture update and preserves its JSON assertion. CD2 and CINV12
+specify each edit list, including the
+position-only case. CK1 and CD18 compare both wire endpoints and compare symbol, value,
+orientation and bounds for coincident same-number pins before using ids. CTC-bind-02 covers
+both cases under reversed insertion. CD18 and C1.3 distinguish exact-state reads from
+next-revision updates. Section 15 assigns the lineage and revision check at lowering entry
+to sim S1.2. The ERC003 crosswalk names the shared PK4 parse predicate and refers missing
+models to ERC009. CD11 includes ERC009 and ERC010 in the Run gate. Rule-1 scan found no
+company or product names introduced in body text. Nothing measured.

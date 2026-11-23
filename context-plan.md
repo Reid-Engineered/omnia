@@ -90,8 +90,8 @@ Out of scope:
 - Simulation lowering, analyses and engine choice (ROADMAP stage 3). `omnia-sim` owns lowering:
   `CircuitIr`, node ordering, device expansion, source maps, diagnostics mapping and SPICE text
   (sim SD7). It reads pin-to-net bindings and ground evidence from this engine (C1.9, CQ9,
-  XD4). Run preflight (`sim.erc`, ERC001–ERC008) is the simulation plan's; this plan shares its
-  predicates (section 9.4, XD6).
+  XD4). The simulation plan owns Run preflight (`sim.erc`, ERC001–ERC010, with ERC007 retired).
+  This plan shares its predicates (section 9.4, XD6).
 - UI panels (inspector, findings list, net highlight). The UI plan consumes the engine later.
 - Hierarchical sheets, buses and multi-unit parts: the document has none yet (PQ1). The schema
   leaves room for them (CK3).
@@ -104,14 +104,14 @@ Checked at `3224084`; the parts and simulation rows rechecked at `9d4b844` (part
 
 | Fact | Where | Consequence |
 | --- | --- | --- |
-| `Change` carries `revision`, `dirty`, `added`, `removed` and `nets_changed: bool`. Modified items appear only through `dirty`; "an empty pair of lists does not mean nothing changed". `apply` builds it in `command.rs`; `undo` and `redo` build it in `undo.rs`. | `crates/omnia-doc/src/command.rs`, `undo.rs` | The engine cannot tell which nets or parts changed without searching `dirty`. Parts task P2.2 adds `modified: Vec<PartId>` for parts whose definition or parameters changed (PD8, XD7); C1.1 adds the net delta and widens the modified lists (CD2). |
+| `Change` carries `revision`, `dirty`, `added`, `removed` and `nets_changed: bool`. Modified items appear only through `dirty`; "an empty pair of lists does not mean nothing changed". `apply` builds it in `command.rs`; `undo` and `redo` build it in `undo.rs`. | `crates/omnia-doc/src/command.rs`, `undo.rs` | The engine cannot tell which nets or parts changed without searching `dirty`. Parts task P2.2 adds `modified: Vec<PartId>` for parts whose definition or parameters changed (PD8, XD7). C1.1 adds the net delta and three separate edit lists (CD2). |
 | A `NetId` "is valid until the next edit": ids are reused, and nets are renumbered on merge and split. | `crates/omnia-doc/src/connectivity.rs` | Agents need keys that survive unrelated edits (CD3). |
 | The agent read layer keys a net by its lowest member by id (AD8, `NetKey`). That key is canonical for one document state but changes with insertion order and edit history. | `mcp-plan.md` AD8; `crates/omnia-agent/src/schema/response.rs` | The circuit key (CK1) is a separate type with a different rule; AD8's `NetKey` is unchanged. |
 | Connectivity is incremental: union-by-size on wire add; on removal an O(1) leaf path, otherwise a two-ended search that moves only the disconnected piece. Equal label text joins nets. `Connectivity::rebuild_with_parts` rebuilds the pin-aware state on load; an independent randomized-test oracle checks INV10. | `connectivity.rs` | The algorithmic base is right and stays (section 11.1). |
 | Every case in the certified command-boundary campaign passed the < 1 ms gate statistic (median of ten run p99s). The worst, a 20k-wire chain split, had median 0.924 ms with run p99s from 0.872 to 1.051 ms. A full connectivity rebuild of `10k` measured about 9 ms on a Windows development machine (not certifying). | `docs/measurements/command-boundary/reference-2026-11-17/README.md`, `T2.8.md` [Ref20] | `Doc::apply` has about 0.08 ms of headroom on its worst case. The engine therefore updates after `apply` returns, under its own budget (CB1), and the net delta recording in `apply` is measured against the existing boundary (C1.1). |
 | `omnia_symbols::Pin` is `{at, number}`; six symbols exist, one of them a ground symbol. Sim task S1.1 adds a per-symbol class (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`). | `crates/omnia-symbols/src/lib.rs`; `sim-plan.md` section 13 | Without the parts plan, the engine knows pin numbers only (role `unspecified`, CK3). Symbol class and pin role are separate types (XD5). |
 | `Part` is `{symbol, at, orient, designator, value}`, the value being free text. The parts plan adds `def`, typed `params`, `SetParam`, `UpdatePartDef` and embedded definitions with pin name, role and SPICE terminal order (PD5, PD6, PD8; PR #85, open); sim SD9's `props` is withdrawn (XD1). | `crates/omnia-doc/src/doc.rs`; `parts-plan.md` | Electrical findings wait for the parts plan's milestone P2 (task C3.1). |
-| `sim-plan.md` plans `omnia-sim`: lowering to `CircuitIr` with a `NodeId` ↔ `NetId` source map (SD7), ERC001–ERC008 as Run preflight (SD8), and node `0` from a `Ground` symbol or a net labelled `0` (SK10, SQ3). | `sim-plan.md` | Lowering is sim's and reads this engine's bindings (C1.9, XD4); findings share predicates with ERC (section 9.4, XD6). |
+| `sim-plan.md` plans `omnia-sim`: lowering to `CircuitIr` with a `NodeId` ↔ `NetId` source map (SD7), ERC001–ERC010 with ERC007 retired as Run preflight (SD8), and node `0` from a `Ground` symbol or a net labelled `0` (SK10, SQ3). | `sim-plan.md` | Lowering is sim's and reads this engine's bindings (C1.9, XD4); findings share predicates with ERC (section 9.4, XD6). |
 | Labels are one kind: global by text across the sheet. | `doc.rs`, `connectivity.rs` | Name priority is simple today (CK2) and grows with label kinds. |
 | The agent's `inspect` summary is three counts; a `Net` is keyed by a member (`pin`, `wire` or `label`) and lists member ids; nets are not paged. | `crates/omnia-agent/src/schema/response.rs`, `mcp-plan.md` 9.3 | The context views replace the join the agent does today (CD8). |
 | mcp-plan.md 10.1 specifies that an MCP result will carry `structuredContent` and a text block with the same JSON. The MCP adapter (A1.8) is `todo`. | `mcp-plan.md` 10.1; `mcp-roadmap.md` | Possibly double the bytes per call, and clients differ on which one the model sees (CD10). |
@@ -147,7 +147,7 @@ C2.4 measures it on the question set.
 
 | ID | Constant | Value |
 | --- | --- | --- |
-| CK1 | Circuit key (stable identity; a type distinct from AD8's `NetKey` and from sim's solver `NodeId`, XD4) | Derived from the net at the current revision and stable across unrelated edits. Rebuilding in a different insertion order yields equivalent keys under the id remapping in CINV3. If the net has labels: `net:"<text>"`, the lowest label text by byte order. Otherwise, if it has pins: the **anchor pin** is the member pin lowest by (designator in natural order, pin number in natural order), then by pin world position (x, then y), then by (part id, pin index); the key is `net:pin:<part id>.<pin index>`. Otherwise (a bare wire island): the anchor is the wire lowest by (lower endpoint x, then y), then by id; the key is `net:wire:<wire id>`. Keys never contain a `NetId`. No conversion between a circuit key, a `NetKey` and a `NodeId` exists in any crate; C1.9's bindings carry the circuit key and the current `NetId` side by side, and lowering assigns `NodeId`s itself (sim SD7). |
+| CK1 | Circuit key (stable identity; a type distinct from AD8's `NetKey` and from sim's solver `NodeId`, XD4) | Derived from the net at the current revision and stable across unrelated edits. Rebuilding in a different insertion order yields equivalent keys under the id remapping in CINV3. If the net has labels: `net:"<text>"`, the lowest label text by byte order. Otherwise, if it has pins, the **anchor pin** is the lowest member pin in CD18's order and the key is `net:pin:<part id>.<pin index>`. For a bare wire island, sort each wire's two endpoints by (x, y) and compare the lower endpoint, then the upper endpoint, then wire id. The lowest wire is the anchor and the key is `net:wire:<wire id>`. Keys never contain a `NetId`. No conversion between a circuit key, a `NetKey` and a `NodeId` exists in any crate; C1.9's bindings carry the circuit key and the current `NetId` side by side, and lowering assigns `NodeId`s itself (sim SD7). |
 | CK2 | Display name | Label nets: the key's label text. Unlabelled nets: `N(<designator>.<pin number>)` from the anchor pin, for example `N(R3.2)`; a bare wire island `N(wire:7)`. Generated names are never valid document text in the line form, because document text with parentheses is always quoted (CK9), so a label `N(R3.2)` cannot be mistaken for one. Every other label text on the net is kept as a candidate name. When label kinds arrive, the priority is: global label, power symbol, local label, hierarchical label, sheet pin, anchor-pin name; ties by lowest text, then lowest id. This order is the established convention [Ref25]. |
 | CK3 | Pin roles | The parts plan's seven (PD5: `passive`, `input`, `output`, `bidir`, `power`, `ground`, `no_connect`), plus `unspecified` for parts whose definition has no pin table (unmodelled definitions, including every part migrated from RON v2). A placed part's embedded definition is authoritative for its pin roles and SPICE terminal order (XD5). Pin role is a per-pin type, separate from sim S1.1's per-symbol class (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`), which the engine keeps as a part column; neither is derived from the other. Fields reserved, absent until their plans add them: unit, alternate function, swap group, instance no-connect marker, hierarchical instance path. |
 | CK4 | Net kinds and ground evidence | `signal`, `power`, `ground`, each with the evidence that set it (CK6). **Declared ground evidence** is exactly sim SQ3's default (XD4): a part whose symbol class is `Ground`, or a label whose text is exactly `0`. `is_ground_reference` is true exactly when a net carries declared ground evidence, and C1.9 exposes the evidence items. A `ground`-role pin sets kind `ground` (declared) but not the reference; a name such as `GND` or `AGND` never sets the reference and may set kind `ground` only at `heuristic` evidence, with the finding `ground.name_only` as the hint (CD13). Until S1.1 lands the symbol class, the one existing ground symbol (`Ground-COM-General`) stands for class `Ground`. |
@@ -189,11 +189,11 @@ C2.4 measures it on the question set.
 ```
 
 Data flows one way. A host (the agent service's document entry, later the app host) owns one
-`Circuit` beside each `Doc` and calls `Circuit::update(&doc, &change)` after every `apply`,
+`Circuit` beside each `Doc` and calls `Circuit::update(&doc, &symbols, &change)` after every `apply`,
 `undo` and `redo` returns, never inside it. The agent service updates before it answers the
 request, so the agent still sees one call. The app host updates off the frame path, after
-paint or at idle, so B6 is unaffected. A view is answered only when the circuit's revision
-equals the document's; otherwise the host updates or rebuilds first (CINV5).
+paint or at idle, so B6 is unaffected. A view requires the circuit's lineage and revision
+to match the document's (CD18, CINV5).
 
 ### Crate ownership
 
@@ -246,10 +246,10 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   part and `UpdatePartDef` lists every instance it moves, even when topology and display text
   are unchanged (PD8, XD7). `modified` keeps exactly that meaning; C1.1 does not widen it.
   C1.1 adds its own fields beside it: `edited_parts: Vec<PartId>`, the parts whose designator,
-  value, position or orientation changed; `modified_wires` and `modified_labels`, the wires and
-  labels whose endpoints, position or text changed. A part can be in both part lists (a
-  `SetParam` on the primary parameter also rewrites `Part::value`, PD6). Undo and redo report
-  the same items in the same lists.
+  value, position or orientation changed. `modified_wires` lists wires whose endpoints changed.
+  `modified_labels` lists labels whose position or text changed. A part can be in both part
+  lists (a `SetParam` on the primary parameter also rewrites `Part::value`, PD6). Undo and redo
+  report the same items in the same lists.
 - `nets_changed` keeps its D2 meaning and its current value everywhere, including the agent
   boundary, so existing responses keep their bytes. `net_delta` describes the final state
   only: a batch that changes a label from `A` to `B` and back sets `nets_changed` with an empty
@@ -289,7 +289,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   | Record | Reads | Marked when |
   | --- | --- | --- |
   | Net membership | connectivity | its `NetId` is in `net_delta` |
-  | Net key and anchor | members' designators, pin numbers, pin world positions, ids; label texts; for wire islands, wire endpoints | membership changes; any member part in `added`, `removed` or `edited_parts`; any member label in `labels` or `modified_labels`; any member wire in `modified_wires` |
+  | Net key, anchor and binding order | CD18's pin order, including symbol, value, orientation and bounds; label texts and positions; both endpoints of each anchor candidate for wire islands | membership changes; any member part in `added`, `removed`, `edited_parts` or `modified`; any member label in `labels` or `modified_labels`; any member wire in `modified_wires` |
   | Display name, candidates, kind | key, anchor's designator, label texts and kinds, member roles | the key, anchor or any of those inputs is marked; a member part in `modified` (its `def`, so its roles, may have changed) |
   | Part row and outline line | designator, value, symbol and its class, `def` and its roles, `params`, each pin's net name | the part is in `added` or `removed`, or in either part list: `edited_parts` for designator, value, position and orientation, `modified` for `def` and `params` (every `SetParam` and `UpdatePartDef` instance, XD7); any of its pins' nets has a marked name |
   | Bindings and ground evidence (C1.9) | pin to net row; symbol class; label texts equal to `0` | membership changes; a part with class `Ground` added or removed; a member label in `labels` |
@@ -432,9 +432,9 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 - Tier 2 runs lazily on the first request after a revision and is cached for that revision
   (CB7). Tier 3 arrives with part knowledge and is always at `heuristic` evidence or below.
 - Severities are data keyed by finding id (section 9.4), so they can be tuned without code.
-  They are advisory: the simulation plan's Error and Warning policy on ERC001–ERC008 is the
-  Run gate. Findings and ERC codes share predicates through the crosswalk in section 9.4
-  (XD6).
+  They are advisory. The simulation plan's Error and Warning policy on ERC001–ERC010 (with
+  ERC007 retired) is the Run gate. Findings and ERC codes share predicates through the
+  crosswalk in section 9.4 (XD6).
 - Every finding names at least one handle and the rule that produced it (CINV8).
 
 ### CD12 Structure is recognised by rules and patterns, not by learning. PROPOSED
@@ -544,9 +544,14 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   `Clone`, so no two live values share a token. Within one lineage every command that changes
   the document, and every undo and redo, advances the revision (`apply_command`, `undo.rs`); a
   validated no-op changes neither. So the pair (lineage, revision) names exactly one document
-  state. A `Circuit` records the pair it was built or updated from;
-  `bindings`, every view (CINV5) and `update` compare both and refuse or rebuild on any
-  mismatch.
+  state. A `Circuit` records the pair it was built or updated from. `bindings` and every view
+  (CINV5) refuse a read unless both fields match the requested document state.
+- **Update transition.** The caller supplies the `Change` just returned by that document's
+  `apply`, `undo` or `redo`. Incremental update requires the same lineage and
+  `change.revision == doc.revision() == circuit.revision + 1`. Apply the delta and then
+  record the new revision. A validated no-op (`dirty: None`) leaves the circuit unchanged
+  when the lineage matches and all three revisions are equal. For any other transition,
+  rebuild from the supplied document and reset the journal base to its revision (CK8).
 - **Why a token, not a content fingerprint.** A fingerprint must either be recomputed over the
   whole document on every read (O(document), against CB3's 50 µs) or be maintained inside
   `Doc::apply`, where the worst certified case has about 0.08 ms of headroom (section 2).
@@ -554,15 +559,15 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   and one comparison per read. Its one conservative effect: the same content reached on two
   lineages, or again after an undo, is treated as a different state and rebuilt, never
   confused.
-- **Net and pin order.** Bindings, and the `net` view's member list, order pins by (designator
-  in natural order, pin number in natural order, pin world position x then y, part id, stored
-  pin index): content and geometry before ids, as AGENTS.md's determinism rule asks, so two
-  pins with equal designator and pin number never sort by insertion order. Nets are ordered in
-  three groups: nets with pins, by their lowest pin in that order; then label-only nets (labels
-  but no pins), by lowest label text in byte order, then that label's position (x, then y),
-  then label id; then wire-only islands, by CK1's anchor wire (lower endpoint x, then y, then
-  wire id). Labels within a net are ordered by text in byte order, then position, then id.
-  Ids decide only between items equal in every content and geometry field (CINV3).
+- **Net and pin order.** Bindings and the `net` view's member list compare pins by designator
+  and pin number (each in natural order), then by pin world position (x, y). For coincident
+  pins, compare the parts' symbol (numeric symbol id), value text (byte order), orientation
+  (encoded `Orient` order) and bounds (world body rectangle, minimum corner then maximum,
+  each by x then y). Compare part id and stored pin index only after those fields.
+  Order nets with pins by their lowest pin in that order, followed by nets with labels and
+  no pins, then by wire-only islands. Order the label group by its lowest label (text in
+  byte order, position by x then y, label id) and wire-only islands by their CK1 anchor
+  wire's full comparison tuple. Use the same label order within a net (CINV3).
 
 ### 6.1 Cross-plan decisions (XD4–XD9). DECIDED (coordinator, owner-delegated, 2026-11-23)
 
@@ -634,14 +639,14 @@ Each has a test; the roadmap task that adds it is in brackets.
 | CINV2 | After every step of a random sequence of commands (including `SetText` renames and duplicate designators), undos and redos, the incrementally updated circuit equals `Circuit::build` on the same document: graph, keys, names, outline cache, tier 0 and 1 findings. [C1.3, C1.6, C3.1] |
 | CINV3 | A document rebuilt with its items inserted in another order renders identical views after replacing every id-bearing token (item ids, `net:pin:` and `net:wire:` keys, `N(wire:<id>)` names, cursors) with its counterpart under the id mapping. For content-and-geometry ties, map indistinguishable items by ascending id within each tied group, preserving references and tied anchors. Use order-preserving mapped ranks for sorted typed handles within such groups. Compare decoded cursor bindings and positions under the same mapping. [C1.5] |
 | CINV4 | For any r0 < r1 within the retained journal, the consolidated journal over (r0, r1] equals the diff of the two snapshots' fact sets; an edit followed by its undo consolidates to nothing. Independently classify events from full endpoint snapshots and compare with journal-derived events, including retained memberships and historical endpoints. [C1.4] |
-| CINV5 | No view is answered from a circuit whose revision differs from the document's. [C1.3, C2.1] |
+| CINV5 | Every view requires the circuit's lineage and revision to match the document's (CD18). [C1.3, C2.1] |
 | CINV6 | Allocation proof, counting `alloc` and `realloc`, each test with a negative control that must count above zero. Warm means: after `build`, plus one pass of the same fixed case set. Then query and render paths allocate nothing; a rerun of the same fixed edit cases through `update` allocates nothing (the journal is preallocated, CK8; CSR slices have the spare capacity the warm pass gave them). Excluded and stated: the first computation of a lazy tier 2 result per revision, compaction (which runs only on idle), edits that introduce new strings, and allocation of the single oversized journal entry in CK8 (only when its fact count exceeds 262,144). Separately count that path with a one-over-capacity entry, verify that only its storage allocates, verify lossless paging and eviction, and rerun the warm zero-allocation check on the next ordinary edit. [C1.7] |
 | CINV7 | Every elision states a count and a cursor. At one revision, following every cursor from the budgeted view reconstructs the unbudgeted view exactly, including hub member lists and records split by CK15; ordinary cursors used after an edit return `stale_cursor`; frozen edit-delta pages and text handles reconstruct the same result throughout CD14 retention. [C1.5, C2.2] |
 | CINV8 | Every finding names at least one handle and its rule id; every recognised structure carries an evidence tier; nothing below `exact` is listed among facts. [C1.6, C4.1] |
 | CINV9 | For arbitrary label, designator and value text, the line form parses back to the same records, and no text can produce a line that is not its own record. [C1.5] |
 | CINV10 | No output depends on hash-map iteration order: enforced by the crate's `clippy.toml` and checked by CINV3. [C1.2] |
 | CINV11 | Fully serialized channels, including envelopes, escaped fragments and errors, stay within CB11 and the effective CK10 budget for context and opted-in edits. [C2.1, C2.2, C2.3] |
-| CINV12 | After every `apply`, `undo` and `redo`, `net_delta` applied to the previous logical partition of pins, wires and labels, with `NetId`s remapped through `renumbered`, reproduces the partition and the `NetId`s `Doc` reports; `modified` lists exactly the items whose stored fields changed; `!net_delta.is_empty() ⇒ nets_changed`. [C1.1] |
+| CINV12 | After every `apply`, `undo` and `redo`, `net_delta` applied to the previous logical partition of pins, wires and labels, with `NetId`s remapped through `renumbered`, reproduces the partition and the `NetId`s `Doc` reports. Among items that retain their ids, `modified` lists exactly the parts whose `def` or `params` changed (parts PD8), `edited_parts` the parts whose designator, value, position or orientation changed, `modified_wires` the wires whose endpoints changed, and `modified_labels` the labels whose position or text changed. A position-only edit to a surviving part puts that part only in `edited_parts`. `!net_delta.is_empty() ⇒ nets_changed`. [C1.1] |
 | CINV13 | An alias that matches more than one entity is refused with `ambiguous_handle` with the exact count and the bounded sorted prefix from CK13, even if no complete handle fits. [C1.5] |
 | CINV14 | `Circuit::bindings` answers only when the circuit's (lineage, revision) pair equals the document's (CD18), and carries both; two forks at the same revision with different edits are told apart. Every pin of every live part appears exactly once, on the net connectivity reports for it; the ground evidence is exactly the declared set of CK4 and is unchanged by any name or topology heuristic; the result equals the one a fresh `Circuit::build` gives, and is identical across insertion orders after the id mapping (CINV3), with pins and nets in CD18's order. [C1.9] |
 
@@ -669,7 +674,7 @@ Each is a test with the required result. Agent transcripts live beside the A1 on
 | CTC-gnd-01 | A net labelled `GND` with no ground part | `is_ground_reference` false; finding `ground.name_only` at `heuristic` |
 | CTC-gnd-02 | Three nets: one with a `Ground`-class part, one labelled `0`, one labelled `AGND` with a `ground`-role pin (after C3.1) | The first two have `is_ground_reference` true with evidence `ground_symbol part:<id>` and `zero_label label:<id>`; the third has kind `ground` (declared) but is not a reference, and `bindings` lists no evidence for it |
 | CTC-bind-01 | CTC-key-01's sheet; read `bindings`; apply `SetParam` on R1 (after parts P2.2), then a wire delete, then undo both. Then fork the document twice at one revision, delete the wire on one fork and move R2 on the other, so both forks reach the same revision; build a circuit from the first fork and ask it for the second fork's bindings | Each read carries the document's lineage and revision; a read against a circuit not yet updated is refused as stale; the `SetParam` changes no binding but advances the revision; after each step the bindings equal a fresh build's. The cross-fork read is refused as stale although the revisions are equal |
-| CTC-bind-02 | Two parts both designated `R3`, each with pin 1 on one unlabelled net, built in both insertion orders; plus a label-only net `A` and a wire-only island | `pins` lists the two `R3.1` pins by position in both orders; the label-only net follows every net with pins and precedes the wire island; bindings are identical after the id mapping (CD18) |
+| CTC-bind-02 | Insert two parts both designated `R3` with pin 1 at different positions on an unlabelled net. Add coincident-pin variants that exercise each tie-break (symbol, value, orientation and bounds). Include a label-only net `A` and a wire-only island consisting of two perpendicular wires with the same lower endpoint, one extending in positive x and the other in positive y. Repeat each case with reversed insertion order. | The pins and pin anchor follow position first and the CD18 tie-break fields when coincident. The label-only net follows every net with pins and precedes the wire island. The positive-y wire is the CK1 anchor in both orders because its upper endpoint sorts first by (x, y). Keys and ordered bindings match after id remapping (CINV3, CINV14). |
 | CTC-find-04 | Parts `r1` and `R1`; two `Ground` parts and one `PowerRail` part with blank designators; one resistor with designator `"  "` | `designator.duplicate` groups `r1` and `R1` (ASCII case folding); no duplicate among the blank designators; `designator.blank` names only the resistor |
 | CTC-find-01 | A part pin alone on its net | Finding `pin.unconnected` naming the pin |
 | CTC-find-02 | An op-amp input pin with no driver (after C3.1) | Finding `input.undriven` naming the pin and its net |
@@ -713,7 +718,7 @@ Each is a test with the required result. Agent transcripts live beside the A1 on
 | View | Answers | Order |
 | --- | --- | --- |
 | `outline` | Every part, one line each, with each pin's net | Designator natural order (`R2` before `R10`), then value, symbol, position (x, then y), then part id |
-| `net` | One net: name, key, kind, candidate names, members; the pageable member list for hubs | Members by (designator, pin number), then pin position (x, then y), then (part id, pin index) (CD18) |
+| `net` | One net: name, key, kind, candidate names, members; the pageable member list for hubs | Members in CD18's pin order |
 | `focus` | A part or net and its neighbourhood to `depth` (default 1, at most 3), never through hubs | Breadth-first, then as above |
 | `since` | Circuit events after `revision` | Fact order (CD6) |
 | `findings` | Findings, filterable by tier and handle | Severity, then rule id, then first handle |
@@ -788,7 +793,7 @@ The JSON form, and the typed header of the line form, carry for each view: `view
 | `names.case` | 0 | warning | No |
 | `designator.duplicate` | 0 | error | No |
 | `designator.blank` | 0 | warning | No (symbol class) |
-| `value.unparsed` | 0 | info | No (until PD6 typed values) |
+| `value.unparsed` | 0 | info | No (legacy unmodelled value text, PK4) |
 | `ground.name_only` | 0 | info | No |
 | `ground.missing` | 0 | warning | No (symbol class and labels) |
 | `pin.no_connect_wired` | 1 | error | Yes |
@@ -831,7 +836,7 @@ shared cases map; each side keeps its own extra cases.
 | --- | --- | --- |
 | ERC001 | `ground.missing`, `ground.name_only` (the hint for a `GND` label alone) | Declared ground evidence, CK4, read from C1.9, with `ground.missing`'s condition: at least one part whose symbol class is not `Ground` |
 | ERC002 | `designator.duplicate` | Case folding and blank designators, as defined above |
-| ERC003 | none for modelled parts (typed parameter validation, PD6 and PD10, refuses bad values at `apply`); `value.unparsed` for legacy unmodelled parts | The parts plan's typed parameter validation. The overlap is partial: `value.unparsed` covers only unparseable legacy text, while a legacy unmodelled part whose value parses still fails sim preflight because it has no model binding (`sim: None`, PD8), which no context finding reports |
+| ERC003 | none for modelled parts (`apply` validates typed parameters under PD6 and PD10); `value.unparsed` for legacy unmodelled parts | Both surfaces flag legacy unmodelled value text that fails the shared PK4 parser (XD2). ERC003 also guards typed parameters required by the model binding (PD6, PD10). ERC009 covers a `Component` with a connected pin and no model binding, including when its legacy value parses. |
 | ERC004 | `source_loop`, where the predicates coincide | A loop of ideal voltage sources, read from C1.9's bindings |
 | ERC005 | none: simulation only (instrument ports and probes) | — |
 | ERC006 | `pin.unconnected`, `net.single_pin` | A pin alone on its net (with roles, not for `no_connect`) |
@@ -1040,7 +1045,8 @@ this plan edits neither file):
 
 | Where | Change | Made by |
 | --- | --- | --- |
-| sim-plan.md, sim-roadmap.md | S1.2 depends on C1.9 and lowers from `Circuit::bindings`; S1.2 adds the check that its solver `NodeId` has no conversion to or from `CircuitKey` or `NetKey` (CK1, XD4), since `NodeId` does not exist until S1.2; a bindings read records `Bindings::lineage()` and `revision()` with the `CircuitIr` so stale results are found by state, not by revision alone (CD18); SK10 and SQ3 ground evidence matches CK4; ERC002 cites section 9.4's case folding and blank designators; the ERC crosswalk of section 9.4 is cited from SD8 | Sim task S0.2 |
+| sim-plan.md, sim-roadmap.md | S1.2 depends on C1.9 and lowers from `Circuit::bindings`. SK10 and SQ3 ground evidence matches CK4. ERC002 cites section 9.4's case folding and blank designators. SD8 cites the ERC crosswalk in section 9.4. | Sim task S0.2 |
+| sim-plan.md SD7, sim-roadmap.md S1.2 | At entry, `CircuitIr::lower(doc, bindings, analysis, probes)` compares `bindings.lineage()` with `doc.lineage()` and `bindings.revision()` with `doc.revision()`. Refuse either mismatch as stale, including equal-revision bindings from divergent forks (CD18). Record both fields with the `CircuitIr` for stale-result handling. Check that solver `NodeId` has no conversion to or from `CircuitKey` or `NetKey` (CK1, XD4). | Sim task S1.2 |
 
 ## 16. Sources
 
