@@ -29,12 +29,15 @@
 //! `/params/...`. [`in_form`] rewrites a response for the MCP arguments form, where the leading
 //! `/params` is dropped (section 9.1).
 //!
-//! `open`, `save` and closing a document with unsaved changes are files and approvals (A1.6);
-//! until then they are refused with `unsupported_in_mode`.
+//! `open`, `save` and `close` enforce the configured [`Policy`] (AD7, AINV9, AINV12): file paths
+//! are canonicalised inside the configured [`Roots`], writes are staged through a sibling
+//! temporary file, and tier 3 effects (overwriting a file or discarding unsaved changes) require
+//! a matching approval echo.
 
 use std::{
     collections::{BTreeMap, VecDeque},
     hash::Hasher,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -44,13 +47,17 @@ use rustc_hash::FxHasher;
 
 use crate::{
     AgentError, Catalog, ErrorKind, IDEMPOTENCY_CACHE_ENTRIES, MAX_OPEN_DOCUMENTS, OpName,
-    Operation, Output, Request, Response, diff,
+    Operation, Output, Request, Response,
+    approval::{ApprovalStore, GuardedEffect, Policy},
+    diff,
     error::Limit,
+    files::{self, Roots},
     host::{DocHandle, DocHost, HeadlessHost},
     ops, preview, read,
     schema::{
         ApplyArgs, ChangeResult, CloseArgs, CloseResult, DocId, DocInfo, EditArgs, EditResult,
-        KeyArgs, PreviewResult, RequestStatus, RevArgs, StoredResponse, ValidateResult,
+        KeyArgs, OpenArgs, PreviewResult, RequestStatus, RevArgs, SaveArgs, SaveResult,
+        StoredResponse, ValidateResult,
     },
 };
 
@@ -69,11 +76,12 @@ pub enum Form {
 }
 
 /// An open document of a session (section 11.1).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct DocEntry {
     handle: DocHandle,
+    /// Canonical path on disk (from `open` or last `save`), if backed by a file.
+    path: Option<PathBuf>,
     /// The revision at open or last save; the document is dirty when its revision differs.
-    /// The file path joins it with `open` and `save` (A1.6).
     saved_revision: u64,
 }
 
@@ -122,6 +130,7 @@ struct Session {
     /// WK10 defaults (section 11.1).
     prefs: WiringPrefs,
     cache: IdempotencyCache,
+    approvals: ApprovalStore,
 }
 
 /// An open document resolved for one request.
@@ -144,6 +153,7 @@ enum Step {
 #[derive(Debug)]
 pub struct AgentService<H: DocHost = HeadlessHost> {
     host: H,
+    policy: Policy,
     symbols: Arc<SymbolLibrary>,
     catalog: Catalog,
     sessions: BTreeMap<SessionId, Session>,
@@ -151,20 +161,26 @@ pub struct AgentService<H: DocHost = HeadlessHost> {
 }
 
 impl<H: DocHost> AgentService<H> {
-    /// A service over `host` with the built-in symbol library.
-    pub fn new(host: H) -> Self {
-        Self::with_symbols(host, SymbolLibrary::builtin())
+    /// A service over `host` with `policy` and the built-in symbol library.
+    pub fn new(host: H, policy: Policy) -> Self {
+        Self::with_symbols(host, policy, SymbolLibrary::builtin())
     }
 
-    /// A service over `host` that places and names parts from `symbols` (AD11).
-    pub fn with_symbols(host: H, symbols: Arc<SymbolLibrary>) -> Self {
+    /// A service over `host` and `policy` that places and names parts from `symbols` (AD11).
+    pub fn with_symbols(host: H, policy: Policy, symbols: Arc<SymbolLibrary>) -> Self {
         Self {
             host,
+            policy,
             symbols,
             catalog: Catalog::current(),
             sessions: BTreeMap::new(),
             next_session: 1,
         }
+    }
+
+    /// The configured file-root and approval policy (AD7, section 12.1).
+    pub fn policy(&self) -> &Policy {
+        &self.policy
     }
 
     /// The capability catalog, which is also the dispatch table (AINV11).
@@ -249,17 +265,35 @@ impl<H: DocHost> AgentService<H> {
         in_form(self.handle(session, req), form)
     }
 
-    /// Registers `doc` as an open document of `session` (`new`; `open` from A1.6), refusing a
+    /// Registers `doc` as an open document of `session` (`new` and `open`), refusing a
     /// session that already has AK6 documents open.
     pub(crate) fn adopt(
         &mut self,
         session: SessionId,
         doc: Doc,
+        path: Option<PathBuf>,
     ) -> Result<(DocId, u64), AgentError> {
         let revision = doc.revision();
+        self.check_open_capacity(session)?;
+        let handle = self.host.insert(doc)?;
+        let s = self.session_mut(session);
+        let doc_id = DocId(s.next_doc);
+        s.next_doc += 1;
+        s.docs.insert(
+            doc_id,
+            DocEntry {
+                handle,
+                path,
+                saved_revision: revision,
+            },
+        );
+        Ok((doc_id, revision))
+    }
+
+    fn check_open_capacity(&self, session: SessionId) -> Result<(), AgentError> {
         let s = self
             .sessions
-            .get_mut(&session)
+            .get(&session)
             .ok_or_else(|| AgentError::with_message(ErrorKind::Internal, "no such session"))?;
         let open = s.docs.len();
         if open >= usize::try_from(MAX_OPEN_DOCUMENTS).unwrap_or(usize::MAX) {
@@ -268,17 +302,7 @@ impl<H: DocHost> AgentService<H> {
                 value: u64::try_from(open).unwrap_or(u64::MAX) + 1,
             }));
         }
-        let handle = self.host.insert(doc)?;
-        let doc_id = DocId(s.next_doc);
-        s.next_doc += 1;
-        s.docs.insert(
-            doc_id,
-            DocEntry {
-                handle,
-                saved_revision: revision,
-            },
-        );
-        Ok((doc_id, revision))
+        Ok(())
     }
 
     fn session(&self, session: SessionId) -> &Session {
@@ -327,7 +351,7 @@ impl<H: DocHost> AgentService<H> {
                 None,
                 Output::Capabilities(Box::new(self.catalog.clone())),
             ),
-            Operation::New(_) => match self.adopt(session, Doc::new()) {
+            Operation::New(_) => match self.adopt(session, Doc::new(), None) {
                 Ok((doc_id, revision)) => success(
                     Some(doc_id),
                     Some(revision),
@@ -338,20 +362,8 @@ impl<H: DocHost> AgentService<H> {
                 ),
                 Err(e) => failure(None, None, e),
             },
-            Operation::Open(_) => failure(
-                None,
-                None,
-                AgentError::with_message(
-                    ErrorKind::UnsupportedInMode,
-                    "opening files is not available in this build yet",
-                ),
-            ),
-            Operation::Save(a) => self.on_doc(session, a.doc_id, |_, _| {
-                Err(AgentError::with_message(
-                    ErrorKind::UnsupportedInMode,
-                    "saving files is not available in this build yet",
-                ))
-            }),
+            Operation::Open(a) => self.open(session, a),
+            Operation::Save(a) => self.on_doc(session, a.doc_id, |svc, t| svc.save(session, t, a)),
             Operation::Close(a) => {
                 self.on_doc(session, a.doc_id, |svc, t| svc.close(session, t, a))
             }
@@ -531,24 +543,124 @@ impl<H: DocHost> AgentService<H> {
         }))
     }
 
+    fn open(&mut self, session: SessionId, a: &OpenArgs) -> Response {
+        let canon = match self.policy.roots().resolve_read(&a.path) {
+            Ok(path) => path,
+            Err(e) => return failure(None, None, e),
+        };
+        if let Err(e) = self.check_open_capacity(session) {
+            return failure(None, None, e);
+        }
+        let doc = match files::open_doc(&canon) {
+            Ok(doc) => doc,
+            Err(e) => return failure(None, None, e),
+        };
+        let display = files::display_path(&canon);
+        match self.adopt(session, doc, Some(canon)) {
+            Ok((doc_id, revision)) => success(
+                Some(doc_id),
+                Some(revision),
+                Output::Document(DocInfo {
+                    path: Some(display),
+                    dirty: false,
+                }),
+            ),
+            Err(e) => failure(None, None, e),
+        }
+    }
+
+    fn save(&mut self, session: SessionId, t: Target, a: &SaveArgs) -> Result<Output, AgentError> {
+        let stored_path = self
+            .session(session)
+            .docs
+            .get(&t.doc_id)
+            .ok_or_else(|| AgentError::new(ErrorKind::DocumentNotFound))?
+            .path
+            .clone();
+        let target = match (&a.path, stored_path.as_deref()) {
+            (Some(raw), _) => self.policy.roots().resolve_write(raw)?,
+            (None, Some(stored)) => self.policy.roots().resolve_write_stored(stored)?,
+            (None, None) => {
+                return Err(AgentError::with_message(
+                    ErrorKind::SchemaViolation {
+                        path: "/params/path".into(),
+                    },
+                    "untitled document requires `path`",
+                ));
+            }
+        };
+        let effect = if target.exists {
+            GuardedEffect::OverwriteFile {
+                doc_id: t.doc_id,
+                revision: t.revision,
+                path: target.path.clone(),
+            }
+        } else {
+            GuardedEffect::WriteFile {
+                doc_id: t.doc_id,
+                revision: t.revision,
+                path: target.path.clone(),
+            }
+        };
+        let policy = &self.policy;
+        let grant = self
+            .sessions
+            .get_mut(&session)
+            .expect("handle checked the session")
+            .approvals
+            .verify(policy, &effect, a.approval.as_ref())?;
+        files::save_doc(self.host.doc(t.handle)?, &target.path)?;
+        let s = self.session_mut(session);
+        s.approvals.consume(grant);
+        let entry = s
+            .docs
+            .get_mut(&t.doc_id)
+            .expect("target checked the document");
+        entry.path = Some(target.path.clone());
+        entry.saved_revision = t.revision;
+        Ok(Output::Saved(SaveResult {
+            path: files::display_path(&target.path),
+            saved_revision: t.revision,
+        }))
+    }
+
     fn close(
         &mut self,
         session: SessionId,
         t: Target,
-        _a: &CloseArgs,
+        a: &CloseArgs,
     ) -> Result<Output, AgentError> {
-        let entry = self.session(session).docs.get(&t.doc_id).copied();
-        let entry = entry.ok_or_else(|| AgentError::new(ErrorKind::DocumentNotFound))?;
-        if t.revision != entry.saved_revision {
-            // Discarding unsaved changes is tier 3 (AD7); its approval is A1.6's.
-            return Err(AgentError::with_message(
-                ErrorKind::UnsupportedInMode,
-                "closing a document with unsaved changes is not available in this build yet",
-            ));
+        let saved_revision = self
+            .session(session)
+            .docs
+            .get(&t.doc_id)
+            .ok_or_else(|| AgentError::new(ErrorKind::DocumentNotFound))?
+            .saved_revision;
+        let dirty = t.revision != saved_revision;
+        let mut grant = None;
+        if dirty {
+            // Discarding unsaved changes is tier 3 (AD7, AINV9). `discard_unsaved: true` is
+            // always required regardless of tier policy, and then policy approval is verified.
+            let effect = GuardedEffect::DiscardUnsaved {
+                doc_id: t.doc_id,
+                revision: t.revision,
+            };
+            let policy = &self.policy;
+            let approvals = &mut self
+                .sessions
+                .get_mut(&session)
+                .expect("handle checked the session")
+                .approvals;
+            if !a.discard_unsaved {
+                return Err(approvals.require(policy, &effect));
+            }
+            grant = approvals.verify(policy, &effect, a.approval.as_ref())?;
         }
         self.host.remove(t.handle)?;
-        self.session_mut(session).docs.remove(&t.doc_id);
-        Ok(Output::Closed(CloseResult { discarded: false }))
+        let s = self.session_mut(session);
+        s.approvals.consume(grant);
+        s.docs.remove(&t.doc_id);
+        Ok(Output::Closed(CloseResult { discarded: dirty }))
     }
 
     fn request_status(&self, session: SessionId, a: &KeyArgs) -> RequestStatus {
@@ -574,9 +686,16 @@ impl<H: DocHost> AgentService<H> {
 }
 
 impl AgentService<HeadlessHost> {
-    /// A headless service with the built-in symbol library (A1 to A3).
+    /// A headless service with no configured roots (every file path is `path_outside_root`) and
+    /// the built-in symbol library (A1 to A3).
     pub fn headless() -> Self {
-        Self::new(HeadlessHost::new())
+        Self::new(HeadlessHost::new(), Policy::default())
+    }
+
+    /// A headless service with `roots` under the AQ4 default policy (tiers 1 and 2 allowed;
+    /// tier 3 requires an echoed approval digest).
+    pub fn headless_with_roots(roots: Roots) -> Self {
+        Self::new(HeadlessHost::new(), Policy::headless(roots))
     }
 }
 
@@ -1254,25 +1373,428 @@ mod tests {
     }
 
     #[test]
-    fn close_refuses_unsaved_changes_and_open_and_save_wait_for_a1_6() {
+    fn ainv9_close_dirty_document_requires_discard_flag_and_matching_approval() {
         let (mut svc, s, d) = two_resistors();
         let before = snapshot(doc(&svc, s, d));
-        for request in [
-            json!({"op": "close", "params": {"doc_id": "d1"}}),
-            json!({"op": "close", "params": {"doc_id": "d1", "discard_unsaved": true}}),
-            json!({"op": "save", "params": {"doc_id": "d1", "path": "x.ron"}}),
-        ] {
-            let r = call(&mut svc, s, request);
-            assert_eq!(error(&r).code(), ErrorCode::UnsupportedInMode);
-            assert_eq!((r.doc_id(), r.revision()), (Some(d), Some(1)));
-        }
-        let open = call(
+
+        // 1. Without discard_unsaved -> ApprovalRequired (tier 3, discard_unsaved); doc stays open.
+        let r1 = call(
             &mut svc,
             s,
-            json!({"op": "open", "params": {"path": "x.ron"}}),
+            json!({"op": "close", "params": {"doc_id": "d1"}}),
         );
-        assert_eq!(error(&open).code(), ErrorCode::UnsupportedInMode);
+        let ErrorKind::ApprovalRequired {
+            approval_id,
+            tier,
+            effect,
+            effect_digest,
+        } = error(&r1).kind.clone()
+        else {
+            panic!("expected approval_required: {}", r1.to_json());
+        };
+        assert_eq!(tier, 3);
+        assert_eq!(effect, crate::error::Effect::DiscardUnsaved);
+        assert_eq!((r1.doc_id(), r1.revision()), (Some(d), Some(1)));
         assert_unchanged(doc(&svc, s, d), &before);
+
+        // 2. Echoing approval WITHOUT discard_unsaved: true is still refused (AINV9).
+        let r2 = call(
+            &mut svc,
+            s,
+            json!({
+                "op": "close",
+                "params": {
+                    "doc_id": "d1",
+                    "approval": {
+                        "approval_id": approval_id,
+                        "effect_digest": effect_digest,
+                    }
+                }
+            }),
+        );
+        assert_eq!(error(&r2).code(), ErrorCode::ApprovalRequired);
+        assert_unchanged(doc(&svc, s, d), &before);
+
+        // 3. discard_unsaved: true without approval -> same ApprovalRequired challenge (AINV5).
+        let r3 = call(
+            &mut svc,
+            s,
+            json!({"op": "close", "params": {"doc_id": "d1", "discard_unsaved": true}}),
+        );
+        assert_eq!(r3.to_json(), r1.to_json());
+
+        // 4. Wrong digest -> refused; doc stays open.
+        let r4 = call(
+            &mut svc,
+            s,
+            json!({
+                "op": "close",
+                "params": {
+                    "doc_id": "d1",
+                    "discard_unsaved": true,
+                    "approval": {
+                        "approval_id": approval_id,
+                        "effect_digest": "ed-0000000000000000",
+                    }
+                }
+            }),
+        );
+        assert_eq!(error(&r4).code(), ErrorCode::ApprovalRequired);
+        assert_unchanged(doc(&svc, s, d), &before);
+
+        // 5. Editing the document invalidates the old revision's digest (AINV9).
+        send(
+            &mut svc,
+            s,
+            &apply_req(d, 1, &[label_op(0, 4, "E")], None, None),
+        );
+        let stale_echo = call(
+            &mut svc,
+            s,
+            json!({
+                "op": "close",
+                "params": {
+                    "doc_id": "d1",
+                    "discard_unsaved": true,
+                    "approval": {
+                        "approval_id": approval_id,
+                        "effect_digest": effect_digest,
+                    }
+                }
+            }),
+        );
+        let ErrorKind::ApprovalRequired {
+            approval_id: new_id,
+            effect_digest: new_digest,
+            ..
+        } = error(&stale_echo).kind.clone()
+        else {
+            panic!("expected fresh approval_required for revision 2");
+        };
+        assert_ne!(new_digest, effect_digest);
+
+        // 6. Echoing the current revision's digest with discard_unsaved: true succeeds.
+        let closed = call(
+            &mut svc,
+            s,
+            json!({
+                "op": "close",
+                "params": {
+                    "doc_id": "d1",
+                    "discard_unsaved": true,
+                    "approval": {
+                        "approval_id": new_id,
+                        "effect_digest": new_digest,
+                    }
+                }
+            }),
+        );
+        assert_eq!(
+            result(&closed),
+            &Output::Closed(CloseResult { discarded: true })
+        );
+        assert_eq!((closed.doc_id(), closed.revision()), (Some(d), Some(2)));
+        assert!(svc.document(s, d).is_none());
+    }
+
+    #[test]
+    fn atc_save_01_and_ainv9_save_new_then_overwrite_with_echoed_digest_and_idempotency() {
+        let root_dir =
+            std::env::temp_dir().join(format!("omnia-agent-atc-save-01-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root_dir);
+        std::fs::create_dir_all(&root_dir).unwrap();
+
+        let roots = Roots::new([&root_dir]).unwrap();
+        let mut svc = Service::headless_with_roots(roots);
+        let s = svc.open_session();
+        let d = new_doc(&mut svc, s);
+
+        // Untitled save without path -> schema_violation at /params/path (and /path in Arguments).
+        let no_path = call(
+            &mut svc,
+            s,
+            json!({"op": "save", "params": {"doc_id": "d1"}}),
+        );
+        assert_eq!(
+            error(&no_path).kind,
+            ErrorKind::SchemaViolation {
+                path: "/params/path".into()
+            }
+        );
+        let no_path_args = in_form(no_path, Form::Arguments);
+        assert_eq!(
+            error(&no_path_args).kind,
+            ErrorKind::SchemaViolation {
+                path: "/path".into()
+            }
+        );
+
+        // Add two resistors and save to a new file (tier 2, allowed headless).
+        let ops = [
+            place(RESISTOR, p(0, 0), Orient::IDENTITY, "R1"),
+            place(RESISTOR, p(12, 0), Orient::IDENTITY, "R2"),
+        ];
+        send(&mut svc, s, &apply_req(d, 0, &ops, None, None));
+        let saved_new = call(
+            &mut svc,
+            s,
+            json!({"op": "save", "params": {"doc_id": "d1", "path": "amp.ron"}}),
+        );
+        let Output::Saved(info) = result(&saved_new).clone() else {
+            panic!("expected SaveResult");
+        };
+        assert_eq!(info.saved_revision, 1);
+        assert_eq!(
+            (saved_new.doc_id(), saved_new.revision()),
+            (Some(d), Some(1))
+        );
+        let disk_v1 = std::fs::read(root_dir.join("amp.ron")).unwrap();
+
+        // Now edit the document (revision 2) and overwrite amp.ron using an idempotency key.
+        send(
+            &mut svc,
+            s,
+            &apply_req(d, 1, &[wire_between_resistors()], None, None),
+        );
+
+        // 1. Overwrite without approval -> approval_required (retryable, so NOT cached under k).
+        let req_unapproved = json!({
+            "op": "save",
+            "params": {"doc_id": "d1"},
+            "idempotency_key": "save-v2",
+        });
+        let r_req = call(&mut svc, s, req_unapproved);
+        let ErrorKind::ApprovalRequired {
+            approval_id,
+            tier,
+            effect,
+            effect_digest,
+        } = error(&r_req).kind.clone()
+        else {
+            panic!("expected approval_required: {}", r_req.to_json());
+        };
+        assert_eq!(tier, 3);
+        assert_eq!(effect, crate::error::Effect::OverwriteFile);
+        assert!(error(&r_req).retryable());
+        // Disk file still holds v1 untouched (AINV9).
+        assert_eq!(std::fs::read(root_dir.join("amp.ron")).unwrap(), disk_v1);
+        // Retryable approval_required was NOT cached under `save-v2`.
+        let st = send(&mut svc, s, &status_req("save-v2"));
+        assert_eq!(result(&st), &Output::RequestStatus(RequestStatus::NotRun));
+
+        // 2. Retry with matching approval and the same idempotency key -> succeeds & caches.
+        let req_approved = json!({
+            "op": "save",
+            "params": {
+                "doc_id": "d1",
+                "approval": {
+                    "approval_id": approval_id,
+                    "effect_digest": effect_digest,
+                }
+            },
+            "idempotency_key": "save-v2",
+        });
+        let saved_v2 = call(&mut svc, s, req_approved.clone());
+        let Output::Saved(info2) = result(&saved_v2).clone() else {
+            panic!("expected SaveResult");
+        };
+        assert_eq!(info2.saved_revision, 2);
+        assert_eq!(info2.path, info.path);
+
+        // Replay with same key returns byte-identical response without needing a new grant.
+        let replay = call(&mut svc, s, req_approved);
+        assert_eq!(replay.to_json(), saved_v2.to_json());
+
+        // Document is now clean, so `close` succeeds without discard_unsaved or approval.
+        let closed = call(
+            &mut svc,
+            s,
+            json!({"op": "close", "params": {"doc_id": "d1"}}),
+        );
+        assert_eq!(
+            result(&closed),
+            &Output::Closed(CloseResult { discarded: false })
+        );
+
+        // Re-open the saved file and verify content, revision and summary match.
+        let opened = call(
+            &mut svc,
+            s,
+            json!({"op": "open", "params": {"path": "amp.ron"}}),
+        );
+        let d2 = opened.doc_id().unwrap();
+        assert_eq!(opened.revision(), Some(2));
+        let Output::Document(doc_info) = result(&opened) else {
+            panic!("expected DocInfo");
+        };
+        assert!(!doc_info.dirty);
+        assert_eq!(doc_info.path.as_deref(), Some(info.path.as_str()));
+        let insp = call(
+            &mut svc,
+            s,
+            json!({"op": "inspect", "params": {"doc_id": d2.to_string(), "include": ["summary"]}}),
+        );
+        let Output::Inspect(ir) = result(&insp) else {
+            panic!("expected InspectResult");
+        };
+        let sum = ir.summary.unwrap();
+        assert_eq!((sum.parts, sum.wires, sum.labels), (2, 1, 0));
+
+        let _ = std::fs::remove_dir_all(&root_dir);
+    }
+
+    #[test]
+    fn atc_path_01_service_refuses_outside_paths_without_reading() {
+        let base =
+            std::env::temp_dir().join(format!("omnia-agent-atc-path-01-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("root");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let secret = outside.join("x.ron");
+        files::save_doc(&Doc::new(), &secret).unwrap();
+
+        let roots = Roots::new([&root]).unwrap();
+        let mut svc = Service::headless_with_roots(roots);
+        let s = svc.open_session();
+        let d = new_doc(&mut svc, s);
+
+        let abs_secret = secret.to_string_lossy().into_owned();
+        let mut paths = vec![
+            "../x.ron".to_owned(),
+            "..\\outside\\x.ron".to_owned(),
+            abs_secret,
+            "/etc/passwd".to_owned(),
+            r"C:\Windows\win.ini".to_owned(),
+        ];
+
+        // Symlink/junction escaping root (must always run on both Unix and Windows).
+        let link_dir = root.join("escape_dir");
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside, &link_dir).is_ok();
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(&outside, &link_dir).is_ok()
+            || std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link_dir)
+                .arg(&outside)
+                .output()
+                .is_ok_and(|out| out.status.success());
+        assert!(linked, "escape link must be created for ATC-path-01");
+        paths.push("escape_dir/x.ron".to_owned());
+        paths.push("escape_dir\\x.ron".to_owned());
+
+        let link_file = root.join("link.ron");
+        #[cfg(unix)]
+        let linked_file = std::os::unix::fs::symlink(&secret, &link_file).is_ok();
+        #[cfg(windows)]
+        let linked_file = std::os::windows::fs::symlink_file(&secret, &link_file).is_ok();
+        if linked_file {
+            paths.push("link.ron".to_owned());
+        }
+
+        for path in paths {
+            let open_r = call(&mut svc, s, json!({"op": "open", "params": {"path": path}}));
+            assert_eq!(
+                error(&open_r).code(),
+                ErrorCode::PathOutsideRoot,
+                "open {path}"
+            );
+            assert_eq!((open_r.doc_id(), open_r.revision()), (None, None));
+
+            let save_r = call(
+                &mut svc,
+                s,
+                json!({"op": "save", "params": {"doc_id": d.to_string(), "path": path}}),
+            );
+            assert_eq!(
+                error(&save_r).code(),
+                ErrorCode::PathOutsideRoot,
+                "save {path}"
+            );
+            assert_eq!((save_r.doc_id(), save_r.revision()), (Some(d), Some(0)));
+        }
+
+        // Default headless() has empty roots: any open/save is path_outside_root.
+        let mut no_roots = Service::headless();
+        let s2 = no_roots.open_session();
+        let r = call(
+            &mut no_roots,
+            s2,
+            json!({"op": "open", "params": {"path": "a.ron"}}),
+        );
+        assert_eq!(error(&r).code(), ErrorCode::PathOutsideRoot);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn custom_policy_enforces_discard_flag_under_allow_and_denies_save_under_deny() {
+        let base =
+            std::env::temp_dir().join(format!("omnia-agent-policy-custom-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let existing = base.join("exist.ron");
+        files::save_doc(&Doc::new(), &existing).unwrap();
+        let original_bytes = std::fs::read(&existing).unwrap();
+
+        // 1. Tier 3 Allow still requires `discard_unsaved: true` on dirty close (AINV9).
+        let allow_policy = crate::Policy::custom(
+            Roots::new([&base]).unwrap(),
+            crate::TierDecision::Allow,
+            crate::TierDecision::Allow,
+            crate::TierDecision::Allow,
+        );
+        let mut svc_allow = Service::new(HeadlessHost::new(), allow_policy);
+        let s = svc_allow.open_session();
+        let d = new_doc(&mut svc_allow, s);
+        send(
+            &mut svc_allow,
+            s,
+            &apply_req(d, 0, &[label_op(0, 0, "A")], None, None),
+        );
+        let refused = call(
+            &mut svc_allow,
+            s,
+            json!({"op": "close", "params": {"doc_id": "d1"}}),
+        );
+        assert_eq!(error(&refused).code(), ErrorCode::ApprovalRequired);
+        assert!(svc_allow.document(s, d).is_some());
+        let allowed = call(
+            &mut svc_allow,
+            s,
+            json!({"op": "close", "params": {"doc_id": "d1", "discard_unsaved": true}}),
+        );
+        assert_eq!(
+            result(&allowed),
+            &Output::Closed(CloseResult { discarded: true })
+        );
+
+        // 2. Tier 3 Deny refuses overwrite with `approval_denied` and leaves file untouched.
+        let deny_policy = crate::Policy::custom(
+            Roots::new([&base]).unwrap(),
+            crate::TierDecision::Allow,
+            crate::TierDecision::Allow,
+            crate::TierDecision::Deny,
+        );
+        let mut svc_deny = Service::new(HeadlessHost::new(), deny_policy);
+        let s2 = svc_deny.open_session();
+        let d2 = new_doc(&mut svc_deny, s2);
+        send(
+            &mut svc_deny,
+            s2,
+            &apply_req(d2, 0, &[label_op(0, 0, "B")], None, None),
+        );
+        let denied = call(
+            &mut svc_deny,
+            s2,
+            json!({"op": "save", "params": {"doc_id": "d1", "path": "exist.ron"}}),
+        );
+        assert_eq!(error(&denied).code(), ErrorCode::ApprovalDenied);
+        assert_eq!(std::fs::read(&existing).unwrap(), original_bytes);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
