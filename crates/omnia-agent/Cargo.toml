@@ -14,6 +14,9 @@ omnia-symbols = { path = "../omnia-symbols" }
 serde = { version = "1", features = ["derive"] }
 # Canvas plan section 10: the agent wire schema (MIT OR Apache-2.0); already in Cargo.lock.
 serde_json = "1"
+# Canvas plan section 10 (MIT OR Apache-2.0), already in Cargo.lock: preview ids and request
+# hashes (mcp-plan.md sections 11.2 and 11.3, AQ10).
+rustc-hash = "2"
 
 [dev-dependencies]
 proptest = "1"

@@ -649,12 +649,37 @@ only the storage lifetime of those handles (11.1): they expire when it exits.
 - `expected_revision` alone already makes a blind retry safe: it is refused as stale and never
   applies twice.
 
+As built at A1.5 (`src/service.rs`, 2026-11-22):
+
+- The canonical request hash is a 64-bit FxHash of `Request::to_json`, the envelope both wire
+  forms decode to, so a replay may arrive in either form (ATC-edit-03). The cache is checked
+  before anything else about a keyed request, including whether its document exists.
+- Stored: every success, and every failure whose code is not retryable (`missing_item`,
+  `document_not_found` and so on), which `request_status` reports as `failed`. Not stored: a
+  retryable failure (`stale_revision`, `user_gesture_in_progress`, and from A1.6
+  `approval_required` and `io_error`). It applied nothing and its code invites a retry, so a
+  retry under the same key is a fresh attempt, and `request_status` answers `not_run` until an
+  entry is stored. `idempotency_conflict` is never stored.
+- When AK5 entries are held, the oldest is evicted first. An evicted key answers `not_run`
+  (AQ11: retention is per session, in memory); a blind retry of its request is then refused as
+  stale, as above.
+- `idempotency_conflict` and `request_status` responses carry no `doc_id` or `revision`.
+
 ### 11.3 Preview identity
 
 `preview_id` is a 64-bit hash (FxHash, `rustc-hash`, already a dependency) of `doc_id`,
 `base_revision`, the canonical operation bytes and the follow policy. `apply` with a
 `preview_id` hashes its own request; a difference is refused with `preview_mismatch`. The hash
 binds a commit to its preview and an approval to an effect. It is not a security token (AQ10).
+
+As built at A1.5 (`src/preview.rs`): the hash input is a domain tag, the `doc_id` and the base
+revision as fixed-width integers, the length and bytes of the operations' canonical JSON, and
+the session's wiring preferences that shape their commands: the follow policy
+(`follow_on_move`, the pin threshold, `invert`) and `delete_wires_with_part` (see 11.4a).
+Nothing is stored: an id that matches is the id a preview of exactly this request at this
+revision returns, so `apply` needs no record of earlier previews. A preview id from another
+document, revision or operation list is `preview_mismatch`; a stale `expected_revision` is
+refused first.
 
 ### 11.4 Undo and redo
 
@@ -664,6 +689,48 @@ binds a commit to its preview and an approval to an effect. It is not a security
   No new document API is needed.
 - If the person edited in between, the agent is refused with `stale_revision` and cannot undo
   the person's work (ATC-edit-06).
+
+### 11.4a Request handling as built at A1.5
+
+Added at A1.5 (2026-11-22: `src/service.rs`, `src/host.rs`, `src/ops.rs`, `src/preview.rs`,
+`src/diff.rs`).
+
+- Order of checks for a document request: the session; for a keyed request the idempotency
+  cache (11.2); `doc_id` (`document_not_found`); for `apply`, `undo` and `redo` a gesture
+  (`user_gesture_in_progress`); `expected_revision` (`stale_revision`), also for `validate`
+  and `preview`; for `apply` the `preview_id` (`preview_mismatch`); the symbol names
+  (`unknown_symbol`); then the document's own verdict on the one `Command` (the
+  `CommandError` codes of 9.4). `undo` and `redo` with nothing to step are `nothing_to_undo`
+  and `nothing_to_redo`.
+- Operations become commands one to one (9.2). Fields the schema does not carry yet come from
+  the session's `WiringPrefs` (WK10 defaults): `move` and `reorient` use
+  `follow_policy(false)` (the modifier released, until A2.2 adds `invert_follow`), and
+  `delete` uses `delete_wires_with_part` (false, until A2.3 adds `with_wires`).
+- `validate` and `preview` apply the command to a fork (`Doc::fork`) and only read the live
+  document. `apply` previews first, so every refusal and the diff are found before the live
+  document is touched (AINV4), then commits the same command through `DocHost::apply`; its
+  `Change` equals the preview's (AINV2).
+- The diff (9.3) is computed from `Change.dirty`: `added` and `removed` are the change's ids
+  read in the after and before documents, `modified` the other ids `Doc::query` finds in
+  `dirty` in either document whose fields differ. It is one page of at most AK4's default
+  (500) entries, filled from `added`, then `removed`, then `modified`, each sorted by kind and
+  id; `truncated` says whether any were left out. The change always lists every id.
+- A response about an open document carries its `doc_id` and its revision after the request,
+  errors included (a refusal reports the unchanged revision). `document_not_found` carries
+  neither, nor do `capabilities`, `request_status` and `idempotency_conflict`.
+- `new` registers an empty document at revision 0 with `saved_revision` 0, and enforces AK6: a
+  ninth open document is `limit_exceeded {open_documents, 9}`. `doc_id`s count from `d1` per
+  session and are never reused. Sessions are separate: their documents and keys do not mix.
+- Interim until A1.6 builds files and approvals: `open` and `save` are refused with
+  `unsupported_in_mode`, and so is `close` of a dirty document (with or without
+  `discard_unsaved`), since discarding is tier 3. `close` of a clean document drops it and
+  answers `{discarded: false}`.
+- Error pointers: the service reports envelope-space pointers (`/params/cursor`, as `read.rs`
+  does). `service::in_form(response, Form::Arguments)`, which `AgentService::handle_in`
+  applies, drops the leading `/params` for the MCP arguments form (`/params` alone becomes
+  `""`), also inside a `request_status` that reports a failure. Successes are unchanged.
+- An unknown `SessionId` is `internal`: sessions are issued by the service, so a transport that
+  names another has a bug.
 
 ### 11.5 Jobs, progress and cancellation (A3)
 
@@ -772,25 +839,42 @@ impl SymbolLibrary {
 // ---- omnia-agent ----
 pub const SCHEMA: &str = "omnia.agent/1";                    // AK7
 
-pub struct AgentService<H: DocHost> { /* sessions, caches, policy, jobs */ }
+// As built at A1.5. Not built yet: the policy (A1.6 adds it to construction), and
+// `CallContext` and `poll_job` (A3.1 adds `cx` to `handle` and adds `poll_job`).
+pub struct AgentService<H: DocHost = HeadlessHost> { /* host, symbols, catalog, sessions */ }
 impl<H: DocHost> AgentService<H> {
-    pub fn new(host: H, policy: Policy) -> Self;
+    pub fn new(host: H) -> Self;                             // built-in symbol library
+    pub fn with_symbols(host: H, symbols: Arc<SymbolLibrary>) -> Self;
     pub fn catalog(&self) -> &Catalog;
-    pub fn handle(&mut self, session: SessionId, req: Request,
-                  cx: &mut CallContext) -> Response;         // synchronous, deterministic
-    pub fn poll_job(&mut self, job: JobId, budget: Duration,
-                    cx: &mut CallContext) -> JobState;       // the host drives jobs (A3)
+    pub fn symbols(&self) -> &Arc<SymbolLibrary>;
+    pub fn host(&self) -> &H;
+    pub fn host_mut(&mut self) -> &mut H;                    // the host's own (a person's) edits
+    pub fn open_session(&mut self) -> SessionId;
+    pub fn close_session(&mut self, session: SessionId) -> bool;   // drops its documents
+    pub fn doc_handle(&self, session: SessionId, doc_id: DocId) -> Option<DocHandle>;
+    pub fn document(&self, session: SessionId, doc_id: DocId) -> Option<&Doc>;
+    pub fn handle(&mut self, session: SessionId, req: &Request) -> Response; // envelope space
+    pub fn handle_in(&mut self, session: SessionId, req: &Request, form: Form) -> Response;
 }
+impl AgentService<HeadlessHost> { pub fn headless() -> Self; }
+pub enum Form { Envelope, Arguments }                        // error pointer space (9.1)
+pub fn in_form(response: Response, form: Form) -> Response;
 
 pub trait DocHost {                       // headless store in A1; Entity<Doc> adapter in A4
+    fn insert(&mut self, doc: Doc) -> Result<DocHandle, AgentError>;   // new; open (A1.6)
+    fn remove(&mut self, h: DocHandle) -> Result<(), AgentError>;      // close
     fn doc(&self, h: DocHandle) -> Result<&Doc, AgentError>;
-    fn apply(&mut self, h: DocHandle, c: Command) -> Result<Change, CommandError>; // Doc::apply
-    fn undo(&mut self, h: DocHandle) -> Option<Change>;
-    fn redo(&mut self, h: DocHandle) -> Option<Change>;
+    fn apply(&mut self, h: DocHandle, c: Command)
+        -> Result<Result<Change, CommandError>, AgentError>;           // Doc::apply
+    fn undo(&mut self, h: DocHandle) -> Result<Option<Change>, AgentError>;  // Doc::undo
+    fn redo(&mut self, h: DocHandle) -> Result<Option<Change>, AgentError>;  // Doc::redo
     fn gesture_active(&self, h: DocHandle) -> bool;          // headless: always false
-    fn request_approval(&mut self, a: &ApprovalRequest) -> ApprovalOutcome;
+    // An unknown handle is `document_not_found`. The approval hook
+    // (`request_approval(&ApprovalRequest) -> ApprovalOutcome`) is added by the task that
+    // first needs a person's approval (A4); headless tiers are decided in the service (A1.6).
 }
 
+// Later (A3.1):
 pub struct CallContext<'a> { pub cancel: &'a CancelToken, pub progress: &'a mut dyn ProgressSink }
 
 pub struct Request { /* private: built only by decoding (9.1) */ }
@@ -832,6 +916,7 @@ Files:
 ```
 crates/omnia-agent/
   Cargo.toml        omnia-doc, omnia-symbols, omnia-theme (A2.4), serde, serde_json, rustc-hash
+                    (rustc-hash from A1.5)
   schema/           committed JSON Schemas (AINV11)
   src/lib.rs        module lines, SCHEMA
   src/schema/       DTOs, id/point/orient codecs                     (A1.3)
