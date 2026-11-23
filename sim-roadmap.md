@@ -3,7 +3,10 @@
 The task list for Stage 3 (circuit simulation). The reference for every `S`-prefixed id used here
 (`SB`, `SK`, `SD`, `SINV`, `STC`, `SS`, `SQ`, `HS`) is [sim-plan.md](sim-plan.md). Ids without an
 `S` prefix live in [canvas-plan.md](canvas-plan.md), [wiring-plan.md](wiring-plan.md),
-[mcp-plan.md](mcp-plan.md) and [ui-plan.md](ui-plan.md). Milestones are written `Milestone S0`–
+[mcp-plan.md](mcp-plan.md) and [ui-plan.md](ui-plan.md); `P`-prefixed ids live in the parts
+plan (`parts-plan.md`, pull request #85) and `C`-prefixed ids in the circuit context plan
+(`context-plan.md`, pull request #100). Cross-plan decisions `XD1`–`XD9` are summarised in
+`sim-plan.md` section 6. Milestones are written `Milestone S0`–
 `Milestone S4` (and tasks `S0.1`–`S4.4`) to stay distinct from canvas Day-1 spikes `S1`–`S8`.
 
 Because Omnia's pure-Rust SPICE engine already exists in `Reid-Engineered/RIS-C` (`risc-c`,
@@ -53,8 +56,8 @@ cargo deny check
 | `sim-core` | `crates/omnia-sim/` | No |
 | `sim-ngspice` | `crates/omnia-sim-ngspice/`, `crates/omnia-ngspice-worker/` | No |
 | `sim-risc` | `crates/omnia-sim-risc/` (adapter over pinned `risc-c`) | No |
-| `sim-tests` | `tests/sim/` (`omnia-sim-tests`), `crates/omnia-bench/benches/sim.rs`, `crates/omnia-bench/src/sim.rs` | No |
-| `doc` / `assets` | `crates/omnia-doc/` (`S1.1`), `crates/omnia-symbols/` (`S1.1`, `S3.2`) | No |
+| `sim-tests` | `tests/sim/` (`omnia-sim-tests`), `crates/omnia-bench/benches/sim.rs`, `crates/omnia-bench/src/sim.rs`, new modelled `StressSheet` variants in `crates/omnia-bench/src/generate.rs` (`S2.3`; existing variants never change) | No |
+| `assets` | `crates/omnia-symbols/` (`S1.1`, `S3.2`, after parts `P1.4`, `XD5`); `library/` additions (`S1.1` analog and rail definitions, `S3.2` instrument definitions, `XD3`). No simulation task owns an `omnia-doc` file (`XD1`). | No |
 | `sim-ui` | `crates/omnia-app/src/sim/`, `crates/omnia-app/src/instruments/`, `crates/omnia-canvas/src/sheet/` probe/instrument hooks (`S3.2`) | Yes |
 | `sim-agent` | `crates/omnia-agent/src/sim.rs` (`S4.1`) | No |
 | `bench` | `crates/omnia-bench/src/spike/sim_scope.rs` (`S0.4`), `crates/omnia-bench/src/ui.rs` sim scripts (`S4.4`), `docs/measurements/S*.md` | Yes |
@@ -66,8 +69,8 @@ Notice that `sim-risc` and `sim-ngspice` own completely disjoint crates and run 
 | Milestone | Delivers | Gate task | Gated |
 | --- | --- | --- | --- |
 | Milestone S0 | `sim-plan.md`, this roadmap, owner sign-off (`S0.2`), spikes `SS1` (`S0.3`) & `SS2` (`S0.4`) | S0.2 (`HS1`), then S0.3 / S0.4 | `HS1`, `SD5`, `SK8` |
-| Milestone S1 | Part props & v1 analog symbols, `omnia-sim` IR/ERC/models/netlist/rings, full `OP`/`DC`/`AC`/`TRAN` adapters for both `RIS-C` and `ngspice` | S1.5 & S1.6 | `SINV1`–`SINV7`, `SINV10`, `SINV12`, `STC-erc-01` |
-| Milestone S2 | Full dual-engine differential parity (`lin`, `nl`, `ac`, `tran`, `err`), Wien bridge oscillator (`723.4 Hz`), and Orion solver bench | S2.3 | `SB1`–`SB4`, `SB7`, `SINV8`, all `STC-*` |
+| Milestone S1 | v1 analog symbols & symbol class, `omnia-sim` bindings/lowering/ERC/netlist/rings, contributed library definitions, full `OP`/`DC`/`AC`/`TRAN` adapters for both `RIS-C` and `ngspice` | S1.5 & S1.6 | `SINV1`–`SINV7`, `SINV12`, `STC-erc-01`/`STC-erc-03` |
+| Milestone S2 | Full dual-engine differential parity (`lin`, `nl`, `ac`, `tran`, `err`), modelled Wien bridge oscillator fixture (`723.4 Hz`), and Orion solver bench | S2.3 | `SB1`–`SB4`, `SB7`, `SINV8`, `SINV10`, S2.1 and S2.2 reference circuits, `STC-erc-01`/`STC-erc-03` |
 | Milestone S3 | Live ERC, toolbar Run controls, on-sheet probes/rails/instrument blocks, Oscilloscope (`XSC1`), Multimeter (`XMM1`), Bode Plotter (`XBP1`), Results dock | S3.6 | `SINV9`, `HS3` (plus non-reference `SB5`/`SB6`/`SB8` checks; Orion certification in `S4.4`) |
 | Milestone S4 | Agent/MCP simulation tools, BSD-3-Clause `ngspice` bundling, First-boot self-test, final Orion gate | S4.4 | `SINV11`, `HS2`, `HS4`, all `SB1`–`SB8` on Orion |
 
@@ -75,11 +78,14 @@ Notice that `sim-risc` and `sim-ngspice` own completely disjoint crates and run 
 
 | Simulation task | Waits for (canvas / wiring / UI / MCP) | Can start |
 | --- | --- | --- |
-| `S0.1`–`S0.3` | nothing (`S0.3` waits on `S0.2`/`HS1`) | now (`S0.3` after `HS1`) |
-| `S0.4` (`SS2`) | standalone GPUI spike in `omnia-bench` (after `S0.2`/`HS1`) | after `HS1` |
-| `S1.1`–`S2.3` (entire dual-engine simulation stack!) | **nothing** beyond `HS1` (zero UI dependency!) | right after `HS1` |
+| `S0.1`–`S0.3` | nothing (`S0.3` waits on `S0.2`/`HS1`) | now (`S0.3` after `HS1`, signed 2026-11-23) |
+| `S0.4` (`SS2`) | standalone GPUI spike in `omnia-bench` (after `S0.2`/`HS1`) | now |
+| `S1.1` | parts `P2.3` (document schema, `XD1`, `XD7`), parts `P1.4` (`pins.toml` order, `XD5`) and parts `P2.4` (shared placement helper, `XD3`) | after `P2.4` & `P1.4` |
+| `S1.2` | `S1.1` (including the parts `PD5` supply contract); context `C1.9` (`Circuit::bindings`, `XD4`), which itself waits for context `C1.2` and S1.1 | after `S1.1` & `C1.9` |
+| `S1.3`–`S2.2` (rest of the dual-engine simulation stack) | nothing beyond `S1.2`'s inputs (zero UI dependency) | after `S1.2` |
+| `S2.3` | `S2.2`; context `C1.3` (incremental update, for `SB1`/`SB2` incremental evidence) | after `S2.2` & `C1.3` |
 | `S3.1` | `U1.6`, `U1.7`, `U1.8`, `S2.3` | after `U1.8` & `S2.3` |
-| `S3.2` | `T4.3`, `T5.3`, `S1.1` | after `T5.3` |
+| `S3.2` | `T4.3`, `T5.3`, `S1.1`, `S1.3` (`ERC005` joins `erc.rs`) | after `T5.3` & `S1.3` |
 | `S3.3` | `S0.4` (`SK8`), `S3.1`, `U4.1` | after `S0.4`, `U4.1`, & `S3.1` |
 | `S3.4` | `S3.1`, `U4.1` | after `U4.1` & `S3.1` |
 | `S3.5` | `S3.1`, `U1.7` | after `U1.7` & `S3.1` |
@@ -90,14 +96,15 @@ Notice that `sim-risc` and `sim-ngspice` own completely disjoint crates and run 
 
 ```
 S0.1 -> S0.2 [HS1] -> S0.3 (SS1), S0.4 (SS2)
-HS1  -> S1.1 (doc+symbols) -> S1.2 (IR/values/models/netlist) -> S1.3 (ERC), S1.4 (engine+ring)
+HS1 + parts P2.3 + parts P1.4 + parts P2.4 -> S1.1 (symbols, symbol class, library definitions)
+S1.1 -> context C1.9 (bindings, XD4); S1.1 + C1.9 -> S1.2 (lowering/netlist) -> S1.3 (ERC), S1.4 (engine+ring)
 S1.4        -> S1.5 (omnia-sim-risc: OP/DC/AC/TRAN)    --+
-S0.3 + S1.4 -> S1.6 (omnia-sim-ngspice: OP/DC/AC/TRAN) --+--> (+ S1.3) -> S2.1 (diff parity) -> S2.2 (Wien) -> S2.3 (Gate S2)
+S0.3 + S1.4 -> S1.6 (omnia-sim-ngspice: OP/DC/AC/TRAN) --+--> (+ S1.3) -> S2.1 (diff parity) -> S2.2 (Wien) -> (+ context C1.3) S2.3 (Gate S2)
 S2.3 + U1.6 + U1.7 + U1.8 -> S3.1 (SimController)
 S3.1 + U4.1 + S0.4 -> S3.3 (XSC1)    --+
 S3.1 + U4.1        -> S3.4 (XMM1+XBP1)-+--> (+ S3.2) -> S3.6 [HS3]
 S3.1 + U1.7        -> S3.5 (Results) --+
-S1.1 + T4.3 + T5.3 -> S3.2 (sheet probes/rails/instrument blocks)
+S1.1 + S1.3 + T4.3 + T5.3 -> S3.2 (sheet probes/rails/instrument blocks, STC-erc-02)
 S2.3 + A3.4 -> S4.1 (agent sim tools)
 S0.3 + S2.3 -> S4.2 (ngspice bundling) [HS2] -> S4.3 (+ U3.3 + U3.5: First boot + prefs)
 S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
@@ -107,7 +114,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 
 | ID | When | What the owner does |
 | --- | --- | --- |
-| `HS1` | S0.2 | Reviews `sim-plan.md`, answers `SQ1`–`SQ10` (including `SQ4` on `RIS-C` repo visibility/`deny.toml`), and approves `SD6`–`SD14`. Milestone S1 starts after `HS1`. |
+| `HS1` | S0.2 | Reviews `sim-plan.md`, answers `SQ1`–`SQ10` (including `SQ4` on `RIS-C` repo visibility/`deny.toml`), and approves `SD6`–`SD14`. Milestone S1 starts after `HS1`. **Signed 2026-11-23** by the coordinating agent under the owner's delegation of that date (answers in `sim-plan.md` section 14). |
 | `HS2` | S4.2 | Verifies the BSD-3-Clause `ngspice` build recipe, binary licence audit, and `THIRD_PARTY.md` entry on Windows and Linux. |
 | `HS3` | S3.6 | Opens the Wien oscillator in Omnia, clicks Run on both `ngspice` and `RIS-C`, inspects `XSC1` live waveforms, `XMM1`, `XBP1`, and Results dock, and approves visual/functional feel. |
 | `HS4` | S4.4 | Runs the final Orion certification campaign (`SB1`–`SB8` + `B3`/`B4`/`UB3`/`UB4` with live simulation). |
@@ -122,10 +129,10 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 - Do: write `sim-plan.md` and `sim-roadmap.md` incorporating the 2026-11-23 owner decisions and integrating the existing first-party `Reid-Engineered/RIS-C` (`risc-c`) crate alongside bundled `ngspice`; register `S`-prefixed ids in `AGENTS.md` and link Stage 3 in `ROADMAP.md`.
 - Done when: `sim-plan.md`, `sim-roadmap.md`, `AGENTS.md` and `ROADMAP.md` agree, pass Hard Rule 1 (no commercial companies), and pass independent review.
 
-### S0.2 Owner sign-off and plan alignment · todo → HS1
-- Lane: docs · Depends: S0.1 · Read: `sim-plan.md` §13–§14
+### S0.2 Owner sign-off and plan alignment · done (HS1 signed 2026-11-23, owner-delegated)
+- Lane: docs · Depends: S0.1 · Read: `sim-plan.md` §13–§14; cross-plan decisions `XD1`–`XD9`; `parts-plan.md` / `parts-roadmap.md` (#85, `1d162f9`); `context-plan.md` / `context-roadmap.md` (#100, `eee05c4`)
 - Owns: `sim-plan.md`, `sim-roadmap.md`
-- Do: present `SQ1`–`SQ10` and `SD6`–`SD14` to the owner at `HS1`; record dated answers in `sim-plan.md` and turn all `PROPOSED` decisions into `DECIDED` (only `SD5` stays `HYPOTHESIS` until `SS1`).
+- Do: present `SQ1`–`SQ10` and `SD6`–`SD14` to the owner at `HS1`; record dated answers in `sim-plan.md` and turn all `PROPOSED` decisions into `DECIDED` (only `SD5` stays `HYPOTHESIS` until `SS1`); apply every cross-plan decision `XD1`–`XD9` that touches the simulation plan and roadmap.
 - Done when: `HS1` is signed off by the owner and no `PROPOSED` entries remain in `sim-plan.md`.
 
 ### S0.3 Spike SS1: `ngspice` worker isolation & BSD-3-Clause build · todo
@@ -144,34 +151,34 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 
 ## Milestone S1: core IR, ERC, netlist, models, and dual `SimEngine` backends
 
-### S1.1 Document part properties & v1 analog symbol set · todo
-- Lane: doc, assets · Depends: S0.2 · Read: `sim-plan.md` SD3, SD9, SD10, SINV10; `crates/omnia-doc/src/{doc.rs,command.rs,io.rs}`, `crates/omnia-symbols/{pins.toml,src/lib.rs}`, `crates/omnia-agent/src/{files.rs,catalog.rs}`
-- Owns: `crates/omnia-doc/src/{doc.rs,command.rs,io.rs}`, `crates/omnia-symbols/`, `xtask/src/symbols.rs`, `crates/omnia-agent/src/{files.rs,catalog.rs}`, `ui-plan.md` (`UTC-open-bad`), `mcp-plan.md` (`AQ12`)
-- Do: store `props: BTreeMap<Arc<str>, Arc<str>>` on crate-private `StoredPart` (keeping `Part`'s 5 public fields unchanged so no `Part { .. }` literals break), add `Doc::part_props(id)` and `Command::SetPartProp` (with inverse and `INV4` property coverage), bump RON serialisation to v3 (`io.rs` `Sheet` preserving v2 load per `SINV10`), bump rejected-version tests/examples from `version: 3` to `version: 4` in `io.rs`, `omnia-agent/src/files.rs`, and `ui-plan.md` (`UTC-open-bad`), and update RON v2 strings in `omnia-agent/src/{files.rs,catalog.rs}` and `mcp-plan.md` (`AQ12`); add `SymbolRole` (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`) and compile the missing v1 analog symbols from `vendor/electronic-symbols/` (inductor, independent DC/AC/pulse sources, VCVS/VCCS dependent sources, NPN & PNP BJT, NMOS & PMOS MOSFET, supply rail tags).
-- Done when: `INV4`, `INV12`, and `SINV10` tests pass; all existing `tests/golden/*.ron` v2 fixtures load unchanged and all 12 goldens match with 0 differing pixels.
+### S1.1 v1 analog symbol set and symbol class · todo
+- Lane: assets · Depends: S0.2, parts P2.3 (`XD1`, `XD7`), parts P1.4 (`pins.toml` order, `XD5`), parts P2.4 (shared placement helper, `XD3`) · Read: `sim-plan.md` SD3, SD10, XD3, XD5; `parts-plan.md` PK6, PK11, PK12, PD1, PD5, PD7, PD11; `crates/omnia-symbols/{pins.toml,src/lib.rs}`, `xtask/src/symbols.rs`
+- Owns: `crates/omnia-symbols/` (`pins.toml`, regenerated `src/generated.rs`, symbol class in `src/lib.rs`), `xtask/src/symbols.rs` (only if needed to keep every existing `SymbolId` unchanged); new `library/parts/**` and `library/models/**` files for the extra `SD3` definitions (rail definitions included), the regenerated `crates/omnia-parts/src/generated.rs`, and their `THIRD_PARTY.md` rows. No `omnia-doc` file and no document schema work (`XD1`).
+- Do: add the symbol class (`SymbolClass`: `Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`), a per-symbol type kept separate from parts `PD5` per-pin roles (`XD5`); compile the v1 analog symbols that parts `P1.4` did not add from `vendor/electronic-symbols/` (inductor, remaining independent DC/AC/pulse sources, VCVS/VCCS dependent sources, NPN & PNP BJT, NMOS & PMOS MOSFET, supply rail tags), appending them so every existing `SymbolId` stays unchanged; contribute their part definitions to the shared `library/` under generic ids and `PK11` licences (`XD3`, no second deck tree): BJT and MOSFET `.model`s, inductor and source primitives, op-amp macromodels built only from `R`/`C`/`E`/`G`/`D` and using parts `PD5`'s `SupplyDecl` (`SD3`), and `rail` definitions (`dc` parameter, no `primary_param`, class `PowerRail`, `SD10`).
+- Done when: every existing `SymbolId` is unchanged and all 12 goldens match with 0 differing pixels; every compiled symbol has a class; placing a generic op-amp with `Catalog::place_symbol(SymbolId, …)` (parts `P2.4`) embeds its `[symbol] default = true` definition with the `SQ8` binding, and reading its `SupplyDecl` verifies the ordered `+15 V`/`−15 V` fallback (`XD3`); `INV12` and `cargo xtask parts --check` pass.
 
-### S1.2 `omnia-sim` core: values, models, `CircuitIr`, netlist emitter · todo
-- Lane: sim-core · Depends: S1.1 · Read: `sim-plan.md` SK1, SK2, SK3, SK10, SK12, SD3, SD7, SQ8, SINV1, SINV2, SINV6, SINV12
-- Owns: `crates/omnia-sim/Cargo.toml`, `crates/omnia-sim/models/`, `crates/omnia-sim/src/{lib.rs,value.rs,models.rs,library.rs,ir.rs,netlist.rs}`
-- Do: create GPUI-free `omnia-sim` crate; implement `SK1` SI engineering value parser (whitespace, units, `1F` vs `10fF`, potentiometer `%`, bare `M`) and SPICE formatter; author the built-in permissive/public-domain `.model`/`.subckt` library (`1N4148`, `2N2222`/`2N3904`, `2N3906`, `2N7000`, `BS250`, behavioral `OpAmp`, `TL072`, `LM741` using only `R`/`C`/`E`/`G`/`D` so both `RIS-C` and `ngspice` run them identically) with precedence `props["model"]` → `part.value` → `SQ8` default; implement insertion-order-independent `CircuitIr::lower` (`SD7`, including potentiometer split and VCVS/VCCS) with bidirectional `SourceMap` and deterministic SPICE netlist emission for `OP`/`DC`/`AC`/`TRAN`.
-- Done when: property tests prove `SINV2` (any arena insertion order gives identical numbering & netlist text), `SINV6` (value parser round-trip & `M`/`F` safety), `SINV12` (complete source map), and `SINV1` (no GPUI in dep tree).
+### S1.2 `omnia-sim` core: bindings, `CircuitIr`, netlist emitter · todo
+- Lane: sim-core · Depends: S1.1, context C1.9 (`Circuit::bindings`: state-matched pin-to-net bindings and declared ground evidence, `XD4`) · Read: `context-plan.md` CK1, CK4, CD18, CINV14, CTC-bind-01, section 12 (`Bindings`); `sim-plan.md` SK1, SK2, SK3, SK10, SK12, SD3, SD7, SD10, SQ8, SINV1, SINV2, SINV6, SINV12, XD1–XD5; `parts-plan.md` PK4, PK6, PK12, PD3, PD5, PD6
+- Owns: `crates/omnia-sim/Cargo.toml`, `crates/omnia-sim/src/{lib.rs,binding.rs,ir.rs,netlist.rs}` (lowering only; library definitions are S1.1's); declares `Analysis` and `ProbeSpec`, which `lower` takes
+- Do: create GPUI-free `omnia-sim` (no `omnia-parts` runtime dependency); read embedded definitions and typed parameters through `Doc::part_def` / `Doc::resolved_param` (no value parser: values are `PK4` `FiniteF64`s) and choose the model only from the embedded binding (`Primitive`, `Model`, `Subckt`, `model` enum), never from `Part::value` (`XD3`); implement insertion-order-independent `CircuitIr::lower(doc, bindings, analysis, probes)` (`SD7`) that checks and retains the `(lineage, revision)` pair, collapses ground nets, joins rails by rail name (`SD10`), expands parts (potentiometer split, VCVS/VCCS) in embedded terminal order, reads `SupplyDecl` to apply the `SD3` supply contract, and builds the many-to-many `SourceMap`; emit deterministic SPICE netlists for `OP`/`DC`/`AC`/`TRAN` with plain numbers only.
+- Done when: property tests prove `SINV2` (any arena insertion order gives identical numbering & netlist text), `SINV6` (emitter writes plain numbers that round-trip bit for bit; `10M` reaches the netlist as `1e7`), `SINV12` (complete many-to-many source map), and `SINV1` (no GPUI in dep tree); lowering records the verified pair and refuses a mismatch in either lineage or revision (`CD18`). Test a stale revision in one lineage and two forks with different edits at the same revision, passing the first fork's valid bindings to `lower` with the second fork's document and asserting stale refusal. Compile-time checks establish that solver `NodeId` has no conversion in either direction with context `CircuitKey` or MCP `NetKey` (`CK1`, `XD4`). Unit tests cover both supplies connected, implicit fallback, one supply connected, and neither connected without a fallback.
 
 ### S1.3 Deterministic ERC engine · todo
-- Lane: sim-core · Depends: S1.2 · Read: `sim-plan.md` SD8, SB1, SK9, SINV2, SINV3, STC-erc-01
+- Lane: sim-core · Depends: S1.2 · Read: `sim-plan.md` SD3 (supply contract), SD8, SD10, SB1, SK9, SK10, SQ3, SQ8, SINV2, SINV3, STC-erc-01, STC-erc-03, XD6; `context-plan.md` CD18; `context-plan.md` CK4 and section 9.4 (case folding, blank designators, ERC crosswalk)
 - Owns: `crates/omnia-sim/src/erc.rs`
-- Do: implement `run_erc(doc, library) -> Vec<ErcDiagnostic>` covering `ERC001`–`ERC008` (ground, duplicate non-empty designators with `Ground`/`PowerRail` empty exemption, bad values, shorted voltage sources, unconnected probes, floating pins, bare `M` on resistors, unpowered op-amp) sorted deterministically by severity, code, geometry, and item id.
-- Done when: `STC-erc-01` unit tests pass on all 8 codes (`ERC001`–`ERC008`); `SINV2` determinism and `SINV3` immutability property tests pass.
+- Do: implement `run_erc(doc, bindings) -> Result<Vec<ErcDiagnostic>, StaleBindings>` reading `Circuit::bindings` (`C1.9`), first checking `(bindings.lineage(), bindings.revision()) == (doc.lineage(), doc.revision())` (`CD18`) and refusing a mismatch, and `validate_probes(doc, bindings, probes) -> Result<Vec<ErcDiagnostic>, StaleBindings>` with the same check, which reports headless `ERC005` for a `ProbeSpec` naming a missing net by probe name and net (unwired instrument ports join `run_erc` in S3.2). `run_erc` covers the codes of `SD8`: `ERC001` ground with the non-`Ground`-part condition and the `GND` hint, `ERC002` duplicate designators per context section 9.4 (ASCII case folding; blank designators never duplicate), `ERC003` the shared parse-failure case, `ERC004` shorted voltage sources, `ERC006` floating pins with `no_connect` exempt, `ERC008` using `SupplyDecl` and pin roles from the embedded definition and net membership from `C1.9`, `ERC009` no simulation model, `ERC010` conflicting rail voltage; use the shared predicates of the `XD6` crosswalk; never emit the retired `ERC007`; sort deterministically by severity, code, geometry, and item id. The Error/Warning policy is the Run gate.
+- Done when: `STC-erc-01` passes for `ERC001`–`ERC004`, `ERC006`, `ERC008` (both severities and the partial-supply Error), `ERC009` and `ERC010`, and `STC-erc-03` (headless-probe `ERC005`); an empty sheet raises nothing; a same-revision divergent-fork `bindings` is refused. Assert that the v3 fixture with `resistance = 0` is refused at load (`PD8`, `PD10`); test any defensive typed `ERC003` check with an internal fixture. `SINV2` determinism and `SINV3` immutability property tests pass.
 
 ### S1.4 `SimEngine` trait, lock-free `SampleRing`, and `SimResult` · todo
 - Lane: sim-core · Depends: S1.2 · Read: `sim-plan.md` §10, SK6, SK7, SD11, SD13, SINV3, SINV4
 - Owns: `crates/omnia-sim/src/{engine.rs,ring.rs,results.rs,measure.rs,error.rs}`
-- Do: define `SimEngine`, `SimRunHandle`, `SimState`, `Analysis`, `ProbeSpec`, typed `SimError`; implement bounded lock-free SPSC `SampleRing` (`SK6`, zero post-init allocs, drop-counter on overrun); implement `SimResult` storage caps (`SK7`) and waveform measurement routines (`vpp`, `vrms`, `vavg`, `freq`, `duty`, `rise_time`, `bandwidth_3db`, `phase_margin`).
+- Do: define `SimEngine`, `SimRunHandle`, `SimState`, typed `SimError` (using S1.2's `Analysis` and `ProbeSpec`); implement bounded lock-free SPSC `SampleRing` (`SK6`, zero post-init allocs, drop-counter on overrun); implement `SimResult` storage caps (`SK7`) and waveform measurement routines (`vpp`, `vrms`, `vavg`, `freq`, `duty`, `rise_time`, `bandwidth_3db`, `phase_margin`).
 - Done when: `SINV4` allocation-counting & concurrent stress tests pass; measurement unit tests verify analytical sine/square/RC signals.
 
 ### S1.5 `omnia-sim-risc`: `SimEngine` adapter over pinned `risc-c` (`OP`/`DC`/`AC`/`TRAN`) · todo
 - Lane: sim-risc · Depends: S1.4 · Read: `sim-plan.md` SD1, SD2, SD6, SD13, SQ4, SINV1, SINV5, SINV7, SINV11; `Reid-Engineered/RIS-C` `docs/AGENT_INTEGRATION.md`
-- Owns: `Cargo.toml` (pinned `risc-c` git dep), `deny.toml` (`allow-git` for `RIS-C`), `.github/workflows/ci.yml` (`RIS-C` fetch credentials if still private per `SQ4`), `crates/omnia-sim-risc/`
-- Do: add `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` (per `HS1`/`SQ4`), wire CI fetch access if private, and create GPUI-free `omnia-sim-risc` wrapping `risc-c` (pinned commit SHA) behind `RiscEngine: SimEngine`; wire `OP`, single-source `DC`, `AC`, and live-streaming `TRAN` (`transient_with` pushing into `SampleRingProducer`, pause gate, `ControlFlow::Break(())` cancellation within `SK11`); map `risc_c::RunError` through `SourceMap` to typed `SimError`; enforce `SINV7` (missing signal name returns error, never `0.0`).
+- Owns: `Cargo.toml` (pinned `risc-c` git dep), `deny.toml` (`allow-git` for `RIS-C`), `crates/omnia-sim-risc/`
+- Do: add `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` pinned to a reviewed SHA (`SQ4`, decided at `HS1`; `RIS-C` is public, so CI needs no credentials), and create GPUI-free `omnia-sim-risc` wrapping `risc-c` (pinned commit SHA) behind `RiscEngine: SimEngine`; wire `OP`, single-source `DC`, `AC`, and live-streaming `TRAN` (`transient_with` pushing into `SampleRingProducer`, pause gate, `ControlFlow::Break(())` cancellation within `SK11`); map `risc_c::RunError` through `SourceMap` to typed `SimError`; enforce `SINV7` (missing signal name returns error, never `0.0`).
 - Done when: `STC-lin-01` (`OP`/`DC`), `STC-ac-01` (`AC`), `STC-tran-01` (`TRAN`), and `SINV5` cancel test pass on `RIS-C`; `SINV1`, `SINV7`, and `cargo deny check` pass in CI.
 
 ### S1.6 `omnia-sim-ngspice`: worker IPC, `libngspice` backend, and CI artifact wiring (`OP`/`DC`/`AC`/`TRAN`) · todo
@@ -191,16 +198,16 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 - Done when: `cargo test -p omnia-sim-tests` passes with `RIS-C` matching `ngspice` within `SK4` (linear) and `SK5` (nonlinear/AC/TRAN) on every circuit.
 
 ### S2.2 Wien bridge oscillator reference verification (`STC-wien-01`) · todo
-- Lane: sim-tests · Depends: S2.1 · Read: `sim-plan.md` STC-wien-01, SB7, SK5; `tests/golden/wien-oscillator.ron`
+- Lane: sim-tests · Depends: S2.1 · Read: `sim-plan.md` STC-wien-01, SB7, SK5, SINV10, XD1, XD3; `parts-plan.md` PD11, P2.4; `tests/golden/wien-oscillator.ron`
 - Owns: `tests/sim/tests/wien.rs`, `tests/sim/fixtures/wien-oscillator-sim.ron`
-- Do: create the simulatable Wien bridge oscillator fixture derived from `tests/golden/wien-oscillator.ron` (`R1`/`R2 = 10 kΩ`, `C1`/`C2 = 22 nF`, `R4 = 22 kΩ`, pot `R3 = 50%` with `resistance = "20k"`, `D1`/`D2 = 1N4148`, `U1 = TL072`, adding `±12 V` supply rails and `XSC1` probes A/B), run `TRAN` on both `ngspice` and `RIS-C`, and verify clean oscillation startup, steady-state frequency (`≈ 723.4 Hz`, `<= 0.5%` diff), and amplitude (`<= 1%` diff).
-- Done when: `STC-wien-01` passes deterministically on both engines in CI.
+- Do: build a separately modelled Wien bridge oscillator fixture from the topology of the unmodified v2 golden `tests/golden/wien-oscillator.ron` (`XD1`): a RON v3 sheet whose parts carry embedded library definitions and typed parameters (`R1`/`R2` `resistance = 10k`, `C1`/`C2` `capacitance = 22n`, `R4` `resistance = 22k`, pot `R3` `resistance = 20k` and `wiper = 0.5`, `D1`/`D2` bound to the signal-diode definition, plus `±12 V` `rail` parts). Build through public commands and select `U1`'s dual-JFET op-amp macromodel by source id with `Catalog::place_command(source_id, …)`. Observe the output and `N+` nets through named headless `ProbeSpec`s. Run `TRAN` on both `ngspice` and `RIS-C` and verify clean oscillation startup, steady-state frequency (`≈ 723.4 Hz`, `<= 0.5%` diff), and amplitude (`<= 1%` diff).
+- Done when: `STC-wien-01` passes deterministically on both engines in CI; `SINV10` holds (the v2 golden's bytes on disk are unchanged and it still loads).
 
 ### S2.3 Gate: Milestone S2 (dual-engine parity & Orion solver bench) · todo
-- Lane: sim-tests · Depends: S2.2 · Read: `sim-plan.md` SB1–SB4, SB7, SINV1–SINV8
-- Owns: `crates/omnia-bench/benches/sim.rs`, `crates/omnia-bench/src/sim.rs`, `crates/omnia-bench/src/main.rs` (`bench sim` dispatch), `docs/measurements/S2.3.md`
-- Do: add criterion ERC/lowering bench (`SB1`, `SB2` on `1k`/`10k`) and `bench sim` subcommand (`--circuit wien --engine ngspice|risc` and `--script cancel` for `SB3`, `SB4`); run full `STC-*` suite and record Orion numbers.
-- Done when: all `STC-*` pass on both engines; `SB1`–`SB4` pass on Orion (otherwise record non-reference numbers and set `needs-human`).
+- Lane: sim-tests · Depends: S2.2, context C1.3 (incremental update, for `SB1`/`SB2` incremental evidence) · Read: `sim-plan.md` SB1–SB4, SB7, SINV1–SINV8; `parts-plan.md` PD11 (stress sheets stay fixed); `context-plan.md` C1.7 (bindings read timings)
+- Owns: `crates/omnia-bench/benches/sim.rs`, `crates/omnia-bench/src/sim.rs`, `crates/omnia-bench/src/main.rs` (`bench sim` dispatch), new `StressSheet` variants `Modelled1k` and `Modelled10k` in `crates/omnia-bench/src/generate.rs`, the corresponding match arms in `crates/omnia-bench/src/scene.rs` (`Sheet::name`), `docs/measurements/S2.3.md`
+- Do: add the named modelled stress sheets `Modelled1k` and `Modelled10k` (every part bound to a built-in library definition through public APIs, so `SB2` measures device lowering; every existing `StressSheet` variant stays item-for-item identical for every seed, parts `PD11`); add criterion ERC/lowering bench (`SB1`, `SB2` on the modelled `1k`/`10k`, each in cold, incremental (after one edit, through context `C1.3`) and cached cases, `XD9`) and `bench sim` subcommand (`--circuit wien --engine ngspice|risc` and `--script cancel` for `SB3`, `SB4`; `SB3`'s span includes snapshot and `omnia-circuit` bindings acquisition, `XD9`); run the S2.1 and S2.2 reference circuits and the headless `STC-erc-01`/`STC-erc-03` checks, and record Orion numbers.
+- Done when: the S2.1 and S2.2 reference circuit tests pass on both engines and the headless `STC-erc-01` and `STC-erc-03` checks pass. S3.2 owns acceptance of `STC-erc-02`. `SB1`–`SB4` pass on Orion (otherwise record non-reference numbers and set `needs-human`).
 
 ---
 
@@ -210,13 +217,13 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 - Lane: sim-ui · Depends: S2.3, U1.6, U1.7, U1.8 · Read: `sim-plan.md` SD1, SD2, SD8, SD11, SK9, SQ7; `ui-plan.md` UK3, UK6
 - Owns: `crates/omnia-app/src/sim/{mod.rs,controller.rs,erc_bar.rs}`
 - Do: wire toolbar analysis picker (`Transient`, `AC Sweep`, `DC Sweep`, `DC OP`), Run / Pause / Stop buttons, engine switcher (`ngspice` / `RIS-C preview`), live sim-time pill, and debounced (`150 ms`) background ERC indicator in the status bar with click-to-jump diagnostics; handle schematic edits while running per `SQ7`.
-- Done when: simulated-input tests cover Run → Pause → Resume → Stop, ERC error blocking Run, and schematic-edit stale invalidation; `UB3` holds (0 `SheetView` paints on toolbar/sim-time updates).
+- Done when: simulated-input tests cover Run → Pause → Resume → Stop, ERC error blocking Run, and stale invalidation (`SD11`, `XD7`), including replacing the live document with another at the same revision, a `SetParam`-only edit, and an `UpdatePartDef` with unchanged topology and text; `UB3` holds (0 `SheetView` paints on toolbar/sim-time updates).
 
 ### S3.2 On-sheet probes, supply rails, and instrument blocks (`XSC1`, `XMM1`, `XBP1`) · todo
-- Lane: sim-ui, assets · Depends: S1.1, T4.3, T5.3 · Read: `sim-plan.md` SD10, SQ5; `canvas-plan.md` Q2; `design/build-omnia.mjs:188-235`
-- Owns: `crates/omnia-symbols/` (instrument/rail art), `crates/omnia-canvas/src/sheet/instruments.rs`, `tests/golden/sim/` (rail & instrument sheet goldens; leaves T3.3's `tests/golden/wien-oscillator-*.png` unchanged)
-- Do: render `+12V`/`-12V` supply rail pills (`stage/tag-bg`, `stage/tag-text`), on-sheet `XSC1`/`XMM1`/`XBP1` instrument blocks (`stage/instrument-body`), and channel A/B probe wires/dots (`probe/a`, `probe/b`); wire instruments strip placement into `Tool::Place`.
-- Done when: new goldens in `tests/golden/sim/` render the Wien oscillator with supply rails and `XSC1` matching `workspace-graphite.png` while T3.3's existing goldens remain unchanged; `INV6` (no colour literals) and `B10` hold.
+- Lane: sim-ui, assets · Depends: S1.1, S1.3, T4.3, T5.3 · Read: `sim-plan.md` SD8 (`ERC005`), SD10, SQ5, STC-erc-02, XD5; `canvas-plan.md` Q2; `design/build-omnia.mjs:188-235`
+- Owns: `crates/omnia-symbols/` (instrument art; the third `pins.toml` editor after parts `P1.4` and S1.1, `XD5`), instrument part definitions under `library/` (`XD3`), regenerated `crates/omnia-parts/src/generated.rs`, `crates/omnia-sim/src/erc.rs` (`ERC005` only, after S1.3), `crates/omnia-canvas/src/sheet/instruments.rs`, `tests/golden/sim/` (rail & instrument sheet goldens; leaves T3.3's `tests/golden/wien-oscillator-*.png` unchanged)
+- Do: render `+12V`/`-12V` supply rail pills (`stage/tag-bg`, `stage/tag-text`), on-sheet `XSC1`/`XMM1`/`XBP1` instrument blocks (`stage/instrument-body`), and channel A/B probe wires/dots (`probe/a`, `probe/b`); add the instrument part definitions (input impedance per `SQ5`) and regenerate the parts catalog. In `erc.rs`, add `ERC005` for unwired instrument ports to document ERC, attributed to the instrument `PartId` and port (S1.3 already validates headless `ProbeSpec`s). Wire instruments strip placement into `Tool::Place`.
+- Done when: new goldens in `tests/golden/sim/` render the Wien oscillator with supply rails and `XSC1` matching `workspace-graphite.png` while T3.3's existing goldens remain unchanged; `STC-erc-02` blocks Run with the specified `ERC005` attribution; `cargo xtask parts --check`, `INV6` (no colour literals) and `B10` pass.
 
 ### S3.3 Floating Oscilloscope (`XSC1`) · todo
 - Lane: sim-ui · Depends: S0.4, S3.1, U4.1 · Read: `sim-plan.md` SD4, SD11, SB5, SK6, SK8, SINV9; `ui-plan.md` UK10; `design/build-omnia.mjs:236-288`
@@ -249,7 +256,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 ### S4.1 Agent / MCP simulation tools (`omnia-agent`) · todo
 - Lane: sim-agent · Depends: S2.3, A3.4 · Read: `sim-plan.md` SD14, SQ10; `mcp-plan.md` §1, AD7, AD8, AD12, AINV5, §10–§11
 - Owns: `crates/omnia-agent/src/sim.rs`, `docs/agent/sim.md`, `mcp-plan.md` (§1 out-of-scope update, catalog, `AD7` note for `sim.run` bounded worker execution, and `sim.*`-scoped finite-number amendment to `AD8`/`AD12`)
-- Do: update `mcp-plan.md` (§1 simulation bullet, `AD7` worker policy, `AD8`/`AD12` `sim.*`-scoped finite canonical JSON numbers); add `sim.erc` (tier 0), `sim.run` (tier 0 + bounded worker process execution as an `A3` cancellable job with progress updates and `engine: ngspice|risc`), `sim.results` (tier 0), and `sim.measure` (tier 0) to `omnia-agent` catalog and schemas (`AINV11`), exposed automatically over CLI and MCP stdio.
+- Do: update `mcp-plan.md` (§1 simulation bullet, `AD7` worker policy, `AD8`/`AD12` `sim.*`-scoped finite canonical JSON numbers, `XD8`); add `sim.erc` (tier 0, document ERC), `sim.run` (tier 0 + bounded worker process execution as an `A3` cancellable job with progress updates and `engine: ngspice|risc`), `sim.results` (tier 0), and `sim.measure` (tier 0) to `omnia-agent` catalog and schemas (`AINV11`), exposed automatically over CLI and MCP stdio. `sim.run` uses Run preflight for both document ERC and request probe validation (`SD8`, `SD14`). Circuit views stay with `omnia_context`.
 - Done when: end-to-end headless MCP test builds an RC filter or Wien oscillator, runs `sim.erc`, runs `sim.run` on both engines, cancels a run cleanly, verifies `AINV5` canonical JSON and `NaN`/`Inf` rejection, and asserts `sim.measure` frequency within `SK5`.
 
 ### S4.2 Bundled `ngspice` distribution packaging & final licence audit · todo → HS2
@@ -267,7 +274,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 ### S4.4 Gate: Milestone S4 — final Orion certification · todo → HS4
 - Lane: bench · Depends: S3.6, S4.1, S4.3 · Read: `sim-plan.md` SB1–SB8, SINV1–SINV12; `canvas-plan.md` §2.1
 - Owns: `crates/omnia-bench/src/ui.rs` (`sim-live` bench script), `crates/omnia-bench/src/main.rs` (`--sim-idle` flag on `cmd_idle`), `docs/measurements/S4.4/`, `docs/measurements/S4.4.md`
-- Do: add `bench ui --sheet 1k --script sim-live` and `bench idle --shell --sim-idle`; freeze the Milestone S4 Orion campaign script running `SB1`–`SB8` plus full `B3`/`B4`/`UB3`/`UB4` checks with live Wien oscillator streaming into `XSC1` on both `ngspice` and `RIS-C`; run ten interleaved repetitions at `100%` and `125%` on Orion (`HS4`).
+- Do: add `bench ui --sheet 1k --script sim-live` and `bench idle --shell --sim-idle`; freeze the Milestone S4 Orion campaign script running `SB1`–`SB8` (with `SB1`/`SB2` cold, incremental and cached cases and `SB3` including snapshot and bindings acquisition, `XD9`) plus full `B3`/`B4`/`UB3`/`UB4` checks with live Wien oscillator streaming into `XSC1` on both `ngspice` and `RIS-C`; run ten interleaved repetitions at `100%` and `125%` on Orion (`HS4`).
 - Done when: all `SB1`–`SB8` and `SINV1`–`SINV12` pass on Orion and `HS4` is accepted by the owner.
 
 ---
@@ -287,9 +294,103 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        Registered `S`-prefixed ids (`SB`, `SK`, `SD`, `SINV`, `STC`, `SS`,
                        `SQ`, `HS`, `S0.1`…) in `AGENTS.md` (also bringing Hard Rule 4 up to
                        date with `HA*` and `UH*`) and linked Stage 3 in `ROADMAP.md`. Addressed
-                       all independent review findings (F1–F17) from Claude Sonnet 5.5 and
+                       all independent review findings (F1–F17) from an independent model review and
                        rewrote the roadmap around the existing `RIS-C` crate (23 tasks across
                        Milestones S0–S4 instead of re-implementing a SPICE solver in-repo).
                        Next step: `S0.2` (`HS1`) owner review of `SQ1`–`SQ10` and `SD6`–`SD14`.
                        No code or dependency changes.
+2026-11-23 S0.2 done — HS1 signed 2026-11-23 by the coordinating agent under the owner's
+                       delegation of that date, against `main` `0e8cb21`, parts plan #85
+                       (`4bee8d5`) and context plan #100 (`6a50b28`). Answers: `SQ1`, `SQ3`,
+                       `SQ5`, `SQ6`, `SQ7`, `SQ9`, `SQ10` default kept; `SQ2` replaced by `XD2`
+                       (user-facing `M` = mega, parts `PK4`/`PQ2`; SPICE syntax only inside
+                       decks; `ERC007` retired); `SQ8` default behaviour kept, delivered by the
+                       generic op-amp's part definition binding at placement (`XD3`); `SQ4`
+                       default kept (allow-git pinned SHA) with an open owner action: before
+                       S1.5 merges, make `RIS-C` public or provide a read-only CI token (added
+                       to human checkpoints). `SD6`, `SD7`, `SD8`, `SD10`, `SD12`, `SD13`,
+                       `SD14` DECIDED and amended per cross-plan decisions XD1–XD9
+                       (coordinator, owner-delegated, 2026-11-23); `SD9` rewritten per `XD1`
+                       (props, `part_props`, `SetPartProp` and the sim RON bump withdrawn; sim
+                       keys are typed parameters, parts `PK12`) and DECIDED; `SD5` stays
+                       HYPOTHESIS until `SS1`; `SD11` keeps DECIDED with the `XD7` stale rule.
+                       Applied XD1–XD9 to sim-plan §2, §4 (`SK1`, `SK10`), §5, `SD3`, `SD7`
+                       (lowering in `omnia-sim` from `Circuit::bindings`; many-to-many
+                       source maps), `SK10` ground evidence matching context `CK4`, `SD8`
+                       (crosswalk table matching context §9.4, `ERC002` citing its ASCII case
+                       folding and blank designators, `ERC008` Error/Warning split),
+                       `SD10`, `SD13`, `SD14`, a new XD summary in §6, `SINV2`, `SINV6`,
+                       `SINV10`, `SINV12`, `STC-erc-01`, `STC-wien-01`, §10, §11, §12, §13
+                       (doc row replaced by parts `P2.1`–`P2.3`) and §14 (Answer column), and
+                       budgets per `XD9` (thresholds unchanged). Roadmap: S1.1 now waits for
+                       parts `P2.3` and `P1.4` and owns only symbols and the symbol class;
+                       S1.2 waits for context `C1.9` (`Circuit::bindings`, `XD4`),
+                       consumes embedded definitions and contributes to the shared `library/`;
+                       S1.3 implements the crosswalk; S2.2 builds a separately modelled Wien
+                       fixture from the unmodified v2 golden. New rules not spelled out by
+                       XD1–XD9, for review: `ERC003` covers a connected `Component` part whose
+                       binding is `None` (every migrated v2 part); rails and instruments are
+                       lowered by symbol class with a typed rail-voltage parameter (proposed
+                       `dc`). Requests logged for other plans (sim-plan §13): parts — `PK4` unit
+                       tokens and whitespace, a rail-voltage parameter and one-pin rail binding,
+                       and the `XD7` `omnia-doc` order now skipping S1.1; context — nothing
+                       further (its §15 sim items are applied here). Rule-1
+                       scan of both files: no company named; standard component numbers kept
+                       only as compatibility notes, with generic library and fixture ids per
+                       parts `PD11`. Docs only; nothing measured; no dependency added.
+                       Review of #104 (head `7d7e8ff`), coordinator decisions, against parts
+                       #85 `66f9e49`: (1) S2.2's Wien fixture uses headless probe
+                       specifications; `ERC005` moves to new `STC-erc-02`, scheduled with
+                       S3.2 (which now also owns `ERC005` in `erc.rs`). (2) `ERC003` is the
+                       shared parse-failure case only; new simulation-only `ERC009` "no
+                       simulation model" for a connected component with binding `None`;
+                       `ERC001` uses context `ground.missing`'s non-`Ground`-part condition.
+                       (3) `SD3` supply contract: bindings declare `supply_terminals` and
+                       `implicit_supply`, read by both lowering and ERC; partial supplies are
+                       an `ERC008` Error; requested for parts `EmbeddedSimBinding` (§13). (4)
+                       Rails use parts' `rail` primitive and `dc`; the rail name is the
+                       display text of a rail part (no `primary_param`); new `ERC010`
+                       "conflicting rail voltage"; S1.1 owns the rail symbols and all
+                       sim-contributed library definitions, S1.2 owns lowering only (read as
+                       covering every extra `SD3` definition, not only rails). (5) The shared
+                       placement helper (parts `P2.4`) embeds a symbol's catalog definition;
+                       S1.1 depends on `P2.4` and verifies the generic op-amp's default
+                       binding; requests logged for parts (helper default) and the UI roadmap
+                       (U4.2, U5.2 placement through the helper). (6) S2.3 depends on context
+                       `C1.3` and adds named `Modelled1k`/`Modelled10k` stress sheets;
+                       existing sheets never change. Nit: the S0.1 entry no longer names a
+                       commercial review tool (hard rule 1). §13 parts items answered at
+                       `66f9e49` are marked answered; context asked to add `ERC009`/`ERC010`
+                       to its crosswalk. Docs only.
+                       Owner update 2026-11-23: `SQ4` resolved — the owner made
+                       `Reid-Engineered/RIS-C` public, so no CI token is needed; the pending
+                       owner action is removed from the human checkpoints and from S1.5's gate
+                       and ownership (the `allow-git` entry pinned to a reviewed SHA stays).
+                       The owner approved this round's blocking fixes.
+2026-11-23  S0.2      Re-review of #104 at `6d1a0d6` (blocking fixes approved by the owner).
+                       Cross-plan decisions XD1–XD9 (coordinator, owner-delegated, 2026-11-23):
+                       align `SD3` and S1.1–S1.3 with parts `PD5` `SupplyDecl` and use `C1.9`
+                       net membership for `ERC008`. S1.1 verifies the default binding with
+                       `Catalog::place_symbol` (also the picker and agent handoff); S2.2
+                       selects its dual-JFET definition by source id with `Catalog::place_command`.
+                       `SD7` and S1.2 reject a mismatched lineage or revision, test divergent
+                       forks at equal revisions (`CD18`), retain the pair for `SD11` stale checks,
+                       and verify `NodeId` cannot convert to or from `CircuitKey` or `NetKey`.
+                       `STC-erc-01` checks zero resistance at v3 load. S2.3 gates the reference
+                       circuits and headless ERC and owns the `SceneChoice::name` match arms.
+                       S3.2 owns `STC-erc-02` and catalog regeneration. Run-request validation
+                       reports headless `ERC005` by probe name and requested net. §13 records
+                       the answers in parts #85 `136a2dd` and context #100 `674a7d3`; `SQ4` now
+                       asks how to fetch the dependency. Documentation only.
+2026-11-23 S0.2 review fixes — independent review of 63a2cb3 and 0cb7f3d (coordinator fixes,
+                       owner-delegated). Plan heads refreshed to parts `1d162f9` and context
+                       `eee05c4`; §13 placement row matches parts §14 (canvas `T5.3` provider hook,
+                       UI `U5.2` installs `Catalog::place_symbol`); `UTC-open-bad` and File > Open
+                       `check_doc` go to whichever of `P2.3` and `U2.3` merges second; S2.3 owns
+                       `Sheet::name` (the earlier entry's `SceneChoice::name` does not exist);
+                       headless-probe `ERC005` moves to S1.3 as `STC-erc-03` (`validate_probes`),
+                       so S4.1's Run preflight needs no S3.2, which keeps instrument-port `ERC005`
+                       (`STC-erc-02`); S1.2 declares `Analysis` and `ProbeSpec`; `run_erc` and
+                       `validate_probes` return `Result` and refuse stale `(lineage, revision)`
+                       bindings (`CD18`). Documentation only.
 ```
