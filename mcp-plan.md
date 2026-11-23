@@ -398,7 +398,7 @@ JSON-lines and the command line, as built at A1.7 (2026-11-23, `crates/omnia-cli
 
 | Operation | Params | `Command` |
 | --- | --- | --- |
-| `place_part` | `symbol`, `at`, `orient`, `designator`, `value` | `PlacePart` via `place_command`; after parts catalog adoption, placement via `Catalog::place_symbol` and any supplied primary value via `SetParam` in the same `apply_batch` transaction (AD11) |
+| `place_part` | `symbol`, `at`, `orient`, `designator`, `value` | `PlacePart` via `place_command`; after parts catalog adoption, `Catalog::place_symbol(symbol, at, orient, designator, Some(value))`, which builds one `PlacePart` carrying the primary-value override (AD11; parts §14) |
 | `add_wires` | `wires: [[a, b], …]` | `AddWires` (split and merge inside `apply`, T6.1) |
 | `add_label` | `at`, `text` | `AddLabel` |
 | `move` | `items`, `delta`; `invert_follow` from A2.2 | `Move` |

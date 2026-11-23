@@ -106,7 +106,7 @@ Checked at `9d4b844` (workspace root).
 | `omnia-symbols` compiles `pins.toml` + vendored SVGs via `cargo xtask symbols` into `generated.rs`; 6 symbols are defined; `SymbolId` is the symbol's index in the compiled order | `crates/omnia-symbols/src/lib.rs`, `pins.toml`, `xtask/src/symbols.rs` | v2 files store raw `SymbolId`s, so adding symbols must not renumber existing ones (`P1.4`). |
 | `omnia-doc` has no UI dependency; `omnia-symbols` depends on `omnia-doc` | `crates/omnia-doc/Cargo.toml`, `crates/omnia-symbols/Cargo.toml` | `omnia-parts` depends on `omnia-doc` and `omnia-symbols` (no GPUI); `omnia-doc` stays independent of `omnia-parts` and `omnia-symbols`. Anything both need (value grammar, definition validator, SPICE screen) lives in `omnia-doc` (`XD2`, `PD10`). |
 | `toml = "1"`, `zip = "9"` (`deflate-flate2-zlib-rs`) and `sha2` are already in `Cargo.lock` and pass `cargo deny check` | `xtask/Cargo.toml`, `Cargo.lock`, `deny.toml` | No new third-party dependency is needed. `deny.toml` governs Rust crates only; bundled model files have their own licence policy (`PK11`). |
-| The U4.2 part picker places built-in symbols through `PlacePart` (enabled by `CanvasEdits::place`); Home shows "Part libraries" disabled (`UD15`); simulation controls are `SimState::Unavailable` (`UD19`) | `crates/omnia-app/src/parts/picker.rs`, `ui-plan.md` | The picker keeps placing unmodelled definitions after `P2.2` (`PlaceDef::Unmodelled`); switching it to catalog parts is a later UI task. |
+| The U4.2 part picker places built-in symbols through `PlacePart` (enabled by `CanvasEdits::place`); Home shows "Part libraries" disabled (`UD15`); simulation controls are `SimState::Unavailable` (`UD19`) | `crates/omnia-app/src/parts/picker.rs`, `ui-plan.md` | The picker keeps placing unmodelled definitions after `P2.2` (`PlaceDef::Unmodelled`); UI `U5.2` switches it to catalog parts through the `Catalog::place_symbol` provider (§14). |
 | `.github/workflows/ci.yml` runs the standard checks only | `.github/workflows/ci.yml` | `P1.4` owns the step that adds `cargo xtask parts --check`. |
 | `crates/omnia-bench/benches/doc_io.rs` and `command.rs` measure `UB10` save/load and command apply | `crates/omnia-bench/` | `PB4`/`PB5` get their own bench target, owned by `P2.5`. |
 
@@ -482,11 +482,14 @@ amended decision:
   otherwise it allocates a new id. Retained records are never matched, so interning gives the
   same id in a document and in `load(save(document))`.
 - **Commands** (all transactional and undoable through `Doc::apply`, `INV4`):
-  - `PlacePart { part, local_pins, local_bounds, def: PlaceDef }` where `PlaceDef` is
+  - `PlacePart { part, local_pins, local_bounds, def: PlaceDef, params: Params }` where `PlaceDef` is
     `Unmodelled` (synthesise the migration definition below), `Existing(PartDefId)` (a
     referenced id; a retained id is refused, because a reloaded document no longer has it) or
-    `Embed(Arc<EmbeddedPartDef>)` (validate, then intern). The instance validator below must
-    accept the part against the definition, or the command is refused.
+    `Embed(Arc<EmbeddedPartDef>)` (validate, then intern). `params` holds the new part's initial
+    override-only parameters (empty for a default placement), so a placement with a chosen value
+    is one command and needs no `PartId` in advance (amended 2026-11-23, owner-delegated, review
+    of #85). The instance validator below must accept the part, its `Part::value` and `params`
+    against the definition, or the command is refused.
   - `SetParam { part: PartId, name: Arc<str>, value: Option<ParamValue> }` (`None` resets to the
     definition's default).
   - `UpdatePartDef { from: PartDefId, to: Arc<EmbeddedPartDef> }` validates `to`, interns it and
@@ -818,8 +821,13 @@ impl Catalog {
     pub fn to_embedded(&self, source_id: &str) -> Result<Arc<omnia_doc::EmbeddedPartDef>, LibraryError>;
     pub fn place_command(&self, source_id: &str, at: Pt, orient: Orient,
                          designator: Arc<str>) -> Result<omnia_doc::Command, LibraryError>; // PlaceDef::Embed; value from resolved primary
-    pub fn place_symbol(&self, symbol: SymbolId, at: Pt, orient: Orient,
-                        designator: Arc<str>) -> omnia_doc::Command; // default definition if any, else Unmodelled (PD11)
+    pub fn place_symbol(&self, symbol: SymbolId, at: Pt, orient: Orient, designator: Arc<str>,
+                        value: Option<&str>) -> Result<omnia_doc::Command, LibraryError>;
+    // Default definition if any, else Unmodelled (PD11). `value`: None or empty -> the default
+    // (no override); otherwise parsed under PK4 as the default definition's `primary_param`; equal
+    // to the default -> no override (PD6); unparseable or out of range -> InvalidValue; a non-empty
+    // value for a definition with no `primary_param` (e.g. ground, opamp-generic) -> NoPrimaryParam;
+    // with no default definition (Unmodelled) the text is kept as legacy display text.
     pub fn diff_embedded(&self, doc: &omnia_doc::Doc) -> Vec<DefUpdateAvailable>;
 }
 
@@ -913,7 +921,7 @@ pub fn validate_instance(def: &EmbeddedPartDef, symbol: SymbolId, local_pins: &[
 
 // ---- omnia-doc: command.rs (P2.2) ----
 pub enum PlaceDef { Unmodelled, Existing(PartDefId), Embed(Arc<EmbeddedPartDef>) }
-//   PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect, def: PlaceDef }
+//   PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect, def: PlaceDef, params: Params }
 //   SetParam { part: PartId, name: Arc<str>, value: Option<ParamValue> }
 //   UpdatePartDef { from: PartDefId, to: Arc<EmbeddedPartDef> }
 //   Change gains `modified: Vec<PartId>` (XD7)
@@ -1002,7 +1010,7 @@ Each has a default. All `PQ1`–`PQ8` defaults were accepted by the owner at `HP
 | `ui-plan.md` sections 1 and 8 | Part Libraries and the inspector will consume `omnia-parts::Catalog` and the `Doc` definition queries. File > Open calls `SymbolLibrary::check_doc` after `Doc::load` (`PD8`). Whichever of `P2.3` and `U2.3` ships second wires the check and bumps `UTC-open-bad` and its app fixture from rejected `version:3` to `version:4`. | P0.2 (handoff documented 2026-11-23); P2.3 or U2.3 (implementation) |
 | `omnia-canvas` placement | Add a shell-supplied placement provider hook (for example `SheetCanvas::set_place_provider`). When `Tool::Place(symbol)` commits, use the provider's returned `Command` for the symbol and snapped point, carrying the chosen orientation and designator. | Canvas T5.3 (request) |
 | `omnia-app` placement | Add the workspace `omnia-parts` dependency and install the provider that calls `Catalog::place_symbol` (`PD11`, `XD3`). Test that placing a generic op-amp through the picker and committing it on the canvas stores the `opamp-generic` definition with its default binding. | UI U5.2, after T5.3 and P2.4 (request) |
-| `omnia-agent` `place_part` | Build placement through `Catalog::place_symbol` (`XD3`). When the operation supplies a value for the primary parameter, parse it under `PK4` and follow placement with `SetParam` on the new part's primary parameter in one atomic `apply_batch` transaction. Test preview/apply of a resistor with value `4.7k`, verifying a resistance override of 4,700 Ω and displayed text `4.7k`. Test that a refused value leaves the document unchanged. | The agent-lane task that adopts `omnia-parts`, after `P2.4` (handoff) |
+| `omnia-agent` `place_part` | Build placement through `Catalog::place_symbol` (`XD3`). Pass the operation's `value` to `place_symbol`, which builds one `PlacePart` carrying the primary-parameter override in its `params` (empty value means the default; equal-to-default means no override; a value on a definition without a primary parameter is refused), so the placement is a single atomic command and needs no new `PartId` in advance. Several `place_part` operations in one request become one `Command::Batch`. Test preview/apply of a resistor with value `4.7k`, verifying a resistance override of 4,700 Ω and displayed text `4.7k`. Test that a refused value leaves the document unchanged. | The agent-lane task that adopts `omnia-parts`, after `P2.4` (handoff) |
 | `mcp-plan.md` section 9.2 | Note future minor schema additions (`set_param`, `list_parts`, `update_part_def`) on the existing preview/apply path (`XD8`). | P0.2 (applied; updated 2026-11-23) |
 | `docs/file-format-proposal.md` | Reserve section kind `PART_DEFS` for the definition table and per-part `def` + `params`. | P0.2 (applied) |
 | `ui-plan.md` ("RON version 2" facts) and `mcp-plan.md` (`AQ12` and other "RON v2" mentions) | Record that documents are RON v3 with v2 read by migration. | P2.3, in the same pull request as the code (`XD1`) |

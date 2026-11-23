@@ -530,14 +530,17 @@ of the `canvas` lane.
   mouse-up, one undo reverts the whole drag, and Esc mid-drag leaves the revision unchanged.
 
 ### T5.3 Place, move, rotate, mirror, delete · todo
-- Lane: canvas · Depends: T5.2 · Read: D7, K2
-- Owns: `crates/omnia-canvas/src/tool/place.rs`, `tool/move_.rs`, `overlay/ghosts.rs`
+- Lane: canvas · Depends: T5.2 · Read: D7, K2; parts-plan.md §14 (placement provider)
+- Owns: `crates/omnia-canvas/src/tool/place.rs`, `tool/move_.rs`, `overlay/ghosts.rs`; the
+  placement-provider setter on `SheetCanvas` in `crates/omnia-canvas/src/input.rs`
 - Do: place a part from `Tool::Place`; drag-move a selection with ghosts in the overlay and
   the dragged items hidden from the sheet; R, X and Y apply to the ghosts during a drag
   and as a command otherwise; Del deletes. Positions snap to the grid by the part's anchor
-  pin.
+  pin. Committing `Tool::Place(symbol)` asks a shell-supplied placement provider
+  (`SheetCanvas::set_place_provider`, parts §14) for the `Command`, defaulting to
+  `SymbolLibrary::place_command` when none is installed.
 - Done when: simulated-input tests cover place, move, rotate during drag, mirror, delete
-  and undo of each; `SheetView` paints exactly twice per drag (start and end).
+  and undo of each, and a stub provider's command is what placement commits; `SheetView` paints exactly twice per drag (start and end).
 
 ### T5.4 Gate: milestone 5 · todo
 - Lane: bench · Depends: T5.3
