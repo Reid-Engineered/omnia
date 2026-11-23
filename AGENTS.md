@@ -20,7 +20,8 @@ Ids are global: `B`, `K`, `D`, `INV`, `Q`, `T` live in the canvas files; `W`-pre
 (`mcp-plan.md`, `mcp-roadmap.md`); `U`-prefixed ids (`UB`, `UK`, `UG`, `UD`, `UINV`, `UTC`,
 `US`, `UQ`, checkpoints `UH`, tasks `U0.1`…) live in the application UI files (`ui-plan.md`,
 `ui-roadmap.md`); `S`-prefixed ids (`SB`, `SK`, `SD`, `SINV`, `STC`, `SS`, `SQ`, checkpoints
-`HS`, tasks `S0.1`…) live in the simulation files (`sim-plan.md`, `sim-roadmap.md`). Cite ids in
+`HS`, tasks `S0.1`…, with milestones written `Milestone S0`–`S4` to stay distinct from canvas
+spikes `S1`–`S8`) live in the simulation files (`sim-plan.md`, `sim-roadmap.md`). Cite ids in
 commits, pull requests and log entries.
 
 The wiring files name crates `schematic-doc`, `schematic-canvas` and `schematic-bench`.

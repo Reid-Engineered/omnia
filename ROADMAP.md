@@ -44,7 +44,7 @@ Define the connection between schematic components and simulation models, circui
 
 **Ready when:** an agreed set of reference circuits produces results within documented tolerances; invalid circuits give actionable diagnostics; a failed or cancelled run leaves the editor usable and the document intact.
 
-**Detailed work:** ERC, netlist lowering, dual simulation engines (`ngspice` + `RIS-C`), analog models, live streaming, virtual instruments (`XSC1`, `XMM1`, `XBP1`, Results dock), and agent simulation tools in the [simulation plan](sim-plan.md) and [simulation roadmap](sim-roadmap.md). Owner decisions (2026-11-23): both engines in parallel from S1, full analog core (`OP`, `TRAN`, `AC`, `DC`), passives/sources/diode/BJT/MOSFET/op-amp models, and Oscilloscope + Multimeter + Bode Plotter + Results panel in v1.
+**Detailed work:** ERC, netlist lowering, dual simulation engines (`ngspice` + `Reid-Engineered/RIS-C`), analog models, live streaming, virtual instruments (`XSC1`, `XMM1`, `XBP1`, Results dock), and agent simulation tools in the [simulation plan](sim-plan.md) and [simulation roadmap](sim-roadmap.md). Owner decisions (2026-11-23): both engines in parallel from Milestone S1, full analog core (`OP`, `TRAN`, `AC`, `DC`), passives/sources/diode/BJT/MOSFET/op-amp models, and Oscilloscope + Multimeter + Bode Plotter + Results panel in v1.
 
 ## 4. Complete the desktop experience
 

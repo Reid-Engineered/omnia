@@ -10,9 +10,10 @@ It extends [canvas-plan.md](canvas-plan.md), [wiring-plan.md](wiring-plan.md),
 [mcp-plan.md](mcp-plan.md) and [ui-plan.md](ui-plan.md) and re-plans nothing they decide. Every
 `B`, `K`, `G`, `D`, `INV`, `Q`, `W`-prefixed, `A`-prefixed and `U`-prefixed id is defined in
 those files and still holds. Section 13 lists the small changes this plan requests from other
-plans and crates; task S0.2 applies them after HS1.
+plans and crates; task S0.2 applies the plan-doc items after HS1.
 
-Written 2026-11-23 against `main` at `b046bbb`. No simulation code exists yet.
+Written 2026-11-23 against Omnia `main` (`b046bbb`) and `Reid-Engineered/RIS-C` (`24710eaf`).
+No Omnia simulation integration code exists yet.
 
 ## How to read this file
 
@@ -26,28 +27,31 @@ Written 2026-11-23 against `main` at `b046bbb`. No simulation code exists yet.
 | `SS` | Spike: a measurement or prototype that settles an open technical fact | 9 |
 | `SQ` | Open question for the owner, each with a default | 14 |
 | `HS` | Human checkpoint | [sim-roadmap.md](sim-roadmap.md) |
-| `S0.1`, `S1.1`… | Task | [sim-roadmap.md](sim-roadmap.md) |
+| `S0.1`, `S1.1`… | Task (milestones are always written `Milestone S0`–`Milestone S4`, distinct from canvas spikes `S1`–`S8`) | [sim-roadmap.md](sim-roadmap.md) |
 
 Status words follow the repository conventions: **DECIDED** (owner confirmed), **DEFAULT**
 (build to this until an owner decision replaces it), **HYPOTHESIS** (build only after the named
 `SS` spike confirms it), and **PROPOSED** (becomes DECIDED or is amended at HS1).
 
-`SPICE`, `ngspice`, and standard JEDEC component numbers (`1N4148`, `2N2222`, `2N3904`,
-`2N7000`, `LM741`, `TL072`) are named here as open standards, open-source software, and generic
-device types. No commercial company or proprietary product is named.
+`SPICE`, `ngspice`, `RIS-C` (`Reid-Engineered/RIS-C`), and standard JEDEC component numbers
+(`1N4148`, `2N2222`, `2N3904`, `2N7000`, `LM741`, `TL072`) are named here as open standards,
+first-party/open-source engines, and generic device types. No commercial company or proprietary
+product is named.
 
 ## 1. Scope
 
 Owner decisions recorded 2026-11-23:
 
-- **Engines (SD1):** Both `ngspice` (bundled) and `RIS-C` (Omnia's pure-Rust SPICE engine)
-  build in parallel from Milestone S1 behind one shared `SimEngine` trait, with `ngspice`
-  serving as the differential accuracy oracle for `RIS-C` on every reference circuit.
+- **Engines (SD1):** Both `ngspice` (bundled) and `RIS-C` (the existing first-party pure-Rust
+  SPICE crate `risc-c` at `Reid-Engineered/RIS-C`) integrate in parallel from Milestone S1 behind
+  one shared `SimEngine` trait, with `ngspice` serving as the differential accuracy oracle on
+  every reference circuit.
 - **Analyses (SD2):** Full analog core in v1 — DC operating point (`OP`), transient (`TRAN`),
-  AC small-signal sweep (`AC`), and DC sweep (`DC`).
-- **Components and models (SD3):** Passives (resistor, capacitor, inductor), sources and supply
-  rails (DC, AC, sine, pulse, `+V`/`-V` rails, ground), diode, BJT, MOSFET, and behavioral plus
-  macromodel op-amps — covering the Wien bridge oscillator and standard analog circuits.
+  AC small-signal sweep (`AC`), and single-source DC sweep (`DC`).
+- **Components and models (SD3):** Passives (resistor, potentiometer, capacitor, inductor),
+  independent & linear dependent sources and supply rails (DC, AC, sine, pulse, VCVS/VCCS,
+  `+V`/`-V` rails, ground), diode, BJT, MOSFET, and behavioral plus macromodel op-amps —
+  covering the Wien bridge oscillator and standard analog circuits.
 - **Instruments and views (SD4):** Floating **Oscilloscope** (`XSC1`, live ring-buffer traces),
   **Multimeter** (`XMM1`), **Bode Plotter** (`XBP1`), and the bottom-dock **Results** panel
   (plots, measurements, diagnostics, CSV export).
@@ -55,29 +59,31 @@ Owner decisions recorded 2026-11-23:
 Out of scope for this plan (candidates for post-v1 milestones):
 
 - Digital / mixed-mode simulation (logic gates, MCU co-simulation, XSPICE codemodels).
-- Parametric, temperature, noise, sensitivity, Fourier/distortion, and Monte Carlo sweeps.
+- Nested two-source DC sweeps, parametric, temperature, noise, sensitivity, Fourier/distortion,
+  and Monte Carlo sweeps.
 - Additional strip instruments beyond the four above (function generator, wattmeter, 4-channel
   scope, frequency counter, word generator, logic analyzer, logic converter, IV analyzer,
   distortion analyzer — their strip icons stay reserved per `ui-plan.md`).
-- Live edit-while-running re-simulation without stopping (SQ7 default: explicit Stop/Re-run or
-  restart-on-edit toggle deferred).
+- Live edit-while-running re-simulation without stopping (SQ7 default: stop and mark stale).
 - External netlist import (SPICE `.cir`/`.asc` import) and vendor encrypted models.
 - Sub-circuit hierarchy / multi-sheet designs (out of scope per `ui-plan.md` UQ3).
 
 ## 2. Repository facts this plan rests on
 
-Checked at `b046bbb`.
+Checked at Omnia `b046bbb` and `Reid-Engineered/RIS-C` `24710eaf`.
 
 | Fact | Where | Consequence |
 | --- | --- | --- |
+| `Reid-Engineered/RIS-C` (`risc-c`, BSD-3-Clause, Edition 2024, Rust 1.91+) already implements classic analog SPICE (`OP`, single-source `DC`, `AC lin\|dec\|oct`, adaptive `TRAN` with BE/Trap/BDF2, `R`/`C`/`L`/`K`/`S`/`W`/`V`/`I`/`E`/`G`/`F`/`H`/`D`/`Q`/`M`, `.model`, `.subckt`, `.ic`, `.nodeset`, `.temp`), validated against `ngspice 47` on Linux/macOS/Windows, with `CompiledCircuit`, concurrent `Simulator`s, and `transient_with` streaming + `ControlFlow::Break(())` cancellation | `Reid-Engineered/RIS-C` `docs/AGENT_INTEGRATION.md`, `docs/COMPATIBILITY.md`, `docs/STATUS.md` | Omnia does **not** re-implement a SPICE solver in-repo. `omnia-sim-risc` wraps the pinned `risc-c` Git crate behind `SimEngine`, obeying `RIS-C` contract rule 8 (integrate via public API, never copy equations). |
+| `RIS-C` does not support runtime behavioral expressions, `.control`, `.measure`, or nested two-source `.dc` | `RIS-C` `docs/COMPATIBILITY.md` | Op-amp macromodels are written as standard SPICE `.subckt`s using `R`/`C`/`E`/`G`/`D` (identical on both `RIS-C` and `ngspice`), all measurements run in `omnia-sim`, and v1 `Analysis::Dc` is single-source. |
 | `omnia-doc` has no UI framework dependency (`INV12`) and owns `Doc`, `Connectivity` (`NetId`, `net_of`, `net_wires`), `Doc::fork()`, and `Doc::revision()` | `crates/omnia-doc/src/` | Simulation crates take a `Doc` snapshot (`Doc::fork()`) and stay 100% GPUI-free (`SINV1`). |
-| `Part` currently stores only `symbol`, `at`, `orient`, `designator: Arc<str>`, and `value: Arc<str>` | `crates/omnia-doc/src/doc.rs:53` | Value covers `10k`, `100nF`, `12V`, etc.; optional simulation overrides (model name, source waveform parameters, initial conditions) need a small additive `props` map on `Part` (S1.1, RON v3 backward-compatible with v2). |
-| `omnia-symbols` currently has 6 compiled symbols: resistor, capacitor, diode, ground, op-amp (5 pins), NPN BJT | `crates/omnia-symbols/src/generated.rs` | S1.1 adds the missing v1 analog symbols from `vendor/electronic-symbols/` (inductor, DC/AC/pulse sources, PNP BJT, NMOS/PMOS MOSFET, supply-rail tags) plus on-sheet instrument/probe glyphs. |
+| `Part` currently stores only `symbol`, `at`, `orient`, `designator: Arc<str>`, and `value: Arc<str>` | `crates/omnia-doc/src/doc.rs:53` | Value covers `10 kΩ`, `22 nF`, `50%`, `TL072`, `12V`, etc.; optional overrides (explicit SPICE model, potentiometer total resistance, source waveform parameters, initial conditions) need an additive `props` map on `Part` (S1.1, RON v3 backward-compatible with v2). |
+| `omnia-symbols` currently has 6 compiled symbols: `Capacitor-IEEE-NonPolarized`, `Diode-COM-Standard`, `Ground-COM-General`, `IC-COM-OpAmp` (5 pins), `Resistor-IEEE-Potentiometer` (3 pins), and `Resistor-IEEE-Standard` | `crates/omnia-symbols/pins.toml`, `generated.rs` | S1.1 adds the missing v1 analog symbols from `vendor/electronic-symbols/` (inductor, independent DC/AC/pulse sources, VCVS/VCCS dependent sources, NPN & PNP BJT, NMOS & PMOS MOSFET, supply-rail tags) plus on-sheet instrument/probe glyphs in S3.2. |
 | `canvas-plan.md` D8 specifies background ERC/netlist on a `DocSnapshot` debounced at `K13` (`150 ms`) and single-producer ring buffers per channel drained by floating cached instrument views | `canvas-plan.md:366-378` | `omnia-sim` implements that exact SPSC ring-buffer contract (`SampleRing`) and debounced ERC runner. |
-| `ui-plan.md` reserves toolbar analysis picker, Run/Pause/Stop controls, sim-time pill, status-bar ERC indicator, instruments strip, floating instrument frames (`U4.1`), and Results dock (`U1.7`, `U5.5`) | `ui-plan.md` UK3, UK4, UK6, UK10, UK11 | S4 wires real simulation state directly into those reserved slots with zero shell redesign. |
-| `mcp-plan.md` §11 job model (`A3`) is explicitly designed for long-running cancellable simulation jobs | `mcp-plan.md:53-54` | S5.1 exposes `sim.erc`, `sim.run`, `sim.results`, and `sim.measure` over `A3`'s job lifecycle. |
-| `deny.toml` allows `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Zlib`, `Unicode-3.0`, `MPL-2.0` — no GPL or LGPL | `deny.toml:10-22` | Bundled `ngspice` must be built strictly from its BSD-3-Clause core (no GPL readline, no LGPL XSPICE/CUSPICE), and `omnia-risc` uses only permissive Rust crates (BSD/MIT/Apache-2.0). |
-| `tests/golden/wien-oscillator.ron` already models the mockup's Wien bridge oscillator (11 parts, 31 wires, 9 nets) | `tests/golden/wien-oscillator.ron` | Used directly (with its `+12V`/`-12V` supply rails added in a sim fixture) as the headline `STC-wien-01` reference circuit for both engines. |
+| `ui-plan.md` reserves toolbar analysis picker, Run/Pause/Stop controls, sim-time pill, status-bar ERC indicator, instruments strip, floating instrument frames (`U4.1`), and Results dock (`U1.7`, `U5.5`) | `ui-plan.md` UK3, UK4, UK6, UK10, UK11 | Milestone S3 wires real simulation state directly into those reserved slots with zero shell redesign. |
+| `mcp-plan.md` §11 job model (`A3`) is designed for long-running cancellable simulation jobs; `AD7` sets tier 0 = read, tier 1 = undoable doc edit | `mcp-plan.md:53-54`, `AD7` | S4.1 exposes `sim.erc`, `sim.results`, and `sim.measure` as tier 0 reads, and `sim.run` as tier 0 read + bounded worker-process execution over `A3`'s job lifecycle. |
+| `deny.toml` allows `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Zlib`, `Unicode-3.0`, `MPL-2.0` (no GPL/LGPL) and restricts `allow-git` | `deny.toml:10-38` | Bundled `ngspice` builds strictly from its BSD-3-Clause core with zero GPL/LGPL bundled or statically linked (system C/compiler runtimes excepted). Adding `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` (and handling CI access while `RIS-C` is private) is decided at `HS1` (`SQ4`). |
+| `tests/golden/wien-oscillator.ron` models the mockup's Wien bridge oscillator (`R1`/`R2 = 10 kΩ`, `C1`/`C2 = 22 nF`, `R4 = 22 kΩ`, pot `R3 = 50%`, `D1`/`D2 = 1N4148`, `U1 = TL072`, two empty-designator grounds; `f_0 ≈ 723.4 Hz`) | `tests/golden/wien-oscillator.ron` | Used directly (adding `±12 V` supply rails, `R3` total resistance prop, and `XSC1` probes in a sim fixture) as the headline `STC-wien-01` reference circuit for both engines. |
 
 ## 3. Budgets
 
@@ -91,26 +97,26 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
 | `SB2` | **Netlist lowering:** `Doc` → `CircuitIr` + SPICE text on `1k` sheet < 5 ms p99; on `10k` sheet < 40 ms p99. | same bench |
 | `SB3` | **Cold run latency (Wien oscillator):** from Run click to first sample in `SampleRing` < 150 ms p99 on `ngspice` and < 50 ms p99 on `RIS-C`. | `bench sim --circuit wien --engine ngspice\|risc` (Orion) |
 | `SB4` | **Cancellation latency:** Stop clicked during a heavy transient run returns to `Idle` and frees worker CPU within < 100 ms p99 (no orphan worker processes). | `bench sim --script cancel` (Orion) |
-| `SB5` | **UI isolation during live simulation:** with `1k` sheet open, transient streaming into `XSC1` oscilloscope at 30 Hz (or 60 Hz if S0.4 passes), `B3` (< 16.7 ms p99, 0 missed refreshes), `B5` (≤ 33.3 ms), `UB3` (`SheetView` paint count = 0 while only `XSC1` updates), and `B10` (`allocs_per_frame.ours == 0` once `XSC1` buffers are warm) all hold. | `bench run --shell --sheet 1k --script sim-live` (Orion) |
-| `SB6` | **Memory:** B9 (< 300 MB) holds on `1k` with active simulation + `XSC1` + Results dock; ring buffers and stored results are strictly bounded by `SK6` and `SK7`. | `memory_mb` in `SB5` run (Orion) |
-| `SB7` | **Differential accuracy (`RIS-C` vs `ngspice`):** linear `OP`/`DC` relative error ≤ `SK4` (`1e-7`); nonlinear `OP`/`DC` ≤ `SK5` (`1e-4` rel + `1e-6` V/A abs); `AC` magnitude ≤ `0.05 dB` and phase ≤ `0.5°`; `TRAN` steady-state oscillation frequency ≤ `0.5%` and peak-to-peak amplitude ≤ `1%` on `STC-wien-01`. | deterministic CI test suite (`cargo test -p omnia-sim-tests`) |
+| `SB5` | **UI isolation during live simulation:** with `1k` sheet open, transient streaming into `XSC1` oscilloscope at `SK8` cadence (`30 Hz`, or `60 Hz` if `SS2` passes), `B3` (< 16.7 ms p99, 0 missed refreshes), `B5` (≤ 33.3 ms), `UB3` (`SheetView` paint count = 0 while only `XSC1` updates), and `B10` (`allocs_per_frame.ours == 0` once `XSC1` buffers are warm) all hold. | `bench ui --sheet 1k --script sim-live` (Orion) |
+| `SB6` | **Memory:** B9 (< 300 MB) holds on `10k` with simulation idle, and `< 300 MB` holds on `1k` with active live simulation + `XSC1` + Results dock; ring buffers and stored results are strictly bounded by `SK6` and `SK7`. | `memory_mb` in `SB5` and `B9` runs (Orion) |
+| `SB7` | **Differential accuracy (`RIS-C` vs `ngspice`):** under the differential test tolerances (`SK2`), linear `OP`/`DC` relative error ≤ `SK4` (`1e-7`); nonlinear `OP`/`DC` ≤ `SK5` (`1e-4` rel + `1e-6` V/A abs); `AC` magnitude ≤ `0.05 dB` and phase ≤ `0.5°`; `TRAN` steady-state oscillation frequency ≤ `0.5%` and peak-to-peak amplitude ≤ `1%` on `STC-wien-01`. | deterministic CI test suite (`cargo test -p omnia-sim-tests`, created in S2.1) |
 | `SB8` | **Idle zero cost:** when simulation is `Idle` (or `Paused` with static traces), `UB4` still holds (0 frames drawn, 0 worker CPU over 10 s). | `bench idle --shell --sim-idle --seconds 10` (Orion) |
 
 ## 4. Constants
 
 | ID | Constant | Value |
 | --- | --- | --- |
-| `SK1` | SI engineering suffixes | Standard SPICE prefixes: `f` (`1e-15`), `p` (`1e-12`), `n` (`1e-9`), `u`/`µ` (`1e-6`), `m` (`1e-3`), `k`/`K` (`1e3`), `Meg`/`MEG` (`1e6`), `G` (`1e9`), `T` (`1e12`). Trailing unit tokens (`Ohm`/`Ω`, `F`, `H`, `V`, `A`, `Hz`, `s`) are stripped deterministically. Bare `M` is `1e-3` (SPICE convention) with an ERC hint warning when attached to a resistor > 1 Ω (SQ2). |
-| `SK2` | Default SPICE tolerances | `RELTOL = 1e-3`, `ABSTOL = 1e-12 A`, `VNTOL = 1e-6 V`, `CHGTOL = 1e-14 C`, `GMIN = 1e-12 S`, `ITL1 = 100` (DC OP), `ITL2 = 50` (DC sweep), `ITL4 = 10` (transient per-step NR). Identical defaults passed to both `ngspice` and `RIS-C`. |
-| `SK3` | Default temperature | `TNOM = 27.0 °C` (`300.15 K`), thermal voltage `V_T = k T / q ≈ 25.85199 mV`. |
+| `SK1` | SI engineering value parser | Accepts optional whitespace between number, prefix, and unit (e.g. `10 kΩ`, `22 nF`, `4.7u`, `1Meg`, `100uH`, `-12V`, `50%` for potentiometer wiper ratio). Prefixes: `f` (`1e-15`), `p` (`1e-12`), `n` (`1e-9`), `u`/`µ` (`1e-6`), `m` (`1e-3`), `k`/`K` (`1e3`), `Meg`/`MEG` (`1e6`), `G` (`1e9`), `T` (`1e12`). Unit tokens (`Ohm`/`Ω`, `F`, `H`, `V`, `A`, `Hz`, `s`) are parsed *with* the prefix so uppercase `1 F` or `1F` on a capacitor is `1 Farad` (while `10fF` or `10f` is `10 fF`). Bare `M` is `1e-3` (SPICE convention, matching `RIS-C` contract 2) and triggers `ERC007` whenever attached to a resistor (SQ2). |
+| `SK2` | SPICE solver tolerances | Interactive default options (passed identically to both engines via `.options` / `RIS-C` options): `RELTOL = 1e-3`, `ABSTOL = 1e-12 A`, `VNTOL = 1e-6 V`, `ITL1 = 100`. Differential oracle tests (`SB7`) tighten both engines to `RELTOL = 1e-6`, `ABSTOL = 1e-13 A`, `VNTOL = 1e-7 V` so stopping tolerance is 100× tighter than `SK5`. |
+| `SK3` | Default temperature | `TNOM = 27.0 °C` (`300.15 K`), thermal voltage `V_T = k T / q ≈ 25.86492 mV` (`25.865 mV`). |
 | `SK4` | Linear differential tolerance | `|a - b| <= 1e-7 * max(|a|, |b|) + 1e-12` (exact MNA match modulo floating-point ordering). |
 | `SK5` | Nonlinear differential tolerance | `|a - b| <= 1e-4 * max(|a|, |b|) + 1e-6` for voltages (V) and currents (A); AC `<= 0.05 dB` magnitude, `<= 0.5°` phase; Wien transient `<= 0.5%` frequency, `<= 1.0%` Vpp. |
 | `SK6` | Ring-buffer capacity | `SampleRing` holds `65,536` `(t: f64, y: f64)` samples per channel (`1 MiB` per channel, power-of-two lock-free SPSC ring). Producer overwrites oldest or drops with a monotonic `dropped_count` counter if UI stalls — never blocks the solver thread or grows heap. |
-| `SK7` | Stored run result cap | At most `2,000,000` sample points per trace (`32 MiB` per trace) and `128 MiB` total stored result memory per run (configurable upper guard; oldest points decimated or run halts cleanly with typed `ResultCapReached` diagnostic). |
-| `SK8` | Instrument redraw cadence | Default `30 Hz` (`33.3 ms` timer) for live oscilloscope updates, promotable to `60 Hz` only if `SS2` proves `B3` holds on Orion (canvas plan §11 risk row). |
+| `SK7` | Stored run result cap | At most `2,000,000` sample points per trace (`32 MiB` per trace) and `128 MiB` total stored result memory per run (oldest points decimated or run halts cleanly with typed `ResultCapReached` diagnostic). |
+| `SK8` | Instrument redraw cadence | Default `30 Hz` (`33.3 ms` timer) for live oscilloscope updates, promotable to `60 Hz` only if `SS2` (S0.4) proves `B3` holds on Orion (canvas plan §11 risk row). |
 | `SK9` | ERC debounce | `K13 = 150 ms` after the last `Doc::revision()` change (D8). |
-| `SK10` | Reference ground node | SPICE node `"0"` (`NodeId(0)`). Any net carrying a `Ground` symbol (or net label `"0"` / `"GND"` when explicitly configured per SQ3) maps to `NodeId(0)`. |
-| `SK11` | Engine timeout & cancel grace | Cooperative cancel grace `50 ms`, hard process kill (for `ngspice` worker) or thread flag abort (for `RIS-C`) within `100 ms` (`SB4`). |
+| `SK10` | Reference ground node | SPICE node `"0"` (`NodeId(0)`). Any net carrying a `Ground` symbol (or net label `"0"` per SQ3) maps to `NodeId(0)`. |
+| `SK11` | Engine timeout & cancel grace | Cooperative cancel grace `50 ms`, hard process kill (for `ngspice` worker) or `ControlFlow::Break(())` abort (for `RIS-C`) within `100 ms` (`SB4`). |
 | `SK12` | Circuit limits | Max `65,535` nodes, `65,535` devices, `64` live probe channels per run (guarding both engines and IPC framing). |
 
 ## 5. Architecture
@@ -127,10 +133,10 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
    +------------v--------------------------+---------------------v------------+
    | omnia-sim (pure Rust, no GPUI, INV12)                                    |
    |   value.rs     SI engineering value parser (SK1)                         |
-   |   models.rs    symbol -> typed Device + built-in model/subckt library    |
+   |   models.rs    symbol -> typed Device + built-in .model/.subckt library  |
    |   erc.rs       deterministic ERC on Doc snapshot (SB1)                   |
    |   ir.rs        canonical CircuitIr + NodeId<->NetId source map (SB2)     |
-   |   netlist.rs   deterministic SPICE netlist emitter                       |
+   |   netlist.rs   deterministic SPICE netlist emitter (RIS-C & ngspice)     |
    |   engine.rs    SimEngine trait, SimRunHandle, SampleRing, SimState       |
    |   results.rs   OpResult, TranResult, AcResult, DcResult, measurements    |
    +-------------------+-----------------------------------+------------------+
@@ -138,17 +144,17 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
                        | SimEngine                         | SimEngine
                        v                                   v
    +-----------------------------------+   +----------------------------------+
-   | omnia-sim-ngspice                 |   | omnia-risc (Omnia Rust SPICE)    |
-   |   worker IPC + libngspice loader  |   |   mna.rs      sparse MNA + LU    |
-   |   omnia-ngspice-worker binary     |   |   dc.rs       OP + DC + NR/GMIN  |
-   |   BSD-3-Clause libngspice (.dll/.so)| |   ac.rs       complex AC phasor  |
-   |   crash-isolated, kill-on-cancel  |   |   tran.rs     BE/Trap/Gear2+LTE  |
-   |   binary double streaming         |   |   devices/    R,C,L,V,I,D,Q,M,U  |
+   | omnia-sim-ngspice                 |   | omnia-sim-risc                   |
+   |   worker IPC + libngspice loader  |   |   thin adapter over pinned       |
+   |   omnia-ngspice-worker binary     |   |   `risc-c` (Reid-Engineered/     |
+   |   BSD-3-Clause libngspice (.dll/.so)| |   RIS-C @ 24710eaf, BSD-3-Clause)|
+   |   crash-isolated, kill-on-cancel  |   |   CircuitBuilder / netlist ->    |
+   |   binary double streaming         |   |   transient_with -> SampleRing   |
    +-----------------------------------+   +----------------------------------+
 ```
 
 **Lane boundaries:**
-- `omnia-sim`, `omnia-sim-ngspice`, and `omnia-risc` have **zero GPUI dependency** (`SINV1`,
+- `omnia-sim`, `omnia-sim-ngspice`, and `omnia-sim-risc` have **zero GPUI dependency** (`SINV1`,
   extending `INV12`). All unit, property, and differential tests run headlessly in standard CI.
 - `omnia-doc` has **zero simulator dependency**. It stores schematic items and opaque key/value
   part properties (`Part::props`); all SPICE interpretation lives in `omnia-sim`.
@@ -158,39 +164,47 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
 
 ## 6. Decisions
 
-### SD1 Dual engines behind `SimEngine` from S1. DECIDED (2026-11-23)
+### SD1 Dual engines behind `SimEngine` from Milestone S1. DECIDED (2026-11-23)
 
-- Both `omnia-sim-ngspice` (`ngspice`, bundled) and `omnia-risc` (`RIS-C`, Omnia's pure-Rust
-  SPICE engine) implement one `SimEngine` trait and develop in parallel from Milestone S1.
+- Both `omnia-sim-ngspice` (`ngspice`, bundled) and `omnia-sim-risc` (adapter over the pinned
+  first-party crate `risc-c` from `Reid-Engineered/RIS-C`) implement one `SimEngine` trait and
+  integrate in parallel from Milestone S1.
 - The user can switch engines per sheet/session (`ngspice` default/stable, `RIS-C` preview,
   matching `design/build-omnia.mjs:536-537`).
 - Every reference circuit (`STC-*`) runs on **both** engines in CI; `ngspice` acts as the
-  differential oracle verifying `RIS-C` numerical accuracy (`SB7`).
+  differential oracle verifying end-to-end Omnia-to-`RIS-C` lowering and numerical agreement
+  (`SB7`).
 
 ### SD2 v1 analysis set: OP, TRAN, AC, DC. DECIDED (2026-11-23)
 
 - `Analysis::Op` — DC operating point (all node voltages and source branch currents).
-- `Analysis::Tran { step, stop, start, max_step, uic }` — time-domain transient simulation with
-  live sample streaming into `SampleRing`.
-- `Analysis::Ac { sweep: Dec | Oct | Lin, points, f_start, f_stop }` — AC small-signal
+- `Analysis::Tran { step_s, stop_s, start_s, max_step_s, uic }` — time-domain transient
+  simulation with live sample streaming into `SampleRing`.
+- `Analysis::Ac { sweep: Dec | Oct | Lin, points, f_start_hz, f_stop_hz }` — AC small-signal
   linearised frequency sweep returning complex phasors `(re, im)` (displayed as magnitude dB +
   phase degrees).
-- `Analysis::Dc { source, start, stop, step, second_source: Option<...> }` — primary (and
-  optional nested secondary) DC transfer sweep.
+- `Analysis::Dc { source, start, stop, step }` — single-source DC transfer sweep (matches
+  `RIS-C` 0.1's `.dc` contract; nested two-source sweep deferred post-v1).
 
 ### SD3 v1 component and model set. DECIDED (2026-11-23)
 
-- **Passives:** Resistor (`R`), Capacitor (`C`, with optional `ic`), Inductor (`L`, with
-  optional `ic`).
+- **Passives:** Resistor (`R`), Potentiometer (`R_pot`, 3-terminal wiper ratio `0%..100%` +
+  total resistance in `props["resistance"]` defaulting to `20 kΩ`, lowered to two series
+  resistors `(1 - α)R` and `αR` meeting at pin 3), Capacitor (`C`, optional `ic`), Inductor
+  (`L`, optional `ic`).
 - **Sources & power:** Independent DC/AC/SIN/PULSE voltage (`V`) and current (`I`) sources;
+  linear dependent sources VCVS (`E`) and VCCS (`G`) (used both directly and inside macromodels);
   named supply rail tags (`+12V`, `-12V`, `+5V`, `+3.3V`, etc., lowered to DC voltage sources
   referenced to ground `0`); Ground (`0`).
-- **Semiconductors:** Diode (`D`: Shockley exponential + junction capacitance + breakdown),
-  NPN/PNP BJT (`Q`: Ebers-Moll / Gummel-Poon DC + junction capacitances), NMOS/PMOS MOSFET
-  (`M`: Level 1 Shichman-Hodges + gate/junction capacitances).
-- **Op-amps:** Behavioral op-amp macromodel (`A_OL`, `GBW` dominant pole, `R_in`, `R_out`,
-  supply-rail output saturation clamp) plus built-in standard macromodels (`TL072`, `LM741`)
-  authored from public datasheet parameters (no proprietary vendor subcircuits).
+- **Semiconductors:** Diode (`D`), NPN/PNP BJT (`Q`), NMOS/PMOS MOSFET (`M`) — using the classic
+  SPICE device parameter subset supported identically by both `ngspice` and `RIS-C` (`docs/COMPATIBILITY.md`).
+- **Op-amps:** Behavioral op-amp `.subckt` macromodel (`A_OL`, `GBW` dominant pole, `R_in`,
+  `R_out`, diode rail-clamped output stage built strictly from `R`/`C`/`E`/`G`/`D` — zero
+  behavioral expressions so it runs identically on both `RIS-C` and `ngspice`) plus built-in
+  standard macromodels (`TL072`, `LM741`) authored from public datasheet parameters.
+- **Model resolution precedence:** `part.props["model"]` (explicit override) → `part.value`
+  matching a built-in model name (e.g. `U1` with `value: "TL072"` or `D1` with `value: "1N4148"`)
+  → symbol default model (`SQ8` for generic op-amps).
 
 ### SD4 v1 instruments and result views. DECIDED (2026-11-23)
 
@@ -214,50 +228,52 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
   then kills the worker cleanly after `SK11` (`50 ms`), guaranteeing zero crashes, zero leaked
   state, and multi-tab concurrency (`SB4`).
 - Spike `SS1` (S0.3) benchmarks startup latency (`SB3`) and streaming throughput of the worker
-  against in-process `libngspice` on both Windows and Orion before S1.5 locks it in.
+  against in-process `libngspice` on both Windows and Orion before S1.6 locks it in.
 
-### SD6 `RIS-C` solver architecture. PROPOSED (confirmed at HS1)
+### SD6 `RIS-C` integration boundary (`omnia-sim-risc`). PROPOSED (confirmed at HS1)
 
-- **Linear algebra:** Sparse Modified Nodal Analysis (MNA) assembled in CSC/CSR format with
-  symbolic ordering (AMD / minimum-degree) and numeric sparse LU with partial pivoting, reused
-  across Newton-Raphson iterations and transient timesteps (`SINV7` — no per-iteration symbolic
-  re-factorisation when sparsity pattern is fixed).
-- **Nonlinear DC (`OP`/`DC`):** Damped Newton-Raphson with SPICE-standard junction voltage
-  limiting (`pnjlim`, `fetlim`), automatic `GMIN` stepping (`1e-3 -> 1e-12`) and source stepping
-  (`0% -> 100%`) fallback on non-convergence.
-- **AC small-signal:** Linearise every nonlinear device at its DC `OP` conductance/capacitance
-  stamp, solve complex sparse MNA `(G + j ω C) X = I` at each sweep frequency.
-- **Transient (`TRAN`):** Start from DC `OP` (or `.ic` if `uic`); first step uses Backward
-  Euler to avoid trapezoidal ringing, then Trapezoidal (with Gear-2 fallback on stiff/ringing
-  steps); adaptive timestep via Local Truncation Error (LTE) estimate and exact breakpoint table
-  for `PULSE`/`SIN` corners; emits samples into `SampleRing` without waiting for run completion.
+- Pin `risc-c` by exact Git commit SHA in workspace `Cargo.toml` (starting at `24710eaf`,
+  upgraded explicitly like GPUI; `Cargo.lock` committed) and never copy internal solver code into
+  Omnia (`RIS-C` `AGENT_INTEGRATION.md` rule 8).
+- `omnia-sim-risc` compiles `CircuitIr` via `risc_c::netlist::parse_str` (with `SK2` options
+  applied) or `CircuitBuilder` into a shareable `CompiledCircuit`, creates a fresh `Simulator`
+  per run on a background worker thread, streams transient samples via `transient_with` directly
+  into `SampleRingProducer`, supports Pause via a worker condition variable and Stop via
+  `ControlFlow::Break(())` (`Error::Cancelled`), and maps `risc_c::RunError` through `SourceMap`
+  into typed `SimError`.
+- Never silently substitute `0.0` for missing signals (`sample.get(&circuit, name)` error
+  propagates explicitly per `RIS-C` contract 4).
 
 ### SD7 Deterministic circuit lowering and source mapping. PROPOSED (confirmed at HS1)
 
 - `CircuitIr::lower(doc, library, analysis, probes)` produces bit-for-bit identical node ids,
   device order, and SPICE netlist text regardless of arena insertion order or hash-map seeding
-  (`SINV2`):
+  (`SINV2`, matching `AGENTS.md` determinism rules: geometry and label/designator before id):
   - Ground nets collapse to `NodeId(0)`.
-  - Non-ground nets sort deterministically by `(explicit_label_name, lowest_pin_part_id, pin_idx)`.
-  - Devices sort by `(spice_prefix, designator, part_id)`.
+  - Non-ground nets sort deterministically by `(explicit_label_name, min_pin_key)` where
+    `pin_key = (part.designator, pin_number, world_y, world_x, part_id)`.
+  - Devices sort by `(spice_prefix, part.designator, world_y, world_x, part_id)`.
 - `SourceMap` records bidirectional links `NodeId <-> NetId`, `DeviceIdx <-> PartId`, so every
   ERC error, convergence failure, and waveform channel highlights the exact schematic net or part.
 
 ### SD8 Electrical Rules Check (ERC) ruleset. PROPOSED (confirmed at HS1)
 
-- Severity levels: **`Error`** (blocks simulation start unless explicitly overridden only for
-  warnings), **`Warning`** (allows run, shown in status bar & Diagnostics), **`Info`**.
+- Severity levels: **`Error`** (blocks simulation start), **`Warning`** (allows run, shown in
+  status bar & Diagnostics), **`Info`**.
 - v1 checks:
   - `ERC001` (Error): No ground reference (`0`) in circuit.
-  - `ERC002` (Error): Duplicate part designator (case-insensitive per SPICE).
-  - `ERC003` (Error): Unparseable or out-of-range component value (e.g. `R = 0`, `C <= 0`, NaN).
+  - `ERC002` (Error): Duplicate non-empty part designator (case-insensitive per SPICE; empty
+    designators on `Ground` and `PowerRail` parts are exempt).
+  - `ERC003` (Error): Unparseable or out-of-range component value (e.g. `R = 0`, `C <= 0`, NaN,
+    potentiometer ratio outside `0%..100%`).
   - `ERC004` (Error): Voltage source / supply rail short circuit (zero-resistance loop of ideal
     voltage sources or shorted to ground).
   - `ERC005` (Error): Unconnected instrument port or probe referencing a missing net.
   - `ERC006` (Warning): Floating pin or single-pin net (unconnected terminal).
-  - `ERC007` (Warning): Ambiguous `M` suffix on resistor (SPICE interprets `1M` as `1 mΩ`, not
+  - `ERC007` (Warning): Bare `M` suffix on a resistor (SPICE interprets `1M` as `1 mΩ`, not
     `1 MΩ`; suggests `1Meg` or `1m`).
-  - `ERC008` (Warning): Op-amp power rail pin unconnected when macromodel requires supplies.
+  - `ERC008` (Warning): Op-amp power rail pin unconnected when selected macromodel requires
+    supplies.
 
 ### SD9 Value & parameter storage in `omnia-doc`. PROPOSED (confirmed at HS1)
 
@@ -265,10 +281,13 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
   code stays untouched.
 - Add `pub props: BTreeMap<Arc<str>, Arc<str>>` (empty by default, zero overhead when empty;
   sorted for determinism) to `Part`, edited through a new `Command::SetPartProp` (full undo/redo
-  per `INV4`). Used for optional SPICE model override (`model = "TL072"`), source waveform specs
-  (`waveform = "SIN(0 1 1k)"`, `ac_mag = "1"`), and initial conditions (`ic = "0.1"`).
-- RON serialisation bumps to v3 with seamless backward-compatible load of existing v2 `.ron`
-  files (`props` defaults to empty).
+  per `INV4`). Used for optional SPICE model override (`model = "TL072"`), potentiometer total
+  resistance (`resistance = "20k"`), source waveform specs (`waveform = "SIN(0 1 1k)"`,
+  `ac_mag = "1"`), and initial conditions (`ic = "0.1"`).
+- RON serialisation (`crates/omnia-doc/src/io.rs` `Sheet`) bumps to v3 with seamless
+  backward-compatible load of existing v2 `.ron` files (`props` defaults to empty; unsupported
+  version rejection tests and `ui-plan.md` `UTC-open-bad` bump their rejected example to
+  `version: 4`).
 
 ### SD10 Supply rails and on-sheet probes/instruments. PROPOSED (confirmed at HS1)
 
@@ -283,7 +302,7 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
   probes (`10 MΩ` default or ideal open, configurable per `SQ5`) and current inputs as zero-volt
   ammeters (`V = 0` branch current sense).
 
-### SD11 Live streaming & UI threading. DECIDED (extends canvas-plan.md D8)
+### SD11 Live streaming & UI threading. DECIDED (extends canvas-plan.md D8; live-edit policy DEFAULT per SQ7)
 
 - Simulation never runs on the GPUI UI thread (`SINV1`, `D8`).
 - Live `TRAN` streams `(t, v_0, v_1, ...)` into lock-free SPSC `SampleRing`s (one per probe
@@ -291,38 +310,42 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
 - The floating `XSC1` oscilloscope view drains available samples into its pre-allocated display
   buffer on its `SK8` cadence (`30 Hz` default) and notifies **only** itself — `SheetView` stays
   `.cached()` with 0 repaints (`SB5`, `UB3`, `INV11`).
-- Editing the schematic while a simulation is `Running` stops or invalidates the live run cleanly
-  per `SQ7` (default: marks results stale with a banner and stops live streaming; never mutates a
-  live `CircuitIr` mid-solve).
+- **Live-edit policy (`DEFAULT`, `SQ7`):** Editing the schematic while a simulation is `Running`
+  stops the live run cleanly and marks results stale with a banner; never mutates a live
+  `CircuitIr` mid-solve.
 
-### SD12 Bundled `ngspice` licensing and build hygiene. PROPOSED (confirmed at HS1 & HS2)
+### SD12 Bundled `ngspice` licensing and build hygiene. PROPOSED (policy confirmed at HS1; exact flags verified at HS2)
 
 - `ngspice` core is **BSD-3-Clause** (compatible with `deny.toml`).
-- Bundled builds MUST compile with `--with-ngshared --disable-xspice --disable-cider
-  --disable-openmp --without-x --without-readline` (exact flags verified in `SS1`/`HS2`) so zero
-  GPL/LGPL code enters the binary.
+- Bundled builds must contain **zero GPL or LGPL code bundled or statically linked** (standard OS
+  C and compiler runtimes such as `glibc`, `libgcc`, and `libstdc++` excepted). Optional
+  GPL/LGPL-dependent features (such as `readline`, `FFTW`, `OpenMP`, and non-BSD solvers or GUI
+  toolkits) are disabled; exact configure flags and binary library audits are settled in `SS1`
+  (S0.3) and signed off at `HS2` (S4.2).
 - `THIRD_PARTY.md` records the exact `ngspice` version, source URL, build flags, and BSD-3-Clause
-  licence text.
+  licence text, plus the pinned `RIS-C` attribution.
 
 ### SD13 Structured errors and convergence diagnostics. PROPOSED (confirmed at HS1)
 
-- Raw SPICE stderr is never dumped raw as the only user message. `omnia-sim` parses engine
-  failures into typed `SimError` variants (`ErcFailed`, `SingularMatrix { nodes }`,
-  `NoConvergence { phase, step_t, nodes }`, `TimestepTooSmall { t }`, `WorkerCrashed`,
-  `Cancelled`, `ResultCapReached`, `EngineUnavailable`), mapped through `SourceMap` to net names
-  and `PartId`s with actionable fix hints (e.g., "Check for floating node on net `N3` or add a
-  DC path to ground").
+- Raw SPICE stderr is never dumped raw as the only user message. `omnia-sim` parses failures from
+  both `ngspice` and `risc_c::RunError` into typed `SimError` variants (`ErcFailed`,
+  `SingularMatrix { nodes }`, `NoConvergence { phase, step_t, nodes }`, `TimestepTooSmall { t }`,
+  `WorkerCrashed`, `Cancelled`, `ResultCapReached`, `EngineUnavailable`), mapped through
+  `SourceMap` to net names and `PartId`s with actionable fix hints (e.g., "Check for floating
+  node on net `N3` or add a DC path to ground").
 
 ### SD14 Agent / MCP integration. PROPOSED (confirmed at HS1)
 
-- Adds 4 read/job tools to `omnia-agent` (after `A3.4`):
-  - `sim.erc` (tier 1 read): runs ERC on an open document, returns typed `ErcDiagnostic` list.
-  - `sim.run` (tier 1 read / A3 job): launches `OP`/`TRAN`/`AC`/`DC` on `ngspice` or `RIS-C`
-    with progress notifications and cancellation; never mutates the document.
-  - `sim.results` (tier 1 read): paged/decimated waveform slice or operating-point table for a
-    completed `sim_run_id`.
-  - `sim.measure` (tier 1 read): computes `vpp`, `vrms`, `vavg`, `vmin`, `vmax`, `freq`, `duty`,
-    `rise_time`, `fall_time`, `bandwidth_3db`, `phase_margin` on any probed net/branch.
+- Adds 4 tools to `omnia-agent` (after `A3.4`), classified per `mcp-plan.md` `AD7`:
+  - `sim.erc` (**tier 0 read**): runs ERC on an open document, returns typed `ErcDiagnostic` list.
+  - `sim.run` (**tier 0 read + bounded worker process execution**): launches `OP`/`TRAN`/`AC`/`DC`
+    on `ngspice` or `RIS-C` via an `A3` cancellable job with progress notifications; mutates no
+    document and runs under `SK11`/`SK12` resource limits (spawns `omnia-ngspice-worker` when
+    `engine = "ngspice"`, declared explicitly in the `AD7` policy table in `S4.1`).
+  - `sim.results` (**tier 0 read**): paged/decimated waveform slice or operating-point table for
+    a completed `sim_run_id`.
+  - `sim.measure` (**tier 0 read**): computes `vpp`, `vrms`, `vavg`, `vmin`, `vmax`, `freq`,
+    `duty`, `rise_time`, `fall_time`, `bandwidth_3db`, `phase_margin` on any probed net/branch.
 
 ## 7. Invariants
 
@@ -330,39 +353,40 @@ Each has a unit or property test; the roadmap task that adds it is in brackets.
 
 | ID | Rule |
 | --- | --- |
-| `SINV1` | `omnia-sim`, `omnia-sim-ngspice`, and `omnia-risc` have zero dependency on GPUI or `omnia-app` (extending `INV12`). [S1.2, S1.5, S1.6] |
+| `SINV1` | `omnia-sim`, `omnia-sim-ngspice`, and `omnia-sim-risc` have zero dependency on GPUI or `omnia-app` (extending `INV12`). [S1.2, S1.5, S1.6] |
 | `SINV2` | **Determinism:** rebuilding the same circuit with parts/wires/labels inserted in any order yields identical `ErcDiagnostic`s, identical `CircuitIr` node/device numbering, and identical SPICE netlist text. [S1.2, S1.3] |
 | `SINV3` | **Document immutability:** running ERC or any simulation never mutates `Doc` or changes `Doc::revision()`. [S1.3, S1.4] |
 | `SINV4` | **Bounded streaming memory:** `SampleRing` never allocates after construction and never blocks the solver thread if the UI stops draining. [S1.4] |
-| `SINV5` | **Clean cancellation:** cancelling a running simulation on either `ngspice` or `RIS-C` terminates worker execution within `SK11` and leaves zero orphan child processes or leaked threads. [S1.5, S1.6, S3.1, S3.3] |
-| `SINV6` | **Value round-trip & SPICE suffix safety:** every valid `SK1` value parses deterministically, rejects NaN/Inf/negative R/C/L, and emits unambiguous SPICE numeric strings (never emitting bare `M` for mega). [S1.2] |
-| `SINV7` | **RIS-C KCL/KVL conservation:** at every converged `OP`, `DC`, `AC`, and `TRAN` step, the residual norm `‖F(x)‖∞` satisfies `SK2` (`ABSTOL` + `RELTOL * max_branch`) — Kirchhoff's laws hold at every node. [S1.6, S2.3, S3.2, S3.3] |
-| `SINV8` | **Differential parity:** every `STC-*` reference circuit produces matching results on `RIS-C` and `ngspice` within `SB7` (`SK4`/`SK5`). [S1.7, S2.4, S3.4] |
-| `SINV9` | **Sheet isolation:** live oscilloscope updates at 30 Hz (or 60 Hz) trigger 0 `SheetView` paints (`INV11`, `UB3`) and 0 Omnia heap allocations per warm paint frame (`B10`). [S4.3, S4.6] |
+| `SINV5` | **Clean cancellation:** cancelling a running simulation on either `ngspice` or `RIS-C` terminates worker execution within `SK11` and leaves zero orphan child processes or leaked threads. [S1.5, S1.6] |
+| `SINV6` | **Value round-trip & SPICE suffix safety:** every valid `SK1` value (including whitespace, units, and potentiometer `%`) parses deterministically, rejects NaN/Inf/negative R/C/L, and emits unambiguous SPICE numeric strings (never emitting bare `M` for mega). [S1.2] |
+| `SINV7` | **No silent signal fallback:** unknown or unallocated probe signal names always return a typed error on both `RIS-C` and `ngspice` (never silently returning `0.0`; `RIS-C` contract 4). [S1.5, S1.6] |
+| `SINV8` | **Differential parity:** every `STC-*` reference circuit produces matching results on `RIS-C` and `ngspice` within `SB7` (`SK4`/`SK5`). [S2.1, S2.2] |
+| `SINV9` | **Sheet isolation:** live oscilloscope updates at `SK8` cadence trigger 0 `SheetView` paints (`INV11`, `UB3`) and 0 Omnia heap allocations per warm paint frame (`B10`). [S3.3, S3.6] |
 | `SINV10` | **RON backward compatibility:** loading any existing v2 `.ron` fixture (including `inverting-amp.ron` and `wien-oscillator.ron`) succeeds identically after adding `Part::props` (v3). [S1.1] |
-| `SINV11` | **Licence purity:** bundled `ngspice` build and all Rust simulation crates contain zero GPL/LGPL code; `cargo deny check` stays green. [S0.3, S1.5, S1.6, S5.2] |
+| `SINV11` | **Licence purity:** bundled `ngspice` build and all Rust simulation crates (including `risc-c` transitive deps) bundle/statically link zero GPL/LGPL code (system C/compiler runtimes excepted); `cargo deny check` stays green. [S0.3, S1.5, S1.6, S4.2] |
 | `SINV12` | **Source-map completeness:** every non-ground `NodeId` and every `DeviceIdx` in `CircuitIr` maps back to a live `NetId` or `PartId` in the source `Doc` snapshot. [S1.2] |
 
 ## 8. Reference circuits and scenarios (`STC`)
 
-Every circuit below lives as a committed fixture in `tests/sim/` and runs on **both** `ngspice`
-and `RIS-C` against analytical solutions and each other.
+Every circuit below lives as a committed fixture in `tests/sim/` (crate `omnia-sim-tests`,
+created in S2.1) and runs on **both** `ngspice` and `RIS-C` against analytical solutions and
+each other under `SK2`'s differential tolerances.
 
 | ID | Circuit / Scenario | Analysis | Expected result |
 | --- | --- | --- | --- |
-| `STC-erc-01` | Missing ground, duplicate `R1`, `R = 0`, shorted DC sources, floating pin, `1M` resistor | ERC | Exact `ERC001`–`ERC007` codes mapped to their `PartId`/`NetId`; `Error` blocks run, `Warning` permits run. [S1.3] |
-| `STC-lin-01` | Resistive divider + Wheatstone bridge (`10 V`, `1k`/`2k`/`3k`/`4k`) | `OP`, `DC` | Matches closed-form nodal voltages & currents to `SK4` (`1e-7`) on both engines. [S1.7] |
-| `STC-lin-02` | Dependent-source active network (VCVS + VCCS) | `OP` | Matches analytical gain and input/output currents to `SK4` on both engines. [S1.7] |
-| `STC-nl-01` | Half-wave `1N4148` diode + `1k` load (`DC` sweep `-2 V..+5 V`) | `OP`, `DC` | Knee voltage (~0.65–0.72 V) and current curve match `ngspice` within `SK5`. [S2.4] |
-| `STC-nl-02` | Common-emitter `2N2222` NPN amplifier biased from `12 V` | `OP`, `DC` | `V_B`, `V_C`, `V_E`, `I_C` match `ngspice` within `SK5`. [S2.4] |
-| `STC-nl-03` | `2N7000` NMOS common-source inverter (`V_GS` sweep `0..5 V`) | `OP`, `DC` | Threshold transition and saturation current match `ngspice` within `SK5`. [S2.4] |
-| `STC-nl-04` | Inverting op-amp (`R1 = 10k`, `R2 = 22k`, `V_in = 1 V`, `±12 V` rails, matching `inverting-amp.ron`) | `OP`, `DC` | `V_out ≈ -2.200 V` in linear region, saturates cleanly near `±12 V` rails; both engines agree within `SK5`. [S2.4] |
-| `STC-ac-01` | First-order RC low-pass (`10k`, `10nF`) & RLC bandpass | `AC` (`dec 50 10 1Meg`) | `-3.01 dB` and `-45°` at `f_c = 1/(2πRC) ≈ 1591.5 Hz`; both engines agree within `0.05 dB` / `0.5°`. [S3.5] |
-| `STC-ac-02` | Inverting op-amp closed-loop frequency response (`TL072` / behavioral GBW) | `AC` | Flat passband `+6.85 dB`, `-20 dB/dec` roll-off at `GBW / (1 + R2/R1)`; both engines agree within `SK5`. [S3.5] |
-| `STC-tran-01` | RC step response (`PULSE 0 5 1m 1u 1u 10m 20m`, `10k`, `100nF`) | `TRAN` (`0..15 ms`) | `v(t) = 5(1 - e^{-(t-1ms)/1ms})` within `SK5` on both engines. [S3.5] |
-| `STC-tran-02` | Full-wave diode bridge rectifier with `100uF` filter cap + `1k` load (`60 Hz` sine) | `TRAN` (`0..50 ms`) | Peak voltage and ripple match `ngspice` within `SK5`. [S3.5] |
-| `STC-wien-01` | **Headline mockup circuit:** Wien bridge oscillator (`R = 10k`, `C = 10nF`, gain network + diode amplitude stabilisation, `±12 V` rails, `XSC1` on output & `N+`) | `TRAN` (`0..20 ms`) | Self-starts cleanly without manual kick (or small `.ic`), stabilises near `f_0 = 1/(2πRC) ≈ 1.59 kHz`; `RIS-C` and `ngspice` agree within `0.5%` frequency and `1%` Vpp. [S3.4, S4.6] |
-| `STC-err-01` | Deliberately singular / non-convergent circuit & mid-run Stop | `OP`, `TRAN` | Typed `SimError` naming the offending net/part; Stop returns to `Idle` within `100 ms` with zero orphan processes (`SB4`, `SINV5`). [S3.5] |
+| `STC-erc-01` | Missing ground, duplicate `R1` (plus two empty-designator grounds that must pass), `R = 0`, shorted DC sources, unconnected `XSC1` probe, floating pin, `1M` resistor, unpowered op-amp | ERC | Exact `ERC001`–`ERC008` codes mapped to their `PartId`/`NetId`; `Error` blocks run, `Warning` permits run. [S1.3] |
+| `STC-lin-01` | Resistive divider + Wheatstone bridge (`10 V`, `1k`/`2k`/`3k`/`4k`) | `OP`, `DC` | Matches closed-form nodal voltages & currents to `SK4` (`1e-7`) on both engines. [S1.5, S1.6, S2.1] |
+| `STC-lin-02` | Dependent-source active network (VCVS `E` + VCCS `G` + resistors) | `OP` | Matches analytical gain and input/output currents to `SK4` on both engines. [S2.1] |
+| `STC-nl-01` | Half-wave `1N4148` diode + `1k` load (`DC` sweep `-2 V..+5 V`) | `OP`, `DC` | Knee voltage (~0.65–0.72 V) and current curve match `ngspice` within `SK5`. [S2.1] |
+| `STC-nl-02` | Common-emitter `2N2222` NPN amplifier biased from `12 V` | `OP`, `DC` | `V_B`, `V_C`, `V_E`, `I_C` match `ngspice` within `SK5`. [S2.1] |
+| `STC-nl-03` | `2N7000` NMOS common-source inverter (`V_GS` sweep `0..5 V`) | `OP`, `DC` | Threshold transition and saturation current match `ngspice` within `SK5`. [S2.1] |
+| `STC-nl-04` | Standalone inverting op-amp fixture (`R1 = 10 kΩ`, `R2 = 22 kΩ`, `V_in = 1 V`, `±12 V` rails) | `OP`, `DC` | `V_out ≈ -2.200 V` in linear region, saturates cleanly near `±12 V` rails; both engines agree within `SK5`. [S2.1] |
+| `STC-ac-01` | First-order RC low-pass (`10 kΩ`, `10 nF`) & RLC bandpass | `AC` (`dec 50 10 1Meg`) | `-3.01 dB` and `-45°` at `f_c = 1/(2πRC) ≈ 1591.5 Hz`; both engines agree within `0.05 dB` / `0.5°`. [S2.1] |
+| `STC-ac-02` | Inverting op-amp closed-loop frequency response (`R1 = 10 kΩ`, `R2 = 22 kΩ`, `TL072` / behavioral GBW) | `AC` | Flat passband `+6.85 dB`, `-20 dB/dec` roll-off at `GBW / (1 + R2/R1)`; both engines agree within `SK5`. [S2.1] |
+| `STC-tran-01` | RC step response (`PULSE 0 5 1m 1u 1u 10m 20m`, `10 kΩ`, `100 nF`) | `TRAN` (`0..15 ms`) | `v(t) = 5(1 - e^{-(t-1ms)/1ms})` within `SK5` on both engines. [S2.1] |
+| `STC-tran-02` | Full-wave diode bridge rectifier with `100 uF` filter cap + `1 kΩ` load (`60 Hz` sine) | `TRAN` (`0..50 ms`) | Peak voltage and ripple match `ngspice` within `SK5`. [S2.1] |
+| `STC-wien-01` | **Headline mockup circuit (derived from `tests/golden/wien-oscillator.ron`):** Wien bridge oscillator (`R1`/`R2 = 10 kΩ`, `C1`/`C2 = 22 nF`, `R4 = 22 kΩ`, pot `R3 = 50%`, `D1`/`D2 = 1N4148`, `U1 = TL072`, `±12 V` rails, `XSC1` on output & `N+`) | `TRAN` (`0..40 ms`) | Self-starts cleanly (via startup transient or small `.ic`), stabilises near `f_0 = 1/(2π · 10k · 22n) ≈ 723.4 Hz`; `RIS-C` and `ngspice` agree within `0.5%` frequency and `1%` Vpp. [S2.2, S3.6] |
+| `STC-err-01` | Deliberately singular / non-convergent circuit & mid-run Stop | `OP`, `TRAN` | Typed `SimError` naming the offending net/part; Stop returns to `Idle` within `100 ms` with zero orphan processes (`SB4`, `SINV5`). [S2.1, S2.3] |
 
 ## 9. Spikes (`SS`)
 
@@ -370,7 +394,7 @@ Run in Milestone S0 before locking `SD5` and `SK8`. Results recorded in `docs/me
 
 | ID | What it tests | Answers |
 | --- | --- | --- |
-| `SS1` | Prototype `omnia-ngspice-worker` (BSD-3-Clause `libngspice` build) vs in-process `libngspice` on Windows and Orion Linux | Exact BSD-3-Clause build flags (confirming zero GPL/LGPL), startup latency (`SB3`), binary streaming overhead, kill-on-cancel reliability (`SB4`), and cross-platform packaging layout. |
+| `SS1` | Prototype `omnia-ngspice-worker` (BSD-3-Clause `libngspice` build) vs in-process `libngspice` on Windows and Orion Linux | Exact BSD-3-Clause build flags (confirming zero bundled/static GPL/LGPL), startup latency (`SB3`), binary streaming overhead, kill-on-cancel reliability (`SB4`), and cross-platform packaging layout. |
 | `SS2` | Live 2-channel `SampleRing` producer at `100 kS/s` drained by a cached floating `XSC1` GPUI view at `30 Hz` and `60 Hz` over a `1k` sheet on Orion | Whether `XSC1` meets `SB5` (`B3` < 16.7 ms, 0 missed refreshes, 0 sheet repaints, 0 warm Omnia allocs) at `30 Hz` and whether `60 Hz` is safe (`SK8`). |
 
 ## 10. Core data model and API sketch (`omnia-sim`)
@@ -423,37 +447,39 @@ Every new crate must pass `cargo deny check` (`MIT`, `Apache-2.0`, `BSD-2-Clause
 
 | Dependency | Crate | Purpose | Licence |
 | --- | --- | --- | --- |
-| `libngspice` (bundled dynamic library, built without XSPICE/CIDER/readline/OpenMP) | `omnia-sim-ngspice` | Reference SPICE backend & differential oracle | BSD-3-Clause (verified at `SS1` / `HS2`) |
+| `risc-c` (`git = "https://github.com/Reid-Engineered/RIS-C"`, pinned `--rev 24710eaf…`) | `omnia-sim-risc` | First-party pure-Rust SPICE engine (`OP`, `DC`, `AC`, `TRAN`, streaming + cancel) | BSD-3-Clause (transitive deps `faer`, `peroxide`, `num-complex`, `thiserror` verified by `cargo deny` in S1.5) |
+| `libngspice` (bundled dynamic library, BSD-3-Clause core build) | `omnia-sim-ngspice` | Reference SPICE backend & differential oracle | BSD-3-Clause (verified at `SS1` / `HS2`) |
 | `libloading` | `omnia-sim-ngspice` | Runtime dynamic loading of `ngspice.dll` / `libngspice.so` | ISC |
-| `num-complex` | `omnia-risc` | Complex phasor arithmetic for AC MNA | MIT OR Apache-2.0 |
-| `faer` (or hand-written sparse CSC LU; decided in S1.6) | `omnia-risc` | Sparse LU / linear solve (if external crate used) | MIT |
 
-No C/C++ code is compiled into `omnia-doc`, `omnia-sim`, `omnia-risc`, `omnia-canvas`, or
+No C/C++ code is compiled into `omnia-doc`, `omnia-sim`, `omnia-sim-risc`, `omnia-canvas`, or
 `omnia-app` directly.
 
 ## 12. Failure modes and mitigations
 
 | Risk | Mitigation | Where checked |
 | --- | --- | --- |
-| `libngspice` C crash or stuck solver hangs Omnia | Worker-process isolation (`SD5`) + `SK11` kill-on-cancel | `SS1`, `S1.5`, `STC-err-01` |
-| GPL/LGPL accidentally enabled in `ngspice` build | Explicit BSD-3-Clause configure flags + symbol/licence audit script | `SS1`, `S5.2`, `HS2` |
-| `RIS-C` diverges numerically from `ngspice` on nonlinear circuits | Differential test suite runs on every milestone PR with exact `SK4`/`SK5` gates | `S1.7`, `S2.4`, `S3.4`, `S3.5` |
-| Wien bridge oscillator fails to self-start in noiseless SPICE | Built-in initial kick / `.ic` support and verified gain-stabilised fixture | `S3.4`, `STC-wien-01` |
-| Live oscilloscope breaks `B3` / `B10` / `UB3` on Orion | Cached `SheetView`, lock-free `SampleRing`, pre-allocated trace buffers, `30 Hz` throttle | `SS2`, `S4.3`, `S5.4` |
+| `libngspice` C crash or stuck solver hangs Omnia | Worker-process isolation (`SD5`) + `SK11` kill-on-cancel | `SS1`, `S1.6`, `STC-err-01` |
+| GPL/LGPL accidentally linked into `ngspice` build | Explicit BSD-3-Clause configure flags + linked-library audit script | `SS1`, `S4.2`, `HS2` |
+| Private `RIS-C` Git dependency blocks public CI or external contributors | Resolved at `HS1` (`SQ4`: make `RIS-C` public, configure CI read token, or publish crate) + `allow-git` entry in `deny.toml` | `S0.2`, `S1.5` |
+| `RIS-C` and `ngspice` diverge on a lowered schematic or macromodel | Differential test suite runs on every milestone PR with tightened `SK2` tolerances (`1e-6`) against `SK4`/`SK5` gates | `S2.1`, `S2.2`, `S2.3` |
+| Wien bridge oscillator fails to self-start in noiseless SPICE | Built-in startup transient / `.ic` support and verified gain-stabilised fixture (`723.4 Hz`) | `S2.2`, `STC-wien-01` |
+| Live oscilloscope breaks `B3` / `B10` / `UB3` on Orion | Cached `SheetView`, lock-free `SampleRing`, pre-allocated trace buffers, `30 Hz` throttle | `SS2`, `S3.3`, `S4.4` |
 | `1M` resistor parsed as `1 mΩ` surprises user | SPICE-compliant parsing (`SK1`) + prominent `ERC007` warning with one-click fix suggestion | `S1.2`, `S1.3`, `STC-erc-01` |
 
 ## 13. Changes requested in other plans and crates
 
-Applied in task S0.2 (for plan docs) and S1.1 / S4.x (for code):
+Applied in task S0.1 (where noted), S0.2 (plan alignments), and S1.1 / S1.5 / S3.x / S4.1 (code):
 
 | Target | Change |
 | --- | --- |
-| `AGENTS.md` | Add `sim-plan.md` and `sim-roadmap.md` to Sources of truth and register `S`-prefixed ids (`SB`, `SK`, `SD`, `SINV`, `STC`, `SS`, `SQ`, `HS`, `S0.1`…). (Applied in S0.1.) |
+| `AGENTS.md` | Add `sim-plan.md` and `sim-roadmap.md` to Sources of truth and register `S`-prefixed ids (`SB`, `SK`, `SD`, `SINV`, `STC`, `SS`, `SQ`, `HS`, `S0.1`…; note `Milestone S0`–`S4` vs canvas spikes `S1`–`S8`). (Applied in S0.1.) |
 | `ROADMAP.md` | Link `sim-plan.md` and `sim-roadmap.md` in intro and Stage 3; update open product decisions with 2026-11-23 owner answers. (Applied in S0.1.) |
-| `crates/omnia-doc` (`S1.1`) | Add `Part::props: BTreeMap<Arc<str>, Arc<str>>` (empty default) + `Command::SetPartProp` + RON v3 with backward-compatible v2 read (`SINV10`). |
-| `crates/omnia-symbols` (`S1.1`, `S4.2`) | Add symbol role metadata (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`) and compile the remaining v1 analog symbols + on-sheet `XSC1`/`XMM1`/`XBP1` blocks. |
-| `ui-roadmap.md` `U5.5` / `canvas-roadmap.md` `T7.3` | `S4.3`–`S4.5` supply the real oscilloscope, multimeter, Bode plotter, and Results panel contents inside `U4.1`'s floating frames and `U1.7`'s bottom dock. |
-| `mcp-plan.md` (`S5.1`) | Register `sim.erc`, `sim.run`, `sim.results`, and `sim.measure` in the `omnia-agent` catalog once `A3.4` is done. |
+| `deny.toml` (`S0.2` / `S1.5`) | Add `https://github.com/Reid-Engineered/RIS-C` to `sources.allow-git` after `HS1` approval (`SQ4`). |
+| `crates/omnia-doc` (`S1.1`) | Add `Part::props: BTreeMap<Arc<str>, Arc<str>>` (empty default) + `Command::SetPartProp` + RON v3 (`io.rs` `Sheet` record, backward-compatible v2 read per `SINV10`, unsupported-version test bumped to `version: 4`). |
+| `ui-plan.md` (`S0.2` / `S1.1`) | Bump `UTC-open-bad`'s rejected-version example from `version: 3` to `version: 4` when RON v3 lands in `S1.1` (`UD8`). |
+| `crates/omnia-symbols` (`S1.1`, `S3.2`) | Add symbol role metadata (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`) and compile the remaining v1 analog symbols + on-sheet `XSC1`/`XMM1`/`XBP1` blocks. |
+| `ui-roadmap.md` `U5.5` / `canvas-roadmap.md` `T7.3` | `S3.3`–`S3.5` supply the real oscilloscope, multimeter, Bode plotter, and Results panel contents inside `U4.1`'s floating frames and `U1.7`'s bottom dock. |
+| `mcp-plan.md` (`S4.1`) | Register `sim.erc`, `sim.run` (tier 0 + bounded worker spawn under `AD7`), `sim.results`, and `sim.measure` in the `omnia-agent` catalog once `A3.4` is done. |
 
 ## 14. Open questions (`SQ`)
 
@@ -465,10 +491,10 @@ replaces it (Hard Rule 5).
 | `SQ1` | Should `omnia-sim-ngspice` always use the isolated `omnia-ngspice-worker` helper process (`SD5`), or allow in-process `libngspice`? | Always use `omnia-ngspice-worker` unless `SS1` shows worker launch exceeds `SB3` (`150 ms`) on Orion. |
 | `SQ2` | How should bare `1M` on a resistor value be handled (SPICE `1 mΩ` vs human `1 MΩ`)? | Follow SPICE (`1M = 1e-3`, `1Meg = 1e6`) for netlist compatibility and emit `ERC007` warning whenever bare `M` is used on a resistor. |
 | `SQ3` | Should a net label `"GND"` without a `Ground` symbol count as node `0`? | No — require an explicit `Ground` symbol (or net label `"0"`), and emit a helpful `ERC001` hint if `"GND"` exists without a `Ground` symbol. |
-| `SQ4` | For `omnia-risc` sparse linear algebra in S1.6: hand-written pure-Rust sparse CSC LU (zero external math crates) or `faer` (MIT)? | Hand-written pure-Rust sparse CSC LU with Markowitz/AMD ordering for S1–S3 (zero extra deps, small matrices `< 10k` nodes), benchmarked against `ngspice` at S3.5. |
+| `SQ4` | `Reid-Engineered/RIS-C` is currently a private GitHub repository while `omnia` is public. How should Omnia's CI and contributors fetch `risc-c`? | Add `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` pinned to a reviewed SHA (`24710eaf`), and either make `RIS-C` public or supply a read-only CI token before `S1.5` merges. |
 | `SQ5` | Default input impedance of on-sheet `XSC1` oscilloscope and `XMM1` voltmeter probes? | `10 MΩ` to ground (realistic bench probe; prevents floating-node singularities when attached to capacitive nodes), overridable to ideal open (`∞`) per instrument. |
 | `SQ6` | Should `RIS-C` ship enabled in the engine picker in v1 or behind a Preferences toggle? | Visible in the First-boot / Preferences / toolbar engine selector labelled `preview`, with `ngspice` as default (matching `design/build-omnia.mjs:536-537`). |
 | `SQ7` | What happens if the user edits the schematic while a simulation is `Running`? | Stop the live run cleanly, mark displayed results/oscilloscope traces with a "Stale — schematic changed" badge, and require clicking Run again (live edit-while-running deferred to post-v1). |
-| `SQ8` | Default op-amp model when placing a generic `IC-COM-OpAmp` with no `model` prop set? | Built-in behavioral op-amp (`A_OL = 100k`, `GBW = 3 MHz`, `R_in = 1 MΩ`, `R_out = 75 Ω`, rail clamp to connected supplies or `±15 V` if supply pins omitted). |
-| `SQ9` | In CI (`windows-latest`), how is `libngspice` provided for `omnia-sim-ngspice` and differential tests? | Pre-built BSD-3-Clause `ngspice` artifact cached/fetched in CI (checksum-pinned, verified at `HS2`); `omnia-risc` tests always run with zero external binaries. |
-| `SQ10` | Should `sim.run` over MCP (`S5.1`) allow selecting `engine: "ngspice" | "risc"`? | Yes — optional `engine` field defaulting to `"ngspice"`, letting agents cross-check circuits on both engines. |
+| `SQ8` | Default op-amp model when placing a generic `IC-COM-OpAmp` with neither `props["model"]` nor a known `value` model name? | Built-in behavioral op-amp `.subckt` (`A_OL = 100k`, `GBW = 3 MHz`, `R_in = 1 MΩ`, `R_out = 75 Ω`, diode rail clamp to connected supplies or `±15 V` if supply pins omitted). |
+| `SQ9` | In CI (`windows-latest`), how is `libngspice` provided for `omnia-sim-ngspice` and differential tests? | Pre-built BSD-3-Clause `ngspice` artifact cached/fetched in CI (checksum-pinned, verified at `HS2`); `omnia-sim-risc` tests always run with zero external binaries. |
+| `SQ10` | Should `sim.run` over MCP (`S4.1`) allow selecting `engine: "ngspice" \| "risc"`? | Yes — optional `engine` field defaulting to `"ngspice"`, letting agents cross-check circuits on both engines. |
