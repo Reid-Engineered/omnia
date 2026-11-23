@@ -100,7 +100,6 @@ HS1 + parts P2.3 + parts P1.4 + parts P2.4 -> S1.1 (symbols, symbol class, libra
 S1.1 -> context C1.9 (bindings, XD4); S1.1 + C1.9 + parts supply contract -> S1.2 (lowering/netlist) -> S1.3 (ERC), S1.4 (engine+ring)
 S1.4        -> S1.5 (omnia-sim-risc: OP/DC/AC/TRAN)    --+
 S0.3 + S1.4 -> S1.6 (omnia-sim-ngspice: OP/DC/AC/TRAN) --+--> (+ S1.3) -> S2.1 (diff parity) -> S2.2 (Wien) -> (+ context C1.3) S2.3 (Gate S2)
-owner SQ4 action (RIS-C public or CI token) -> S1.5 merge
 S2.3 + U1.6 + U1.7 + U1.8 -> S3.1 (SimController)
 S3.1 + U4.1 + S0.4 -> S3.3 (XSC1)    --+
 S3.1 + U4.1        -> S3.4 (XMM1+XBP1)-+--> (+ S3.2) -> S3.6 [HS3]
@@ -116,7 +115,6 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 | ID | When | What the owner does |
 | --- | --- | --- |
 | `HS1` | S0.2 | Reviews `sim-plan.md`, answers `SQ1`–`SQ10` (including `SQ4` on `RIS-C` repo visibility/`deny.toml`), and approves `SD6`–`SD14`. Milestone S1 starts after `HS1`. **Signed 2026-11-23** by the coordinating agent under the owner's delegation of that date (answers in `sim-plan.md` section 14). |
-| `HS1` action (`SQ4`) | before S1.5 merges | Open owner action, not something an agent can do: the owner either makes the `Reid-Engineered/RIS-C` repository public or provides a read-only CI token for it. Until then S1.5 may be built and reviewed but does not merge; it is set to `needs-human` with this reason. |
 | `HS2` | S4.2 | Verifies the BSD-3-Clause `ngspice` build recipe, binary licence audit, and `THIRD_PARTY.md` entry on Windows and Linux. |
 | `HS3` | S3.6 | Opens the Wien oscillator in Omnia, clicks Run on both `ngspice` and `RIS-C`, inspects `XSC1` live waveforms, `XMM1`, `XBP1`, and Results dock, and approves visual/functional feel. |
 | `HS4` | S4.4 | Runs the final Orion certification campaign (`SB1`–`SB8` + `B3`/`B4`/`UB3`/`UB4` with live simulation). |
@@ -179,9 +177,9 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 
 ### S1.5 `omnia-sim-risc`: `SimEngine` adapter over pinned `risc-c` (`OP`/`DC`/`AC`/`TRAN`) · todo
 - Lane: sim-risc · Depends: S1.4 · Read: `sim-plan.md` SD1, SD2, SD6, SD13, SQ4, SINV1, SINV5, SINV7, SINV11; `Reid-Engineered/RIS-C` `docs/AGENT_INTEGRATION.md`
-- Owns: `Cargo.toml` (pinned `risc-c` git dep), `deny.toml` (`allow-git` for `RIS-C`), `.github/workflows/ci.yml` (`RIS-C` fetch credentials if still private per `SQ4`), `crates/omnia-sim-risc/`
-- Do: add `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` pinned to a reviewed SHA (`SQ4`, decided at `HS1`), wire CI fetch access with the owner-provided read-only token if `RIS-C` is still private, and create GPUI-free `omnia-sim-risc` wrapping `risc-c` (pinned commit SHA) behind `RiscEngine: SimEngine`; wire `OP`, single-source `DC`, `AC`, and live-streaming `TRAN` (`transient_with` pushing into `SampleRingProducer`, pause gate, `ControlFlow::Break(())` cancellation within `SK11`); map `risc_c::RunError` through `SourceMap` to typed `SimError`; enforce `SINV7` (missing signal name returns error, never `0.0`).
-- Done when: `STC-lin-01` (`OP`/`DC`), `STC-ac-01` (`AC`), `STC-tran-01` (`TRAN`), and `SINV5` cancel test pass on `RIS-C`; `SINV1`, `SINV7`, and `cargo deny check` pass in CI. Merge waits for the `HS1` `SQ4` owner action (repository public or read-only CI token); until then the task is `needs-human` with that reason.
+- Owns: `Cargo.toml` (pinned `risc-c` git dep), `deny.toml` (`allow-git` for `RIS-C`), `crates/omnia-sim-risc/`
+- Do: add `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` pinned to a reviewed SHA (`SQ4`, decided at `HS1`; `RIS-C` is public, so CI needs no credentials), and create GPUI-free `omnia-sim-risc` wrapping `risc-c` (pinned commit SHA) behind `RiscEngine: SimEngine`; wire `OP`, single-source `DC`, `AC`, and live-streaming `TRAN` (`transient_with` pushing into `SampleRingProducer`, pause gate, `ControlFlow::Break(())` cancellation within `SK11`); map `risc_c::RunError` through `SourceMap` to typed `SimError`; enforce `SINV7` (missing signal name returns error, never `0.0`).
+- Done when: `STC-lin-01` (`OP`/`DC`), `STC-ac-01` (`AC`), `STC-tran-01` (`TRAN`), and `SINV5` cancel test pass on `RIS-C`; `SINV1`, `SINV7`, and `cargo deny check` pass in CI.
 
 ### S1.6 `omnia-sim-ngspice`: worker IPC, `libngspice` backend, and CI artifact wiring (`OP`/`DC`/`AC`/`TRAN`) · todo
 - Lane: sim-ngspice · Depends: S0.3, S1.4 · Read: `sim-plan.md` SD1, SD2, SD5, SD12, SD13, SQ9, SINV1, SINV5, SINV7, SINV11
@@ -364,4 +362,9 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        commercial review tool (hard rule 1). §13 parts items answered at
                        `66f9e49` are marked answered; context asked to add `ERC009`/`ERC010`
                        to its crosswalk. Docs only.
+                       Owner update 2026-11-23: `SQ4` resolved — the owner made
+                       `Reid-Engineered/RIS-C` public, so no CI token is needed; the pending
+                       owner action is removed from the human checkpoints and from S1.5's gate
+                       and ownership (the `allow-git` entry pinned to a reviewed SHA stays).
+                       The owner approved this round's blocking fixes.
 ```
