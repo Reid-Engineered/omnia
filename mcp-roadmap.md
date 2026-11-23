@@ -143,7 +143,7 @@ own in turn.
 - Done when: AINV8 (the INV12 test covers the new crates), AINV10 and AINV11 pass; property
   tests round-trip every DTO through JSON.
 
-### A1.4 Read projections · todo
+### A1.4 Read projections · done
 - Lane: agent · Depends: A1.3 · Read: D3, WD8, AD8, AINV5
 - Owns: `crates/omnia-agent/src/read.rs`
 - Do: summary; items paged in id order; query modes over `Doc::query`, `query_within` and
@@ -490,3 +490,40 @@ sketch shows the constructors and accessors. Ownership: `crates/omnia-agent/prop
 is outside the subpaths A1.3's **Owns** line lists; it is read as included, since it sits inside
 the owned crate and `omnia-doc` commits its regression seeds the same way (the line itself is
 unchanged). The branch is updated from `main` (T2.9, #86). Checks rerun locally.
+
+2026-11-22 A1.4 done — new `crates/omnia-agent/src/read.rs` (plus its `mod` line in `lib.rs`
+and an `omnia-symbols` dependency in the crate's `Cargo.toml`, which section 14 already lists;
+GPUI-free, and the INV12/AINV8 xtask test still passes). Free functions over `&Doc` through its
+public API only: `summary`; `item` and `items` (every live item in canonical order, paged);
+`query_ids` and `query` over `Doc::query` (`envelope`), `query_within` (WD8 Enclosed) and
+`query_touching` (WD8 Intersecting), sorted and deduplicated; `inspect` (exactly what
+`include` names); `all_nets` and `nets` (`at`, `wire`, or all); `symbols` and `symbol`. All
+results are the A1.3 DTOs; no schema file changed. Nets are grouped by the `NetId`s of
+`Doc::net_at` (pins, labels) and `Doc::net_of` (wires), which never leave the module, then
+keyed per AD8 and listed in key order. Choices, written into mcp-plan.md (AD8 and a new
+"Read results as built at A1.4" note in 9.3): keyset paging with the last item's id as the
+cursor; a bad cursor or a `limit` of 0 is `schema_violation` at an envelope-space pointer,
+over AK4 `limit_exceeded` first; `inspect`'s `area` pages the `envelope` mode's items while
+summary and nets stay whole-document; `nets {at}` with nothing at the point is empty, `nets
+{wire}` on a missing wire `unknown_item`; a part whose symbol id the library lacks makes an
+items read `internal`; the symbol catalog DTO is `read::SymbolInfo {name, bounds, width,
+height, pins}`, with no committed schema until A1.8 publishes the resource. Tests (all in
+`read.rs`): nets equal an independent union-find partition of pins, wires and labels over
+random lattice sheets, before and after a `Delete` renumbers the nets, with `nets.len() ==
+Doc::net_count()`; AINV5: a sheet rebuilt by `Doc::from_items` with each kind in reverse order
+gives byte-identical `inspect`, `query` (all three modes), `nets {at}` and `nets {wire}`
+responses after the id mapping, and the same request twice or on a `fork` gives the same bytes;
+ATC-read-01 on the `100` sheet's geometry saved and re-opened through RON (counts 100, 200, 0;
+revision the file's); ATC-net-01 (two interior-crossing wires added in one `AddWires` are two
+nets, and the crossing point has none); query modes against the `Doc` calls (property) and a
+WD8 case with a pin stub outside the body; paging at every limit from 1 to 21, the AK4 default
+of 500, an exactly full last page, a cursor whose item was deleted, and refused cursors and
+limits. Every produced result goes through `Response::new`, is validated against the
+committed `<op>.response` schema text and decodes back equal. ATC-read-01 rebuilds the `100`
+sheet's geometry in the test because `omnia-bench` depends on GPUI; opening it through the
+service is A1.5's. For A1.5: map read errors' `/params/...` pointers for the MCP form as the
+decoder does, and resolve `doc_id` before calling these functions. Checks: fmt, workspace
+clippy, omnia-bench clippy with `scene-counts,readback`, tests of omnia-agent, xtask,
+omnia-doc and omnia-symbols ran locally and pass; `cargo deny` passes bans, licences and
+sources and fails only advisories, on the known `RUSTSEC-2026-0592` (`url 2.5.8`), which is
+being fixed separately. The full `cargo test --workspace` is left to CI. Nothing measured.

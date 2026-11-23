@@ -8,6 +8,8 @@ publish.workspace = true
 # mcp-plan.md section 5: no GPUI and no async runtime (AINV8, extends INV12).
 [dependencies]
 omnia-doc = { path = "../omnia-doc" }
+# Symbol names, pins and bounds for the read projections (A1.4); GPUI-free (AINV8).
+omnia-symbols = { path = "../omnia-symbols" }
 # Canvas plan section 10 (MIT OR Apache-2.0); already in Cargo.lock.
 serde = { version = "1", features = ["derive"] }
 # Canvas plan section 10: the agent wire schema (MIT OR Apache-2.0); already in Cargo.lock.
