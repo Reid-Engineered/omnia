@@ -431,7 +431,7 @@ of the `canvas` lane.
   difference. Set `needs-human`; after the owner approves, commit the renders as goldens
   and set `done`.
 
-### T3.4 Gate: milestone 3 · todo
+### T3.4 Gate: milestone 3 · needs-human
 - Lane: bench · Depends: T3.3
 - Do: `bench run --sheet text --script pan` and `zoom`: p99 < 16.7 ms (B3). Re-run the whole
   T2.7 table with text on. Run the golden tests.
@@ -1872,3 +1872,26 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        12 goldens 0 differing pixels) pass locally; `cargo deny check` passes
                        bans/licenses/sources but reports pre-existing `RUSTSEC-2026-0592` on
                        `url 2.5.8` in `Cargo.lock` (out of T3.3 scope). No new dependencies.
+2026-11-22 T3.4 needs-human — Milestone 3 gate prepared; awaiting Orion reference campaign
+                       (`docs/measurements/T3.4/gate.py`). Registered bundled `Inter-Medium.ttf`
+                       and `Inter-SemiBold.ttf` in `crates/omnia-bench/src/harness.rs`
+                       (`register_sheet_fonts`, called in `run`, `idle`, and `start_child` for
+                       `Sheet::Stress(_)` and `S5`, fulfilling T3.1's handoff note). Froze
+                       `docs/measurements/T3.4/gate.py` (160 invocations across 100%/125%:
+                       `start-empty`, `start-1k`, `text-pan`, `text-zoom`, `1k-pan`, `1k-zoom`,
+                       `10k-pan`, `10k-zoom`; 10 rotating repetitions, full attribution, no B4
+                       known limit) and verified it with `docs/measurements/T3.4/test_gate.py`
+                       (4/4 pass). Windows golden suite (`cargo test -p omnia-golden`): all 12
+                       images (`inverting-amp` and `wien-oscillator`, both themes, 1.0/1.25/1.5)
+                       matched with 0 differing pixels. Non-reference Windows diagnostics
+                       (i7-14650HX, Intel UHD Graphics driver 32.0.101.7088 active, Windows 11
+                       26200, 1536x864 logical / 1920x1080 device @ 1.25 scale, 165 Hz, AC,
+                       Silent; certifies nothing; `docs/measurements/T3.4.md`): B10 holds
+                       (`ours.max == 0`) on all 6 motion runs; `start` delta +23.668 ms;
+                       `text-pan` p99 2.216 ms, `1k-pan` 1.587 ms, `10k-pan` 2.056 ms.
+                       Diagnostic risks flagged for Orion: `text-zoom` hit 25.854 ms p99 (max
+                       35.226 ms, 2,897 total allocs/frame p99) from per-bucket reshaping across
+                       K11's 0.5 px buckets, and zoom sweeps added ~200 MB private memory
+                       (`10k-zoom` 373.71 MB vs `10k-pan` 171.07 MB) from non-evicting glyph
+                       atlas growth. Standard checks pass locally (fmt, workspace clippy, bench
+                       feature clippy, cargo test, cargo deny check). No new dependencies.
