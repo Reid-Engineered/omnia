@@ -55,8 +55,16 @@ In scope:
 Out of scope: canvas behaviour (the shell hosts `SheetCanvas` and calls its public methods);
 simulation internals, models, netlists, instrument signal processing and result plots (the
 shell reserves their places and the states idle, running, paused, failed); a component library
-browser beyond what placement needs; printing; packaging, installers and updates; multiple
+browser and property inspector beyond what placement needs (the data model is in
+[parts-plan.md](parts-plan.md); Part Libraries and inspector UI will consume
+`omnia-parts::Catalog` and `Doc::part_defs`); printing; packaging, installers and updates; multiple
 top-level workspace windows; multi-sheet designs and project containers (UQ3).
+
+`U5.2` follows `T5.3` and parts `P2.4`. It installs the shell placement provider that calls
+`Catalog::place_symbol` when `Tool::Place(symbol)` commits. Its placement test checks that a
+committed generic op-amp carries the default model binding (`PD11`). Whichever of parts `P2.3`
+and `U2.3` merges second wires `SymbolLibrary::check_doc` after `Doc::load` in File > Open and
+bumps `UTC-open-bad` and its app fixture from rejected `version:3` to `version:4` (`PD8`).
 
 Repository facts this plan builds on:
 
@@ -863,7 +871,8 @@ pub enum Tool { Select, Wire, Place(SymbolId), Label, ZoomArea }                
 
 ## 11. Dependencies
 
-No new crate. Everything the shell needs is GPUI plus crates already in canvas plan section 10.
+The shell uses GPUI and the workspace crates in canvas plan section 10. `U5.2` also uses the
+workspace `omnia-parts` crate for catalog-backed placement.
 
 | Crate or asset | Use | Licence |
 | --- | --- | --- |

@@ -89,7 +89,7 @@ U1.7 -> U2.6 -> U2.7 -> U2.8
 U1.3 -> U3.1 ; U1.7 -> U3.2 ; U3.1 + U2.6 -> U3.3 ; U3.1 + U2.6 -> U3.4 -> U3.5
 U3.2 -> U3.6 ; U3.4 + U3.5 + U3.6 -> U3.7 [UH3] -> U3.8
 U1.7 -> U4.1, U4.3, U4.4, U4.5 ; U1.6 -> U4.2 ; U3.4 -> U4.6 ; U4.1..U4.6 -> U4.7
-T4.3 + T5.2 + T5.3 + U2.5 -> U5.1      T5.3 + U4.2 -> U5.2      T7.1 + U5.1 -> U5.3
+T4.3 + T5.2 + T5.3 + U2.5 -> U5.1      T5.3 + U4.2 + P2.4 -> U5.2      T7.1 + U5.1 -> U5.3
 W2.3 + U3.3 -> U5.4      T7.3 + U4.1 -> U5.5      T2.7 + U5.1 + U4.7 + U3.8 + U2.8 -> U5.6 [UH4]
 ```
 
@@ -113,7 +113,7 @@ without being drawn.
 | U4.1, U4.3 to U4.7 | nothing | **now** (after U1.7) |
 | U4.2 | T2.3 (done) for the symbol list | **now**; placing waits for U5.2 |
 | U5.1 | T4.3 (`select_all`), T5.2 (`undo`, `redo`, `CanvasEvent::History`), T5.3 (`delete_selection`) | after T5.3 |
-| U5.2 | T5.3 (place tool) | after T5.3 |
+| U5.2 | T5.3 (place tool), parts P2.4 (`Catalog::place_symbol`) | after T5.3 and P2.4 |
 | U5.3 | T7.1 (`cut`, `copy`, `paste`) | after T7.1 |
 | U5.4 | W2.3 (`set_wiring_prefs`, first consumer of the preferences) | after W2.3 |
 | U5.5 | T7.3 (animated instrument content) | after T7.3 |
@@ -354,13 +354,18 @@ without being drawn.
   "In use" picker shows 0 parts.
 
 ### U2.3 File actions · todo
-- Lane: shell · Depends: U2.2 · Read: UD7, UD8, UG4, UG10, D8
-- Owns: `crates/omnia-app/src/files.rs`, `main.rs`, `workspace.rs` (file handlers)
+- Lane: shell · Depends: U2.2 · Read: UD7, UD8, UG4, UG10, D8; ui-plan.md section 1 (parts
+  note); parts-plan.md PD8, §14 (File > Open handoff)
+- Owns: `crates/omnia-app/src/files.rs`, `main.rs`, `workspace.rs` (file handlers); if parts
+  `P2.3` merged first, also ui-plan.md `UTC-open-bad` (rejected version 3 → 4)
 - Do: New, Open (picker, several files, already-open), background load with a loading tab, Save,
   Save As with extension, atomic write, Close Tab, drop to open, paths on the command line,
-  "Saved …" status message.
+  "Saved …" status message. If parts `P2.3` merged first (whichever of `P2.3` and U2.3 merges
+  second does this, parts §14): File > Open calls `SymbolLibrary::check_doc` after `Doc::load`
+  and refuses a file with an unknown symbol id, and `UTC-open-bad` uses version 4.
 - Done when: UTC-open, UTC-open-twice, UTC-open-bad, UTC-open-drop, UTC-save-untitled,
-  UTC-save-cancel and UTC-save-fail pass headless; `write_atomic` leaves no temp file on any
+  UTC-save-cancel and UTC-save-fail pass headless (and, when U2.3 merges after `P2.3`, the app-level
+  `PTC-unknown-symbol` case); `write_atomic` leaves no temp file on any
   failure path (tested with a failing writer).
 
 ### U2.4 Dialogs, modal layer and toasts · todo
@@ -552,18 +557,23 @@ without being drawn.
   (INV5 unchanged); UINV4 still passes with T5.2's bindings.
 
 ### U5.2 Placement · todo
-- Lane: shell · Depends: T5.3, U4.2 · Read: T5.3
-- Owns: `crates/omnia-app/src/parts/picker.rs`, `actions.rs` (`place` flag)
+- Lane: shell · Depends: T5.3, U4.2, parts P2.4 · Read: T5.3; parts-plan.md PD11, §14 (`XD3`,
+  `Catalog::place_symbol`)
+- Owns: `crates/omnia-app/src/parts/picker.rs`, `actions.rs` (`place` flag), the placement
+  provider wiring in `workspace.rs`, the `omnia-parts` dependency in `crates/omnia-app/Cargo.toml`
 - Do: `PlacePart` sets the canvas tool to `Tool::Place(symbol)` and makes the sheet the key target
   (UQ14). Placement needs `Sheet`'s bindings (R, X, Y), so if GPUI focus is elsewhere (a
   Tab-focused chrome control) it then focuses the sheet: starting a canvas tool is not a
   shell-only change, and this costs at most one sheet repaint. With the sheet already focused no
-  focus call is made. The In use count updates after placement.
+  focus call is made. The In use count updates after placement. Install the canvas placement
+  provider (`T5.3`) with one that calls `Catalog::place_symbol`, so the picker and Place > Part
+  commit catalog definitions (parts §14).
 - Done when: a headless test places a resistor from the toolbar and from Place > Part, and Ctrl+Z
-  removes it; with the sheet focused beforehand, choosing the part causes 0 shell or focus sheet
-  paints before the placement preview; with a toolbar control focused, at most one focus-caused
-  paint (the move into the sheet). In both cases modality paints are counted separately under
-  UQ15 (`modality_paints <= modality_switches`, e.g. a Tab then a pointer choice is one switch).
+  removes it; a generic op-amp committed through the picker carries its default binding; with
+  the sheet focused beforehand, choosing the part causes 0 shell or focus sheet paints before the
+  placement preview; with a toolbar control focused, at most one focus-caused paint (the move into
+  the sheet). In both cases modality paints are counted separately under UQ15
+  (`modality_paints <= modality_switches`, e.g. a Tab then a pointer choice is one switch).
 
 ### U5.3 Clipboard · todo
 - Lane: shell · Depends: T7.1, U5.1 · Read: T7.1

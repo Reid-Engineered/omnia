@@ -489,6 +489,8 @@ pub enum ItemId { Part(PartId), Wire(WireId), Label(LabelId) }
 
 pub struct Part { pub symbol: SymbolId, pub at: Pt, pub orient: Orient,
                   pub designator: Arc<str>, pub value: Arc<str> }
+// P2.1 (parts-plan.md PD8, amended 2026-11-23): Part keeps these five fields; each StoredPart also
+// holds def: PartDefId and params (non-default overrides), read via part_def_id/part_params.
 pub struct Wire { pub a: Pt, pub b: Pt }                  // INV1
 pub struct Label { pub at: Pt, pub text: Arc<str> }
 
@@ -497,7 +499,7 @@ pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
                         DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField },
                         Follow(FollowError), Segment(Blocker) } // Follow/Segment: wiring-plan.md W2.2, W3.2
 pub enum Command {
-    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect },
+    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect }, // P2.2 adds def: PlaceDef and params: Params (parts-plan.md PD8)
     AddWires(Vec<Wire>),
     AddLabel(Label),
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
@@ -505,11 +507,14 @@ pub enum Command {
     DragSegment { wire: WireId, offset: i32 }, // wiring-plan.md WD7 (W3.2); nm, signed
     Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false)
     SetText { item: ItemId, field: TextField, text: Arc<str> },
+    // P2.2 (parts-plan.md PD8): SetParam { part, name, value } and UpdatePartDef { from, to }
     Paste { clip: Clip, at: Pt },
     Batch(Vec<Command>),
 }
 pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
+// P2.2 (parts-plan.md PD8, XD7): adds modified: Vec<PartId>, the parts whose params or definition
+// changed (SetParam, every instance of an UpdatePartDef) even when geometry and text did not.
 // added/removed are membership deltas only: an item that keeps its id with new geometry
 // (moved, reoriented, merge survivor, first piece of a split) is in neither; `dirty` covers
 // its old and new bounds. Consumers invalidate from dirty/revision, not the id lists.
@@ -554,6 +559,9 @@ impl Doc {
     pub fn save(&self, w: impl io::Write) -> io::Result<()>;
     pub fn load(r: impl io::Read) -> io::Result<Self>;
     // Version 2 RON embeds local bounds and pins (omnia-symbols depends on omnia-doc).
+    // P2.3 (parts-plan.md PD3, PD8, PK9): Version 3 adds the deduplicated part_defs table and per-part def/params;
+    // v2 loads by migration to unmodelled definitions. P2.1 adds part_def, part_defs, part_def_id,
+    // part_params and resolved_param queries, and extends PartialEq/content_eq per parts-plan.md PD8.
     // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points, index and connectivity.
     pub fn content_eq(&self, other: &Self) -> bool; // live items, exact live IDs, interior gaps, bounds/pins
     // PartialEq compares persistent state, including revision and every reserved slot (pre-T5.1 contract).
@@ -691,6 +699,8 @@ impl SheetCanvas {
     pub fn camera(&self) -> &Camera;
     pub fn status(&self) -> CanvasStatus;
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
+    // T5.3: a shell-supplied placement provider (see parts-plan.md section 14) builds the
+    // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation.
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);
@@ -703,6 +713,7 @@ impl EventEmitter<CanvasEvent> for SheetCanvas {}
 pub struct CountingAlloc;                                  // #[global_allocator]
 pub fn count_allocs<R>(f: impl FnOnce() -> R) -> (R, u64);
 pub enum StressSheet { Parts100, Parts1k, Parts10k, DenseWiring, TextHeavy }
+// Parts P2.5 adds Embedded10k (--sheet embedded-10k) for the B9 regression run (parts PD11).
 pub fn generate(sheet: StressSheet, seed: u64) -> Doc;
 // generate module: SplitMix64 seeds; counts (parts, wire segments): 100=(100,200),
 // 1k=(1_000,2_000), 10k=(10_000,20_000), dense=(1_000,12_000), text=(1_000,2_000).
