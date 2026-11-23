@@ -144,6 +144,9 @@ fact no longer matches, stop and log it.
 | UG12 | `set_window_title`, `toggle_fullscreen`, `is_fullscreen`, `window_bounds`, `appearance()`, `observe_window_appearance`, `scale_factor()`. | `window.rs` | Title, Full screen, Match system, window restore. |
 | UG13 | GPUI has no text-field element. `examples/input.rs` builds one from `EntityInputHandler` and `ElementInputHandler`. | `gpui/examples/input.rs` | UD16. |
 | UG14 | `Application::with_assets(impl AssetSource)` serves bytes to `svg()`; SVGs rasterise once per size into the atlas (G4). | `app.rs` `with_assets`; `assets.rs` | Icons (UD17). |
+| UG15 | `Window::focus` calls `refresh()`, and a refreshing window re-renders every cached view (`!window.refreshing` in the cache check). A mouse-down on a focusable element focuses it. | `window.rs` `focus`; `view.rs`; `elements/div.rs` (mouse-down focus, which a handler can suppress) | Pointer input in the chrome must not move focus (UQ14). Found by U4.2. |
+| UG16 | `Div::on_click` records the press with `window.refresh()` on mouse-down and refreshes again when the release over the hitbox completes the click. | `elements/div.rs` (click listeners, mouse-down and mouse-up handlers) | Chrome controls activate from their own `on_mouse_down`/`on_mouse_up` handlers with pressed state in the owning view, never `on_click` (UQ14). Found by the UH0 review. |
+| UG17 | `Window::dispatch_event` tracks input modality (keyboard, mouse, touch) and calls `refresh()` whenever it changes, before any handler runs. A refreshing window re-renders every cached view (UG15), so the first key after mouse input, or the first mouse move or press after a key, repaints `SheetView` once. Headless `simulate_keystrokes` uses the same dispatcher. | `window.rs` `dispatch_event`; `view.rs` cache check | No chrome code can avoid it; UQ15. Found by the UH0 review. |
 
 Not settled by reading, so measured in section 9: whether a `deferred` child of a `.cached()` view
 replays and occludes correctly (US2); what our render code allocates for a view whose only child
@@ -200,6 +203,9 @@ root re-render replays the sheet's previous primitives (G6) and does not run `Sh
 code. Hover, menu, toolbar, status, toast and instrument-frame changes notify only their own view
 (UINV2). The only shell actions that repaint the sheet are the ones D7 already allows: a theme
 change, a scale-factor change, and a viewport change from a dock resize, at most once per frame.
+Independently of the shell, GPUI itself refreshes the window, and so repaints the sheet once,
+when input switches between mouse and keyboard (UG17); whether that repaint is accepted is UQ15,
+and until it is answered the counts in UINV2, UB3 and the UTC rows stay as written.
 
 ## 6. Decisions
 
@@ -232,8 +238,9 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
   (`Window::bindings_for_action`), formatted with `Keystroke::unparse` for the running OS:
   `Ctrl+S`, `Ctrl+Shift+S`, `F11`. The mockup's command-key glyphs are not used on Windows or
   Linux (UQ11).
-- Keyboard: F10 focuses the first menu; Alt+underlined letter opens a menu; arrows move, Enter
-  activates, Esc closes one level and returns focus to where it was. There is no bare-Alt
+- Keyboard: F10 makes the menu bar the key target (UQ14) and highlights the first menu without
+  moving GPUI focus; Alt+underlined letter opens a menu the same way; arrows move, Enter
+  activates, Esc closes one level and returns the key target to where it was. There is no bare-Alt
   activation: Alt held at commit is the wiring follow modifier (WK3), and releasing it after a
   drag must not open a menu.
 - Opening a menu, moving between items and hovering notify `MenuBar` only. US2 confirms that a
@@ -257,18 +264,51 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
   `enabled` and `checked`. Menus, toolbar buttons, tooltips ("Save (Ctrl+S)") and the Help >
   Keyboard Shortcuts list are all generated from it. No other code builds a menu item or a
   binding.
-- Key contexts, outermost first: `Shell` (window root), `Workspace`, then exactly one of
-  `Sheet` (the canvas has focus), `Panel`, `Instrument`, `Menu`, `Dialog`, `Home`, `FirstBoot`;
-  `TextField` nests inside `Dialog`, `Home` or `Panel`.
+- Key contexts, outermost first: `Shell` (window root), `Workspace`, then exactly one focused
+  context of `Sheet` (the canvas has focus), `Panel`, `Dialog`, `Home`, `FirstBoot`, or a chrome
+  control reached by Tab (UINV12); `TextField` nests inside `Dialog`, `Home` or `Panel`. Menus,
+  popovers and instrument frames are not focused contexts: they are key targets held by the
+  workspace (UQ14).
 - Who binds what:
   - `Shell` and `Workspace` bind every modifier shortcut: Ctrl+N, O, S, Shift+S, W, Q, Z, Y,
     Shift+Z, X, C, V, A, comma, =, -, 0, 1, 2, 3, Tab, Shift+Tab, F1, F10, F11, and Delete.
-  - `Sheet` binds the single-key canvas tools from T5.2 (R, X, Y, W, Esc, and Space as T1.5 and
-    T6.2 use it), so typing in a text field can never rotate a part.
+  - `Sheet` binds the single-key canvas tools from T5.2 (R, X, Y, W, and Space as T1.5 and
+    T6.2 use it), so typing in a text field can never rotate a part. Esc is not bound in `Sheet`
+    (UQ14): the shell's `NavCancel` handler calls `SheetCanvas::cancel` (T5.2) when the sheet is
+    the key target.
   - The focused `TextField` handles its editing keystrokes before keymap dispatch (Ctrl+A,
     Ctrl+C, Ctrl+V, Ctrl+X, arrows, Backspace, Delete). It consumes document undo and redo
     keystrokes while focused. Text insertion goes through GPUI's input handler.
-  - `Menu` and `Dialog` bind arrows, Enter, Esc and Tab.
+  - Navigation keys are bound once, in `Shell`, so no two active contexts share one (UINV4)
+    and they resolve on every context stack, with or without `Workspace`: Up, Down, Left, Right,
+    Enter, Esc, Tab and Shift+Tab map to `NavUp`, `NavDown`, `NavLeft`, `NavRight`,
+    `NavConfirm`, `NavCancel`, `NavNext` and `NavPrev`. These are internal actions, not user
+    commands: they are not in `ACTIONS` (so UINV3's menu-entry rule does not apply) and
+    `default_bindings()` adds them beside `FocusMenuBar`, where the UINV4 validator covers them.
+    No other context binds these keys;
+    `Dialog`, a Tab-focused chrome control and the `Home` menu handle the `Nav*` actions with
+    `on_action`, which runs before `Shell`'s handler because they are deeper on the dispatch path.
+    Space on a Tab-focused chrome control is handled by that control's own key-down listener, not
+    by a binding.
+  - Key target routing (UQ14). Chrome buttons and popover rows suppress GPUI's automatic
+    mouse-down focus and activate from their own mouse-down and mouse-up handlers, not
+    `on_click`, which refreshes the window on press and release (UG16); the shared `widgets/`
+    button does both once for all of them. Menus, popovers
+    and instrument frames never take GPUI focus from a pointer, from F10 or Alt+letter, or when they close; the `KeyTarget` router (`Sheet`, `Menu`,
+    `Popover(id)`, `Instrument(id)`) records which one receives keys. The router registers
+    `capture_action` for every `Nav*` action on the root element; the capture phase runs root
+    first, before any focused control's `on_action`. While a menu, popover or instrument is the
+    key target, the router hands the action to it and stops propagation, so a Tab-focused toolbar
+    button cannot swallow Enter meant for an open menu. Opening a dialog closes any such overlay
+    first, so a focused dialog always receives its keys. A focused `TextField` intercepts its
+    editing keys before bindings resolve; while the key target is not `Sheet` it yields Enter,
+    Esc, Up, Down, Left, Right and Tab (it reads the router's target), so they resolve to `Nav*`
+    and reach the open overlay. With the target `Sheet`, the capture
+    handler lets the action propagate; if nothing deeper handles it, the root's bubble handler
+    acts: `NavCancel` calls
+    `SheetCanvas::cancel` (a no-op until T5.2 provides it), `NavNext` and `NavPrev` move focus per
+    UINV12, and the rest do nothing. Esc therefore closes an overlay whether the sheet or a
+    Tab-focused toolbar control has focus, and needs no canvas binding.
 - Undo, Redo, Cut, Copy, Paste, Delete and Select All are shell actions. Their handlers call the
   active canvas's public methods (`undo`, `redo`, `cut`, `copy`, `paste`, `delete_selection`,
   `select_all`; section 14 adds these to T5.2, T5.3 and T7.1). So the shortcut works wherever
@@ -316,8 +356,10 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
   one focus model; and tests run on the test platform.
 - Drag moves the frame by updating its rect in `InstrumentLayer` state, which notifies only the
   layer; the sheet replays (G6), and T-replay already showed replay is cheaper than repaint. A
-  click raises a frame to the top and focuses it (`Instrument` context); Esc returns focus to the
-  sheet. Frames are clamped so their header stays inside the sheet area, and they are clamped
+  click raises a frame to the top and makes it the key target (`Instrument(id)`, UQ14) without
+  moving GPUI focus, so the sheet is not refreshed; Esc returns the key target to the sheet. Tab
+  and F6 may move GPUI focus into a frame (UINV12); that keyboard move is not a shell-only
+  change, and Esc from a frame that holds real focus also returns GPUI focus to the sheet. Frames are clamped so their header stays inside the sheet area, and they are clamped
   again after a window or dock resize. The strip button for an open instrument shows UK4's dot
   and raises it.
 - Cost: an instrument that animates notifies only its frame; the frame's own paint plus sheet
@@ -610,7 +652,7 @@ runs in CI; "golden" means a Windows golden; "bench" means a reference-machine r
 | UTC-recovery | Modify, wait for autosave (timer driven), drop the app without quitting, relaunch | Home shows a Recovered card; Restore opens it modified with the edit present and bound to the original path; Discard deletes both recovery files. Headless with the test clock. |
 | UTC-recent | Open 25 different files | `recent.ron` holds 20, newest first; reopening the third restores its camera. Headless. |
 | UTC-tabs | Two documents: pan, zoom and select in A; switch to B and back ten times | A's camera, selection, undo depth and cursor equal their values before. Headless; UB6 bench. |
-| UTC-menu-keys | F10, Right ×2, Down, Enter on View > Zoom In | View opened by keyboard; Zoom In ran once; focus back on the sheet; `SheetView` paints once (the zoom) and `MenuBar` renders for each move. Headless. |
+| UTC-menu-keys | F10, Right ×2, Down, Enter on View > Zoom In | View opened by keyboard; Zoom In ran once; GPUI focus stays on the sheet throughout; `SheetView` paints once (the zoom) and `MenuBar` renders for each move. Headless. |
 | UTC-menu-mouse | Hover across all nine menu labels with a menu open, then Esc | Each opens in the next frame; sheet paint count 0. Headless; UB2/UB3 bench. |
 | UTC-disabled | With no selection, invoke Delete, Cut, Copy by key, menu and toolbar | Nothing changes (UINV5); items shown disabled. Headless. |
 | UTC-type-r | Open the threshold field in Preferences, type "R" and "Ctrl+Z" | The field receives the text; no rotate, no document undo. Headless. |
@@ -618,7 +660,7 @@ runs in CI; "golden" means a Windows golden; "bench" means a reference-machine r
 | UTC-small | Resize to 960x600 at 1.0 and 1.5 | Toolbar collapses in UD12's order; tabs scroll; nothing overlaps (`debug_bounds`). Headless; golden. |
 | UTC-theme | Switch Graphite → Gray → Match system with the system dark | Every view re-renders once per switch; each open sheet repaints once; the golden equals a fresh start in that theme. Headless; golden; UB7 bench. |
 | UTC-scale | Shell at 1.25, change to 1.5 | Image equals a fresh window at 1.5. Golden (with T7.4 for the sheet). |
-| UTC-instrument | Open two instruments, drag one 200 px over 30 frames, click the other, Esc | Clicked frame on top and focused; Esc focuses the sheet; sheet paint count 0 throughout. Headless; bench. |
+| UTC-instrument | Open two instruments, drag one 200 px over 30 frames, click the other, Esc | Clicked frame on top and the key target; Esc makes the sheet the key target; GPUI focus stays on the sheet; sheet paint count 0 throughout. Headless; bench. |
 | UTC-toast | Make `prefs.ron` unreadable, launch | Defaults in use; one toast; it expires after 8 s; afterwards no timer exists. Headless. |
 | UTC-first-boot | No `prefs.ron`, launch, press Enter | First boot shows; Enter writes `prefs.ron` with defaults and opens Home. Headless. |
 | UTC-wiring-prefs | Set follow threshold to 3 in Preferences, restart | The value is in `prefs.ron`; each canvas reports 3; a threshold of 0 in the file is rejected with a toast and the default used. Headless. |
@@ -852,28 +894,33 @@ names and recovery ids use the process id, time and a counter instead of a UUID 
 | Shortcut conflicts appear as canvas and stage 3 add keys | UINV4 test over the whole keymap, run in CI | U1.4 |
 | The file-chooser portal is missing on a Linux desktop | `FileError::PickerUnavailable` dialog naming the missing service; files can still be opened by drop or command line | US1 machine check |
 | Users lose work to a crash between saves | UD9 recovery copies every 60 s of unsaved work | UTC-recovery |
-| GPUI churn changes action, focus or overlay APIs | Facts UG1 to UG14 re-checked at each upgrade (canvas plan section 10, step 2) | Upgrade routine |
+| GPUI churn changes action, focus or overlay APIs | Facts UG1 to UG17 re-checked at each upgrade (canvas plan section 10, step 2) | Upgrade routine |
 | Shell work starts before canvas editing exists, then has to change | Shell calls only the canvas methods in section 10; `CanvasEdits` flags enable menu items as each canvas task lands (U5.x) | U2.5 tests with flags off and on |
 
 ## 13. Open questions
 
 Each has a default. Build to the default; the owner's dated answer replaces it here.
 
-| ID | Question | Default until answered |
-| --- | --- | --- |
-| UQ1 | `text/muted` (2.32 to 3.88:1) and Gray `text/secondary` on backdrop (4.25) and inset (4.43) are below 4.5:1. Change the tokens, or change where they are used? | The shell uses the next stronger token wherever a pair it draws would fail (muted → secondary, secondary → primary); UH2 lists every substitution next to the mockup. |
-| UQ2 | Command palette? | No. Menus, F10 and Alt+letter cover keyboard reach. |
-| UQ3 | Standalone files or a project container (ROADMAP open decision)? | Standalone `.omnia` files, one sheet each. Home's "Projects" are folders. |
-| UQ4 | Tab label: file name or a design title stored in the file? | File name without extension. |
-| UQ5 | Autosave recovery copies on by default, every 60 s? | Yes. |
-| UQ6 | Shell colours not in the `Theme` collection: logo tile, mark, oscilloscope screen, "running" pill, focus ring. | Add to the overlay token file, same value in both themes: `brand/tile` `#F2F2F2`, `brand/mark` `#111112`, `instrument/screen` `#0E0F11`, `focus/ring` = `stage/select`; the pill uses `stage/tag-bg`, `stage/tag-text`, `accent/mint`. A token that appears in `omnia.figcraft` wins. |
-| UQ7 | Home sidebar items for features that do not exist (Templates, Part libraries, Simulation results, account footer)? | Shown disabled with "Not available yet"; the footer omitted. |
-| UQ8 | Keep T1.5's cursor readout, which the mockup's status bar does not show? | Keep it, before grid. |
-| UQ9 | First boot sections 3 and 4 (libraries, simulator) before those features exist? | Reserved rows listing only what this build has. |
-| UQ10 | Guard against two instances editing the same file? | No lock; last save wins. |
-| UQ11 | The mockup shows command-key glyphs; the targets are Windows and Linux. | Show "Ctrl+N" style text. |
-| UQ12 | IEC symbol preference before an IEC symbol set is compiled? | Stored only; the sheet keeps the built-in set. |
-| UQ13 | Print (toolbar, File)? | Shown disabled; no print plan exists. |
+UH0 was signed on 2026-11-23. The owner delegated the sign-off to the coordinating agent, which
+kept every default and approved section 14 as written.
+
+| ID | Question | Default until answered | Answer |
+| --- | --- | --- | --- |
+| UQ1 | `text/muted` (2.32 to 3.88:1) and Gray `text/secondary` on backdrop (4.25) and inset (4.43) are below 4.5:1. Change the tokens, or change where they are used? | The shell uses the next stronger token wherever a pair it draws would fail (muted → secondary, secondary → primary); UH2 lists every substitution next to the mockup. | Default kept (UH0, 2026-11-23). |
+| UQ2 | Command palette? | No. Menus, F10 and Alt+letter cover keyboard reach. | Default kept (UH0, 2026-11-23). |
+| UQ3 | Standalone files or a project container (ROADMAP open decision)? | Standalone `.omnia` files, one sheet each. Home's "Projects" are folders. | Default kept (UH0, 2026-11-23). |
+| UQ4 | Tab label: file name or a design title stored in the file? | File name without extension. | Default kept (UH0, 2026-11-23). |
+| UQ5 | Autosave recovery copies on by default, every 60 s? | Yes. | Default kept (UH0, 2026-11-23). |
+| UQ6 | Shell colours not in the `Theme` collection: logo tile, mark, oscilloscope screen, "running" pill, focus ring. | Add to the overlay token file, same value in both themes: `brand/tile` `#F2F2F2`, `brand/mark` `#111112`, `instrument/screen` `#0E0F11`, `focus/ring` = `stage/select`; the pill uses `stage/tag-bg`, `stage/tag-text`, `accent/mint`. A token that appears in `omnia.figcraft` wins. | Default kept (UH0, 2026-11-23). |
+| UQ7 | Home sidebar items for features that do not exist (Templates, Part libraries, Simulation results, account footer)? | Shown disabled with "Not available yet"; the footer omitted. | Default kept (UH0, 2026-11-23). |
+| UQ8 | Keep T1.5's cursor readout, which the mockup's status bar does not show? | Keep it, before grid. | Default kept (UH0, 2026-11-23). |
+| UQ9 | First boot sections 3 and 4 (libraries, simulator) before those features exist? | Reserved rows listing only what this build has. | Default kept (UH0, 2026-11-23). |
+| UQ10 | Guard against two instances editing the same file? | No lock; last save wins. | Default kept (UH0, 2026-11-23). |
+| UQ11 | The mockup shows command-key glyphs; the targets are Windows and Linux. | Show "Ctrl+N" style text. | Default kept (UH0, 2026-11-23). |
+| UQ12 | IEC symbol preference before an IEC symbol set is compiled? | Stored only; the sheet keeps the built-in set. | Default kept (UH0, 2026-11-23). |
+| UQ13 | Print (toolbar, File)? | Shown disabled; no print plan exists. | Default kept (UH0, 2026-11-23). |
+| UQ14 | At the pinned revision `Window::focus` calls `refresh()`, which re-renders every cached view, and a mouse-down focuses a focusable element (UG15). Chrome clicks and popovers that take focus would therefore repaint `SheetView`, against UINV2, UB3, UTC-menu-keys and UTC-instrument. Accept the repaint and reword those, or keep pointer input in the chrome from moving focus? | None (raised by U4.2 after UH0's draft). | 2026-11-23 (UH0): keep UINV2, UB3 and their paint counts. Neither a pointer action in the chrome nor F10/Alt+letter calls `Window::focus`; mouse-down focus is suppressed on chrome controls (UG15). The workspace root holds a key target (`Sheet`, `Menu`, `Instrument(id)`); menus, popovers and instrument frames become the key target, not the focused element, and receive arrows, Enter, Esc and Tab through `Nav*` actions bound once in `Shell` and routed by the root's `KeyTarget` router (Esc is no longer a `Sheet` binding; T5.2 provides `SheetCanvas::cancel` instead) (UD2, UD3, UD5; UTC-menu-keys and UTC-instrument reworded to say GPUI focus stays on the sheet, paint counts unchanged). Chrome controls activate from their own mouse-down and mouse-up handlers, never `Div::on_click` (UG16). A focused text field yields navigation keys while an overlay is the key target. GPUI focus moves only for keyboard traversal (Tab, F6, UINV12), for dialogs and text fields, which need the input handler, and when a command starts a canvas tool while focus is outside the sheet (U5.2's `PlacePart`: the tool needs `Sheet`'s bindings; at most one sheet repaint). None of these is a shell-only change under UINV2. If U1.5 finds this cannot be built at the pinned revision, it is set to `blocked (UQ14)` and returns to the owner; the invariants are not reworded to fit. |
+| UQ15 | GPUI refreshes the whole window when input switches between mouse and keyboard (UG17), so a click then Esc (UTC-instrument), mouse input then F10 (UTC-menu-keys), or Tab then a pointer move repaints `SheetView` once, whatever the chrome does. Accept one sheet repaint per input-modality switch and say so in UINV2, UB3, UTC-menu-keys and UTC-instrument, or patch the pinned GPUI so a modality change refreshes only views that style on it? | Neither: UINV2, UB3 and the UTC rows stay as written. A task whose acceptance check fails only because of the UG17 refresh is set to `blocked (UQ15)`, records the counts with and without the modality-switch frame, and returns to the owner. | Open: for the owner (raised 2026-11-23 by the UH0 review; the delegated sign-off does not reword invariants). |
 
 ## 14. Changes to the canvas and wiring plans
 
@@ -894,7 +941,7 @@ wiring files stay authoritative for their ids.
 | canvas-roadmap.md T4.3 | Also provide `select_all` (Ctrl+A is bound by the shell, UD3). |
 | canvas-roadmap.md T4.5 | Also provide `zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation), used by View and the toolbar. |
 | canvas-roadmap.md T5.1 | Follow-up for doc lane task U2.1: `history_cursor`, `can_undo`, `can_redo`. |
-| canvas-roadmap.md T5.2 | Bind R, X, Y, W, Esc (and T1.5/T6.2's Space) in key context `Sheet`. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and `CanvasEvent::History`. The keymap conflict test (UINV4) covers T5.2's bindings. |
+| canvas-roadmap.md T5.2 | Bind R, X, Y, W (and T1.5/T6.2's Space) in key context `Sheet`; provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and `CanvasEvent::History`. The keymap conflict test (UINV4) covers T5.2's bindings. |
 | canvas-roadmap.md T5.3 | Provide `delete_selection`. |
 | canvas-roadmap.md T7.1 | Ctrl+C, Ctrl+X, Ctrl+V are bound by the shell; T7.1 provides `cut`, `copy`, `paste`. |
 | canvas-roadmap.md T7.3 | The floating frame, drag, stacking and focus come from ui-roadmap.md U4.1. T7.3 supplies the animated stub content inside that frame, keeps `bench run --script pan --instrument` and its done-when; `instrument_host.rs` holds the content only. |
