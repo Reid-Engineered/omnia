@@ -8,9 +8,11 @@
 //!   ground) intentionally omit pin numbers; multi-pin symbols show every pin number.
 //! - Bucketing (K11, D6): logical font sizes are quantised to 0.5 px steps, capped at
 //!   [`MAX_FONT_PX`] so the non-evicting glyph atlas stays bounded across K4's zoom range.
-//!   Each label caches one [`ShapedLine`] for its current bucket and reshapes only when its
-//!   bucket, text, or window scale factor changes. Pin numbers share one cached line per
-//!   `(symbol, pin)` across all parts of that symbol.
+//!   Each label caches one [`ShapedLine`] shaped once at its 100%-zoom base size (K8) and
+//!   reshapes only when its text changes; on paint, metrics and glyph positions scale linearly to
+//!   the active K11 bucket and emit directly at that bucket's font size, so zooming across
+//!   buckets or moving across scale factors never reshapes on the hot path. Pin numbers share one
+//!   cached line per `(symbol, pin)` across all parts of that symbol.
 //! - LOD (K9, D5, T0.6): ordinary text (designators, values, net labels) hides below 6.5 px font
 //!   size; pin numbers then stay visible down to K9's 2.5 px pin-number and junction-dot threshold
 //!   (31.25% zoom), matching D5's drop order. Visible labels are viewport-culled before enforcing
@@ -153,17 +155,16 @@ fn priority_key(c: &Candidate) -> (Reverse<u16>, i32, i32, u32, u8, u16) {
 
 #[derive(Debug, Default)]
 struct CachedLine {
-    /// 0 means empty or invalidated; valid buckets are >= 1 (0.5 px).
-    bucket: u16,
     /// Prepared single-line display string, updated in `sync()` on `Doc::revision` changes so the
     /// paint hot path never allocates to escape or copy label text (B10).
     display: SharedString,
+    /// Line shaped once at its kind's 100%-zoom base size (D6); metrics and glyph offsets scale
+    /// linearly to the active K11 bucket on paint.
     line: Option<ShapedLine>,
 }
 
 impl CachedLine {
     fn clear(&mut self) {
-        self.bucket = 0;
         self.display = SharedString::default();
         self.line = None;
     }
@@ -177,7 +178,6 @@ impl CachedLine {
             return;
         }
         self.display = prepare_display(raw);
-        self.bucket = 0;
         self.line = None;
     }
 }
@@ -249,7 +249,6 @@ pub(super) struct TextCache {
     /// part's visual body, computed once per revision so edge-crossing labels are never missed.
     max_part_overhang_nm: (i32, i32, i32, i32),
     doc_revision: Option<u64>,
-    scale_factor_bits: u32,
     semibold: Font,
     medium: Font,
     #[cfg(test)]
@@ -265,7 +264,6 @@ impl TextCache {
             pin_offsets.push(pin_lines.len());
             for pin in def.pins {
                 pin_lines.push(CachedLine {
-                    bucket: 0,
                     display: prepare_static_display(pin.number),
                     line: None,
                 });
@@ -283,7 +281,6 @@ impl TextCache {
             max_net_chars: 0,
             max_part_overhang_nm: (0, 0, 0, 0),
             doc_revision: None,
-            scale_factor_bits: 0,
             semibold: Font {
                 weight: FontWeight::SEMIBOLD,
                 ..gpui::font(inter.clone())
@@ -297,25 +294,10 @@ impl TextCache {
         }
     }
 
-    /// Resets cached buckets on scale-factor changes (T7.4), releases cached `ShapedLine`s for
-    /// deleted, emptied, or edited items on `Doc::revision` changes while preserving slot capacity,
-    /// prepares escaped display strings once per revision, and computes deterministic part-label
-    /// placements once per revision (B10).
-    fn sync(&mut self, doc: &Doc, sf: f32) {
-        let sf_bits = sf.to_bits();
-        if self.scale_factor_bits != sf_bits {
-            self.scale_factor_bits = sf_bits;
-            for slot in &mut self.pin_lines {
-                slot.bucket = 0;
-            }
-            for slot in &mut self.part_lines {
-                slot.designator.bucket = 0;
-                slot.value.bucket = 0;
-            }
-            for slot in &mut self.label_lines {
-                slot.bucket = 0;
-            }
-        }
+    /// Releases cached `ShapedLine`s for deleted, emptied, or edited items on `Doc::revision`
+    /// changes while preserving slot capacity, prepares escaped display strings once per revision,
+    /// and computes deterministic part-label placements once per revision (B10).
+    fn sync(&mut self, doc: &Doc) {
         let revision = doc.revision();
         if self.doc_revision != Some(revision) {
             self.doc_revision = Some(revision);
@@ -575,7 +557,7 @@ impl TextCache {
         window: &mut Window,
         scope: &impl SheetPaintScope,
     ) {
-        self.sync(frame.doc, frame.scale_factor);
+        self.sync(frame.doc);
 
         let buckets = Buckets {
             part: FontBucket::from_logical(PART_LABEL_PX * frame.camera.zoom()),
@@ -680,7 +662,6 @@ impl TextCache {
         &mut self,
         part_id: PartId,
         is_value: bool,
-        bucket: FontBucket,
         ink: Hsla,
         window: &Window,
         scope: &impl SheetPaintScope,
@@ -693,11 +674,17 @@ impl TextCache {
         } else {
             &mut slots.designator
         };
-        if slot.display.is_empty() || (slot.bucket == bucket.half_px && slot.line.is_some()) {
+        if slot.display.is_empty() || slot.line.is_some() {
             return;
         }
-        let shaped = shape_display_line(&slot.display, bucket, &self.semibold, ink, window, scope);
-        slot.bucket = bucket.half_px;
+        let shaped = shape_display_line(
+            &slot.display,
+            px(PART_LABEL_PX as f32),
+            &self.semibold,
+            ink,
+            window,
+            scope,
+        );
         slot.line = Some(shaped);
         #[cfg(test)]
         {
@@ -708,7 +695,6 @@ impl TextCache {
     fn ensure_label_slot_shaped(
         &mut self,
         label_id: LabelId,
-        bucket: FontBucket,
         ink: Hsla,
         window: &Window,
         scope: &impl SheetPaintScope,
@@ -716,11 +702,17 @@ impl TextCache {
         let Some(slot) = self.label_lines.get_mut(label_id.0 as usize) else {
             return;
         };
-        if slot.display.is_empty() || (slot.bucket == bucket.half_px && slot.line.is_some()) {
+        if slot.display.is_empty() || slot.line.is_some() {
             return;
         }
-        let shaped = shape_display_line(&slot.display, bucket, &self.medium, ink, window, scope);
-        slot.bucket = bucket.half_px;
+        let shaped = shape_display_line(
+            &slot.display,
+            px(NET_LABEL_PX as f32),
+            &self.medium,
+            ink,
+            window,
+            scope,
+        );
         slot.line = Some(shaped);
         #[cfg(test)]
         {
@@ -731,17 +723,22 @@ impl TextCache {
     fn ensure_pin_slot_shaped(
         &mut self,
         slot_idx: usize,
-        bucket: FontBucket,
         ink: Hsla,
         window: &Window,
         scope: &impl SheetPaintScope,
     ) {
         let slot = &mut self.pin_lines[slot_idx];
-        if slot.display.is_empty() || (slot.bucket == bucket.half_px && slot.line.is_some()) {
+        if slot.display.is_empty() || slot.line.is_some() {
             return;
         }
-        let shaped = shape_display_line(&slot.display, bucket, &self.medium, ink, window, scope);
-        slot.bucket = bucket.half_px;
+        let shaped = shape_display_line(
+            &slot.display,
+            px(PIN_NUMBER_PX as f32),
+            &self.medium,
+            ink,
+            window,
+            scope,
+        );
         slot.line = Some(shaped);
         #[cfg(test)]
         {
@@ -773,12 +770,8 @@ impl TextCache {
             let has_both = has_desig && has_value;
             let pair_flag = u16::from(has_both);
 
-            let desig_cached = slots
-                .map(|s| s.designator.bucket == bucket.half_px && s.designator.line.is_some())
-                .unwrap_or(false);
-            let value_cached = slots
-                .map(|s| s.value.bucket == bucket.half_px && s.value.line.is_some())
-                .unwrap_or(false);
+            let desig_cached = slots.is_some_and(|s| s.designator.line.is_some());
+            let value_cached = slots.is_some_and(|s| s.value.line.is_some());
 
             // If either field is unshaped and the conservative part-label box straddles a viewport
             // edge, shape before culling so edited or wide strings never get misclassified.
@@ -828,14 +821,10 @@ impl TextCache {
                 }
                 if !all_strictly_inside {
                     if has_desig {
-                        self.ensure_part_slot_shaped(
-                            part_id, false, bucket, frame.ink, window, scope,
-                        );
+                        self.ensure_part_slot_shaped(part_id, false, frame.ink, window, scope);
                     }
                     if has_value {
-                        self.ensure_part_slot_shaped(
-                            part_id, true, bucket, frame.ink, window, scope,
-                        );
+                        self.ensure_part_slot_shaped(part_id, true, frame.ink, window, scope);
                     }
                 }
             }
@@ -940,8 +929,7 @@ impl TextCache {
                 continue;
             }
             let slot_idx = pin_base + pin_idx;
-            let cached = self.pin_lines[slot_idx].bucket == bucket.half_px
-                && self.pin_lines[slot_idx].line.is_some();
+            let cached = self.pin_lines[slot_idx].line.is_some();
             if let Some(window) = window
                 && !cached
             {
@@ -952,13 +940,7 @@ impl TextCache {
                     continue;
                 }
                 if !label_strictly_inside_viewport(lx, by, cm, frame.scale_factor, frame.viewport) {
-                    self.ensure_pin_slot_shaped(
-                        slot_idx,
-                        bucket,
-                        frame.ink_secondary,
-                        window,
-                        scope,
-                    );
+                    self.ensure_pin_slot_shaped(slot_idx, frame.ink_secondary, window, scope);
                 }
             }
             let def = self.library.get(part.symbol);
@@ -1003,7 +985,7 @@ impl TextCache {
         let cached = self
             .label_lines
             .get(label_id.0 as usize)
-            .is_some_and(|s| s.bucket == bucket.half_px && s.line.is_some());
+            .is_some_and(|s| s.line.is_some());
         if let Some(window) = window
             && !cached
         {
@@ -1028,7 +1010,7 @@ impl TextCache {
                 frame.scale_factor,
                 frame.viewport,
             ) {
-                self.ensure_label_slot_shaped(label_id, bucket, frame.ink_secondary, window, scope);
+                self.ensure_label_slot_shaped(label_id, frame.ink_secondary, window, scope);
             }
         }
         let m = line_metrics(
@@ -1065,7 +1047,6 @@ impl TextCache {
                     self.ensure_part_slot_shaped(
                         PartId(c.id),
                         c.kind == LabelKind::Value,
-                        c.bucket,
                         frame.ink,
                         window,
                         scope,
@@ -1074,7 +1055,6 @@ impl TextCache {
                 LabelKind::NetLabel => {
                     self.ensure_label_slot_shaped(
                         LabelId(c.id),
-                        c.bucket,
                         frame.ink_secondary,
                         window,
                         scope,
@@ -1082,13 +1062,7 @@ impl TextCache {
                 }
                 LabelKind::PinNumber => {
                     let slot_idx = self.pin_offsets[c.symbol.index()] + usize::from(c.extra);
-                    self.ensure_pin_slot_shaped(
-                        slot_idx,
-                        c.bucket,
-                        frame.ink_secondary,
-                        window,
-                        scope,
-                    );
+                    self.ensure_pin_slot_shaped(slot_idx, frame.ink_secondary, window, scope);
                 }
             }
         }
@@ -1135,7 +1109,7 @@ impl TextCache {
                         line_metrics(Some(&slots.value), &part.value, c.bucket).width
                     };
                     let block_w = desig_w.max(value_w);
-                    let m = metrics_from_shaped(line);
+                    let m = metrics_from_shaped(line, c.bucket);
                     let layout = PartLabelLayout {
                         placement: slots.placement,
                         is_value: c.kind == LabelKind::Value,
@@ -1174,20 +1148,23 @@ impl TextCache {
                         part,
                         def,
                         def.pins[pin_idx].at,
-                        metrics_from_shaped(line),
+                        metrics_from_shaped(line, c.bucket),
                         frame.camera,
                     );
                     (line, frame.ink_secondary, left_x, baseline_y)
                 }
             };
 
+            let bucket_px = c.bucket.pixels();
+            let scale = font_scale_f32(line, c.bucket);
+
             // Snap each label origin to whole device pixels so glyphs hit deterministic subpixel
             // X variants across pans and repeated zoom sweeps.
             let origin_x = snap_logical(left_x, frame.scale_factor) as f32;
             let baseline_y = snap_logical(baseline_y, frame.scale_factor) as f32;
-            let top_y = baseline_y - f32::from(line.ascent);
-            let bottom_y = baseline_y + f32::from(line.descent).max(0.0);
-            let right_x = origin_x + f32::from(line.width);
+            let top_y = baseline_y - f32::from(line.ascent) * scale;
+            let bottom_y = baseline_y + f32::from(line.descent).max(0.0) * scale;
+            let right_x = origin_x + f32::from(line.width) * scale;
             if right_x < v_left || origin_x > v_right || bottom_y < v_top || top_y > v_bottom {
                 continue;
             }
@@ -1195,14 +1172,14 @@ impl TextCache {
             for run in &line.runs {
                 for glyph in &run.glyphs {
                     let pos = point(
-                        px(origin_x) + glyph.position.x,
-                        px(baseline_y) + glyph.position.y,
+                        px(origin_x + f32::from(glyph.position.x) * scale),
+                        px(baseline_y + f32::from(glyph.position.y) * scale),
                     );
                     scope.gpui(|| {
                         let result = if glyph.is_emoji {
-                            window.paint_emoji(pos, run.font_id, glyph.id, line.font_size)
+                            window.paint_emoji(pos, run.font_id, glyph.id, bucket_px)
                         } else {
-                            window.paint_glyph(pos, run.font_id, glyph.id, line.font_size, color)
+                            window.paint_glyph(pos, run.font_id, glyph.id, bucket_px, color)
                         };
                         if let Err(error) = result {
                             eprintln!("sheet glyph: {error}");
@@ -1302,21 +1279,33 @@ fn flattened_char_len(text: &str) -> usize {
         .sum()
 }
 
-fn metrics_from_shaped(line: &ShapedLine) -> LineMetrics {
+fn font_scale_f32(line: &ShapedLine, bucket: FontBucket) -> f32 {
+    let base = f32::from(line.font_size);
+    let target = f32::from(bucket.pixels());
+    debug_assert!(base > 0.0);
+    if target == base { 1.0 } else { target / base }
+}
+
+fn font_scale_f64(line: &ShapedLine, bucket: FontBucket) -> f64 {
+    let base = f64::from(line.font_size);
+    let target = f64::from(bucket.pixels());
+    debug_assert!(base > 0.0);
+    if target == base { 1.0 } else { target / base }
+}
+
+fn metrics_from_shaped(line: &ShapedLine, bucket: FontBucket) -> LineMetrics {
+    let scale = font_scale_f64(line, bucket);
     LineMetrics {
-        width: f64::from(line.width),
-        ascent: f64::from(line.ascent),
-        descent: f64::from(line.descent).max(0.0),
-        font_size: f64::from(line.font_size),
+        width: f64::from(line.width) * scale,
+        ascent: f64::from(line.ascent) * scale,
+        descent: f64::from(line.descent).max(0.0) * scale,
+        font_size: f64::from(bucket.pixels()),
     }
 }
 
 fn line_metrics(slot: Option<&CachedLine>, raw_text: &str, bucket: FontBucket) -> LineMetrics {
-    if let Some(slot) = slot
-        && slot.bucket == bucket.half_px
-        && let Some(line) = slot.line.as_ref()
-    {
-        return metrics_from_shaped(line);
+    if let Some(line) = slot.and_then(|s| s.line.as_ref()) {
+        return metrics_from_shaped(line, bucket);
     }
     let font_size = f64::from(bucket.pixels());
     let chars = slot.filter(|s| !s.display.is_empty()).map_or_else(
@@ -1338,11 +1327,8 @@ fn conservative_metrics(
     raw_text: &str,
     bucket: FontBucket,
 ) -> LineMetrics {
-    if let Some(slot) = slot
-        && slot.bucket == bucket.half_px
-        && let Some(line) = slot.line.as_ref()
-    {
-        return metrics_from_shaped(line);
+    if let Some(line) = slot.and_then(|s| s.line.as_ref()) {
+        return metrics_from_shaped(line, bucket);
     }
     let font_size = f64::from(bucket.pixels());
     let chars = slot.filter(|s| !s.display.is_empty()).map_or_else(
@@ -1395,7 +1381,7 @@ fn label_strictly_inside_viewport(
 
 fn shape_display_line(
     display: &SharedString,
-    bucket: FontBucket,
+    font_size: Pixels,
     font: &Font,
     color: Hsla,
     window: &Window,
@@ -1413,7 +1399,7 @@ fn shape_display_line(
         out = Some(
             window
                 .text_system()
-                .shape_line(shared, bucket.pixels(), &[run], None),
+                .shape_line(shared, font_size, &[run], None),
         );
     });
     out.expect("scope.gpui runs closure")
@@ -1871,7 +1857,7 @@ mod tests {
             ink_secondary,
         };
         let mut cache = TextCache::new();
-        cache.sync(&doc, 1.0);
+        cache.sync(&doc);
         let initial_cap = cache.candidates.capacity();
         cache.collect_candidates(&frame, buckets, None, &());
         assert_eq!(cache.candidates.len(), MAX_VISIBLE_LABELS);
@@ -1916,7 +1902,7 @@ mod tests {
             ..frame
         };
         let mut cache2 = TextCache::new();
-        cache2.sync(&doc, 1.0);
+        cache2.sync(&doc);
         cache2.collect_candidates(&frame_rev, buckets, None, &());
         let keys = |c: &TextCache| -> Vec<_> {
             c.candidates
@@ -2046,7 +2032,7 @@ mod tests {
 
         window.update(|_, window, _| {
             // Frame 1 at initial camera: `"I"` is inside viewport and gets shaped & cached.
-            cache.sync(&doc, 1.0);
+            cache.sync(&doc);
             let area0 = cache.expanded_query_area(&camera_initial, buckets).unwrap();
             doc.query(area0, &mut cache.query_buf);
             let frame0 = TextFrame {
@@ -2134,7 +2120,7 @@ mod tests {
                 text: "WW".into(),
             })
             .unwrap();
-            cache.sync(&doc, 1.0);
+            cache.sync(&doc);
             assert!(
                 cache.label_lines[label_id.0 as usize].line.is_none(),
                 "sync must clear stale shaped line on text edit"
@@ -2168,7 +2154,7 @@ mod tests {
     }
 
     #[test]
-    fn d6_reshapes_only_when_bucket_text_or_scale_factor_changes_and_clears_deleted_items() {
+    fn d6_shapes_once_scales_across_buckets_and_reshapes_only_on_text_edit() {
         let library = SymbolLibrary::builtin();
         let resistor = library.get(library.by_name("Resistor-IEEE-Standard").unwrap());
         let mut doc = Doc::new();
@@ -2230,16 +2216,34 @@ mod tests {
                     net: FontBucket::from_logical(NET_LABEL_PX * cam.zoom()),
                     pin: pin_number_bucket(cam),
                 };
-                cache.sync(doc, sf);
+                cache.sync(doc);
                 cache.collect_candidates(&frame, buckets, Some(window), &());
                 cache.shape_missing(&frame, window, &());
             };
 
         window.update(|_, window, _| {
-            // Frame 1 at 100%: 1 designator + 1 value + 2 pin numbers + 1 multiline net = 5 shapes.
+            // Frame 1 at 100%: 1 designator + 1 value + 2 pin numbers + 1 multiline net = 5 shapes,
+            // each stored at its 100%-zoom base size (17 px for parts, 13 px for net/pins).
             let mut cam = Camera::new(Pt::ZERO, 1.0, bounds);
             run_step(&mut cache, &doc, &cam, 1.0, window);
             assert_eq!(cache.shape_count, 5);
+            assert_eq!(
+                cache.part_lines[part_id.0 as usize]
+                    .designator
+                    .line
+                    .as_ref()
+                    .unwrap()
+                    .font_size,
+                px(PART_LABEL_PX as f32)
+            );
+            assert_eq!(
+                cache.label_lines[label_id.0 as usize]
+                    .line
+                    .as_ref()
+                    .unwrap()
+                    .font_size,
+                px(NET_LABEL_PX as f32)
+            );
             assert_eq!(
                 cache.label_lines[label_id.0 as usize]
                     .line
@@ -2260,16 +2264,30 @@ mod tests {
             run_step(&mut cache, &doc, &cam_same, 1.0, window);
             assert_eq!(cache.shape_count, 5);
 
-            // Zoom to a new bucket: reshapes all 5.
+            // Zoom across K11 buckets (1.2x -> 20.5 px / 15.5 px, 0.5x -> 8.5 px / 6.5 px):
+            // 0 reshapes, and metrics scale linearly to the active bucket.
             let cam_new = Camera::new(Pt::ZERO, 1.2, bounds);
             run_step(&mut cache, &doc, &cam_new, 1.0, window);
-            assert_eq!(cache.shape_count, 10);
+            assert_eq!(cache.shape_count, 5);
 
-            // Same new bucket again: 0 reshapes.
-            run_step(&mut cache, &doc, &cam_new, 1.0, window);
-            assert_eq!(cache.shape_count, 10);
+            let bucket_100 = FontBucket::from_logical(PART_LABEL_PX).unwrap();
+            let bucket_120 = FontBucket::from_logical(PART_LABEL_PX * 1.2).unwrap();
+            let bucket_50 = FontBucket::from_logical(PART_LABEL_PX * 0.5).unwrap();
+            let slot = &cache.part_lines[part_id.0 as usize].designator;
+            let m_100 = line_metrics(Some(slot), "R1", bucket_100);
+            let m_120 = line_metrics(Some(slot), "R1", bucket_120);
+            let m_50 = line_metrics(Some(slot), "R1", bucket_50);
+            assert_eq!(m_120.font_size, f64::from(bucket_120.pixels()));
+            assert_eq!(m_50.font_size, f64::from(bucket_50.pixels()));
+            assert!((m_120.width - m_100.width * (m_120.font_size / PART_LABEL_PX)).abs() < 1e-6);
+            assert!((m_50.width - m_100.width * (m_50.font_size / PART_LABEL_PX)).abs() < 1e-6);
+            assert!((m_120.ascent - m_100.ascent * (m_120.font_size / PART_LABEL_PX)).abs() < 1e-6);
 
-            // Text edit reshapes only the edited field.
+            let cam_half = Camera::new(Pt::ZERO, 0.5, bounds);
+            run_step(&mut cache, &doc, &cam_half, 1.0, window);
+            assert_eq!(cache.shape_count, 5);
+
+            // Text edit reshapes only the edited field (still at its base size).
             doc.apply(Command::SetText {
                 item: ItemId::Part(part_id),
                 field: omnia_doc::TextField::Value,
@@ -2277,11 +2295,21 @@ mod tests {
             })
             .unwrap();
             run_step(&mut cache, &doc, &cam_new, 1.0, window);
-            assert_eq!(cache.shape_count, 11);
+            assert_eq!(cache.shape_count, 6);
+            assert_eq!(
+                cache.part_lines[part_id.0 as usize]
+                    .value
+                    .line
+                    .as_ref()
+                    .unwrap()
+                    .font_size,
+                px(PART_LABEL_PX as f32)
+            );
 
-            // Scale-factor change invalidates and reshapes all 5.
+            // Scale-factor change (T7.4) never reshapes logical-space lines; glyph rasterisation
+            // and origin snapping use the live scale factor on paint.
             run_step(&mut cache, &doc, &cam_new, 1.5, window);
-            assert_eq!(cache.shape_count, 16);
+            assert_eq!(cache.shape_count, 6);
 
             // Revision sync clears emptied field without shrinking slot capacity.
             let part_cap = cache.part_lines.capacity();
@@ -2292,7 +2320,7 @@ mod tests {
                 text: "".into(),
             })
             .unwrap();
-            cache.sync(&doc, 1.5);
+            cache.sync(&doc);
             assert!(cache.part_lines[part_id.0 as usize].value.line.is_none());
             assert!(
                 cache.part_lines[part_id.0 as usize]
@@ -2307,7 +2335,7 @@ mod tests {
                 with_wires: false,
             })
             .unwrap();
-            cache.sync(&doc, 1.5);
+            cache.sync(&doc);
             assert!(
                 cache.part_lines[part_id.0 as usize]
                     .designator
@@ -2318,6 +2346,85 @@ mod tests {
             assert!(cache.label_lines[label_id.0 as usize].line.is_none());
             assert_eq!(cache.part_lines.capacity(), part_cap);
             assert_eq!(cache.label_lines.capacity(), label_cap);
+        });
+    }
+
+    #[test]
+    fn d6_base_size_scaling_matches_direct_bucket_shaping() {
+        let mut app = gpui::TestApp::new();
+        let bounds = viewport();
+        let mut window = app.open_window_with_options(
+            gpui::WindowOptions {
+                window_bounds: Some(gpui::WindowBounds::Windowed(bounds)),
+                ..Default::default()
+            },
+            |_, _| gpui::Empty,
+        );
+        let cache = TextCache::new();
+        let ink = crate::sheet::gpui_color(omnia_theme::GRAPHITE.stage_ink);
+
+        window.update(|_, window, _| {
+            for sample in ["R102", "10.0k", "VOUT_CLK"] {
+                let text = SharedString::new_static(sample);
+                let base_line = shape_display_line(
+                    &text,
+                    px(PART_LABEL_PX as f32),
+                    &cache.semibold,
+                    ink,
+                    window,
+                    &(),
+                );
+                let base_glyph_ids: Vec<_> = base_line
+                    .runs
+                    .iter()
+                    .flat_map(|r| r.glyphs.iter().map(|g| (r.font_id, g.id)))
+                    .collect();
+
+                for target_px in [8.5, 17.0, 34.0, 68.0, MAX_FONT_PX] {
+                    let bucket = FontBucket::from_logical(target_px).unwrap();
+                    let direct = shape_display_line(
+                        &text,
+                        bucket.pixels(),
+                        &cache.semibold,
+                        ink,
+                        window,
+                        &(),
+                    );
+                    let direct_glyph_ids: Vec<_> = direct
+                        .runs
+                        .iter()
+                        .flat_map(|r| r.glyphs.iter().map(|g| (r.font_id, g.id)))
+                        .collect();
+                    assert_eq!(
+                        base_glyph_ids, direct_glyph_ids,
+                        "glyph ids for {sample} at {target_px} px must match base shape"
+                    );
+
+                    let scaled = metrics_from_shaped(&base_line, bucket);
+                    // Both cosmic_text (Hinting::Disabled) and DirectWrite (NATURAL) scale glyph
+                    // advances linearly; allow a small tolerance for platform line-metric rounding.
+                    let width_tol = (target_px * 0.005).max(0.05);
+                    let metric_tol = (target_px * 0.02).max(0.25);
+                    assert!(
+                        (scaled.width - f64::from(direct.width)).abs() <= width_tol,
+                        "scaled width {} vs direct {} for {sample} at {target_px} px",
+                        scaled.width,
+                        f64::from(direct.width)
+                    );
+                    assert!(
+                        (scaled.ascent - f64::from(direct.ascent)).abs() <= metric_tol,
+                        "scaled ascent {} vs direct {} for {sample} at {target_px} px",
+                        scaled.ascent,
+                        f64::from(direct.ascent)
+                    );
+                    assert!(
+                        (scaled.descent - f64::from(direct.descent).max(0.0)).abs() <= metric_tol,
+                        "scaled descent {} vs direct {} for {sample} at {target_px} px",
+                        scaled.descent,
+                        f64::from(direct.descent).max(0.0)
+                    );
+                }
+            }
         });
     }
 }

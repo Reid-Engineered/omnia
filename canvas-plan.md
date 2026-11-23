@@ -204,7 +204,7 @@ longer matches the source, stop and record it in the roadmap log.
 | G12 | `Window::render_to_image()` (feature `test-support`) renders the current scene to an RGBA image without presenting; the DirectX renderer implements it. | `window.rs`; `gpui_windows/src/directx_renderer.rs` | Golden-image tests need no screenshots. |
 | G13 | `window.frame_duration_snapshot()` (feature `profiler`) returns histograms of draw time, dirty-to-present time and present interval. GPUI's spans use the `profiling` crate. | `profiler.rs` `FrameDurationSnapshot` | The bench reads GPUI's own histograms. Tracy works through `profiling`. |
 | G14 | Glyph atlas entries are keyed by font, glyph, font size, scale factor and one of 4 horizontal subpixel offsets. `paint_glyph` always uses a unit transform. | `window.rs` `paint_glyph`; `text_system.rs` `SUBPIXEL_VARIANTS_X` | Bucket font sizes (K11). Text cannot be rotated. |
-| G15 | `text_system.shape_line(text, font_size, runs, force_width) -> ShapedLine`; `ShapedLine::paint(origin, line_height, align, align_width, window, cx)`. | `text_system.rs`; `text_system/line.rs` | Cache one `ShapedLine` per label and size bucket. |
+| G15 | `text_system.shape_line(text, font_size, runs, force_width) -> ShapedLine`; `ShapedLine::paint(origin, line_height, align, align_width, window, cx)`. Both Linux (`cosmic_text` `Hinting::Disabled`) and Windows (`DirectWrite` natural measuring) produce size-linear glyph offsets. | `text_system.rs`; `text_system/line.rs` | Cache one base-size `ShapedLine` per label (K8) and scale linearly to the active K11 bucket on direct glyph emission (D6). |
 | G16 | Apps start with `gpui_platform::application().run(..)`; `gpui_platform::headless()` also exists. `window.request_animation_frame()` notifies the current view on the next frame. | `gpui_platform/src/gpui_platform.rs`; `window.rs` | Entry point and animation tick. |
 
 Not settled by reading, so measured in the spike: whether the sprite atlas ever evicts,
@@ -345,8 +345,11 @@ returns a `Change` that the views use to decide what to repaint.
 
 ### D6 Text: cached shaped lines, bucketed sizes. DECIDED
 
-- Each label keeps one `ShapedLine` for the current size bucket (K11, G15). A frame only
-  calls `paint`.
+- Each label shapes one `ShapedLine` at its 100%-zoom base size (K8) and caches it until its
+  text changes or the item is deleted (G15). On paint, metrics and glyph offsets scale linearly
+  to the active K11 0.5 px size bucket (capped at `MAX_FONT_PX`) and glyphs emit directly at
+  that bucket's font size, so zooming across buckets or moving across scale factors never
+  reshapes on the hot path.
 - Positions are exact; only the glyph size is bucketed, so the error is under a quarter pixel.
 - Labels stay horizontal for every part orientation (G14).
 - Labels are culled by the same index query as everything else.
