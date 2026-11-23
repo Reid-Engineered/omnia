@@ -257,9 +257,11 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
   `enabled` and `checked`. Menus, toolbar buttons, tooltips ("Save (Ctrl+S)") and the Help >
   Keyboard Shortcuts list are all generated from it. No other code builds a menu item or a
   binding.
-- Key contexts, outermost first: `Shell` (window root), `Workspace`, then exactly one of
-  `Sheet` (the canvas has focus), `Panel`, `Instrument`, `Menu`, `Dialog`, `Home`, `FirstBoot`;
-  `TextField` nests inside `Dialog`, `Home` or `Panel`.
+- Key contexts, outermost first: `Shell` (window root), `Workspace`, then exactly one focused
+  context of `Sheet` (the canvas has focus), `Panel`, `Dialog`, `Home`, `FirstBoot`, or a chrome
+  control reached by Tab (UINV12); `TextField` nests inside `Dialog`, `Home` or `Panel`. Menus,
+  popovers and instrument frames are not focused contexts: they are key targets held by the
+  workspace (UQ14).
 - Who binds what:
   - `Shell` and `Workspace` bind every modifier shortcut: Ctrl+N, O, S, Shift+S, W, Q, Z, Y,
     Shift+Z, X, C, V, A, comma, =, -, 0, 1, 2, 3, Tab, Shift+Tab, F1, F10, F11, and Delete.
@@ -268,12 +270,19 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
   - The focused `TextField` handles its editing keystrokes before keymap dispatch (Ctrl+A,
     Ctrl+C, Ctrl+V, Ctrl+X, arrows, Backspace, Delete). It consumes document undo and redo
     keystrokes while focused. Text insertion goes through GPUI's input handler.
-  - `Dialog` binds arrows, Enter, Esc and Tab. Menus, popovers and instrument frames never take
-    GPUI focus from a pointer (UQ14): the workspace root holds a key target (`Sheet`, `Menu`,
-    `Instrument(id)`), and while the target is not `Sheet` its `capture_action` listeners on the
-    `Workspace` element take arrows, Enter, Esc and Tab before the sheet's handlers, so the menu's
-    Esc wins over `Sheet`'s Esc while the sheet keeps focus. `Menu` and `Instrument` are key
-    targets, not focused contexts.
+  - `Dialog` binds arrows, Enter, Esc and Tab.
+  - Key target routing (UQ14). Menus, popovers and instrument frames never take GPUI focus from a
+    pointer or from F10/Alt+letter; the `KeyTarget` router (`Sheet`, `Menu`, `Popover(id)`,
+    `Instrument(id)`) holds which one receives keys. `Workspace` binds Up, Down, Left, Right,
+    Enter, Space, Tab and Shift+Tab to overlay actions (`OverlayUp` … `OverlayNext`,
+    `OverlayPrev`). These bindings are on the dispatch path whenever focus is inside the workspace,
+    so they resolve while the sheet is focused; when the key target is `Sheet` their handlers
+    call `cx.propagate()` (Tab then moves focus per UINV12). For a key that a deeper focused
+    context also binds (today `Sheet`'s Esc), the router registers `capture_action` for that
+    context's action on the `Workspace` element and, when the key target is not `Sheet`, handles
+    it and calls `cx.stop_propagation()`, so the overlay's Esc wins over the sheet's. The UINV4
+    keymap test covers the overlay bindings; a new deeper binding on one of these keys must add
+    its action to the router's capture list (U1.5 test).
 - Undo, Redo, Cut, Copy, Paste, Delete and Select All are shell actions. Their handlers call the
   active canvas's public methods (`undo`, `redo`, `cut`, `copy`, `paste`, `delete_selection`,
   `select_all`; section 14 adds these to T5.2, T5.3 and T7.1). So the shortcut works wherever
