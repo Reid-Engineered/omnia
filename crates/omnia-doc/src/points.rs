@@ -1,6 +1,6 @@
 //! Geometric incidence only: wire bodies and labels never contribute ends.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::{PartId, Pt, Rect, WireId};
 
@@ -11,7 +11,7 @@ pub(crate) enum End {
 }
 
 #[derive(Debug, Default, Clone)]
-pub(crate) struct Points(HashMap<Pt, Vec<End>>);
+pub(crate) struct Points(FxHashMap<Pt, Vec<End>>);
 
 impl Points {
     pub(crate) fn insert(&mut self, at: Pt, end: End) {

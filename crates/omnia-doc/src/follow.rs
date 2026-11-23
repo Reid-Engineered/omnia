@@ -1,9 +1,12 @@
 //! Pure WD2/WD3 follow planning. Commands consume this plan in W2.2.
+use rustc_hash::FxHashMap;
+
 use crate::{
-    Anchor, Boundary, Doc, ItemId, LabelId, Orient, PartId, Pt, Run, Wire, WireId,
+    Anchor, Boundary, Doc, INDEX_CELL_NM, ItemId, LabelId, Orient, PartId, Pt, Rect, Run, Wire,
+    WireId,
     points::End,
     prefs::FollowPolicy,
-    route::{Axis, Blocker, RouteScratch, check_new_wires, route},
+    route::{Axis, Blocker, RouteScratch, RouteSheet, check_new_wires_on, route_on},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,55 +97,345 @@ fn allows(doc: &Doc, items: &[ItemId], run: &Run, policy: FollowPolicy) -> bool 
         })
 }
 
-// Preserve original identities in this private final-geometry view, including holes.
-// Nothing in the caller's document (including history, revision and index stamps) changes.
-fn view(
-    doc: &Doc,
-    items: &[ItemId],
-    t: Isometry,
-    runs: &[Run],
-    detached: &[bool],
-) -> Result<Doc, Blocker> {
-    let mut v = Doc::new();
-    v.parts.slots.resize(doc.parts.slots.len(), None);
-    v.wires.slots.resize(doc.wires.slots.len(), None);
-    for (i, s) in doc.parts.slots.iter().enumerate() {
-        if let Some(s) = s {
-            let mut s = s.clone();
-            if items.contains(&ItemId::Part(PartId(i as u32))) {
-                s.part.at = t.apply(s.part.at).map_err(|_| Blocker::Sheet)?;
-                if let Isometry::Reorient { by, .. } = t {
-                    s.part.orient = s.part.orient.then(by);
-                }
-                for p in &mut s.pins {
-                    *p = t.apply(*p).map_err(|_| Blocker::Sheet)?;
+/// A selected part in its final position.
+#[derive(Debug)]
+struct MovedPart {
+    id: PartId,
+    /// Its pins in [`View::pins`].
+    pins: std::ops::Range<usize>,
+    body: Rect,
+    /// Body and pins, as the spatial index registers a part.
+    envelope: Rect,
+}
+
+/// The sheet in its final geometry, as WD4 sees it while the runs are planned: the document
+/// with the selection transformed, the replaced runs removed, the runs' end reservations and
+/// the wires planned so far. It is layered over the caller's document, which it never
+/// changes, so building it costs the selection and the plan, not the sheet. Labels play no
+/// part in WD4 and are left out.
+///
+/// Identities are those of a copy of the document with every slot kept, holes included:
+/// existing items keep their ids, reservations take part ids after the document's part
+/// slots and planned wires take wire ids after its wire slots, both in insertion order.
+struct View<'a> {
+    doc: &'a Doc,
+    base_parts: u32,
+    base_wires: u32,
+    /// Live selected parts in their final position, by id.
+    parts: Vec<MovedPart>,
+    pins: Vec<Pt>,
+    /// Live selected wires, by id.
+    selected: Vec<WireId>,
+    /// Selected wires outside the replaced runs, in their final position, by id.
+    moved: Vec<(WireId, Wire)>,
+    /// Wires of the replaced (not detached) runs, by id.
+    hidden: Vec<WireId>,
+    /// Zero-area reservation parts with one pin each, at these points.
+    markers: Vec<Pt>,
+    /// Planned wires and the first wire of the run each replaces.
+    added: Vec<(Wire, WireId)>,
+    /// The view's own items by K12 cell; the document's index serves everything else.
+    cells: FxHashMap<(i64, i64), Vec<ItemId>>,
+}
+
+fn view_cell(v: i32) -> i64 {
+    i64::from(v).div_euclid(i64::from(INDEX_CELL_NM))
+}
+
+impl<'a> View<'a> {
+    /// The selection's parts in their final position. Every failure is [`Blocker::Sheet`].
+    fn new(doc: &'a Doc, items: &[ItemId], t: Isometry) -> Result<Self, Blocker> {
+        let mut ids: Vec<PartId> = items
+            .iter()
+            .filter_map(|item| match *item {
+                ItemId::Part(id) if doc.parts.get(id.0).is_some() => Some(id),
+                _ => None,
+            })
+            .collect();
+        ids.sort_unstable_by_key(|id| id.0);
+        ids.dedup();
+        let mut selected: Vec<WireId> = items
+            .iter()
+            .filter_map(|item| match *item {
+                ItemId::Wire(id) if doc.wires.get(id.0).is_some() => Some(id),
+                _ => None,
+            })
+            .collect();
+        selected.sort_unstable_by_key(|id| id.0);
+        selected.dedup();
+        let mut parts = Vec::with_capacity(ids.len());
+        let mut pins = Vec::new();
+        for id in ids {
+            let stored = doc.parts.get(id.0).expect("live selected part");
+            let at = t.apply(stored.part.at).map_err(|_| Blocker::Sheet)?;
+            let orient = match t {
+                Isometry::Reorient { by, .. } => stored.part.orient.then(by),
+                Isometry::Translate(_) => stored.part.orient,
+            };
+            let first = pins.len();
+            for &p in &stored.pins {
+                pins.push(t.apply(p).map_err(|_| Blocker::Sheet)?);
+            }
+            let moved = &pins[first..];
+            if !at.is_in_bounds() || moved.iter().any(|p| !p.is_in_bounds()) {
+                return Err(Blocker::Sheet);
+            }
+            let envelope = Doc::part_envelope_raw(at, orient, stored.local_bounds, moved)
+                .map_err(|_| Blocker::Sheet)?;
+            let body =
+                Doc::part_bounds_at(at, orient, stored.local_bounds).map_err(|_| Blocker::Sheet)?;
+            parts.push(MovedPart {
+                id,
+                pins: first..pins.len(),
+                body,
+                envelope,
+            });
+        }
+        Ok(Self {
+            doc,
+            base_parts: u32::try_from(doc.parts.slots.len()).expect("part id space"),
+            base_wires: u32::try_from(doc.wires.slots.len()).expect("wire id space"),
+            parts,
+            pins,
+            selected,
+            moved: Vec::new(),
+            hidden: Vec::new(),
+            markers: Vec::new(),
+            added: Vec::new(),
+            cells: FxHashMap::default(),
+        })
+    }
+
+    /// Starts a planning pass: hides the wires of the runs that are not detached, moves the
+    /// remaining selected wires, and drops earlier reservations and planned wires.
+    fn reset(&mut self, t: Isometry, runs: &[Run], detached: &[bool]) -> Result<(), Blocker> {
+        self.hidden.clear();
+        for (run, _) in runs.iter().zip(detached).filter(|(_, d)| !**d) {
+            self.hidden.extend_from_slice(&run.wires);
+        }
+        self.hidden.sort_unstable_by_key(|id| id.0);
+        self.hidden.dedup();
+        self.moved.clear();
+        self.markers.clear();
+        self.added.clear();
+        for list in self.cells.values_mut() {
+            list.clear();
+        }
+        for i in 0..self.selected.len() {
+            let id = self.selected[i];
+            if self.is_hidden(id) {
+                continue;
+            }
+            let w = t
+                .wire(*self.doc.wire(id).expect("live selected wire"))
+                .map_err(|_| Blocker::Sheet)?;
+            Doc::validate_wire(w).map_err(|_| Blocker::Sheet)?;
+            self.moved.push((id, w));
+        }
+        for i in 0..self.parts.len() {
+            let MovedPart { id, envelope, .. } = self.parts[i];
+            self.register(ItemId::Part(id), envelope);
+        }
+        for i in 0..self.moved.len() {
+            let (id, w) = self.moved[i];
+            self.register(ItemId::Wire(id), wire_rect(w));
+        }
+        Ok(())
+    }
+
+    fn register(&mut self, item: ItemId, area: Rect) {
+        for cy in view_cell(area.min.y)..=view_cell(area.max.y) {
+            for cx in view_cell(area.min.x)..=view_cell(area.max.x) {
+                self.cells.entry((cx, cy)).or_default().push(item);
+            }
+        }
+    }
+
+    fn is_hidden(&self, id: WireId) -> bool {
+        self.hidden.binary_search_by_key(&id.0, |w| w.0).is_ok()
+    }
+
+    fn is_selected(&self, id: WireId) -> bool {
+        self.selected.binary_search_by_key(&id.0, |w| w.0).is_ok()
+    }
+
+    fn moved_part(&self, id: PartId) -> Option<&MovedPart> {
+        self.parts
+            .binary_search_by_key(&id.0, |p| p.id.0)
+            .ok()
+            .map(|i| &self.parts[i])
+    }
+
+    /// Whether the document's own entry for `item` is part of the view.
+    fn keeps(&self, item: ItemId) -> bool {
+        match item {
+            ItemId::Part(id) => self.moved_part(id).is_none(),
+            ItemId::Wire(id) => !self.is_hidden(id) && !self.is_selected(id),
+            ItemId::Label(_) => false,
+        }
+    }
+
+    /// Indexed bounds of one of the view's own items.
+    fn own_bounds(&self, item: ItemId) -> Rect {
+        match item {
+            ItemId::Part(id) if id.0 >= self.base_parts => {
+                let at = self.markers[(id.0 - self.base_parts) as usize];
+                Rect { min: at, max: at }
+            }
+            ItemId::Part(id) => self.moved_part(id).expect("own part").envelope,
+            ItemId::Wire(id) => wire_rect(RouteSheet::wire(self, id)),
+            ItemId::Label(_) => unreachable!("the view holds no labels"),
+        }
+    }
+
+    /// The lowest wire id with an end at `at`, before reservations and planned wires exist.
+    fn lowest_wire_end(&self, at: Pt) -> Option<WireId> {
+        let kept = self.doc.points.at(at).iter().filter_map(|end| match *end {
+            End::Wire(id) if !self.is_hidden(id) && !self.is_selected(id) => Some(id),
+            _ => None,
+        });
+        let moved = self
+            .moved
+            .iter()
+            .filter(|(_, w)| w.a == at || w.b == at)
+            .map(|&(id, _)| id);
+        kept.chain(moved).min_by_key(|id| id.0)
+    }
+
+    /// Adds a reservation: a zero-area part with one pin at `at`.
+    fn reserve(&mut self, at: Pt) -> PartId {
+        let id = PartId(self.base_parts + u32::try_from(self.markers.len()).expect("part ids"));
+        self.markers.push(at);
+        self.register(ItemId::Part(id), Rect { min: at, max: at });
+        id
+    }
+
+    /// Adds a planned wire replacing a run whose first wire is `source`.
+    fn insert(&mut self, wire: Wire, source: WireId) {
+        let id = WireId(self.base_wires + u32::try_from(self.added.len()).expect("wire ids"));
+        self.added.push((wire, source));
+        self.register(ItemId::Wire(id), wire_rect(wire));
+    }
+
+    /// Reports a view blocker in the document's terms: a reservation is the replaced wire
+    /// it stands for, and a planned wire is the first wire of the run it replaces.
+    fn remap(&self, blocker: Blocker, sources: &[WireId]) -> Blocker {
+        let wire = |w: WireId| {
+            if w.0 >= self.base_wires {
+                self.added[(w.0 - self.base_wires) as usize].1
+            } else {
+                w
+            }
+        };
+        match blocker {
+            Blocker::Pin { part, .. } if part.0 >= self.base_parts => {
+                Blocker::WireEnd(sources[(part.0 - self.base_parts) as usize])
+            }
+            Blocker::WireEnd(w) => Blocker::WireEnd(wire(w)),
+            Blocker::WireBody(w) => Blocker::WireBody(wire(w)),
+            Blocker::Overlap(w) => Blocker::Overlap(wire(w)),
+            b => b,
+        }
+    }
+}
+
+fn wire_rect(w: Wire) -> Rect {
+    Rect::from_points(w.a, w.b).expect("validated wire")
+}
+
+impl RouteSheet for View<'_> {
+    fn query(&self, area: Rect, out: &mut Vec<ItemId>) {
+        if area.min.x > area.max.x || area.min.y > area.max.y {
+            out.clear();
+            return;
+        }
+        // The caller's index is read without touching its visit stamps (W2.1: the
+        // document, index stamps included, is unchanged by planning).
+        self.doc
+            .index
+            .query_filtered_unstamped(area, out, |item, _| self.keeps(item));
+        let start = out.len();
+        let (x0, x1) = (view_cell(area.min.x), view_cell(area.max.x));
+        let (y0, y1) = (view_cell(area.min.y), view_cell(area.max.y));
+        let mut take = |list: &Vec<ItemId>| {
+            for &item in list {
+                if self.own_bounds(item).intersects(area) {
+                    out.push(item);
                 }
             }
-            v.restore_stored_part_raw(PartId(i as u32), s)
-                .map_err(|_| Blocker::Sheet)?;
-        }
-    }
-    for (id, &w) in doc.wires() {
-        if runs
-            .iter()
-            .enumerate()
-            .any(|(i, r)| !detached[i] && r.wires.contains(&id))
-        {
-            continue;
-        }
-        let w = if items.contains(&ItemId::Wire(id)) {
-            t.wire(w).map_err(|_| Blocker::Sheet)?
-        } else {
-            w
         };
-        v.restore_wire_raw(id, w).map_err(|_| Blocker::Sheet)?;
+        // Walk whichever is smaller: the cells under the area or the occupied cells.
+        let span = (x1 - x0 + 1).saturating_mul(y1 - y0 + 1);
+        if span <= self.cells.len() as i64 {
+            for cy in y0..=y1 {
+                for cx in x0..=x1 {
+                    if let Some(list) = self.cells.get(&(cx, cy)) {
+                        take(list);
+                    }
+                }
+            }
+        } else {
+            for (&(cx, cy), list) in &self.cells {
+                if (x0..=x1).contains(&cx) && (y0..=y1).contains(&cy) {
+                    take(list);
+                }
+            }
+        }
+        // An item spanning several cells is met once per cell. Sorting makes the result
+        // independent of the map's iteration order.
+        let key = |item: &ItemId| match *item {
+            ItemId::Part(id) => (0u8, id.0),
+            ItemId::Wire(id) => (1, id.0),
+            ItemId::Label(id) => (2, id.0),
+        };
+        out[start..].sort_unstable_by_key(key);
+        let mut write = start;
+        for read in start..out.len() {
+            if write == start || out[write - 1] != out[read] {
+                out[write] = out[read];
+                write += 1;
+            }
+        }
+        out.truncate(write);
     }
-    Ok(v)
+
+    fn pins(&self, id: PartId) -> &[Pt] {
+        if id.0 >= self.base_parts {
+            return std::slice::from_ref(&self.markers[(id.0 - self.base_parts) as usize]);
+        }
+        match self.moved_part(id) {
+            Some(part) => &self.pins[part.pins.clone()],
+            None => self.doc.pins(id).expect("queried part is live"),
+        }
+    }
+
+    fn wire(&self, id: WireId) -> Wire {
+        if id.0 >= self.base_wires {
+            return self.added[(id.0 - self.base_wires) as usize].0;
+        }
+        match self.moved.binary_search_by_key(&id.0, |(w, _)| w.0) {
+            Ok(i) => self.moved[i].1,
+            Err(_) => *self.doc.wire(id).expect("queried wire is live"),
+        }
+    }
+
+    fn part_body(&self, id: PartId) -> Option<Rect> {
+        if id.0 >= self.base_parts {
+            // A reservation's zero-area body at an in-sheet point is that point.
+            let at = self.markers[(id.0 - self.base_parts) as usize];
+            return Some(Rect { min: at, max: at });
+        }
+        match self.moved_part(id) {
+            Some(part) => Some(part.body),
+            None => self.doc.part_body(id),
+        }
+    }
 }
 
 /// WD3: rigid first, unanimous boundary policy, reroute or detach. On refusal `plan` is empty.
 /// Labels on rigid corners move once; rerouted label placement belongs to W3.6.
-/// Nonempty plans currently build an isolated document view; no timing budget is certified.
+/// Nonempty plans read the document through a final-geometry view layered over it
+/// (selection, reservations and planned wires only), never a copy of the sheet.
 pub fn plan_follow(
     doc: &Doc,
     items: &[ItemId],
@@ -173,22 +466,25 @@ fn build(
     doc.affected_runs(&boundary, &mut runs);
     let mut detached = vec![false; runs.len()];
     let mut scratch = RouteScratch::new();
+    let mut query = Vec::new();
+    let sheet_error = |blocker| FollowError::NoRoute {
+        from: runs[0].a.0,
+        to: runs[0].b.0,
+        blocker,
+    };
+    let mut v = View::new(doc, items, t).map_err(sheet_error)?;
+    let mut end_markers = Vec::new();
+    let mut reservations = Vec::new();
     // A failed rigid attempt under detach policy introduces old geometry. Restart so every
     // earlier run sees it too. Each restart fixes at least one fate, so termination is bounded.
     'restart: loop {
         plan.clear();
-        let mut v =
-            view(doc, items, t, &runs, &detached).map_err(|blocker| FollowError::NoRoute {
-                from: runs[0].a.0,
-                to: runs[0].b.0,
-                blocker,
-            })?;
-        let mut sources: Vec<WireId> = (0..v.wires.slots.len()).map(|i| WireId(i as u32)).collect();
+        v.reset(t, &runs, &detached).map_err(sheet_error)?;
         // Removing a run also removes its otherwise free far end. Reserve every final
         // endpoint before planning: an earlier corner must not capture a later run's end.
         // Zero-area marker parts affect validity only, not body/crossing scores.
-        let mut end_markers = Vec::new();
-        let mut reservations = Vec::new();
+        end_markers.clear();
+        reservations.clear();
         for (i, r) in runs.iter().enumerate() {
             if detached[i] {
                 continue;
@@ -204,36 +500,16 @@ fn build(
                     end.0
                 };
                 let source = v
-                    .points
-                    .at(at)
-                    .iter()
-                    .filter_map(|end| match end {
-                        End::Wire(id) => Some(*id),
-                        End::Pin { .. } => None,
-                    })
-                    .chain(std::iter::once(source))
-                    .min_by_key(|id| id.0)
-                    .unwrap();
+                    .lowest_wire_end(at)
+                    .map_or(source, |id| if id.0 < source.0 { id } else { source });
                 reservations.push((at, source));
             }
         }
         // Marker pin ids must preserve the original lowest-wire-id tie at a shared end.
         reservations.sort_unstable_by_key(|(at, source)| (source.0, at.x, at.y));
-        for (at, source) in reservations {
-            let (id, _) = v
-                .insert_part_raw(
-                    crate::Part {
-                        symbol: crate::SymbolId(0),
-                        at,
-                        orient: Orient::IDENTITY,
-                        designator: "".into(),
-                        value: "".into(),
-                    },
-                    &[Pt::ZERO],
-                    crate::Rect::from_points(Pt::ZERO, Pt::ZERO).unwrap(),
-                )
-                .expect("bounded endpoint reservation");
-            end_markers.push((id, source));
+        for &(at, source) in &reservations {
+            v.reserve(at);
+            end_markers.push(source);
         }
         for (i, r) in runs.iter().enumerate() {
             if detached[i] {
@@ -266,7 +542,7 @@ fn build(
                         Ok::<_, Blocker>(())
                     })
                     .is_ok()
-                && check_new_wires(&v, &wires, [a, b]).is_ok();
+                && check_new_wires_on(&v, &wires, [a, b], &mut query).is_ok();
             let fate = if rigid {
                 RunFate::Translated
             } else {
@@ -281,25 +557,11 @@ fn build(
                 } else {
                     Axis::Vertical
                 };
-                route(&v, a, b, first_leg, &mut scratch, &mut wires).map_err(|blocker| {
-                    let remap = |w: WireId| sources[w.0 as usize];
-                    let blocker = match blocker {
-                        Blocker::Pin { part, .. }
-                            if end_markers.iter().any(|(id, _)| *id == part) =>
-                        {
-                            Blocker::WireEnd(
-                                end_markers.iter().find(|(id, _)| *id == part).unwrap().1,
-                            )
-                        }
-                        Blocker::WireEnd(w) => Blocker::WireEnd(remap(w)),
-                        Blocker::WireBody(w) => Blocker::WireBody(remap(w)),
-                        Blocker::Overlap(w) => Blocker::Overlap(remap(w)),
-                        b => b,
-                    };
+                route_on(&v, a, b, first_leg, &mut scratch, &mut wires).map_err(|blocker| {
                     FollowError::NoRoute {
                         from: r.a.0,
                         to: r.b.0,
-                        blocker,
+                        blocker: v.remap(blocker, &end_markers),
                     }
                 })?;
                 RunFate::Rerouted
@@ -320,8 +582,7 @@ fn build(
             }
             // Insertion makes subsequent runs validate against every already planned segment.
             for &w in &wires {
-                v.insert_wire_raw(w).expect("validated candidate");
-                sources.push(r.wires[0]);
+                v.insert(w, r.wires[0]);
             }
             plan.remove.extend_from_slice(&r.wires);
             plan.add.extend(wires);
@@ -736,6 +997,250 @@ mod tests {
             prop_assert_eq!(&expected,&plan(&d,&items,t,policy(invert)));
             prop_assert_eq!(expected.fates.len(),n as usize);
             let mut removed=expected.remove.clone();removed.sort_unstable_by_key(|w|w.0);removed.dedup();prop_assert_eq!(removed.len(),expected.remove.len());
+        }
+    }
+}
+
+#[cfg(test)]
+mod view_tests {
+    //! The planner's layered view must read exactly like a full copy of the final
+    //! geometry (the view W2.1 built before the WB3 work): the same items for every
+    //! query, the same pins, wires and bodies, and the same reservation and
+    //! planned-wire ids.
+    use super::*;
+    use crate::{GRID_NM, Label, Part, SymbolId};
+    use proptest::prelude::*;
+
+    fn g(x: i32, y: i32) -> Pt {
+        Pt {
+            x: x * GRID_NM,
+            y: y * GRID_NM,
+        }
+    }
+
+    /// The full copy: every slot kept, the selection moved, the replaced runs removed,
+    /// labels left out, then reservations and planned wires inserted.
+    fn materialize(
+        doc: &Doc,
+        items: &[ItemId],
+        t: Isometry,
+        runs: &[Run],
+        detached: &[bool],
+        markers: &[Pt],
+        added: &[Wire],
+    ) -> Result<Doc, Blocker> {
+        let mut v = Doc::new();
+        v.parts.slots.resize(doc.parts.slots.len(), None);
+        v.wires.slots.resize(doc.wires.slots.len(), None);
+        for (i, s) in doc.parts.slots.iter().enumerate() {
+            if let Some(s) = s {
+                let mut s = s.clone();
+                if items.contains(&ItemId::Part(PartId(i as u32))) {
+                    s.part.at = t.apply(s.part.at).map_err(|_| Blocker::Sheet)?;
+                    if let Isometry::Reorient { by, .. } = t {
+                        s.part.orient = s.part.orient.then(by);
+                    }
+                    for p in &mut s.pins {
+                        *p = t.apply(*p).map_err(|_| Blocker::Sheet)?;
+                    }
+                }
+                v.restore_stored_part_raw(PartId(i as u32), s)
+                    .map_err(|_| Blocker::Sheet)?;
+            }
+        }
+        for (id, &w) in doc.wires() {
+            if runs
+                .iter()
+                .enumerate()
+                .any(|(i, r)| !detached[i] && r.wires.contains(&id))
+            {
+                continue;
+            }
+            let w = if items.contains(&ItemId::Wire(id)) {
+                t.wire(w).map_err(|_| Blocker::Sheet)?
+            } else {
+                w
+            };
+            v.restore_wire_raw(id, w).map_err(|_| Blocker::Sheet)?;
+        }
+        for &at in markers {
+            let part = Part {
+                symbol: SymbolId(0),
+                at,
+                orient: Orient::IDENTITY,
+                designator: "".into(),
+                value: "".into(),
+            };
+            let zero = Rect::from_points(Pt::ZERO, Pt::ZERO).unwrap();
+            v.insert_part_raw(part, &[Pt::ZERO], zero).unwrap();
+        }
+        for &w in added {
+            v.insert_wire_raw(w).unwrap();
+        }
+        Ok(v)
+    }
+
+    fn sorted(items: &[ItemId]) -> Vec<(u8, u32)> {
+        let mut keys: Vec<_> = items
+            .iter()
+            .map(|item| match *item {
+                ItemId::Part(id) => (0, id.0),
+                ItemId::Wire(id) => (1, id.0),
+                ItemId::Label(id) => (2, id.0),
+            })
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    fn segment((x, y, len, horizontal): (i32, i32, i32, bool)) -> Wire {
+        let len = if len == 0 { 1 } else { len };
+        let a = g(x, y);
+        let b = if horizontal {
+            g(x + len, y)
+        } else {
+            g(x, y + len)
+        };
+        Wire { a, b }
+    }
+
+    type PartSpec = ((i32, i32), Vec<(i32, i32)>, (i32, i32), usize);
+    type SegSpec = (i32, i32, i32, bool);
+
+    fn part_spec() -> impl Strategy<Value = PartSpec> {
+        (
+            (-12i32..12, -12i32..12),
+            prop::collection::vec((-3i32..4, -3i32..4), 0..4),
+            (0i32..3, 0i32..3),
+            0usize..8,
+        )
+    }
+
+    fn seg_spec() -> impl Strategy<Value = SegSpec> {
+        (-14i32..14, -14i32..14, -8i32..9, any::<bool>())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+        #[test]
+        fn w22_view_reads_as_the_full_copy(
+            parts in prop::collection::vec(part_spec(), 1..8),
+            wires in prop::collection::vec(seg_spec(), 0..30),
+            labels in prop::collection::vec((-14i32..14, -14i32..14), 0..4),
+            holes in prop::collection::vec(any::<u16>(), 0..4),
+            pick in prop::collection::vec(any::<u16>(), 1..5),
+            rotate in any::<bool>(),
+            orientation in 0usize..8,
+            shift in (-3i32..4, -3i32..4),
+            pivot in (-6i32..7, -6i32..7),
+            detach in prop::collection::vec(any::<bool>(), 0..40),
+            planned in prop::collection::vec(seg_spec(), 0..12),
+            areas in prop::collection::vec((-18i32..18, -18i32..18, 0i32..12, 0i32..12), 1..24),
+        ) {
+            let mut d = Doc::new();
+            for ((x, y), pins, (w, h), o) in parts {
+                let local: Vec<Pt> = pins.iter().map(|&(px, py)| g(px, py)).collect();
+                let part = Part {
+                    symbol: SymbolId(0),
+                    at: g(x, y),
+                    orient: Orient::ALL[o],
+                    designator: "P".into(),
+                    value: "".into(),
+                };
+                d.insert_part(part, &local, Rect::from_points(g(-w, -h), g(w, h)).unwrap())
+                    .unwrap();
+            }
+            for spec in wires {
+                d.insert_wire(segment(spec)).unwrap();
+            }
+            for (x, y) in labels {
+                d.insert_label(Label { at: g(x, y), text: "n".into() }).unwrap();
+            }
+            // Holes: removed slots keep their ids reserved.
+            let live: Vec<WireId> = d.wires().map(|(id, _)| id).collect();
+            for h in holes {
+                if !live.is_empty() {
+                    d.remove_wire_raw(live[h as usize % live.len()]);
+                }
+            }
+            let mut all: Vec<ItemId> = d.parts().map(|(id, _)| ItemId::Part(id)).collect();
+            all.extend(d.wires().map(|(id, _)| ItemId::Wire(id)));
+            all.extend(d.labels().map(|(id, _)| ItemId::Label(id)));
+            let items: Vec<ItemId> = pick.iter().map(|&i| all[i as usize % all.len()]).collect();
+            let t = if rotate {
+                Isometry::Reorient { pivot: g(pivot.0, pivot.1), by: Orient::ALL[orientation] }
+            } else {
+                Isometry::Translate(g(shift.0, shift.1))
+            };
+            let mut boundary = Boundary::default();
+            d.boundary_points(&items, &mut boundary);
+            let mut runs = Vec::new();
+            d.affected_runs(&boundary, &mut runs);
+            let detached: Vec<bool> = (0..runs.len())
+                .map(|i| detach.get(i).copied().unwrap_or(false))
+                .collect();
+
+            let view = View::new(&d, &items, t)
+                .and_then(|mut v| v.reset(t, &runs, &detached).map(|()| v));
+            let copy = materialize(&d, &items, t, &runs, &detached, &[], &[]);
+            prop_assert_eq!(view.is_ok(), copy.is_ok());
+            let (Ok(mut view), Ok(copy)) = (view, copy) else {
+                return Ok(());
+            };
+
+            // The lowest wire end at a point, before reservations and planned wires.
+            let mut probes: Vec<Pt> = copy.wires().flat_map(|(_, w)| [w.a, w.b]).collect();
+            probes.extend(d.wires().flat_map(|(_, w)| [w.a, w.b]));
+            for p in probes {
+                let expected = copy
+                    .points
+                    .at(p)
+                    .iter()
+                    .filter_map(|e| match *e {
+                        End::Wire(id) => Some(id),
+                        End::Pin { .. } => None,
+                    })
+                    .min_by_key(|id| id.0);
+                prop_assert_eq!(view.lowest_wire_end(p), expected);
+            }
+
+            let markers: Vec<Pt> = runs.iter().flat_map(|r| [r.a.0, r.b.0]).collect();
+            let added: Vec<Wire> = planned.into_iter().map(segment).collect();
+            for &at in &markers {
+                view.reserve(at);
+            }
+            for &w in &added {
+                view.insert(w, WireId(0));
+            }
+            let copy = materialize(&d, &items, t, &runs, &detached, &markers, &added).unwrap();
+            let (mut got, mut want) = (Vec::new(), Vec::new());
+            for (x, y, w, h) in areas {
+                let area = Rect::from_points(g(x, y), g(x + w, y + h)).unwrap();
+                RouteSheet::query(&view, area, &mut got);
+                RouteSheet::query(&copy, area, &mut want);
+                prop_assert_eq!(sorted(&got), sorted(&want));
+                for &item in &got {
+                    match item {
+                        ItemId::Part(id) => {
+                            prop_assert_eq!(RouteSheet::pins(&view, id), RouteSheet::pins(&copy, id));
+                            prop_assert_eq!(
+                                RouteSheet::part_body(&view, id),
+                                RouteSheet::part_body(&copy, id)
+                            );
+                        }
+                        ItemId::Wire(id) => {
+                            prop_assert_eq!(RouteSheet::wire(&view, id), RouteSheet::wire(&copy, id));
+                        }
+                        ItemId::Label(_) => prop_assert!(false, "the view holds no labels"),
+                    }
+                }
+            }
+            // Planning never touches the caller's document, index stamps included.
+            let before = format!("{d:?}");
+            let mut plan = FollowPlan::default();
+            let policy = FollowPolicy::new(true, 10, false).unwrap();
+            let _ = plan_follow(&d, &items, t, policy, &mut plan);
+            prop_assert_eq!(before, format!("{d:?}"));
         }
     }
 }

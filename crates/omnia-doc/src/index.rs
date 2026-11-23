@@ -161,6 +161,39 @@ impl SpatialIndex {
         });
     }
 
+    /// As [`SpatialIndex::query_filtered`], but leaves the visit stamps alone, so a reader
+    /// that must not change the index at all (the follow planner, W2.1) can query it. An
+    /// item registered in several cells is met once per cell; sorting `out` by kind, then
+    /// id, removes the repeats. Allocates nothing when `out` has room for every visit.
+    pub(crate) fn query_filtered_unstamped(
+        &self,
+        area: Rect,
+        out: &mut Vec<ItemId>,
+        mut predicate: impl FnMut(ItemId, Rect) -> bool,
+    ) {
+        debug_assert!(area.min.x <= area.max.x && area.min.y <= area.max.y);
+        out.clear();
+        let (x0, y0, x1, y1) = cell_span(area);
+        for cy in y0..=y1 {
+            let row = &self.cells[cy * CELLS_PER_AXIS..][..CELLS_PER_AXIS];
+            for cell in &row[x0..=x1] {
+                for &item in cell {
+                    let entry = self.entry(item).expect("cell lists an item with no entry");
+                    if entry
+                        .bounds
+                        .is_some_and(|bounds| bounds.intersects(area) && predicate(item, bounds))
+                    {
+                        out.push(item);
+                    }
+                }
+            }
+        }
+        if x0 != x1 || y0 != y1 {
+            out.sort_unstable_by_key(|&item| item_key(item));
+            out.dedup();
+        }
+    }
+
     fn query_with(
         &self,
         area: Rect,
@@ -224,6 +257,14 @@ impl SpatialIndex {
     #[cfg(test)]
     fn set_generation(&self, generation: u32) {
         self.generation.set(generation);
+    }
+}
+
+fn item_key(item: ItemId) -> (u8, u32) {
+    match item {
+        ItemId::Part(id) => (0, id.0),
+        ItemId::Wire(id) => (1, id.0),
+        ItemId::Label(id) => (2, id.0),
     }
 }
 
@@ -546,6 +587,51 @@ mod tests {
                         for k in &expected {
                             prop_assert!(inter_set.contains(k));
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    proptest! {
+        /// `query_filtered_unstamped` equals a brute-force scan, returns each item once, and
+        /// leaves the index exactly as it was, stamps and generation included (W2.1, W2.2).
+        #[test]
+        fn query_filtered_unstamped_matches_brute_force_and_keeps_stamps(
+            ops in prop::collection::vec(
+                prop_oneof![
+                    4 => (any_item(), prop_oneof![any_rect(), wire_rect()])
+                        .prop_map(|(i, r)| (0u8, i, r)),
+                    1 => any_item().prop_map(|i| (1u8, i, rect(0, 0, 0, 0))),
+                    3 => raw_box().prop_map(|r| (2u8, ItemId::Part(PartId(0)), r)),
+                ],
+                1..200,
+            )
+        ) {
+            let mut index = SpatialIndex::new();
+            let mut model: BTreeMap<(u8, u32), (ItemId, Rect)> = BTreeMap::new();
+            let mut out = Vec::new();
+            for (kind, item, bounds) in ops {
+                match kind {
+                    0 => {
+                        index.insert(item, bounds).unwrap();
+                        model.insert(key(item), (item, bounds));
+                    }
+                    1 => {
+                        index.remove(item);
+                        model.remove(&key(item));
+                    }
+                    _ => {
+                        let norm = normalize_rect(bounds);
+                        let before = format!("{index:?}");
+                        index.query_filtered_unstamped(norm, &mut out, |item, b| {
+                            assert!(b.intersects(norm), "predicate called for non-intersecting item");
+                            norm.contains_rect(b) && !matches!(item, ItemId::Label(_))
+                        });
+                        prop_assert_eq!(before, format!("{index:?}"), "the index changed");
+                        let unique: HashSet<_> = out.iter().map(|&i| key(i)).collect();
+                        prop_assert_eq!(unique.len(), out.len(), "duplicate in query result");
+                        prop_assert_eq!(sorted(&out), brute_filtered(&model, norm));
                     }
                 }
             }

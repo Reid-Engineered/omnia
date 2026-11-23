@@ -18,7 +18,36 @@ use std::collections::BTreeMap;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::{Doc, ItemId, Pt, Rect, Wire, WireId, points::End};
+use crate::{Doc, ItemId, PartId, Pt, Rect, Wire, WireId, points::End};
+
+/// What WD4's validator and scorer read from a sheet. [`Doc`] is one; the follow planner's
+/// final-geometry view (W2.1) is another, layered over the document without copying it.
+pub(crate) trait RouteSheet {
+    /// As [`Doc::query`]: replaces `out` with the items whose indexed bounds meet `area`.
+    /// Order is unspecified; callers must not depend on it.
+    fn query(&self, area: Rect, out: &mut Vec<ItemId>);
+    /// World pins of a live part returned by [`RouteSheet::query`].
+    fn pins(&self, id: PartId) -> &[Pt];
+    /// A live wire returned by [`RouteSheet::query`].
+    fn wire(&self, id: WireId) -> Wire;
+    /// As [`Doc::part_body`].
+    fn part_body(&self, id: PartId) -> Option<Rect>;
+}
+
+impl RouteSheet for Doc {
+    fn query(&self, area: Rect, out: &mut Vec<ItemId>) {
+        Doc::query(self, area, out);
+    }
+    fn pins(&self, id: PartId) -> &[Pt] {
+        Doc::pins(self, id).expect("queried part is live")
+    }
+    fn wire(&self, id: WireId) -> Wire {
+        *Doc::wire(self, id).expect("queried wire is live")
+    }
+    fn part_body(&self, id: PartId) -> Option<Rect> {
+        Doc::part_body(self, id)
+    }
+}
 
 /// The L-route between `a` and `b`: zero, one, or two axis-aligned segments.
 ///
@@ -99,86 +128,166 @@ pub fn check_new_wires_in(
     check_new_wires_ignoring_in(doc, wires, &own_ends, &[], scratch)
 }
 
-fn check_new_wires_ignoring_in(
-    doc: &Doc,
+/// [`check_new_wires`] on any [`RouteSheet`], with a caller-owned query buffer.
+pub(crate) fn check_new_wires_on<S: RouteSheet + ?Sized>(
+    doc: &S,
+    wires: &[Wire],
+    own_ends: [Pt; 2],
+    scratch: &mut Vec<ItemId>,
+) -> Result<(), Blocker> {
+    check_new_wires_ignoring_in(doc, wires, &own_ends, &[], scratch)
+}
+
+fn check_new_wires_ignoring_in<S: RouteSheet + ?Sized>(
+    doc: &S,
     wires: &[Wire],
     own_ends: &[Pt],
     ignore_wires: &[WireId],
     scratch: &mut Vec<ItemId>,
 ) -> Result<(), Blocker> {
-    for &w in wires {
-        if !on_lattice(w.a) || !on_lattice(w.b) || w.a == w.b || (w.a.x != w.b.x && w.a.y != w.b.y)
-        {
-            return Err(Blocker::Sheet);
-        }
+    if !wires.iter().all(|&w| shape_valid(w)) {
+        return Err(Blocker::Sheet);
     }
     for &w in wires {
         doc.query(Rect::from_points(w.a, w.b).unwrap(), scratch);
-        let mut best = None;
-        let mut consider = |p: Pt, kind: u8, id: u32, pin: usize, blocker| {
-            if contains(w, p) && !own_ends.contains(&p) {
-                let key = (w.a.manhattan_distance(p), pt_key(p), kind, id, pin);
-                if best.as_ref().is_none_or(|&(old, _)| key < old) {
-                    best = Some((key, blocker));
-                }
-            }
-        };
-        for &item in scratch.iter() {
-            match item {
-                ItemId::Part(part) => {
-                    for (pin, &p) in doc.pins(part).unwrap().iter().enumerate() {
-                        consider(p, 0, part.0, pin, Blocker::Pin { part, pin });
-                    }
-                }
-                ItemId::Wire(id) => {
-                    if ignore_wires.contains(&id) {
-                        continue;
-                    }
-                    let other = *doc.wire(id).unwrap();
-                    for p in [other.a, other.b] {
-                        consider(p, 1, id.0, 0, Blocker::WireEnd(id));
-                    }
-                    for v in [w.a, w.b] {
-                        if interior_contains(other, v) {
-                            consider(v, 2, id.0, 0, Blocker::WireBody(id));
-                        }
-                    }
-                }
-                ItemId::Label(_) => {}
-            }
-        }
-        if let Some((_, blocker)) = best {
+        if let Some(blocker) = point_blocker(doc, w, own_ends, ignore_wires, scratch) {
             return Err(blocker);
         }
     }
     for &w in wires {
         doc.query(Rect::from_points(w.a, w.b).unwrap(), scratch);
-        let mut best = None;
-        for &item in scratch.iter() {
-            if let ItemId::Wire(id) = item {
-                if ignore_wires.contains(&id) {
-                    continue;
-                }
-                let other = *doc.wire(id).unwrap();
-                if shared_stretch(w, other) {
-                    let (lo, hi, _) = normalised(other);
-                    let first = Pt {
-                        x: w.a.x.clamp(lo.x, hi.x),
-                        y: w.a.y.clamp(lo.y, hi.y),
-                    };
-                    let distance = w.a.manhattan_distance(first);
-                    let key = (distance, pt_key(lo), pt_key(hi), id.0);
-                    if best.as_ref().is_none_or(|&(old, _)| key < old) {
-                        best = Some((key, id));
-                    }
-                }
-            }
-        }
-        if let Some((_, id)) = best {
-            return Err(Blocker::Overlap(id));
+        if let Some(blocker) = overlap_blocker(doc, w, ignore_wires, scratch) {
+            return Err(blocker);
         }
     }
     Ok(())
+}
+
+/// WD4 rule 1 for one segment: lattice vertices inside the sheet, axis-aligned, not a point.
+fn shape_valid(w: Wire) -> bool {
+    on_lattice(w.a) && on_lattice(w.b) && w.a != w.b && (w.a.x == w.b.x || w.a.y == w.b.y)
+}
+
+/// WD4 rule 2 for one segment, over `items` (the query of the segment's bounds): the
+/// first foreign pin, wire end or (at its vertices) wire interior along it from `w.a`.
+fn point_blocker<S: RouteSheet + ?Sized>(
+    doc: &S,
+    w: Wire,
+    own_ends: &[Pt],
+    ignore_wires: &[WireId],
+    items: &[ItemId],
+) -> Option<Blocker> {
+    let mut rule = PointRule::new(w, own_ends);
+    for &item in items {
+        match item {
+            ItemId::Part(part) => rule.part(part, doc.pins(part)),
+            ItemId::Wire(id) if !ignore_wires.contains(&id) => rule.wire(id, doc.wire(id)),
+            ItemId::Wire(_) | ItemId::Label(_) => {}
+        }
+    }
+    rule.blocker()
+}
+
+/// WD4 rule 3 for one segment, over `items`: the first foreign wire it shares a stretch with.
+fn overlap_blocker<S: RouteSheet + ?Sized>(
+    doc: &S,
+    w: Wire,
+    ignore_wires: &[WireId],
+    items: &[ItemId],
+) -> Option<Blocker> {
+    let mut rule = OverlapRule::new(w);
+    for &item in items {
+        if let ItemId::Wire(id) = item
+            && !ignore_wires.contains(&id)
+        {
+            rule.wire(id, doc.wire(id));
+        }
+    }
+    rule.blocker()
+}
+
+type PointKey = (i64, (i32, i32), u8, u32, usize);
+type OverlapKey = (i64, (i32, i32), (i32, i32), u32);
+
+/// WD4 rule 2 accumulated over one segment's items, in any order.
+struct PointRule<'a> {
+    w: Wire,
+    bounds: Rect,
+    own_ends: &'a [Pt],
+    best: Option<(PointKey, Blocker)>,
+}
+
+impl<'a> PointRule<'a> {
+    fn new(w: Wire, own_ends: &'a [Pt]) -> Self {
+        Self {
+            w,
+            bounds: Rect::from_points(w.a, w.b).unwrap(),
+            own_ends,
+            best: None,
+        }
+    }
+
+    fn consider(&mut self, p: Pt, kind: u8, id: u32, pin: usize, blocker: Blocker) {
+        if self.bounds.contains(p) && !self.own_ends.contains(&p) {
+            let key = (self.w.a.manhattan_distance(p), pt_key(p), kind, id, pin);
+            if self.best.as_ref().is_none_or(|&(old, _)| key < old) {
+                self.best = Some((key, blocker));
+            }
+        }
+    }
+
+    fn part(&mut self, part: PartId, pins: &[Pt]) {
+        for (pin, &p) in pins.iter().enumerate() {
+            self.consider(p, 0, part.0, pin, Blocker::Pin { part, pin });
+        }
+    }
+
+    fn wire(&mut self, id: WireId, other: Wire) {
+        for p in [other.a, other.b] {
+            self.consider(p, 1, id.0, 0, Blocker::WireEnd(id));
+        }
+        for v in [self.w.a, self.w.b] {
+            if interior_contains(other, v) {
+                self.consider(v, 2, id.0, 0, Blocker::WireBody(id));
+            }
+        }
+    }
+
+    fn blocker(&self) -> Option<Blocker> {
+        self.best.map(|(_, blocker)| blocker)
+    }
+}
+
+/// WD4 rule 3 accumulated over one segment's items, in any order.
+struct OverlapRule {
+    w: Wire,
+    best: Option<(OverlapKey, WireId)>,
+}
+
+impl OverlapRule {
+    fn new(w: Wire) -> Self {
+        Self { w, best: None }
+    }
+
+    fn wire(&mut self, id: WireId, other: Wire) {
+        let w = self.w;
+        if shared_stretch(w, other) {
+            let (lo, hi, _) = normalised(other);
+            let first = Pt {
+                x: w.a.x.clamp(lo.x, hi.x),
+                y: w.a.y.clamp(lo.y, hi.y),
+            };
+            let distance = w.a.manhattan_distance(first);
+            let key = (distance, pt_key(lo), pt_key(hi), id.0);
+            if self.best.as_ref().is_none_or(|&(old, _)| key < old) {
+                self.best = Some((key, id));
+            }
+        }
+    }
+
+    fn blocker(&self) -> Option<Blocker> {
+        self.best.map(|(_, id)| Blocker::Overlap(id))
+    }
 }
 
 /// The axis a route leaves `a` along.
@@ -208,11 +317,39 @@ struct Score {
     number: u16,
 }
 
+impl Score {
+    /// The comparison as one integer: each field in its own bits, most significant
+    /// first, so `a.key() < b.key()` exactly when `a < b`. Length is a sum of
+    /// distances, never negative.
+    fn key(self) -> u128 {
+        debug_assert!(self.length >= 0);
+        (u128::from(self.bodies) << 120)
+            | (u128::from(self.bends) << 112)
+            | (u128::from(self.crossings) << 80)
+            | (u128::from(self.length as u64) << 16)
+            | u128::from(self.number)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Candidate {
     wires: [Wire; 3],
     len: u8,
+    /// A lower bound while `stage` is [`Stage::Bound`], then the full WD4 score.
     score: Score,
+    /// `score.key()` until checked, then `u128::MAX`.
+    key: u128,
+    stage: Stage,
+    /// Once scored: the blocker [`check_new_wires_in`] reports, `None` when valid.
+    verdict: Option<Blocker>,
+}
+
+/// Where a candidate is in [`route`]'s best-first walk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Stage {
+    Bound,
+    Scored,
+    Checked,
 }
 
 impl Candidate {
@@ -248,12 +385,24 @@ impl Default for RouteScratch {
 /// WD4: route a new run from `a` to `b`.
 ///
 /// Enumerates the candidates in WD4's order (straight; the L leaving `a` along
-/// `first_leg`, then the other L; then up to WK6 doglegs), scores each, and
-/// returns the lowest-scoring valid one in `out`, segments directed from `a` to
-/// `b`. Validity is [`check_new_wires_in`] with `[a, b]` as the own ends. With no
+/// `first_leg`, then the other L; then up to WK6 doglegs) and returns the
+/// lowest-scoring valid one in `out`, segments directed from `a` to `b`.
+/// Validity is [`check_new_wires_in`] with `[a, b]` as the own ends. With no
 /// valid candidate, `out` is left empty and the error is the blocker of the
 /// lowest-scoring invalid candidate (the same comparison ranks them). `a == b`
 /// routes to nothing.
+///
+/// Candidates are scored lazily, best first: bends, length and number need no
+/// query and crossings are never negative, so `(0, bends, 0, length, number)`
+/// bounds each score from below. A segment leaving a point strictly inside a
+/// part body passes through that body, so once the first assessment has seen
+/// whether `a` and `b` lie inside one, the body term rises to that count (one
+/// for a straight, which is a single segment). The walk always
+/// takes the least key, scoring a candidate when its bound is least and checking
+/// it when its full score is least. Candidates are therefore checked in exactly
+/// the order of their full scores, and the result equals scoring and sorting all
+/// of them; only candidates that could still win are queried. Scoring a
+/// candidate also judges its validity from the same per-segment queries.
 ///
 /// Doglegs: for `d = 1, 2, ...` grid steps (K2) from `a`'s coordinate, H-V-H
 /// (vertical at `x = m`) then V-H-V (horizontal at `y = m`), each first on the
@@ -273,25 +422,62 @@ pub fn route(
     scratch: &mut RouteScratch,
     out: &mut Vec<Wire>,
 ) -> Result<(), Blocker> {
+    route_on(doc, a, b, first_leg, scratch, out)
+}
+
+/// [`route`] on any [`RouteSheet`].
+pub(crate) fn route_on<S: RouteSheet + ?Sized>(
+    doc: &S,
+    a: Pt,
+    b: Pt,
+    first_leg: Axis,
+    scratch: &mut RouteScratch,
+    out: &mut Vec<Wire>,
+) -> Result<(), Blocker> {
     out.clear();
     if a == b {
         return Ok(());
     }
     let RouteScratch { candidates, items } = scratch;
     enumerate_candidates(a, b, first_leg, candidates);
-    for candidate in candidates.iter_mut() {
-        candidate.score = score(doc, candidate.wires(), candidate.score.number, items);
-    }
-    // Unique candidate numbers make the order total; the unstable sort is in place.
-    candidates.sort_unstable_by_key(|c| c.score);
     let mut first_blocker = None;
-    for candidate in candidates.iter() {
-        match check_new_wires_in(doc, candidate.wires(), [a, b], items) {
-            Ok(()) => {
+    let mut probed = false;
+    // Unique candidate numbers make every key distinct, so the least is unique.
+    while let Some(candidate) = candidates
+        .iter_mut()
+        .min_by_key(|c| c.key)
+        .filter(|c| c.stage != Stage::Checked)
+    {
+        if candidate.stage == Stage::Bound {
+            let wires = &candidate.wires[..usize::from(candidate.len)];
+            let (score, verdict, inside) =
+                assess(doc, wires, [a, b], candidate.score.number, items);
+            (candidate.score, candidate.verdict) = (score, verdict);
+            candidate.key = score.key();
+            candidate.stage = Stage::Scored;
+            if !probed {
+                // The first assessment's queries cover both ends; raise every bound.
+                probed = true;
+                let (a_inside, b_inside) = (u8::from(inside[0]), u8::from(inside[1]));
+                for other in candidates.iter_mut().filter(|c| c.stage == Stage::Bound) {
+                    other.score.bodies = if other.len == 1 {
+                        a_inside.max(b_inside)
+                    } else {
+                        a_inside + b_inside
+                    };
+                    other.key = other.score.key();
+                }
+            }
+            continue;
+        }
+        candidate.stage = Stage::Checked;
+        candidate.key = u128::MAX;
+        match candidate.verdict {
+            None => {
                 out.extend_from_slice(candidate.wires());
                 return Ok(());
             }
-            Err(blocker) => {
+            Some(blocker) => {
                 first_blocker.get_or_insert(blocker);
             }
         }
@@ -310,13 +496,24 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
                 b: pair[1],
             };
         }
+        let len = points.len() - 1;
+        // WD4's lower bound: the full score without part bodies and crossings.
+        let score = Score {
+            bends: (len - 1) as u8,
+            length: wires[..len]
+                .iter()
+                .map(|w| w.a.manhattan_distance(w.b))
+                .sum(),
+            number,
+            ..Score::default()
+        };
         out.push(Candidate {
             wires,
-            len: (points.len() - 1) as u8,
-            score: Score {
-                number,
-                ..Score::default()
-            },
+            len: len as u8,
+            score,
+            key: score.key(),
+            stage: Stage::Bound,
+            verdict: None,
         });
     };
     if a.x == b.x || a.y == b.y {
@@ -380,15 +577,33 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
     }
 }
 
-/// WD4 scores invalid candidates too. Clip only the index query to K1;
-/// keep the original segment for body and crossing intersection tests.
-fn score(doc: &Doc, wires: &[Wire], number: u16, items: &mut Vec<ItemId>) -> Score {
+/// WD4's score of a candidate and its verdict under [`check_new_wires_in`] with
+/// `own_ends`, from one query and one pass over its items per segment. WD4
+/// scores invalid candidates too: clip only the index query to K1 and keep the
+/// original segment for body and crossing tests. A candidate with a valid shape
+/// lies inside K1, so its clipped query is exactly the validator's query, and
+/// the verdict follows the validator's order: the first segment with a point
+/// blocker, else the first with an overlap. Also reports whether each own end
+/// lies strictly inside a part body (the first segment's query covers the
+/// first end, the last segment's the second).
+fn assess<S: RouteSheet + ?Sized>(
+    doc: &S,
+    wires: &[Wire],
+    own_ends: [Pt; 2],
+    number: u16,
+    items: &mut Vec<ItemId>,
+) -> (Score, Option<Blocker>, [bool; 2]) {
     let mut score = Score {
         bends: (wires.len() - 1) as u8,
         number,
         ..Score::default()
     };
-    for &w in wires {
+    let judged = wires.iter().all(|&w| shape_valid(w));
+    let mut point = None;
+    let mut overlap = None;
+    let mut inside = [false; 2];
+    let last = wires.len() - 1;
+    for (index, &w) in wires.iter().enumerate() {
         score.length += w.a.manhattan_distance(w.b);
         let limit = crate::SHEET_LIMIT_NM;
         let area = Rect {
@@ -402,23 +617,54 @@ fn score(doc: &Doc, wires: &[Wire], number: u16, items: &mut Vec<ItemId>) -> Sco
             },
         };
         doc.query(area, items);
+        // Rules 2 and 3 matter only until a point blocker is known.
+        let rules = judged && point.is_none();
+        // Only a valid shape is judged; its bounds exist (inside K1).
+        let mut points = rules.then(|| PointRule::new(w, &own_ends));
+        let mut overlaps = OverlapRule::new(w);
         let mut through_body = false;
         for &item in items.iter() {
             match item {
                 ItemId::Part(id) => {
-                    through_body |= doc
-                        .part_body(id)
-                        .is_some_and(|body| passes_through(w, body));
+                    if let Some(body) = doc.part_body(id) {
+                        through_body |= passes_through(w, body);
+                        inside[0] |= index == 0 && strictly_inside(body, own_ends[0]);
+                        inside[1] |= index == last && strictly_inside(body, own_ends[1]);
+                    }
+                    if let Some(points) = points.as_mut() {
+                        points.part(id, doc.pins(id));
+                    }
                 }
                 ItemId::Wire(id) => {
-                    score.crossings += u32::from(crosses(w, *doc.wire(id).unwrap()));
+                    let other = doc.wire(id);
+                    score.crossings += u32::from(crosses(w, other));
+                    if let Some(points) = points.as_mut() {
+                        points.wire(id, other);
+                        overlaps.wire(id, other);
+                    }
                 }
                 ItemId::Label(_) => {}
             }
         }
         score.bodies += u8::from(through_body);
+        if let Some(points) = points {
+            point = points.blocker();
+            if point.is_none() && overlap.is_none() {
+                overlap = overlaps.blocker();
+            }
+        }
     }
-    score
+    let verdict = if judged {
+        point.or(overlap)
+    } else {
+        Some(Blocker::Sheet)
+    };
+    (score, verdict, inside)
+}
+
+/// `p` lies in the open interior of `body`: every segment leaving `p` passes through it.
+fn strictly_inside(body: Rect, p: Pt) -> bool {
+    body.min.x < p.x && p.x < body.max.x && body.min.y < p.y && p.y < body.max.y
 }
 
 /// The open segment meets the open rectangle (running along an edge or
@@ -991,8 +1237,9 @@ fn plan_wires_with_replacements(
         {
             pins.push(at);
         }
-        doc.query(Rect { min: at, max: at }, &mut scratch);
-        if scratch.iter().any(|item| matches!(item, ItemId::Label(_))) {
+        // Labels are indexed at their anchor point, which is where the
+        // connectivity keeps them.
+        if !doc.connectivity.labels_at(at).is_empty() {
             labels.push(at);
         }
     }
@@ -1053,23 +1300,14 @@ fn plan_wires_with_replacements(
     }
     feature.extend_from_slice(&pins);
     feature.extend_from_slice(&labels);
-    feature.sort_by_key(|&p| pt_key(p));
+    feature.sort_unstable_by_key(|&p| pt_key(p));
     feature.dedup();
 
-    let mut rows: FxHashMap<i32, Vec<i32>> = FxHashMap::default();
-    let mut cols: FxHashMap<i32, Vec<i32>> = FxHashMap::default();
-    for p in &feature {
-        rows.entry(p.y).or_default().push(p.x);
-        cols.entry(p.x).or_default().push(p.y);
-    }
-    for xs in rows.values_mut() {
-        xs.sort_unstable();
-        xs.dedup();
-    }
-    for ys in cols.values_mut() {
-        ys.sort_unstable();
-        ys.dedup();
-    }
+    // Feature points along each line, as (fixed, along) pairs sorted without
+    // repeats: columns by (x, y), rows by (y, x).
+    let cols: Vec<(i32, i32)> = feature.iter().map(|p| (p.x, p.y)).collect();
+    let mut rows: Vec<(i32, i32)> = feature.iter().map(|p| (p.y, p.x)).collect();
+    rows.sort_unstable();
 
     // Atomic pieces: maximal sub-segments free of interior feature points.
     // Identical pieces from overlapping wires are deduplicated here, so no two
@@ -1077,18 +1315,18 @@ fn plan_wires_with_replacements(
     let mut atomic_index: FxHashMap<(u8, i32, i32, i32), usize> = FxHashMap::default();
     let mut atomics: Vec<Atomic> = Vec::new();
     for source in &sources {
-        let (coords, low, high) = if source.horizontal {
-            (rows.get(&source.lo.y), source.lo.x, source.hi.x)
+        let (line, fixed, low, high) = if source.horizontal {
+            (&rows, source.lo.y, source.lo.x, source.hi.x)
         } else {
-            (cols.get(&source.lo.x), source.lo.y, source.hi.y)
+            (&cols, source.lo.x, source.lo.y, source.hi.y)
         };
-        let coords = coords.map_or(&[][..], Vec::as_slice);
-        let start = coords.partition_point(|&c| c <= low);
-        let end = coords.partition_point(|&c| c < high);
+        // Feature coordinates strictly between the source's ends, in order.
+        let start = line.partition_point(|&c| c <= (fixed, low));
+        let end = line.partition_point(|&c| c < (fixed, high));
         let mut lo = source.lo;
-        for coordinate in coords[start..end]
+        for coordinate in line[start..end]
             .iter()
-            .copied()
+            .map(|&(_, c)| c)
             .chain(std::iter::once(high))
         {
             let hi = if source.horizontal {
@@ -2147,7 +2385,8 @@ mod tests {
                     Axis::Horizontal
                 };
                 for (number, wires) in oracle_candidates(lp(a.0, a.1), lp(b.0, b.1), axis) {
-                    let actual = score(&doc, &wires, number, &mut Vec::new());
+                    let ends = [lp(a.0, a.1), lp(b.0, b.1)];
+                    let (actual, _, _) = assess(&doc, &wires, ends, number, &mut Vec::new());
                     assert_eq!(
                         (
                             actual.bodies,

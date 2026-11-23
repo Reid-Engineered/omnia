@@ -559,8 +559,9 @@ pub const DOGLEG_REACH_NM: i32;   // WK5
 pub const DOGLEG_CAP: usize;      // WK6
 pub struct RouteScratch { /* candidates, query buffer */ }  // caller-owned, reused (W1.5)
 impl RouteScratch { pub fn new() -> Self; }
-// Scores every candidate, validates in score order, returns the first valid one or the
-// blocker of the lowest-scoring candidate. No allocation once scratch and out are warm.
+// Returns the lowest-scoring valid candidate or the blocker of the lowest-scoring one.
+// Scores lazily against a lower bound (W2.2): the same answer as scoring every candidate
+// and validating in score order. No allocation once scratch and out are warm.
 pub fn route(doc: &Doc, a: Pt, b: Pt, first_leg: Axis, scratch: &mut RouteScratch,
              out: &mut Vec<Wire>) -> Result<(), Blocker>;
 pub struct SegmentDragPlan { pub remove: Vec<WireId>, pub add: Vec<Wire> } // WD7 (W3.2)
@@ -610,15 +611,19 @@ rotation and mirror. `fates` has one entry per run, so several entries can share
 point. `NoRoute` names the original run's two ends. Blockers in already planned output
 are mapped to the first original wire of that run, never a temporary view id.
 Refusal clears every output vector. The empty-boundary path does not validate selected
-items; command validation remains the caller's responsibility. Nonempty planning builds
-an isolated final-geometry document view with original part/wire identities, removes all
-replaced runs, reserves every final endpoint (including free far ends), and validates
-against selected geometry and already planned runs. Endpoint reservations report the
+items; command validation remains the caller's responsibility. Nonempty planning reads a
+final-geometry view with original part/wire identities, removes all replaced runs,
+reserves every final endpoint (including free far ends), and validates against selected
+geometry and already planned runs. Since W2.2 (WB3, 2026-11-23) the view is layered over
+the caller's document instead of copied from it: it holds only the moved selection, the
+reservations and the planned wires, reads the document's index without touching its
+visit stamps, and gives the ids a full copy would. Endpoint reservations report the
 original incident wire as their blocker. A detach fallback restarts planning with that
 run fixed at its original geometry, so earlier runs
 also see it. Rigid corner labels move; rerouted and detached labels stay put until W3.6.
-The current nonempty path allocates its view and scratch on each call; the warm-allocation
-goal above is not yet met beyond the required empty-boundary path. W2.4 must measure
+The current nonempty path allocates its view and scratch on each call (sized by the
+selection and the plan, not the sheet); the warm-allocation goal above is not yet met
+beyond the required empty-boundary path. W2.4 must measure
 this implementation before any WB1/WB2/WB7 verdict; no budget claim follows from W2.1.
 
 Bench additions. Every subcommand exits by itself and takes `--json <file>`.
