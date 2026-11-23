@@ -1,17 +1,21 @@
-//! T4.3: `OverlayView` — hover outline, selection halos, and WD8 rubber band over a cached
-//! [`SheetView`] (D7, G6, INV6, INV11).
+//! T4.3 / T4.4: `OverlayView` — hover outline, selection halos, WD8 rubber band, and net
+//! highlight over a cached [`SheetView`] (D7, G6, INV6, INV11).
 //!
 //! Architecture (D7, G6):
 //! - [`CachedSheet`] is a dedicated entity wrapping [`SheetView`], embedded inside
 //!   [`OverlayView`] with `.cached(StyleRefinement::default().size_full())`.
 //! - [`OverlayView`] itself is NOT embedded with `.cached()` inside a parent that notifies on
-//!   hover: when hover, selection, or a rubber-band drag updates, only [`OverlayView`] is
-//!   notified, so GPUI replays [`CachedSheet`]'s cached prepaint and paint without calling
-//!   [`SheetView`]'s paint code (INV11).
+//!   hover: when hover, selection, net highlight, or a rubber-band drag updates, only
+//!   [`OverlayView`] is notified, so GPUI replays [`CachedSheet`]'s cached prepaint and paint
+//!   without calling [`SheetView`]'s paint code (INV11).
 //! - [`CachedSheet`] is notified only by a camera change, a theme change, a document swap, or a
 //!   [`Change`] whose dirty rectangle meets the viewport (D7).
 //! - All overlay colours come exclusively from `omnia-theme` tokens (`stage/select`,
-//!   `stage/select-halo`, `stage/hover`, INV6).
+//!   `stage/select-halo`, `stage/hover`, `stage/net-highlight`, INV6).
+
+mod net;
+
+pub use net::NetHighlight;
 
 use std::{cell::Cell, rc::Rc};
 
@@ -28,7 +32,7 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style, StyleRefinement,
     Styled, WeakEntity, Window, div, fill, point, px, relative,
 };
-use omnia_doc::{Change, Doc, ItemId, Pt, Rect, Wire, prefs::SelectMode};
+use omnia_doc::{Change, Doc, ItemId, NetId, Pt, Rect, Wire, WireId, prefs::SelectMode};
 use omnia_theme::Theme;
 
 /// K5 wire stroke width in world nanometres, matching `sheet/wires.rs`.
@@ -183,14 +187,15 @@ impl Element for CountedSheet {
 
 /// Transient interactive overlay above a `.cached()` [`SheetView`] (D7, INV11).
 ///
-/// Owns hover, selection, and rubber-band state, registers one sheet-wide hitbox for pointer
-/// picking and rubber-band drags, and repaints only itself on transient updates.
+/// Owns hover, selection, net-highlight, and rubber-band state, registers one sheet-wide hitbox
+/// for pointer picking and rubber-band drags, and repaints only itself on transient updates.
 pub struct OverlayView {
     doc: Entity<Doc>,
     sheet: Entity<CachedSheet>,
     camera: Camera,
     theme: &'static Theme,
     state: SelectionState,
+    net_highlight: NetHighlight,
     focus: FocusHandle,
     renders: u64,
     paints: Rc<Cell<u64>>,
@@ -213,6 +218,7 @@ impl OverlayView {
             camera,
             theme,
             state: SelectionState::default(),
+            net_highlight: NetHighlight::new(),
             focus: cx.focus_handle(),
             renders: 0,
             paints: Rc::new(Cell::new(0)),
@@ -241,6 +247,14 @@ impl OverlayView {
 
     pub fn hovered(&self) -> Option<ItemId> {
         self.state.hovered()
+    }
+
+    pub fn highlighted_nets(&self) -> &[NetId] {
+        self.net_highlight.nets()
+    }
+
+    pub fn highlighted_wires(&self) -> &[WireId] {
+        self.net_highlight.wires()
     }
 
     pub fn rubber_band(&self) -> Option<RubberBand> {
@@ -283,9 +297,18 @@ impl OverlayView {
         }
     }
 
+    fn sync_net_highlight(&mut self, cx: &App) -> bool {
+        self.net_highlight.sync(
+            self.doc.read(cx),
+            self.state.hovered(),
+            self.state.selection(),
+        )
+    }
+
     /// Sets the hovered item directly (never notifies `SheetView`).
     pub fn set_hovered(&mut self, item: Option<ItemId>, cx: &mut Context<Self>) {
         if self.state.set_hovered(item) {
+            self.sync_net_highlight(cx);
             cx.notify();
         }
     }
@@ -297,6 +320,7 @@ impl OverlayView {
         cx: &mut Context<Self>,
     ) {
         if self.state.set_selection(items) {
+            self.sync_net_highlight(cx);
             cx.emit(OverlayEvent::SelectionChanged);
             cx.notify();
         }
@@ -305,6 +329,7 @@ impl OverlayView {
     /// Clears the selection (never notifies `SheetView`).
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         if self.state.clear_selection() {
+            self.sync_net_highlight(cx);
             cx.emit(OverlayEvent::SelectionChanged);
             cx.notify();
         }
@@ -314,6 +339,7 @@ impl OverlayView {
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         let changed = self.state.select_all(self.doc.read(cx));
         if changed {
+            self.sync_net_highlight(cx);
             cx.emit(OverlayEvent::SelectionChanged);
             cx.notify();
         }
@@ -376,6 +402,7 @@ impl OverlayView {
         self.doc = doc;
         let had_selection = !self.state.selection().is_empty();
         self.state = SelectionState::new(self.state.select_mode());
+        self.net_highlight.clear();
         self.sheet.update(cx, |sheet, cx| {
             sheet.document = Some(document);
             cx.notify();
@@ -387,18 +414,24 @@ impl OverlayView {
     }
 
     /// Applies D7's dirty-rectangle invalidation after a document command:
-    /// notifies `SheetView` only when `change.dirty` intersects the visible viewport, and prunes
-    /// any removed items from hover/selection.
+    /// notifies `SheetView` only when `change.dirty` intersects the visible viewport, prunes
+    /// any removed items from hover/selection, and re-resolves net highlights (T4.4).
     pub fn on_doc_change(&mut self, change: &Change, cx: &mut Context<Self>) {
         let visible = self.camera.visible();
         if change.dirty.is_some_and(|dirty| dirty.intersects(visible)) {
             self.sheet.update(cx, |_, cx| cx.notify());
         }
-        let update = self.state.prune(self.doc.read(cx));
+        let mut update = self.state.prune(self.doc.read(cx));
+        if self.sync_net_highlight(cx) {
+            update.visual_changed = true;
+        }
         self.apply_update(update, cx);
     }
 
-    fn apply_update(&self, update: SelectionUpdate, cx: &mut Context<Self>) {
+    fn apply_update(&mut self, update: SelectionUpdate, cx: &mut Context<Self>) {
+        if update.visual_changed || update.selection_changed {
+            self.sync_net_highlight(cx);
+        }
         if update.selection_changed {
             cx.emit(OverlayEvent::SelectionChanged);
         }
@@ -550,9 +583,18 @@ impl Element for OverlayLayer {
             let mut camera = self.camera.clone();
             camera.set_viewport(bounds);
             let sf = window.scale_factor();
-            let state = &overlay.read(cx).state;
+            let view = overlay.read(cx);
             let doc = self.doc.read(cx);
-            paint_overlay(doc, state, &camera, bounds, sf, self.theme, window);
+            paint_overlay(
+                doc,
+                &view.state,
+                &view.net_highlight,
+                &camera,
+                bounds,
+                sf,
+                self.theme,
+                window,
+            );
         }
 
         if self.dragging {
@@ -858,9 +900,11 @@ fn item_world_bounds(doc: &Doc, item: ItemId) -> Option<Rect> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_overlay(
     doc: &Doc,
     state: &SelectionState,
+    net_highlight: &NetHighlight,
     camera: &Camera,
     bounds: Bounds<Pixels>,
     sf: f32,
@@ -870,7 +914,7 @@ fn paint_overlay(
     let hovered = state.hovered();
     let selection = state.selection();
     let band = state.rubber_band().filter(|b| b.is_visible());
-    if hovered.is_none() && selection.is_empty() && band.is_none() {
+    if hovered.is_none() && selection.is_empty() && band.is_none() && net_highlight.is_empty() {
         return;
     }
 
@@ -978,9 +1022,23 @@ fn paint_overlay(
             }
         });
 
-        // Layer 2: crisp outlines, wire highlights, corner handles, and rubber-band border.
+        // Layer 2: crisp net highlights, outlines, wire highlights, corner handles, and rubber-band border.
         window.paint_layer(|window| {
-            // Hovered item outline.
+            // T4.4: whole-net wire highlight in `stage/net-highlight` (underneath selection handles).
+            net::paint_wires(
+                doc,
+                net_highlight.wires(),
+                camera,
+                visible_padded,
+                sf,
+                wire_select_dev,
+                clip,
+                theme,
+                window,
+            );
+
+            // Hovered item outline (hovered wires are painted by `net::paint_wires` above, with
+            // their Layer 1 hover halo indicating the hovered segment).
             if let Some(item) = hovered
                 && !state.is_selected(item)
                 && item_world_bounds(doc, item).is_some_and(|r| r.intersects(visible_padded))
@@ -994,14 +1052,7 @@ fn paint_overlay(
                             paint_solid_outline(rect, hover_outline_dev, hover_color, sf, window);
                         }
                     }
-                    ItemId::Wire(id) => {
-                        if let Some(&wire) = doc.wire(id)
-                            && let Some(rect) =
-                                wire_rect_dev(wire, camera, sf, wire_select_dev, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), hover_color));
-                        }
-                    }
+                    ItemId::Wire(_) => {}
                     ItemId::Label(id) => {
                         if let Some(label) = doc.label(id)
                             && let Some(rect) =
@@ -1477,6 +1528,189 @@ mod tests {
             cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
             paints_1,
             "INV11: clicks once focused must not repaint SheetView"
+        );
+    }
+
+    #[gpui::test]
+    fn inv11_net_highlight_never_repaints_sheet(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        // Net A: Wire(0) (-8g,0)->(-2g,0) + Wire(1) (-2g,0)->(-2g,4g), plus label-bridged Wire(2) (4g,0)->(8g,0).
+        // Net B: Wire(3) (-8g,8g)->(0,8g).
+        let net_doc = Doc::from_items(
+            [],
+            [
+                Wire {
+                    a: Pt { x: -8 * g, y: 0 },
+                    b: Pt { x: -2 * g, y: 0 },
+                },
+                Wire {
+                    a: Pt { x: -2 * g, y: 0 },
+                    b: Pt {
+                        x: -2 * g,
+                        y: 4 * g,
+                    },
+                },
+                Wire {
+                    a: Pt { x: 4 * g, y: 0 },
+                    b: Pt { x: 8 * g, y: 0 },
+                },
+                Wire {
+                    a: Pt {
+                        x: -8 * g,
+                        y: 8 * g,
+                    },
+                    b: Pt { x: 0, y: 8 * g },
+                },
+            ],
+            [
+                Label {
+                    at: Pt { x: -8 * g, y: 0 },
+                    text: "NET_A".into(),
+                },
+                Label {
+                    at: Pt { x: 4 * g, y: 0 },
+                    text: "NET_A".into(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let doc = cx.new(|_| net_doc);
+        let doc_clone = doc.clone();
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = OverlayView::new(doc_clone, camera, &GRAPHITE, cx);
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+        let sheet_notifies = Rc::new(Cell::new(0u32));
+        let sn = sheet_notifies.clone();
+        cx.update(|_, cx| {
+            let sheet = overlay.read(cx).sheet_entity().clone();
+            cx.observe(&sheet, move |_, _| sn.set(sn.get() + 1))
+                .detach();
+        });
+
+        let initial_sheet_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let initial_overlay_paints = cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
+        assert_eq!(initial_sheet_paints, 1);
+
+        // Hover Wire(0): whole Net A ([0, 1, 2]) highlights in overlay; SheetView does not repaint.
+        let w0_pos = screen_of(&overlay, cx, Pt { x: -5 * g, y: 0 });
+        let empty_pos = screen_of(
+            &overlay,
+            cx,
+            Pt {
+                x: -10 * g,
+                y: -8 * g,
+            },
+        );
+        cx.simulate_mouse_move(w0_pos, None, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2)]
+        );
+        let paints_after_hover = cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
+        assert!(paints_after_hover > initial_overlay_paints);
+
+        // Hover empty space: highlight clears.
+        cx.simulate_mouse_move(empty_pos, None, Modifiers::none());
+        assert!(cx.update(|_, cx| overlay.read(cx).highlighted_wires().is_empty()));
+
+        // Click Wire(1) to select it: Net A highlights.
+        let w1_pos = screen_of(
+            &overlay,
+            cx,
+            Pt {
+                x: -2 * g,
+                y: 2 * g,
+            },
+        );
+        cx.simulate_mouse_down(w1_pos, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(w1_pos, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2)]
+        );
+
+        // Hover Wire(3) while Wire(1) is selected: both Net A and Net B highlight.
+        let w3_pos = screen_of(
+            &overlay,
+            cx,
+            Pt {
+                x: -4 * g,
+                y: 8 * g,
+            },
+        );
+        cx.simulate_mouse_move(w3_pos, None, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2), WireId(3)]
+        );
+
+        // Off-screen label edit merges Wire(4) into Net A: OverlayView re-resolves without
+        // repainting SheetView (D7).
+        let off_wire = cx.update(|_, cx| {
+            doc.update(cx, |doc, _| {
+                doc.apply(Command::AddWires(vec![Wire {
+                    a: Pt {
+                        x: 200 * g,
+                        y: 200 * g,
+                    },
+                    b: Pt {
+                        x: 204 * g,
+                        y: 200 * g,
+                    },
+                }]))
+                .unwrap()
+            })
+        });
+        let off_wid = off_wire
+            .added
+            .iter()
+            .find_map(|item| match *item {
+                ItemId::Wire(id) => Some(id),
+                _ => None,
+            })
+            .unwrap();
+        cx.update(|_, cx| {
+            overlay.update(cx, |v, cx| v.on_doc_change(&off_wire, cx));
+        });
+        let off_label = cx.update(|_, cx| {
+            doc.update(cx, |doc, _| {
+                doc.apply(Command::AddLabel(Label {
+                    at: Pt {
+                        x: 200 * g,
+                        y: 200 * g,
+                    },
+                    text: "NET_A".into(),
+                }))
+                .unwrap()
+            })
+        });
+        cx.update(|_, cx| {
+            overlay.update(cx, |v, cx| v.on_doc_change(&off_label, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2), WireId(3), off_wid]
+        );
+
+        // Clear selection and move hover away: net highlight clears.
+        cx.simulate_mouse_move(empty_pos, None, Modifiers::none());
+        cx.update(|_, cx| overlay.update(cx, |v, cx| v.clear_selection(cx)));
+        assert!(cx.update(|_, cx| overlay.read(cx).highlighted_wires().is_empty()));
+
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            initial_sheet_paints,
+            "INV11/T4.4: net highlight changes must never repaint SheetView"
+        );
+        assert_eq!(
+            sheet_notifies.get(),
+            0,
+            "INV11/T4.4: net highlight changes must never notify SheetView"
         );
     }
 }

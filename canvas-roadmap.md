@@ -484,7 +484,7 @@ of the `canvas` lane.
   simulated hover moves, a selection change and a rubber-band drag; goldens for selected
   and hovered states exist in both themes.
 
-### T4.4 Net highlight · todo
+### T4.4 Net highlight · done
 - Lane: canvas · Depends: T4.1, T4.3 · Read: D7
 - Owns: `crates/omnia-canvas/src/overlay/net.rs`
 - Do: hovering or selecting a wire repaints its whole net in the overlay in
@@ -1997,3 +1997,23 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        run; it is kept in `orion-2026-11-23/aborted-attempt/`. Evidence in
                        `docs/measurements/T2.9/orion-2026-11-23/`; `gate.py summarize`
                        reproduces the summary.
+2026-11-23 T4.4 done — implemented `crates/omnia-canvas/src/overlay/net.rs` (`NetHighlight` and
+                       `paint_wires`), integrated into `crates/omnia-canvas/src/overlay.rs`
+                       (`OverlayView::highlighted_nets`, `OverlayView::highlighted_wires`, and
+                       `paint_overlay` Layer 2) and re-exported `NetHighlight` from `lib.rs`
+                       (documented in `canvas-plan.md` section 9 per rule 12). Hovering or
+                       selecting a wire resolves its logical `NetId` via `Doc::net_of`, gathers
+                       every wire in the net via `Doc::net_wires` (including label-bridged
+                       components), deduplicates across hover and multi-wire selection in
+                       canonical ascending `WireId` order, re-resolves on `on_doc_change`, and
+                       paints the net in `stage/net-highlight` (INV6, no colour literals).
+                       `NetHighlight` tests verify deterministic resolution across label bridges
+                       and net merges/splits; `inv11_net_highlight_never_repaints_sheet` verifies
+                       0 `SheetView` paints/notifies across hover, selection, and off-screen
+                       net-extending edits (D7, INV11). Added `overlay-net-highlight` (both
+                       themes, 100%/125%/150%) and updated `overlay-selected` goldens in
+                       `tests/golden/tests/overlay.rs`; all 12/12 sheet and 24/24 overlay
+                       goldens match with 0 differing pixels on Windows. Standard checks pass
+                       locally on Windows (fmt, workspace clippy, bench-features clippy,
+                       workspace tests, golden tests, cargo deny). No budgets measured; no new
+                       dependencies.

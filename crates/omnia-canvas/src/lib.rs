@@ -9,6 +9,6 @@ pub mod snap_px;
 
 pub use camera::Camera;
 pub use input::{CanvasEvent, CanvasStatus, Navigator, SheetCanvas};
-pub use overlay::{CachedSheet, OverlayEvent, OverlayView};
+pub use overlay::{CachedSheet, NetHighlight, OverlayEvent, OverlayView};
 pub use selection::{RubberBand, Selection, SelectionState};
 pub use sheet::SheetView;
