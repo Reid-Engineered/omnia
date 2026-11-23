@@ -384,8 +384,10 @@ Decoding rules, fixed at A1.3 (2026-11-21; amended by its three review rounds th
 | `set_text` | `item`, `field` (`designator`, `value`, `label`), `text` | `SetText` |
 
 Future minor schema additions once `omnia-doc` lands `parts-plan.md` `PD8` (`P2.2`): `set_param`,
-`list_parts` and `update_part_def`. They use the existing preview/apply edit path, and their
-effects appear in change deltas like any other edit (cross-plan decision XD8, 2026-11-23).
+`list_parts` and `update_part_def`. `set_param` and `update_part_def` are edit operations: they
+use the existing preview/apply edit path, and their effects appear in change deltas like any
+other edit (cross-plan decision XD8, 2026-11-23). `list_parts` is a read operation: it reads the
+document's definitions and the catalog, changes nothing, and has no preview or apply step.
 
 `invert_follow` means exactly what holding Alt at commit means (WK3), applied to the session's
 `WiringPrefs` (WK10). It exists only once W2.2 has added `FollowPolicy` to the code.

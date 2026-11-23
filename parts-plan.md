@@ -465,14 +465,34 @@ amended decision:
 - **Commands** (all transactional and undoable through `Doc::apply`, `INV4`):
   - `PlacePart { part, local_pins, local_bounds, def: PlaceDef }` where `PlaceDef` is
     `Unmodelled` (synthesise the migration definition below), `Existing(PartDefId)` (a
-    referenced id; a retained id is refused, because a reloaded document no longer has it) or `Embed(Arc<EmbeddedPartDef>)` (validate, then intern). The
-    definition's symbol, pin count and local geometry must equal the command's, or the command
-    is refused.
+    referenced id; a retained id is refused, because a reloaded document no longer has it) or
+    `Embed(Arc<EmbeddedPartDef>)` (validate, then intern). The instance validator below must
+    accept the part against the definition, or the command is refused.
   - `SetParam { part: PartId, name: Arc<str>, value: Option<ParamValue> }` (`None` resets to the
     definition's default).
   - `UpdatePartDef { from: PartDefId, to: Arc<EmbeddedPartDef> }` validates `to`, interns it and
     moves every part referencing `from` onto it. It is refused if any of those parts' pin
     geometry or overrides would become invalid. `from` becomes retained.
+- **Instance validation** (amended again 2026-11-23, re-review of #85). One function,
+  `omnia_doc::part_def::validate_instance(def, symbol, local_pins, local_bounds, params)`,
+  checks one part against its definition, and every path that creates or changes a part's
+  definition or overrides calls it: v3 load (each part record), `PlacePart`, `SetParam` (on the
+  resulting override map) and `UpdatePartDef` (each moved part against `to`). It checks:
+  - `symbol == def.symbol`;
+  - `local_pins == def.local_pins` element by element, in order, and
+    `local_bounds == def.local_bounds`. Equal count is not enough: the same pins in another
+    order are refused, because the terminal mapping (`PD5`) indexes `def.local_pins`;
+  - every override name is declared in `def.params`; its `ParamValue` variant matches the
+    declared kind; reals and ints lie within `min`/`max`; enum values are declared variants;
+    text is within `PK7`; and no override equals its default (overrides are stored canonically,
+    so a file holding a default-valued override is refused rather than normalised).
+- **Pin geometry comes from the definition.** A stored part's local pins and art bounds are its
+  definition's. The v3 part record stores no geometry of its own; world pins are rebuilt from
+  `def.local_pins`, `at` and `orient` on load. The terminal mapping is therefore consistent by
+  construction once `validate` (definition) and `validate_instance` (part) pass. `omnia-doc`
+  cannot see symbol pin numbers, so a definition's geometry is authoritative for its parts, as
+  per-part geometry is in v2; `Catalog::diff_embedded` reports `SymbolMismatch` when an embedded
+  definition's geometry differs from the built-in symbol it names (`PD9`).
 - **Refusal rolls back exactly.** A refused command or batch, including one that interned a new
   definition before a later step failed, leaves the arena length, every record, every part, the
   revision and the history as they were.
@@ -492,17 +512,25 @@ amended decision:
   indexed by id: referenced records at their ids, `None` for retained or never-filled slots,
   trailing `None`s kept so the arena length survives. Nothing is remapped, so ids in a saved
   file equal ids in memory (`PQ6`).
-- **Load.** `version: 3` runs every record through the `PD10` validator and refuses the file if a
-  part names a missing or `None` id, or a part's symbol or pin count disagrees with its record.
+- **Load.** `version: 3` runs every record through the `PD10` validator and every part record
+  through `validate_instance`, and refuses the file if a part names a missing or `None` id or
+  either check fails.
 - **v2 migration** (`XD1`). `version: 2` files load by strict migration: each unique
   `(symbol, local_pins, local_bounds)` tuple, in order of first appearance by part slot,
   becomes an unmodelled definition with `source_id = "legacy:<symbol id>"`,
   `content_hash = None`, the tuple's geometry, an empty pin table (`omnia-doc` cannot see
   symbol pin numbers, and inventing roles would be false; context derives `unspecified`,
-  `XD5`), no parameters and `sim: None`; each part references its tuple's id with empty `params`. The same
-  synthesis serves `PlaceDef::Unmodelled`, so a sheet built by placement and the same sheet
-  loaded from v2 are equal. v2 is read only; `save` always writes v3. Any other version is
-  refused.
+  `XD5`), no parameters and `sim: None`; each part references its tuple's id with empty
+  `params`. The same synthesis serves `PlaceDef::Unmodelled`, so a sheet built by placement and
+  the same sheet loaded from v2 are equal. v2 is read only; `save` always writes v3. Any other
+  version is refused.
+- **No lossy save between tasks** (amended again 2026-11-23, re-review of #85). The commands
+  land in `P2.2` and the v3 writer in `P2.3`. In between, `Doc::save` still writes v2, which
+  cannot hold definitions or overrides, so from `P2.1` until `P2.3` `save` refuses with
+  `io::ErrorKind::InvalidData` ("document holds part definitions or parameters that this build
+  cannot save") when any referenced definition is not an unmodelled one or any part has a
+  non-empty `params`. A document of unmodelled parts saves exactly as before. `P2.3` removes the
+  refusal when it lands the v3 writer (`PTC-no-lossy-save`).
 
 ### PD9 Provenance, hash verification and explicit library updates. DECIDED (owner, 2026-11-20)
 
@@ -524,8 +552,10 @@ amended decision:
   the provenance. `diff_embedded` pairs records with library entries by `source_id` only; an
   equal hash under a different `source_id` is reported as "same content, different source" and
   never offered as an update. A document record whose `content_hash` no longer matches its own
-  content when recomputed by `omnia-parts` is reported as `LocallyModified`. In `Doc`, records
-  with different `source_id`s are different records even if their content is equal.
+  content when recomputed by `omnia-parts` is reported as `LocallyModified`, and one whose
+  local pins or bounds differ from the built-in symbol it names as `SymbolMismatch` (`PD8`). In
+  `Doc`, records with different `source_id`s are different records even if their content is
+  equal.
 
 ### PD10 One validation contract for every ingress. DECIDED (owner, 2026-11-20; amended 2026-11-23, owner-delegated, review of #85)
 
@@ -651,6 +681,7 @@ Each invariant has an automated test; the owning task is named in `parts-roadmap
 | PINV9 | **SPICE hygiene (`PK10`).** No definition containing `.control`, shell escapes or an unresolved `.include`/`.lib` is admitted through any ingress (archive, folder, v3 load, `PlacePart`, `UpdatePartDef`); every embedded SPICE block has zero external file references. |
 | PINV10 | **Built-in zero-I/O start (`PB1`).** Constructing `Catalog::builtin()` executes zero filesystem calls and parses zero TOML at runtime. |
 | PINV11 | **Terminal mapping** (added 2026-11-23). For every admitted definition, `terminals` maps each SPICE terminal to exactly one stored pin index and every non-`no_connect` pin to exactly one terminal (`PD5`). |
+| PINV12 | **Instance validity** (added 2026-11-23, re-review of #85). Every stored part passes `validate_instance` against its definition after every accepted command and every load; no path admits an override that is undeclared, of the wrong kind, out of bounds or equal to its default, or local pins that differ from the definition's in value or order. |
 
 ## 8. Scenarios
 
@@ -665,7 +696,9 @@ Each scenario is an automated test with this expected result.
 | PTC-param-silent | Apply `SetParam("tc1", "1e-3")` on a resistor (not the primary parameter) | Accepted; `Part::value` unchanged; revision advances; `Change::modified == [part]`; undo reports the same part (`XD7`). |
 | PTC-opart-roundtrip | Pack the `opamp-generic` directory into an `.opart`, mount it with `Catalog::mount_opart`, resolve, compare against the unpacked load | Identical definition, identical `content_hash` (`PINV2`), identical resolved SPICE block. |
 | PTC-offline-omnia | Place a custom `.opart` part, save, drop `Catalog`, load | Loads cleanly; `load(save(doc)) == doc`; all metadata, pin roles, param overrides and SPICE `.subckt` intact; ids unchanged (`PINV4`). |
-| PTC-def-lifecycle | Place a modelled part (definition id 1), delete it, save and reload; in the original, undo the delete; then place the same definition again in both | The saved file has `None` at id 1 and the same arena length; the reloaded doc equals the original under `PartialEq`; undo restores the part with `def == 1` and an equal record; the second placement allocates the same new id in both documents (`PD8`, `PINV4`, `PINV7`). |
+| PTC-def-lifecycle | Place a modelled part (definition id 1) and delete it: call this state `D`. Branch A: save `D`, load it as `L`, then place the same definition in both `D` and `L`. Branch B (from a fresh copy of `D`): undo the delete, then place the same definition again | A: the saved file has `None` at id 1 and the same arena length; `L == D` under `PartialEq`; both placements allocate the same new id 2, since neither document has a referenced record at 1 (`PD8`, `PINV4`). B: undo restores the part with `def == 1` and an equal record (`PINV7`); the new placement reuses id 1 because it is referenced again. |
+| PTC-instance-refuse | Load v3 files whose part records hold (a) an override below its `min`, (b) an undeclared override name, (c) an override of the wrong kind, (d) an override equal to its default; apply `PlacePart { def: Existing(id) }` whose `local_pins` are the definition's pins with two swapped (same count) | Each file refused at load with an error naming the part and parameter; the command refused with `InvalidInstance`; `Doc` unchanged (`PD8`, `PINV12`). |
+| PTC-no-lossy-save | Between `P2.2` and `P2.3`: place a part with `PlaceDef::Embed`, or apply `SetParam`, then call `save`; and save a document of unmodelled parts | The first two saves are refused with `InvalidData` and write nothing usable as a v2 file; the unmodelled document saves byte-identical to before. From `P2.3` the same documents save as v3 and `PINV4` holds (`PD8`). |
 | PTC-batch-intern-refused | Apply a `Batch` of `PlacePart { def: Embed(new) }` followed by an invalid `SetParam` | Refused; the definition arena length, every record, every part, revision and history are unchanged (`PINV7`). |
 | PTC-pin-order | Build two definitions for the same 3-pin symbol, one listing `[[pins]]` in symbol order and one in another order, and a third whose `[sim].pins` swaps two terminals; place each and read terminal-to-pin mappings | The first two give identical embedded pin tables and terminals; the third maps the swapped terminals to the swapped pin indices; a terminal list with the right count but a repeated pin is refused (`PINV11`). |
 | PTC-library-update | Load a document whose embedded `opamp-generic` has an older hash; mount a newer one; run `diff_embedded` + `UpdatePartDef` + `undo` | `diff_embedded` reports 1 update; `UpdatePartDef` updates hash and SPICE text on all instances and lists them in `Change::modified`; `undo` restores the old record and id. |
@@ -720,6 +753,7 @@ pub enum DefUpdateAvailable {
     Newer { def: PartDefId, to: Arc<PartDef> },
     SameContentDifferentSource { def: PartDefId, library_source_id: Arc<str> },
     LocallyModified { def: PartDefId },
+    SymbolMismatch { def: PartDefId },
 }
 
 // Packing helpers for export and tests
@@ -793,6 +827,8 @@ pub struct EmbeddedPartDef {               // Eq; validated by validate() on eve
     pub sim: EmbeddedSimBinding,
 }
 pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError>;
+pub fn validate_instance(def: &EmbeddedPartDef, symbol: SymbolId, local_pins: &[Pt],
+                         local_bounds: Rect, params: &Params) -> Result<(), InstanceError>; // PD8
 
 // ---- omnia-doc: command.rs (P2.2) ----
 pub enum PlaceDef { Unmodelled, Existing(PartDefId), Embed(Arc<EmbeddedPartDef>) }
@@ -800,7 +836,8 @@ pub enum PlaceDef { Unmodelled, Existing(PartDefId), Embed(Arc<EmbeddedPartDef>)
 //   SetParam { part: PartId, name: Arc<str>, value: Option<ParamValue> }
 //   UpdatePartDef { from: PartDefId, to: Arc<EmbeddedPartDef> }
 //   Change gains `modified: Vec<PartId>` (XD7)
-//   CommandError gains InvalidParam { part, name }, InvalidDef(DefError), MissingDef(PartDefId)
+//   CommandError gains InvalidParam { part, name }, InvalidDef(DefError),
+//   InvalidInstance(InstanceError), MissingDef(PartDefId)
 
 // ---- omnia-doc: Doc queries (P2.1) ----
 //   pub fn part_def(&self, id: PartDefId) -> Option<&EmbeddedPartDef>;          // referenced or retained
@@ -843,7 +880,8 @@ and follow `PK11`.
 | Third-party SPICE models carry restrictive or non-redistributable licences | `PK11` list, `[license]` metadata and `THIRD_PARTY.md`, enforced by `xtask parts --check` in CI | `PTC-xtask-mismatch` |
 | Transitive `.subckt` dependencies inside a `.lib` (subcircuit A calls subcircuit B + `.model` C) | `spice.rs` performs a local dependency closure within the `.lib` when extracting the embedded block | `PS1` spike + `PTC-opart-roundtrip` |
 | Untrusted `.opart`, `.omnia` or agent command contains host-executing `.control` / `shell` directives or ZIP bombs | `PK3` streaming caps + one `PD10` validator on every ingress | `PTC-hostile-opart`, `PTC-hostile-embedded` |
-| Equal pin counts hide a wrong terminal order | Explicit stored-index → number → terminal mapping (`PD5`) | `PTC-pin-order` |
+| Equal pin counts hide a wrong terminal order | Explicit stored-index → number → terminal mapping (`PD5`); geometry taken from the definition and checked in order by `validate_instance` (`PD8`) | `PTC-pin-order`, `PTC-instance-refuse` |
+| A save between `P2.2` and `P2.3` drops definitions or overrides | `save` refuses such documents until the v3 writer lands (`PD8`) | `PTC-no-lossy-save` |
 | Workspace-wide breakage from `Part`/`Command` changes | `Part` unchanged; the task that changes `PlacePart`, `Command` or `Change` owns every construction site and exhaustive match (`P2.2`) | Standard checks on `P2.1`, `P2.2` |
 | `StoredPart` growth or map cloning slows `Doc::fork` (`AB2`) or `10k` load (`PB4`, `UB10`) | Store only non-default overrides (empty on default parts); deduplicate definitions; measure | `PB4` bench + `AB2` check |
 | Divergence between RON v3 and the proposed binary `.omnia` format | The definition table maps 1:1 to a single `PART_DEFS` binary section (`PQ8`); `FH0` stays separate (`XD8`) | `FH0` alignment |
