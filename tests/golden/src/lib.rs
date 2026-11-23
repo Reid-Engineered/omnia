@@ -232,11 +232,13 @@ pub struct Hooks {
     pub render_to_image: fn(&Window) -> Result<RgbaImage, String>,
 }
 
-/// One image: a golden name, a scale factor, and the change to make to the view first
-/// (theme, document, camera).
+/// One image: a golden name, a scale factor, an optional per-shot logical box size, and the
+/// change to make to the view first (theme, document, camera).
 pub struct Shot<V> {
     pub name: String,
     pub scale_factor: f32,
+    /// Logical box size for this shot; `None` uses the suite's `content` size.
+    pub content: Option<gpui::Size<Pixels>>,
     pub prepare: Box<dyn FnOnce(&mut V)>,
 }
 
@@ -257,19 +259,22 @@ impl<V: 'static + Render> Render for Frame<V> {
 }
 
 /// Opens one hidden window, renders every shot in order and returns each one's image, cropped
-/// to `content` at its scale factor. Runs the GPUI application, so call it once per process,
-/// from the main thread.
+/// to each shot's logical box (`Shot::content`, or `content` when `None`) at its scale factor.
+/// Runs the GPUI application, so call it once per process, from the main thread.
 pub fn capture<V: 'static + Render>(
     content: gpui::Size<Pixels>,
     hooks: Hooks,
     build: impl FnOnce(&mut Window, &mut App) -> Entity<V> + 'static,
     shots: Vec<Shot<V>>,
 ) -> Result<Vec<(String, RgbaImage)>, String> {
-    let largest = shots.iter().map(|s| s.scale_factor).fold(1.0, f32::max);
-    let window_size = size(
-        px((f32::from(content.width) * largest).ceil()),
-        px((f32::from(content.height) * largest).ceil()),
-    );
+    let mut max_w = f32::from(content.width);
+    let mut max_h = f32::from(content.height);
+    for shot in &shots {
+        let box_size = shot.content.unwrap_or(content);
+        max_w = max_w.max(f32::from(box_size.width) * shot.scale_factor);
+        max_h = max_h.max(f32::from(box_size.height) * shot.scale_factor);
+    }
+    let window_size = size(px(max_w.ceil()), px(max_h.ceil()));
     let outcome = Rc::new(RefCell::new(None));
     let slot = outcome.clone();
     gpui_platform::application().run(move |cx: &mut App| {
@@ -319,14 +324,18 @@ fn shoot<V: 'static + Render>(
     for Shot {
         name,
         scale_factor,
+        content: shot_content,
         prepare,
     } in shots
     {
+        let shot_content = shot_content.unwrap_or(content);
         win.update(cx, |frame, _, cx| {
+            frame.content = shot_content;
             frame.inner.update(cx, |view, cx| {
                 prepare(view);
                 cx.notify();
-            })
+            });
+            cx.notify();
         })
         .map_err(|e| format!("{name}: update view: {e}"))?;
         let image = cx
@@ -343,7 +352,7 @@ fn shoot<V: 'static + Render>(
             })
             .map_err(|e| format!("{name}: draw: {e}"))?
             .map_err(|e| format!("{name}: render_to_image: {e}"))?;
-        let (w, h) = device_size(content, scale_factor);
+        let (w, h) = device_size(shot_content, scale_factor);
         if image.width() < w || image.height() < h {
             return Err(format!(
                 "{name}: the window rendered {}x{} device pixels, smaller than the {w}x{h} \
