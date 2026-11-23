@@ -28,6 +28,8 @@ pub(crate) struct Frame {
     len: u64,
     /// Whether the frame's last byte is a carriage return.
     last_cr: bool,
+    /// Whether the frame ended at its delimiter, which was consumed; false at the end of input.
+    terminated: bool,
 }
 
 impl Frame {
@@ -50,9 +52,11 @@ impl Frame {
         })
     }
 
-    /// Drops one trailing carriage return, so `\r\n` line ends read like `\n`.
+    /// Drops the carriage return of a consumed `\r\n` line end, so it reads like `\n`. A
+    /// carriage return at the end of the input, with no `\n` after it, is part of the line, as
+    /// it is of the input to `omnia call -` (AD1, AK2).
     fn without_cr(mut self) -> Self {
-        if self.last_cr {
+        if self.last_cr && self.terminated {
             self.last_cr = false;
             self.len -= 1;
             // Kept whole, the frame still holds the carriage return; cut short, it never did.
@@ -77,6 +81,7 @@ pub(crate) fn read_frame(reader: &mut dyn BufRead, delim: Option<u8>) -> io::Res
         bytes: Vec::new(),
         len: 0,
         last_cr: false,
+        terminated: false,
     };
     let mut any = false;
     loop {
@@ -102,6 +107,7 @@ pub(crate) fn read_frame(reader: &mut dyn BufRead, delim: Option<u8>) -> io::Res
         let consumed = end.map_or(buf.len(), |i| i + 1);
         reader.consume(consumed);
         if end.is_some() {
+            frame.terminated = true;
             return Ok(Some(frame));
         }
     }

@@ -44,8 +44,10 @@ usage: omnia <command>
 commands:
   capabilities                    print the capability catalog
   schema [NAME]                   print the JSON Schema NAME, or list the names
-  call [--root DIR]... REQUEST    answer one request envelope; REQUEST is JSON text, or -
-                                  to read it from standard input
+  call [--root DIR]... [--] REQUEST
+                                  answer one request envelope; REQUEST is JSON text, or -
+                                  to read it from standard input; put -- before a REQUEST
+                                  that starts with -
   serve [--root DIR]...           JSON-lines session on standard input and output
   help                            print this text
 
@@ -768,6 +770,66 @@ mod tests {
         assert_eq!(out.text(), t.output);
     }
 
+    /// AD1 and AK2 at the end of the input: a carriage return with no `\n` after it is part of
+    /// the last line, as it is of `call -`'s input; only a consumed `\r\n` drops it.
+    #[test]
+    fn a1_7_ad1_a_carriage_return_at_the_end_of_input_is_part_of_the_line() {
+        let root = TempRoot::new("eof-cr");
+        let base = r#"{"op":"new","params":{}}"#;
+        let padded = |len: u64| {
+            let pad = usize::try_from(len).unwrap() - base.len() - 1;
+            format!("{base}{}\r", " ".repeat(pad))
+        };
+        let at_limit = padded(MAX_REQUEST_BYTES);
+        let over = padded(MAX_REQUEST_BYTES + 1);
+        for (name, input) in [
+            ("malformed", "{\r".to_owned()),
+            ("AK2 bytes, the last a CR", at_limit.clone()),
+            ("one over AK2, the last a CR", over.clone()),
+        ] {
+            let called = call_stdin(root.path(), input.as_bytes());
+            let served = serve(root.path(), input.as_bytes());
+            assert_eq!(served.text(), called.text(), "{name}");
+            assert_eq!(
+                served.text(),
+                call_arg(root.path(), &input).text(),
+                "{name}"
+            );
+            assert!(
+                served.stderr.is_empty() && called.stderr.is_empty(),
+                "{name}"
+            );
+        }
+        // The malformed line's error column counts the carriage return.
+        let malformed = serve(root.path(), b"{\r");
+        let message = field(malformed.text(), "/error/message");
+        assert_eq!(
+            field(malformed.text(), "/error/code"),
+            json!("invalid_request")
+        );
+        assert!(message.as_str().unwrap().ends_with("column 2"), "{message}");
+        // At the limit the CR fits; one byte over, AK2 refuses with the full length.
+        assert!(
+            field(serve(root.path(), at_limit.as_bytes()).text(), "")
+                .get("result")
+                .is_some()
+        );
+        let refused = serve(root.path(), over.as_bytes());
+        assert_eq!(
+            field(refused.text(), "/error/details"),
+            json!({"limit": "request_bytes", "value": MAX_REQUEST_BYTES + 1})
+        );
+        // With a `\n` after it, the CR is the line end's and is dropped.
+        let terminated = serve(root.path(), format!("{over}\n").as_bytes());
+        let trimmed = call_arg(root.path(), over.strip_suffix('\r').unwrap());
+        assert_eq!(terminated.text(), trimmed.text());
+        assert!(field(trimmed.text(), "").get("result").is_some());
+        assert_eq!(
+            serve(root.path(), b"{\r\n").text(),
+            call_arg(root.path(), "{").text()
+        );
+    }
+
     #[test]
     fn a1_7_serve_refuses_an_oversized_line_and_goes_on() {
         let root = TempRoot::new("oversized");
@@ -949,6 +1011,21 @@ mod tests {
         a.push(OsString::from("--"));
         a.push(OsString::from(r#"{"op":"new","params":{}}"#));
         assert_eq!(omnia(&a, b"").text(), ok.text());
+        // A request that starts with `-` reads as an option unless `--` comes first.
+        let mut dashed = rooted("call", root.path());
+        dashed.push(OsString::from("-1"));
+        let refused = omnia(&dashed, b"");
+        assert_eq!(refused.code, EXIT_USAGE);
+        assert!(refused.stdout.is_empty());
+        dashed.insert(3, OsString::from("--"));
+        let answered = omnia(&dashed, b"");
+        assert_eq!(answered.code, EXIT_FAILURE, "`-1` is not an envelope");
+        assert_eq!(answered.text(), serve(root.path(), b"-1\n").text());
+        assert_eq!(
+            field(answered.text(), "/error/code"),
+            json!("invalid_request")
+        );
+        assert!(USAGE.contains("[--] REQUEST"));
         // No root: every path is outside the roots (section 12.1).
         let open = r#"{"op":"open","params":{"path":"x.ron"}}"#;
         let unrooted = omnia(&args(&["call", open]), b"");

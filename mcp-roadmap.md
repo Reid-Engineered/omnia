@@ -173,7 +173,8 @@ own in turn.
 
 ### A1.7 Command line · done
 - Lane: agent · Depends: A1.6 · Read: mcp-plan.md sections 9.1 and 14
-- Owns: `crates/omnia-cli/` (`Cargo.toml`, `src/main.rs`, `src/call.rs`, `src/jsonl.rs`)
+- Owns: `crates/omnia-cli/` (`Cargo.toml`, `src/main.rs`, `src/call.rs`, `src/jsonl.rs`);
+  the INV12 crate-list line in `xtask/src/main.rs` (adds `omnia-cli`, per the A1.3 handoff)
 - Do: `omnia capabilities`, `omnia schema`, `omnia call`, `omnia serve`; exit codes 0, 1, 2;
   logs to stderr only.
 - Done when: transcript tests show the same request gives byte-identical results through
@@ -669,3 +670,19 @@ scene-counts,readback -- -D warnings`; `cargo test --workspace`; `cargo deny che
 bans, licences, sources ok; a first attempt failed to load the advisory database with a
 Windows paging-file error during a parallel build, and passed when rerun alone). Rule-1 scan
 of the changed files done. Nothing measured.
+
+2026-11-23 A1.7 done (review fixes) — independent review (a model other than the author) of
+8649cb7 requested changes; all fixed on the same branch. (1) Blocking: `serve` dropped a `\r`
+at the end of the input even with no `\n` after it, so an unterminated line ending in `\r`
+differed from `call -` on the same bytes (an AK2-plus-one line was accepted, and a malformed
+`{\r` reported another column). `jsonl.rs` now drops the `\r` only of a consumed `\r\n`; new
+test `a1_7_ad1_a_carriage_return_at_the_end_of_input_is_part_of_the_line` covers `{\r`
+(column counted), a line of exactly AK2 bytes ending in `\r` (accepted) and one byte over
+(refused with the full length) through `call -`, `call REQUEST` and `serve`, plus the same
+lines with a `\n` after them; it fails on the old code. mcp-plan.md 9.1's A1.7 note says so.
+(2) Blocking: A1.7's **Owns** line now lists the INV12 crate-list line in `xtask/src/main.rs`,
+as A1.3's handoff required. (3) The `call` usage text shows `[--] REQUEST` and says to put `--`
+before a request that starts with `-`; a test checks that `call -1` is a usage error and
+`call -- -1` is answered like `serve` answers `-1`; section 14's A1.7 note mentions `--`.
+Checks rerun locally on Windows, all passing: fmt, workspace clippy, omnia-bench clippy with
+`scene-counts,readback`, `cargo test --workspace`, `cargo deny check`. Nothing measured.

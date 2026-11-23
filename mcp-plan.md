@@ -374,7 +374,9 @@ Decoding rules, fixed at A1.3 (2026-11-21; amended by its three review rounds th
 JSON-lines and the command line, as built at A1.7 (2026-11-23, `crates/omnia-cli`):
 
 - `omnia serve` reads one envelope per line (`\n` or `\r\n`; a final line may lack its end)
-  and writes one response per line, flushed after each. Lines that are empty or only JSON
+  and writes one response per line, flushed after each. Only a consumed `\r\n` drops its
+  `\r`: a `\r` at the end of the input with no `\n` after it is part of the last line, as it is
+  of `omnia call -`'s input. Lines that are empty or only JSON
   whitespace are skipped. One stream is one session (11.1); a bad line is answered and the
   session goes on.
 - The `"id"` is a string or a 64-bit integer. A line is decoded in `Request::from_slice`'s
@@ -1029,7 +1031,8 @@ or is not a directory is a usage error; with no root every path is `path_outside
 `omnia capabilities` prints the `result` of a `capabilities` request, byte for byte. `omnia
 schema` without a name lists the published names, one per line; `omnia schema NAME` (a `.json`
 suffix is accepted) prints the committed file's bytes, and an unknown name is a usage error.
-`omnia call ... -` reads the request from standard input. Exit codes: 0 success; 1 a tool
+`omnia call ... -` reads the request from standard input; `--` ends the options, so a request
+that starts with `-` is written `omnia call -- REQUEST`. Exit codes: 0 success; 1 a tool
 error, or an I/O failure on the standard streams; 2 a usage error. `serve` exits 0 at the end
 of its input. Standard output carries only results; usage errors and diagnostics go to
 standard error. `help` prints the usage. `omnia mcp` is A1.8's.
