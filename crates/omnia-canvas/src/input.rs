@@ -19,15 +19,19 @@
 //! cursor movement only emits [`CanvasEvent::Status`], which the status bar view observes.
 
 use crate::camera::Camera;
-use crate::sheet::{SheetView, grid_level};
+use crate::camera_anim::{
+    CameraAnimation, ViewAnimation, fit_rect_camera, fit_sheet_camera, viewport_center,
+    zoom_to_selection_camera,
+};
+use crate::sheet::{SheetDocument, SheetView, grid_level};
 use gpui::{
-    App, Bounds, Context, DispatchPhase, Element, ElementId, EventEmitter, FocusHandle,
+    App, Bounds, Context, DispatchPhase, Element, ElementId, Entity, EventEmitter, FocusHandle,
     GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, KeyDownEvent,
     KeyUpEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
     PinchEvent, Pixels, Point, Render, ScrollDelta, ScrollEvent, ScrollSource, Styled, TouchPhase,
     WeakEntity, Window, div, point, prelude::*,
 };
-use omnia_doc::Pt;
+use omnia_doc::{Doc, ItemId, Pt, Rect};
 use omnia_theme::Theme;
 
 /// Lines per wheel notch: Windows' default `SPI_GETWHEELSCROLLLINES`, which GPUI multiplies
@@ -213,11 +217,15 @@ impl Navigator {
 pub struct SheetCanvas {
     camera: Camera,
     theme: &'static Theme,
+    doc: Option<Entity<Doc>>,
+    sheet_doc: Option<SheetDocument>,
     nav: Navigator,
     focus: FocusHandle,
     /// Last pointer position over the sheet, window logical px.
     pointer: Option<Point<f64>>,
     status: CanvasStatus,
+    viewport: Bounds<Pixels>,
+    anim: Option<ViewAnimation>,
     renders: u64,
 }
 
@@ -231,15 +239,42 @@ impl SheetCanvas {
             status: CanvasStatus::new(&camera, None),
             camera,
             theme,
+            doc: None,
+            sheet_doc: None,
             nav: Navigator::default(),
             focus: cx.focus_handle(),
             pointer: None,
+            viewport: Bounds::default(),
+            anim: None,
             renders: 0,
         }
     }
 
+    /// Attaches a document entity to this canvas for rendering and `fit_sheet` (T4.5).
+    pub fn with_doc(mut self, doc: Entity<Doc>) -> Self {
+        self.sheet_doc = Some(SheetDocument::new(doc.clone()));
+        self.doc = Some(doc);
+        self
+    }
+
+    pub fn doc(&self) -> Option<&Entity<Doc>> {
+        self.doc.as_ref()
+    }
+
+    /// Replaces or clears the attached document, cancelling any active view animation.
+    pub fn set_doc(&mut self, doc: Option<Entity<Doc>>, cx: &mut Context<Self>) {
+        self.anim = None;
+        self.sheet_doc = doc.as_ref().map(|d| SheetDocument::new(d.clone()));
+        self.doc = doc;
+        cx.notify();
+    }
+
     pub fn camera(&self) -> &Camera {
         &self.camera
+    }
+
+    pub fn viewport(&self) -> Bounds<Pixels> {
+        self.viewport
     }
 
     pub fn status(&self) -> CanvasStatus {
@@ -250,9 +285,88 @@ impl SheetCanvas {
         &self.nav
     }
 
+    pub fn is_animating(&self) -> bool {
+        self.anim.is_some()
+    }
+
+    /// Cancels any active view animation immediately from the current camera position (K13).
+    pub fn cancel_animation(&mut self) -> bool {
+        self.anim.take().is_some()
+    }
+
     /// How many times this view has rendered (tests check D7 with it).
     pub fn render_count(&self) -> u64 {
         self.renders
+    }
+
+    fn emit_status_if_changed(&mut self, cx: &mut Context<Self>) {
+        let cursor = self.pointer.map(|p| self.camera.screen_to_world(p));
+        let status = CanvasStatus::new(&self.camera, cursor);
+        if status != self.status {
+            self.status = status;
+            cx.emit(CanvasEvent::Status(status));
+        }
+    }
+
+    /// Starts a 150 ms ease-out view animation (K13) from the current camera to `target`.
+    pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>) {
+        let anim = CameraAnimation::new(self.camera.clone(), target, self.viewport);
+        if anim.is_noop() {
+            self.anim = None;
+            return;
+        }
+        self.anim = Some(ViewAnimation::start(anim, cx));
+        cx.notify();
+    }
+
+    /// Animates the camera to fit `rect` in the current viewport with default margins.
+    pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>) {
+        self.animate_to(fit_rect_camera(rect, self.viewport), cx);
+    }
+
+    /// Animates the camera to fit all items in `doc` (or origin at 100% if empty).
+    pub fn fit_doc(&mut self, doc: &Doc, cx: &mut Context<Self>) {
+        self.animate_to(fit_sheet_camera(Some(doc), self.viewport), cx);
+    }
+
+    /// Animates the camera to fit the attached document (or origin at 100% if none/empty).
+    pub fn fit_sheet(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let target = fit_sheet_camera(self.doc.as_ref().map(|d| d.read(cx)), self.viewport);
+        self.animate_to(target, cx);
+    }
+
+    /// Animates the camera to fit `selection` in `doc`. Returns `false` if nothing live is selected.
+    pub fn zoom_to_selection_in(
+        &mut self,
+        doc: &Doc,
+        selection: &[ItemId],
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(target) = zoom_to_selection_camera(doc, selection, self.viewport) else {
+            return false;
+        };
+        self.animate_to(target, cx);
+        true
+    }
+
+    /// Animates the camera to fit the current selection when selection is available on the canvas.
+    pub fn zoom_to_selection(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
+    /// Animates a K4 zoom of `steps` notches about the viewport centre (`ui-plan.md` section 14).
+    pub fn zoom_step(&mut self, steps: i32, _window: &mut Window, cx: &mut Context<Self>) {
+        if steps == 0 {
+            return;
+        }
+        let mut target = self
+            .anim
+            .as_ref()
+            .map_or_else(|| self.camera.clone(), |a| a.target().clone());
+        target.set_viewport(self.viewport);
+        target.zoom_about(
+            viewport_center(self.viewport),
+            wheel_factor(f64::from(steps)),
+        );
+        self.animate_to(target, cx);
     }
 
     /// Runs one input step: notifies (repaints the sheet) only if the camera changed, and
@@ -262,22 +376,18 @@ impl SheetCanvas {
         viewport: Bounds<Pixels>,
         pointer: Option<Point<f64>>,
         cx: &mut Context<Self>,
-        f: impl FnOnce(&mut Navigator, &mut Camera) -> (bool, R),
+        f: impl FnOnce(&mut Navigator, &mut Camera, &mut Option<ViewAnimation>) -> (bool, R),
     ) -> R {
+        self.viewport = viewport;
         self.camera.set_viewport(viewport);
         if pointer.is_some() {
             self.pointer = pointer;
         }
-        let (changed, result) = f(&mut self.nav, &mut self.camera);
+        let (changed, result) = f(&mut self.nav, &mut self.camera, &mut self.anim);
         if changed {
             cx.notify();
         }
-        let cursor = self.pointer.map(|p| self.camera.screen_to_world(p));
-        let status = CanvasStatus::new(&self.camera, cursor);
-        if status != self.status {
-            self.status = status;
-            cx.emit(CanvasEvent::Status(status));
-        }
+        self.emit_status_if_changed(cx);
         result
     }
 
@@ -287,9 +397,18 @@ impl SheetCanvas {
         viewport: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.step(viewport, Some(to_f64(event.position)), cx, |nav, _| {
-            (false, nav.mouse_down(event))
-        })
+        self.step(
+            viewport,
+            Some(to_f64(event.position)),
+            cx,
+            |nav, _, anim| {
+                let started = nav.mouse_down(event);
+                if started {
+                    *anim = None;
+                }
+                (false, started)
+            },
+        )
     }
 
     fn on_mouse_move(
@@ -298,9 +417,18 @@ impl SheetCanvas {
         viewport: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        self.step(viewport, Some(to_f64(event.position)), cx, |nav, camera| {
-            (nav.mouse_move(camera, event), ())
-        })
+        self.step(
+            viewport,
+            Some(to_f64(event.position)),
+            cx,
+            |nav, camera, anim| {
+                let panned = nav.mouse_move(camera, event);
+                if panned {
+                    *anim = None;
+                }
+                (panned, ())
+            },
+        )
     }
 
     /// Ending a pan moves nothing, so it neither notifies nor emits.
@@ -311,21 +439,61 @@ impl SheetCanvas {
     fn on_scroll(&mut self, event: &ScrollEvent, viewport: Bounds<Pixels>, cx: &mut Context<Self>) {
         // A touch pan reports where it started, not the pointer (G9).
         let pointer = (event.source == ScrollSource::Pointer).then(|| to_f64(event.position));
-        self.step(viewport, pointer, cx, |nav, camera| {
+        self.step(viewport, pointer, cx, |nav, camera, anim| {
+            match event.delta {
+                ScrollDelta::Lines(lines) if lines.y != 0.0 => *anim = None,
+                ScrollDelta::Pixels(delta) => {
+                    let d = to_f64(delta);
+                    if event.touch_phase == TouchPhase::Started
+                        || (d.x.is_finite() && d.y.is_finite() && (d.x != 0.0 || d.y != 0.0))
+                    {
+                        *anim = None;
+                    }
+                }
+                _ => {}
+            }
             (nav.scroll(camera, event), ())
         })
     }
 
     fn on_pinch(&mut self, event: &PinchEvent, viewport: Bounds<Pixels>, cx: &mut Context<Self>) {
-        self.step(viewport, Some(to_f64(event.position)), cx, |nav, camera| {
-            (nav.pinch(camera, event), ())
-        })
+        self.step(
+            viewport,
+            Some(to_f64(event.position)),
+            cx,
+            |nav, camera, anim| {
+                if event.phase == TouchPhase::Started
+                    || (event.phase != TouchPhase::Cancelled
+                        && event.phase != TouchPhase::Ended
+                        && event.delta != 0.0)
+                {
+                    *anim = None;
+                }
+                (nav.pinch(camera, event), ())
+            },
+        )
     }
 }
 
 impl Render for SheetCanvas {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        if let Some(anim) = &self.anim {
+            let (next_cam, finished) = anim.step(self.viewport, cx);
+            self.camera = next_cam;
+            self.emit_status_if_changed(cx);
+            if finished {
+                self.anim = None;
+            } else {
+                window.request_animation_frame();
+            }
+        }
+        let sheet = match &self.sheet_doc {
+            Some(document) => {
+                SheetView::with_document(self.camera.clone(), self.theme, document.clone())
+            }
+            None => SheetView::new(self.camera.clone(), self.theme),
+        };
         div()
             .size_full()
             .track_focus(&self.focus)
@@ -342,7 +510,7 @@ impl Render for SheetCanvas {
                 }
             }))
             .child(CanvasInput {
-                sheet: SheetView::new(self.camera.clone(), self.theme),
+                sheet,
                 canvas: cx.entity().downgrade(),
                 focus: self.focus.clone(),
                 dragging: self.nav.is_dragging(),
@@ -394,7 +562,10 @@ impl Element for CanvasInput {
         // Keep the entity's camera on the painted bounds, so `camera()` maps what is shown.
         // No notify: the bounds are already the ones being painted.
         self.canvas
-            .update(cx, |canvas, _| canvas.camera.set_viewport(bounds))
+            .update(cx, |canvas, _| {
+                canvas.viewport = bounds;
+                canvas.camera.set_viewport(bounds);
+            })
             .ok();
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
