@@ -2,11 +2,14 @@
 
 The task list for the Circuit Context Engine. The reference for every `C`-prefixed id used here
 (`CB`, `CK`, `CD`, `CINV`, `CTC`, `CQ`, `HC`) is [context-plan.md](context-plan.md). Unprefixed
-ids are in the canvas files; `W`, `A`, `U` and `P` ids are in the wiring, agent, UI and parts
-files.
+ids are in the canvas files; `W`, `A`, `U`, `P` and `S` ids are in the wiring, agent, UI, parts
+and simulation files; `XD` ids are the cross-plan decisions recorded in context-plan.md
+section 6.1.
 
 This roadmap runs beside the others. Milestone C1 touches the new `circuit` lane and one `doc`
-task; C2 adds to the agent lane after A1.8; C3 waits for the parts plan's milestone P2.
+task, C1.1, which waits for parts P2.1–P2.3 and sim S1.1 (XD7); C1.9 gives sim S1.2 its
+bindings (XD4); C2 adds to the agent lane after A1.8; C3 waits for the parts plan's
+milestone P2.
 
 ## How to work a task
 
@@ -40,7 +43,7 @@ As in AGENTS.md: `cargo fmt --all --check`, `cargo clippy --workspace --all-targ
 | Lane | Owns | Needs GPUI |
 | --- | --- | --- |
 | `circuit` (new) | `crates/omnia-circuit/`, `context-plan.md`, `context-roadmap.md` | No |
-| `doc` | `Change::net_delta` in `crates/omnia-doc/src/command.rs` and its source in `connectivity.rs` (C1.1 only) | No |
+| `doc` | `Change::net_delta` and the widened modified lists in `crates/omnia-doc/src/command.rs` and `undo.rs`, and their source in `connectivity.rs` (C1.1 only, after parts P2.1–P2.3 and sim S1.1, XD7) | No |
 | `agent` | The `context` operation in `crates/omnia-agent/` and its MCP mapping in `crates/omnia-cli/` (C2) | No |
 | `bench` | `crates/omnia-bench/benches/circuit.rs`, `docs/measurements/C*.md` | No |
 
@@ -49,7 +52,7 @@ As in AGENTS.md: `cargo fmt --all --check`, `cargo clippy --workspace --all-targ
 | # | Delivers | Gate task | Gated |
 | --- | --- | --- | --- |
 | C0 | context-plan.md and this roadmap; owner decisions | C0.2 | HC1 |
-| C1 | Net delta; `omnia-circuit`: graph, keys, names, journal, views, tier 0 findings | C1.8 | CB1 to CB6, CB9, CB10, CINV1 to CINV10, CINV12, CINV13, HC2 |
+| C1 | Net delta; `omnia-circuit`: graph, keys, names, bindings for lowering, journal, views, tier 0 findings | C1.8 | CB1 to CB6, CB9, CB10, CINV1 to CINV10, CINV12 to CINV14, HC2 |
 | C2 | `context` operation, edit deltas, `omnia_context` over MCP, question set | C2.5 | CB11, CB12, CINV11, HC3 |
 | C3 | Electrical semantics: roles, ground, tier 1 and tier 2 findings | C3.3 | CB7, HC4 |
 | C4 | Structure recognition: patterns, channels, rails | C4.4 | CB8, HC5 |
@@ -60,8 +63,10 @@ As in AGENTS.md: `cargo fmt --all --check`, `cargo clippy --workspace --all-targ
 | Circuit task | Waits for (other roadmaps) | Can start |
 | --- | --- | --- |
 | C0.1, C0.2 | nothing | now |
-| C1.1 | no open task owning `command.rs`, `undo.rs` or `connectivity.rs` (CQ10) | after HC1 |
-| C1.2 to C1.7 | nothing beyond C1.1 for C1.3 onward | after HC1 |
+| C1.1 | parts P2.1–P2.3 and sim S1.1 `done` (XD7), then no open task owning `doc.rs`, `command.rs`, `undo.rs`, `io.rs` or `connectivity.rs` (CQ10) | after HC1 and those tasks |
+| C1.2 | nothing | after HC1 |
+| C1.9 | sim S1.1 (symbol class); sim S1.2 waits for C1.9 (XD4) | after C1.2 and S1.1 |
+| C1.3 to C1.7 | nothing beyond C1.1 and C1.9 | after HC1 |
 | C2.1, C2.2 | A1.8 | after C1.8 and A1.8 |
 | C2.5 | A1.9 (creates the agent contract) | after C2.4 and A1.9 |
 | C3.1 | parts P2 (embedded definitions with pin roles in `Doc`) | after C1.8 and P2 |
@@ -74,8 +79,9 @@ As in AGENTS.md: `cargo fmt --all --check`, `cargo clippy --workspace --all-targ
 
 ```
 C0.1 -> C0.2 [HC1]
-HC1 -> C1.1 (doc), C1.2 (circuit)
-C1.1 + C1.2 -> C1.3 -> C1.4 -> C1.5 -> C1.6 -> C1.7 -> C1.8 [HC2]
+HC1 + parts P2.1-P2.3 + sim S1.1 -> C1.1 (doc)      HC1 -> C1.2 (circuit)
+C1.2 + sim S1.1 -> C1.9 (bindings) -> sim S1.2 (lowering, XD4)
+C1.1 + C1.9 -> C1.3 -> C1.4 -> C1.5 -> C1.6 -> C1.7 -> C1.8 [HC2]
 C1.8 + A1.8 -> C2.1 -> C2.2 -> C2.3 -> C2.4;  C2.4 + A1.9 -> C2.5 [HC3]
 C1.8 + parts P2 -> C3.1 -> C3.2;  C3.2 + A1.9 -> C3.3 [HC4]
 C3.1 -> C4.1 -> C4.2 -> C4.3 -> C4.4 [HC5]
@@ -86,7 +92,7 @@ C1.8 + (A3.1 or A4.1) -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.
 
 | ID | When | What the owner does |
 | --- | --- | --- |
-| HC1 | C0.2 | Answers CQ1 to CQ11 or keeps their defaults; turns CB, CK and CD entries from PROPOSED to DECIDED or amends them; confirms which open tasks hold `command.rs` and `connectivity.rs` (CQ10). |
+| HC1 | C0.2 | Answers CQ1 to CQ11 or keeps their defaults (CQ9 is already answered by XD4, and CQ2 and CQ10 are bounded by XD5 and XD7); turns CB, CK and CD entries from PROPOSED to DECIDED or amends them, without reopening section 6.1; confirms which open tasks hold `command.rs` and `connectivity.rs` (CQ10). |
 | HC2 | C1.8 | Runs the CB1 to CB6, CB9 and CB10 campaign on the reference machine (canvas plan section 2.1). |
 | HC3 | C2.5 | Runs the circuit question set through an MCP client and model of their choice, with and without `omnia_context`, and records accuracy, tokens and calls per family; checks which result channel the client forwards. About an hour. |
 | HC4 | C3.3 | Runs the CB1 and CB7 campaign on the reference machine with tier 1 and tier 2 findings on. |
@@ -119,15 +125,20 @@ C1.8 + (A3.1 or A4.1) -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.
 ## Milestone C1: the engine
 
 ### C1.1 Net delta in `Change` · todo
-- Lane: doc · Depends: C0.2 and CQ10 · Read: D2, INV10, CD2, CINV12; T2.8 measurements
+- Lane: doc · Depends: C0.2; parts P2.1, P2.2 and P2.3; sim S1.1; CQ10 (XD7) · Read: D2, INV10,
+  CD2, CINV12, section 6.1 (XD7); parts-plan.md PD8 (change visibility); T2.8 measurements
 - Owns: `Change` and `ChangeAcc` in `crates/omnia-doc/src/command.rs`; the `Change` that
   `undo` and `redo` build in `crates/omnia-doc/src/undo.rs`; delta recording in
   `crates/omnia-doc/src/connectivity.rs`; `crates/omnia-doc/tests/net_delta.rs`
 - Do: add the transaction-level `net_delta` (`retired`, `created`, `mapping`, `moved` for pins,
-  wires and labels, `labels`) and `modified` (CD2). Fix the types in context-plan.md section 12
-  and canvas-plan.md section 9; amend D2 there if `nets_changed` needs it.
-- Done when: CINV12 holds over the T5.1 random command generator, including batches, undo and
-  redo; `nets_changed == !net_delta.is_empty()` holds or D2 is amended; the command-boundary
+  wires and labels, `labels`, `renumbered`); widen P2.2's `modified` to every part whose stored
+  fields changed and add `modified_wires` and `modified_labels` (CD2), keeping P2.2's rule that
+  `SetParam` and every part an `UpdatePartDef` moves are listed. Fix the types in
+  context-plan.md section 12 and canvas-plan.md section 9; amend D2 there if `nets_changed`
+  needs it.
+- Done when: CINV12 holds over the T5.1 random generator, including batches, undo and
+  redo, `SetParam` and `UpdatePartDef`; P2.2's `Change::modified` tests still pass; the
+  one-way rule `!net_delta.is_empty() ⇒ nets_changed` holds (CD2); the command-boundary
   cases are re-run paired (delta off, delta on) on a development machine and recorded,
   labelled non-certifying, and the reference re-run is requested at HC2.
 
@@ -140,13 +151,31 @@ C1.8 + (A3.1 or A4.1) -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.
 - Done when: CINV1 and CINV10 pass; keys and names match CK1 and CK2 on CTC-key-01 and
   CTC-name-01 built from scratch; a unit test per key form.
 
+### C1.9 Bindings and ground evidence for lowering · todo
+Numbered after C1.8 because it was added later (XD4); it lands right after C1.2, before the
+journal and the views, so that sim S1.2 can start.
+- Lane: circuit · Depends: C1.2, sim S1.1 (symbol class) · Read: section 6.1 (XD4, XD5), CK1,
+  CK3, CK4, CD13, CINV5, CINV14, section 12 (`Bindings`); sim-plan.md SD7, SK10, SQ3
+- Owns: `crates/omnia-circuit/src/bindings.rs`; `crates/omnia-circuit/tests/bindings.rs`
+- Do: the read-only `Circuit::bindings(&doc)`: refuse when the circuit's revision differs from
+  the document's; per net its CK1 key, its current `NetId`, member pins as (part, stored pin
+  index), labels and declared ground evidence (CK4: `Ground`-class parts, labels `0`); per pin
+  its net. Borrowed views only: no allocation per read, no solver `NodeId`, no SPICE text, no
+  name or topology heuristic. Until C1.3, the host rebuilds the circuit whenever the revision
+  moves.
+- Done when: CINV14 holds under property test, including shuffled insertion orders; CTC-bind-01
+  passes (with `SetParam` once parts P2.2 is `done`); CTC-gnd-02's `Ground`-part and `0`-label
+  nets pass (its `ground`-role pin case waits for C3.1); a type-level test shows no conversion
+  between a circuit key, a `NetKey` and a `NodeId`.
+
 ### C1.3 Incremental update · todo
-- Lane: circuit · Depends: C1.1, C1.2 · Read: CD5, CINV2, CINV5
+- Lane: circuit · Depends: C1.1, C1.2, C1.9 · Read: CD5, CINV2, CINV5, CINV14
 - Owns: `crates/omnia-circuit/src/update.rs`
 - Do: `Circuit::update` from `Change` and `net_delta`: recompute only touched nets, backdate
-  unchanged ones, keep revision agreement.
-- Done when: CINV2 holds over the T5.1 random generator with undo and redo; CINV5 has a test
-  that a stale circuit refuses to answer.
+  unchanged ones, keep revision agreement; keep the bindings and ground evidence current (CD5).
+- Done when: CINV2 holds over the T5.1 random generator with undo and redo, `SetParam` and
+  `UpdatePartDef`; CINV14 holds after incremental updates; CINV5 has a test that a stale
+  circuit refuses to answer.
 
 ### C1.4 Journal and `since` · todo
 - Lane: circuit · Depends: C1.3 · Read: CD6, CK8, CINV4
@@ -172,7 +201,8 @@ C1.8 + (A3.1 or A4.1) -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.
 - Lane: circuit · Depends: C1.3, C1.5 · Read: CD11, CK5, section 9.4, CINV8
 - Owns: `crates/omnia-circuit/src/findings.rs`; the `findings` view
 - Do: the tier 0 rows of section 9.4, maintained in `update`.
-- Done when: CINV8 holds; CTC-key-04, CTC-key-05, CTC-find-01, CTC-find-03 and CTC-gnd-01 pass; tier 0
+- Done when: CINV8 holds; CTC-key-04, CTC-key-05, CTC-find-01, CTC-find-03, CTC-find-04 and
+  CTC-gnd-01 pass; section 9.4's case folding and blank-designator rules have unit tests; tier 0
   findings and the outline cache are in CINV2.
 
 ### C1.7 Benches and allocation proofs · todo
@@ -181,7 +211,9 @@ C1.8 + (A3.1 or A4.1) -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.
   `crates/omnia-circuit/tests/alloc_*.rs`
 - Do: per-query timing into `hdrhistogram` with varied, seeded targets that include the
   largest net and the densest neighbourhood; whole-sheet outline; `update` timed paired with
-  the command-boundary cases; resident memory by the counting allocator (CB10).
+  the command-boundary cases; resident memory by the counting allocator (CB10); the
+  whole-sheet `Circuit::bindings` read, cold and after an incremental update, recorded for sim
+  SB2 and SB3 evidence and gating nothing (XD9).
 - Done when: CINV6 passes with negative controls and with warm-up as CINV6 defines it; the
   bench runs on a development machine and its numbers are recorded and labelled.
 
@@ -244,13 +276,15 @@ C1.8 + (A3.1 or A4.1) -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.
 ## Milestone C3: electrical semantics
 
 ### C3.1 Roles, kinds and ground · todo
-- Lane: circuit · Depends: C1.8, parts P2 · Read: CK3, CK4, CD13, PD5, PD6
+- Lane: circuit · Depends: C1.8, parts P2 · Read: CK3, CK4, CD13, PD5, PD6, section 6.1 (XD5)
 - Owns: role and kind columns in `crates/omnia-circuit/src/graph.rs`; tier 1 in `findings.rs`
-- Do: read pin names and roles from embedded definitions; set net kinds and the ground
-  reference; tier 1 rows of section 9.4. A part's effective value is its override, else its
+- Do: read pin names and roles from embedded definitions (authoritative for roles, XD5); set
+  net kinds from roles and declarations (the ground reference stays C1.9's declared evidence,
+  CK4); tier 1 rows of section 9.4. A part's effective value is its override, else its
   definition's default (PD6); unmodelled legacy parts keep their free text, and only those can
   raise `value.unparsed`.
-- Done when: CTC-find-02 passes; tier 1 findings are in CINV2; pin names appear in the line form.
+- Done when: CTC-find-02 and the whole of CTC-gnd-02 pass; tier 1 findings are in CINV2; pin
+  names appear in the line form; CINV14 still holds with roles present.
 
 ### C3.2 Tier 2 findings · todo
 - Lane: circuit · Depends: C3.1 · Read: CD11, CB7
@@ -365,3 +399,28 @@ C4.1 and C5.1 ownership and dependencies. Also, at the owner's request, every re
 now cites a source listed in context-plan.md section 16, with links. Section 16.2 links to
 product documentation and user reports as citations only; the owner decides whether that is
 acceptable under rule 1.
+
+2026-11-23 C0.1 cross-plan alignment — merged `main` at 9d4b844 (sim plan S0.1, T3.4) into the
+branch, keeping both id registrations in AGENTS.md (S and C, plus `HC*` in hard rule 4) and
+both plan links in ROADMAP.md. Applied cross-plan decisions XD1–XD9 (coordinator,
+owner-delegated, 2026-11-23), recorded with their text in context-plan.md section 6.1. XD4:
+new task C1.9 (`Circuit::bindings`: revision-matched pin-to-net bindings and declared ground
+evidence, read-only, depends on C1.2 and sim S1.1 only, so sim S1.2 can start before the
+journal and views), CINV14, CTC-bind-01 and CTC-gnd-02; CQ9 answered (lowering is `omnia-sim`'s
+and consumes C1.9; no parts-plan netlister); CK4 and CD13 ground evidence is sim SQ3's default
+(`Ground`-class part or label `0`; `GND` alone gets `ground.name_only`), and name or topology
+heuristics never reach the bindings; CK1 keys, `NetKey` and `NodeId` stay distinct. XD5: CK3
+separates pin roles from sim S1.1's symbol class; CQ2 keeps its default. XD6: section 9.4 ERC
+crosswalk (ERC001–ERC008 to finding ids), case folding and blank designators defined once,
+new tier 0 `designator.blank`, `ground.missing` moved to tier 0 (it needs symbol class, not
+roles), CTC-find-04; context severities advisory, sim's policy is the Run gate. XD7: C1.1 waits
+for parts P2.1–P2.3 and sim S1.1 (CQ10); P2.2's `Change::modified` is widened by C1.1 and joined
+by `modified_wires` and `modified_labels`; `SetParam` and `UpdatePartDef` reach invalidation,
+the journal (`PartParam`, `PartDef` facts; `param` and `def` events) and `since`. XD8: crate
+roles and one-way dependencies in section 5; `set_param` and `update_part_def` take CD14's
+`circuit` option; context views never emit floats. XD9: section 16 citation ids renamed
+`Ref1`–`Ref33` everywhere they are cited; no budget threshold changed, and C1.7 records the
+bindings read for sim SB2 and SB3 evidence. C0.2 (HC1) stays `todo`. Sim-side amendments are
+listed in section 15 for sim task S0.2; sim-plan.md and sim-roadmap.md not edited. Rule-1
+scan: no company or product newly named in body text; section 16 unchanged except the ids.
+Nothing measured.
