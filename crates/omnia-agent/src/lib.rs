@@ -5,17 +5,28 @@
 //! `CommandError` mapping (AD6, AINV10), the capability catalog that is the dispatch table, and
 //! the hand-written JSON Schema module whose output is committed under `schema/` (AINV11).
 //!
+//! A1.4 adds the read projections (`read`). A1.5 adds the service core: sessions and the
+//! headless document host (`host`), operation-to-`Command` conversion (`ops`), fork preview
+//! (`preview`), the dirty-bounded diff (`diff`) and the service itself (`service`).
+//!
 //! The crate has no UI framework and no async runtime (AINV8). It edits documents only through
-//! `omnia_doc::Doc::apply`, `undo` and `redo` (AINV1); the service that does so is A1.5.
+//! `omnia_doc::Doc::apply`, `undo` and `redo` (AINV1).
 
 pub mod catalog;
+pub mod diff;
 pub mod error;
+pub mod host;
+pub mod ops;
+pub mod preview;
 pub mod read;
 pub mod schema;
+pub mod service;
 
 pub use catalog::{Catalog, EditOpName, OpName, OpSpec};
 pub use error::{AgentError, ErrorCode, ErrorKind};
+pub use host::{DocHandle, DocHost, HeadlessHost};
 pub use schema::{Operation, Output, Request, Response};
+pub use service::{AgentService, Form, SessionId, in_form};
 
 /// Schema version string carried by every response (AK7).
 pub const SCHEMA: &str = "omnia.agent/1";
