@@ -1889,9 +1889,11 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        Silent; certifies nothing; `docs/measurements/T3.4.md`): B10 holds
                        (`ours.max == 0`) on all 6 motion runs; `start` delta +23.668 ms;
                        `text-pan` p99 2.216 ms, `1k-pan` 1.587 ms, `10k-pan` 2.056 ms.
-                       Diagnostic risks flagged for Orion: `text-zoom` hit 25.854 ms p99 (max
-                       35.226 ms, 2,897 total allocs/frame p99) from per-bucket reshaping across
-                       K11's 0.5 px buckets, and zoom sweeps added ~200 MB private memory
-                       (`10k-zoom` 373.71 MB vs `10k-pan` 171.07 MB) from non-evicting glyph
-                       atlas growth. Standard checks pass locally (fmt, workspace clippy, bench
-                       feature clippy, cargo test, cargo deny check). No new dependencies.
+                       Diagnostic risks flagged for Orion (hypotheses, unprofiled): `text-zoom`
+                       hit 25.854 ms p99 (max 35.226 ms, 2,897 total allocs/frame p99; suspected
+                       label reshaping across K11 buckets), and zoom sweeps added ~200 MB private
+                       memory over same-machine pan (`10k-zoom` 373.71 MB vs `10k-pan` 171.07 MB;
+                       suspected non-evicting glyph atlas growth). Independent review (Claude
+                       Sonnet 5.5) approved with minor findings (addressed). Standard checks pass
+                       locally (fmt, workspace clippy, bench feature clippy, omnia-bench and
+                       omnia-golden tests, cargo deny check). No new dependencies.

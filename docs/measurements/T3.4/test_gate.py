@@ -164,9 +164,16 @@ class GateTest(unittest.TestCase):
         # 2 scales * 10 reps * (2 starts + 6 motion) = 160 invocations
         self.assertEqual(len(order), 160)
         for tag in gate.SCALES:
+            first_cases = []
             for rep in range(1, gate.REPETITIONS + 1):
                 cases = [c for t, r, c in order if t == tag and r == rep]
                 self.assertEqual(sorted(cases), sorted([*gate.STARTS, *gate.MOTION]))
+                first_cases.append(cases[0])
+                start_order = [c for c in cases if c in gate.STARTS]
+                expected_starts = list(gate.STARTS[::-1] if (rep - 1) % 2 else gate.STARTS)
+                self.assertEqual(start_order, expected_starts)
+            # First 7 reps start on 7 distinct groups before wrapping.
+            self.assertEqual(len(set(first_cases[:7])), 7)
 
     def test_passing_campaign(self):
         with tempfile.TemporaryDirectory() as tmp:
