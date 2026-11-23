@@ -9,8 +9,8 @@ Read these before you change anything they cover. In order of authority:
 
 | File | What it decides |
 | --- | --- |
-| `canvas-plan.md`, `wiring-plan.md`, `mcp-plan.md`, `ui-plan.md`, `sim-plan.md`, `context-plan.md` | Budgets, constants, decisions, invariants, open questions with defaults |
-| `canvas-roadmap.md`, `wiring-roadmap.md`, `mcp-roadmap.md`, `ui-roadmap.md`, `sim-roadmap.md`, `context-roadmap.md` | Tasks, their status, dependencies, owned files, done-when checks, the log |
+| `canvas-plan.md`, `wiring-plan.md`, `mcp-plan.md`, `ui-plan.md`, `sim-plan.md`, `parts-plan.md`, `context-plan.md` | Budgets, constants, decisions, invariants, open questions with defaults |
+| `canvas-roadmap.md`, `wiring-roadmap.md`, `mcp-roadmap.md`, `ui-roadmap.md`, `sim-roadmap.md`, `parts-roadmap.md`, `context-roadmap.md` | Tasks, their status, dependencies, owned files, done-when checks, the log |
 | `ROADMAP.md` | Product stages above the technical roadmaps |
 | `docs/measurements/` | Recorded numbers and gate evidence |
 
@@ -21,7 +21,9 @@ Ids are global: `B`, `K`, `D`, `INV`, `Q`, `T` live in the canvas files; `W`-pre
 `US`, `UQ`, checkpoints `UH`, tasks `U0.1`…) live in the application UI files (`ui-plan.md`,
 `ui-roadmap.md`); `S`-prefixed ids (`SB`, `SK`, `SD`, `SINV`, `STC`, `SS`, `SQ`, checkpoints
 `HS`, tasks `S0.1`…, with milestones written `Milestone S0`–`S4` to stay distinct from canvas
-spikes `S1`–`S8`) live in the simulation files (`sim-plan.md`, `sim-roadmap.md`); `C`-prefixed
+spikes `S1`–`S8`) live in the simulation files (`sim-plan.md`, `sim-roadmap.md`); `P`-prefixed
+ids (`PB`, `PK`, `PD`, `PINV`, `PTC`, `PS`, `PQ`, checkpoints `HP`, tasks `P0.1`…) live in the
+component-definitions and models files (`parts-plan.md`, `parts-roadmap.md`); `C`-prefixed
 ids (`CB`, `CK`, `CD`, `CINV`, `CTC`, `CQ`, checkpoints `HC`, tasks `C0.1`…) live in the
 circuit-context files (`context-plan.md`, `context-roadmap.md`). Cite ids in commits, pull
 requests and log entries.
@@ -39,8 +41,8 @@ Those are this repository's `omnia-doc`, `omnia-canvas` and `omnia-bench`.
 3. **Only the reference machine certifies a budget.** That is the Orion laptop (Linux,
    Wayland, wgpu/Vulkan), run under canvas plan section 2.1. Numbers from any other machine
    are recorded and labelled, and never mark a budget met.
-4. **Stop at human checkpoints** (`H*`, `HW*`, `HA*`, `UH*`, `HS*`, `HC*`). Do not work past one or
-   answer it yourself.
+4. **Stop at human checkpoints** (`H*`, `HW*`, `HA*`, `UH*`, `HS*`, `HP*`, `HC*`). Do not work
+   past one or answer it yourself.
 5. **Open questions have defaults.** Build to the default in the plan's open-questions
    section until the owner's dated answer replaces it. Do not pick a different answer.
 
