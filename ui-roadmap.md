@@ -569,15 +569,11 @@ without being drawn.
   provider (`T5.3`) with one that calls `Catalog::place_symbol`, so the picker and Place > Part
   commit catalog definitions (parts §14).
 - Done when: a headless test places a resistor from the toolbar and from Place > Part, and Ctrl+Z
-<<<<<<< HEAD
-  removes it; a generic op-amp committed through the picker carries its default binding; with the sheet focused beforehand, choosing the part paints the sheet 0 times
-  before the placement preview; with a toolbar control focused, at most once.
-=======
-  removes it; with the sheet focused beforehand, choosing the part causes 0 shell or focus sheet
-  paints before the placement preview; with a toolbar control focused, at most one focus-caused
-  paint (the move into the sheet). In both cases modality paints are counted separately under
-  UQ15 (`modality_paints <= modality_switches`, e.g. a Tab then a pointer choice is one switch).
->>>>>>> origin/main
+  removes it; a generic op-amp committed through the picker carries its default binding; with
+  the sheet focused beforehand, choosing the part causes 0 shell or focus sheet paints before the
+  placement preview; with a toolbar control focused, at most one focus-caused paint (the move into
+  the sheet). In both cases modality paints are counted separately under UQ15
+  (`modality_paints <= modality_switches`, e.g. a Tab then a pointer choice is one switch).
 
 ### U5.3 Clipboard · todo
 - Lane: shell · Depends: T7.1, U5.1 · Read: T7.1
