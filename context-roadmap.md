@@ -118,7 +118,7 @@ HC2 + (A3.1 or A4.1) -> C5.1          HC2 + measured split tails (CQ7) -> C5.2
 - Done when: every `C`-prefixed id is defined once and every reference resolves; no statement
   contradicts a decided `D`, `WD`, `AD`, `UD` or `PD`; the rule-1 scan is logged.
 
-### C0.2 Owner decisions · todo → HC1
+### C0.2 Owner decisions · done → HC1 (signed 2026-11-23, owner-delegated)
 - Lane: any · Depends: C0.1 · Read: context-plan.md sections 3, 4, 6 and 14
 - Owns: context-plan.md sections 3, 4, 6 and 14; the C0.2 rows of section 15 in the files they
   name
@@ -497,3 +497,14 @@ destination from Ref22–Ref33 (cited by feature description only, Ref32–Ref33
 *(user report)*) and removing the HC1 deferral; HC1 carries no rule-1 disposition for
 section 16.2. Nits: CD14 spells out AK5 as 256 entries; the plan header now cites `main`
 at `c6b6f2e`. Rule-1 scan of the diff: no company or product name added. Nothing measured.
+
+2026-11-23 C0.2 done (HC1). The owner delegated every pending sign-off to the coordinating agent on
+2026-11-23. Section 14 gains an Answer column: CQ1–CQ8 and CQ11 keep their defaults, CQ9 stays
+answered by XD4, and CQ10 keeps its default and names the tasks still holding the `omnia-doc`
+files (W2.2 `blocked` on WB3; W3.4, W3.5 and W3.6 tool halves). Every CB, CK and CD entry is
+DECIDED as written; section 6.1 is not reopened. Section 15's C0.2 rows are applied to
+mcp-plan.md (9.2 `context` operation and the optional `circuit` field, 9.3, 9.4 CK12 codes,
+10.1 `omnia_context`, 10.2 the context resource, 13 the safe loop) and canvas-plan.md section 10;
+the `Change` row moves to C1.1, which fixes the shape; parts' XD7 line was already applied in
+PR #85. C1 tasks may start once their dependencies are done. Documentation only; rule-1 scan
+clean.

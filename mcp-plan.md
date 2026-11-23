@@ -412,10 +412,21 @@ use the existing preview/apply edit path, and their effects appear in change del
 other edit (cross-plan decision XD8, 2026-11-23). `list_parts` is a read operation: it reads the
 document's definitions and the catalog, changes nothing, and has no preview or apply step.
 
+Added at context C0.2 (HC1, 2026-11-23), both minor changes under AK7 (context-plan.md CK12),
+available from context C2.1: the read operation `context {doc_id, views, budget?, format?}`
+answers the views of context-plan.md section 9 against one revision in one call (CD9); and
+`preview` and `apply` take an optional request field `circuit: {format?, budget?}`. When the
+field is absent, request and response bytes are exactly as before.
+
 `invert_follow` means exactly what holding Alt at commit means (WK3), applied to the session's
 `WiringPrefs` (WK10). It exists only once W2.2 has added `FollowPolicy` to the code.
 
 ### 9.3 Results of edits
+
+`preview` and `apply` return the result below. With the optional `circuit` request field
+(9.2, context-plan.md CD14) the result also carries `circuit`: the `since` view for exactly
+that edit, byte-identical between a preview and its matching apply at the same format and
+budget, and part of the stored idempotent replay (AINV2, AINV7).
 
 `preview` and `apply` return:
 
@@ -494,6 +505,7 @@ Read results as built at A1.4 (`src/read.rs`, 2026-11-22):
 | Approval | `approval_required {approval_id, tier, effect, effect_digest}`, `approval_denied` |
 | Files | `path_outside_root`, `file_exists`, `io_error`, `unsupported_file_version` |
 | Jobs | `cancelled`, `job_not_found` |
+| Context (context-plan.md CK12, from C2.1) | `stale_cursor`, `unknown_revision`, `ambiguous_handle {candidate_count, candidates}` |
 | Other | `internal` |
 
 Amended at A1.3 (2026-11-21), so the plan follows the code. The wiring tasks had already added
@@ -556,9 +568,12 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_route`, `omnia_snap`, `omnia_hit` | 0 | read-only, idempotent | A2 |
 | `omnia_render_svg {doc_id, area?, theme}` | 0 | read-only, idempotent | A2 |
 | `omnia_job_status`, `omnia_job_cancel` | 0 | — | A3; not listed before A3.1 |
+| `omnia_context {doc_id, views, budget?, format?}` | 0 | read-only, idempotent | context C2 |
 
 Every tool declares an `inputSchema` and an `outputSchema`. A result carries
-`structuredContent` (the 9.1 envelope) and a text block with the same JSON.
+`structuredContent` (the 9.1 envelope) and a text block with the same JSON. One exception
+(context-plan.md CD10, CQ3): a successful `omnia_context` response in `lines` format carries the
+compact lines in both channels; its errors and every other tool keep the serialized JSON text.
 
 A tool's arguments are its operation's params, plus `idempotency_key` for `omnia_apply`,
 `omnia_undo`, `omnia_redo` and `omnia_save` (11.2); the `inputSchema` is `<op>.arguments` and
@@ -584,6 +599,7 @@ errors.
 | `omnia://doc/{doc_id}/nets` | Canonical nets | Yes |
 | `omnia://symbols`, `omnia://symbols/{name}` | Pins, bounds, placed size (K7) | No |
 | `omnia://jobs/{job_id}` | Job state (A3) | Yes |
+| `omnia://doc/{doc_id}/context` | The context summary view (context-plan.md CD8), cacheable; built by context C2.3 | `updated` on every revision change |
 
 Tools duplicate the key resources because client support for resources varies.
 
@@ -879,10 +895,12 @@ protocol's authorization flow, TLS and a threat-model review by the owner.
   ids, params or symbol names, edit the only copy of a file.
 - The safe loop:
   1. `omnia_capabilities`.
-  2. `omnia_open` or `omnia_new`, then `omnia_inspect`.
+  2. `omnia_open` or `omnia_new`, then `omnia_inspect`; from context C2, orient with
+     `omnia_context` instead.
   3. `omnia_preview` the batch; read the predicted pins and ids.
   4. `omnia_apply` with `preview_id`, `expected_revision` and `idempotency_key`.
-  5. `omnia_nets` to check connectivity.
+  5. `omnia_nets` to check connectivity; from context C2, read the `circuit` delta that
+     `omnia_apply` returns when asked (context-plan.md CD14).
   6. From A2, `omnia_render_svg`, and look at it.
   7. `omnia_save` to a new path; check the response; reopen and compare.
 
