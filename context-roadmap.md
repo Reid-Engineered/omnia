@@ -18,6 +18,11 @@ The same steps as AGENTS.md: pick a `todo` task whose dependencies are all `done
 it `doing`, read what **Read** names, do **Do** inside **Owns**, run the standard checks and
 **Done when** checks, set the status, and append one log entry at the end of this file.
 
+C1 and later tasks require a recorded owner disposition at HC1 and C0.2 marked `done`.
+C2–C5 also require the completed HC2 reference campaign, a recorded owner disposition
+and C1.8 marked `done`. Campaign
+preparation and `needs-human` status never satisfy either prerequisite.
+
 Statuses: `todo`, `doing`, `done`, `blocked (reason)`, `needs-human`.
 
 ## Rules
@@ -82,10 +87,10 @@ C0.1 -> C0.2 [HC1]
 HC1 + parts P2.1-P2.3 + sim S1.1 -> C1.1 (doc)      HC1 -> C1.2 (circuit)
 C1.2 + sim S1.1 -> C1.9 (bindings) -> sim S1.2 (lowering, XD4)
 C1.1 + C1.9 -> C1.3 -> C1.4 -> C1.5 -> C1.6 -> C1.7 -> C1.8 [HC2]
-C1.8 + A1.8 -> C2.1 -> C2.2 -> C2.3 -> C2.4;  C2.4 + A1.9 -> C2.5 [HC3]
-C1.8 + parts P2 -> C3.1 -> C3.2;  C3.2 + A1.9 -> C3.3 [HC4]
+HC2 + A1.8 -> C2.1 -> C2.2 -> C2.3 -> C2.4;  C2.4 + A1.9 -> C2.5 [HC3]
+HC2 + parts P2 -> C3.1 -> C3.2;  C3.2 + A1.9 -> C3.3 [HC4]
 C3.1 -> C4.1 -> C4.2 -> C4.3 -> C4.4 [HC5]
-C1.8 + (A3.1 or A4.1) -> C5.1          C1.1 or C1.8 (if split tails, CQ7) -> C5.2
+HC2 + (A3.1 or A4.1) -> C5.1          HC2 + measured split tails (CQ7) -> C5.2
 ```
 
 ## Human checkpoints
@@ -182,7 +187,7 @@ journal and the views, so that sim S1.2 can start.
 - Owns: `crates/omnia-circuit/src/journal.rs`
 - Do: signed facts per revision, the ring, checkpoints, consolidation, truncation; key-churn
   counter for CQ1.
-- Done when: CINV4 holds under property test; CTC-key-01, CTC-key-02, CTC-key-06 and
+- Done when: both CINV4 oracles pass under property test; CTC-key-01, CTC-key-02, CTC-key-06, CTC-key-07 and
   CTC-since-01 to 06 pass, including the base-revision boundaries after open, rebuild and
   eviction.
 
@@ -214,7 +219,7 @@ journal and the views, so that sim S1.2 can start.
   the command-boundary cases; resident memory by the counting allocator (CB10); the
   whole-sheet `Circuit::bindings` read, cold and after an incremental update, recorded for sim
   SB2 and SB3 evidence and gating nothing (XD9).
-- Done when: CINV6 passes with negative controls and with warm-up as CINV6 defines it; the
+- Done when: CINV6 passes with negative controls, the specified warm-up and the separately counted oversized journal case; the
   bench runs on a development machine and its numbers are recorded and labelled.
 
 ### C1.8 Gate: milestone C1 · todo → HC2
@@ -222,8 +227,8 @@ journal and the views, so that sim S1.2 can start.
 - Owns: `docs/measurements/C1.8.md` and `docs/measurements/C1.8/`
 - Do: prepare the reference campaign as one command; record development-machine numbers;
   measure split tails on the largest net (CQ7) and key churn (CQ1).
-- Done when: the campaign script, order file and case list are fixed; the owner has run HC2 or
-  the task is `needs-human` with the script ready.
+- Done when: the campaign script, order file and case list are fixed and the owner has run and recorded HC2.
+  With only the script ready, set `needs-human` and keep downstream tasks gated.
 
 ## Milestone C2: agent surface
 
@@ -233,8 +238,8 @@ journal and the views, so that sim S1.2 can start.
   file and catalog entry; `omnia-circuit` ownership in the service's document entry
 - Do: decode, dispatch, render through `omnia-circuit`, enforce budgets; the host updates the
   circuit after every `apply`, `undo` and `redo`.
-- Done when: AINV5 and AINV11 cover `context`; CINV11 holds; unknown handles list the closest
-  names.
+- Done when: AINV5 and AINV11 cover `context`; CINV11 holds; unknown handles list a bounded
+  prefix of the closest names; CTC-view-05 and CTC-handle-02 pass.
 
 ### C2.2 Circuit delta on `apply` and `preview` · todo
 - Lane: agent · Depends: C2.1 · Read: CD14, AD3, AINV2
@@ -243,7 +248,7 @@ journal and the views, so that sim S1.2 can start.
   `<op>.arguments` schemas; the service's apply and preview paths
 - Do: render `since` for the edit into the result when asked; preview computes it on the
   fork; the option stays outside the operations a `preview_id` binds (CD14).
-- Done when: CTC-apply-01 passes: a request without `circuit` gives exactly today's bytes from
+- Done when: CTC-apply-01 and CTC-apply-02 pass: a request without `circuit` gives exactly today's bytes from
   the same starting revision; a no-op gives an empty view; preview and apply with the same
   option give byte-identical `circuit` fields (AINV2); an idempotent replay returns the stored
   bytes and a replay with a different option is `idempotency_conflict` (AINV7).
@@ -343,7 +348,7 @@ journal and the views, so that sim S1.2 can start.
   revision.
 
 ### C5.2 Connectivity refinements · todo (optional)
-- Lane: doc · Depends: C1.1 or C1.8 showing split tails (CQ7)
+- Lane: doc · Depends: C1.8 and split tails measured in C1.1 or C1.8 (CQ7)
 - Owns: `crates/omnia-doc/src/connectivity.rs` (spanning-forest bit with replacement
   promotion, batched search)
 - Done when: INV10 and CINV12 hold, including the two-delete cycle case (context-plan.md
@@ -424,3 +429,12 @@ bindings read for sim SB2 and SB3 evidence. C0.2 (HC1) stays `todo`. Sim-side am
 listed in section 15 for sim task S0.2; sim-plan.md and sim-roadmap.md not edited. Rule-1
 scan: no company or product newly named in body text; section 16 unchanged except the ids.
 Nothing measured.
+
+
+2026-11-23 C0.1 review follow-up — specified journal endpoint reconstruction and the event
+oracle (CD6, CINV4, CB4); bounded candidate errors and escaped fragments (CK10, CK13–CK15,
+CD10); defined frozen edit continuations across preview, apply and replay (CD14); made the
+CK8 oversized path separately measurable under CINV6; and made HC1 and HC2 runnable-task
+prerequisites. Checked cross-plan decisions XD1–XD9 (coordinator, owner-delegated, 2026-11-23),
+including the §16 Ref1–Ref33 namespace, and shortened product-source labels to feature
+descriptions. No thresholds changed. Nothing measured.

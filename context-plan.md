@@ -140,28 +140,28 @@ other machines and at 100,000 parts are recorded and labelled, never gating.
 | CB12 | Round trips: orientation in 1 call; any question in the circuit question set's local families in at most 2 calls; checking an edit needs no call beyond the edit itself (CD14) | the question-set CI proxy (section 10) |
 
 CB11 assumes roughly 4 bytes per token, so 12 KB is about 3,000 tokens and 32 KB stays under
-the smallest client warning threshold found (10,000 tokens) [Ref31]. The ratio is a HYPOTHESIS until
+a reported tool-output warning threshold (10,000 tokens) [Ref31]. The ratio is a HYPOTHESIS until
 C2.4 measures it on the question set.
 
 ## 4. Constants
 
 | ID | Constant | Value |
 | --- | --- | --- |
-| CK1 | Circuit key (stable identity; a type distinct from AD8's `NetKey` and from sim's solver `NodeId`, XD4) | A pure function of the net's members at the current revision, chosen by document content first so that insertion order cannot change it. If the net has labels: `net:"<text>"`, the lowest label text by byte order. Otherwise, if it has pins: the **anchor pin** is the member pin lowest by (designator in natural order, pin number in natural order), then by pin world position (x, then y), then by (part id, pin index); the key is `net:pin:<part id>.<pin index>`. Otherwise (a bare wire island): the anchor is the wire lowest by (lower endpoint x, then y), then by id; the key is `net:wire:<wire id>`. Keys never contain a `NetId`. No conversion between a circuit key, a `NetKey` and a `NodeId` exists in any crate; C1.9's bindings carry the circuit key and the current `NetId` side by side, and lowering assigns `NodeId`s itself (sim SD7). |
+| CK1 | Circuit key (stable identity; a type distinct from AD8's `NetKey` and from sim's solver `NodeId`, XD4) | Derived from the net at the current revision and stable across unrelated edits. Rebuilding in a different insertion order yields equivalent keys under the id remapping in CINV3. If the net has labels: `net:"<text>"`, the lowest label text by byte order. Otherwise, if it has pins: the **anchor pin** is the member pin lowest by (designator in natural order, pin number in natural order), then by pin world position (x, then y), then by (part id, pin index); the key is `net:pin:<part id>.<pin index>`. Otherwise (a bare wire island): the anchor is the wire lowest by (lower endpoint x, then y), then by id; the key is `net:wire:<wire id>`. Keys never contain a `NetId`. No conversion between a circuit key, a `NetKey` and a `NodeId` exists in any crate; C1.9's bindings carry the circuit key and the current `NetId` side by side, and lowering assigns `NodeId`s itself (sim SD7). |
 | CK2 | Display name | Label nets: the key's label text. Unlabelled nets: `N(<designator>.<pin number>)` from the anchor pin, for example `N(R3.2)`; a bare wire island `N(wire:7)`. Generated names are never valid document text in the line form, because document text with parentheses is always quoted (CK9), so a label `N(R3.2)` cannot be mistaken for one. Every other label text on the net is kept as a candidate name. When label kinds arrive, the priority is: global label, power symbol, local label, hierarchical label, sheet pin, anchor-pin name; ties by lowest text, then lowest id. This order is the established convention [Ref25]. |
 | CK3 | Pin roles | The parts plan's seven (PD5: `passive`, `input`, `output`, `bidir`, `power`, `ground`, `no_connect`), plus `unspecified` for parts whose definition has no pin table (unmodelled definitions, including every part migrated from RON v2). A placed part's embedded definition is authoritative for its pin roles and SPICE terminal order (XD5). Pin role is a per-pin type, separate from sim S1.1's per-symbol class (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`), which the engine keeps as a part column; neither is derived from the other. Fields reserved, absent until their plans add them: unit, alternate function, swap group, instance no-connect marker, hierarchical instance path. |
 | CK4 | Net kinds and ground evidence | `signal`, `power`, `ground`, each with the evidence that set it (CK6). **Declared ground evidence** is exactly sim SQ3's default (XD4): a part whose symbol class is `Ground`, or a label whose text is exactly `0`. `is_ground_reference` is true exactly when a net carries declared ground evidence, and C1.9 exposes the evidence items. A `ground`-role pin sets kind `ground` (declared) but not the reference; a name such as `GND` or `AGND` never sets the reference and may set kind `ground` only at `heuristic` evidence, with the finding `ground.name_only` as the hint (CD13). Until S1.1 lands the symbol class, the one existing ground symbol (`Ground-COM-General`) stands for class `Ground`. |
 | CK5 | Finding tiers | 0: per pin or per net, maintained in the edit. 1: over one net's multiset of pin roles, maintained in the edit. 2: traversals across components, computed lazily per revision. 3: heuristics that need part knowledge. Ids and default severities are in section 9.4. |
 | CK6 | Evidence tiers | `declared` (drawn in the document), `exact` (a role-correct structural match), `derived` (an exact match whose values satisfy the structure's predicates), `heuristic` (name-based or approximate), `suggested` (statistical). No numeric confidence. |
 | CK7 | Hub nets | A net is a hub if its kind is `power` or `ground`, or it has more than 32 pins. Views never list a hub's members inline: they show `GND (412 pins)` and a handle. Inline member lists stop at 16 pins. |
-| CK8 | Journal | Entries for at most the last 1,024 revisions and at most 262,144 facts in total, preallocated; the oldest entries are evicted first, and no entry is ever truncated. The journal keeps a **base revision**: the revision at open or rebuild, advanced to the revision just before the oldest retained entry on each eviction. `since r` is answerable exactly when base ≤ r ≤ now. An entry larger than the whole capacity is stored alone, evicting every older entry (an allocation CINV6 excludes), so the base becomes the revision just before it and its own delta stays answerable and pageable until the next edit evicts it. |
+| CK8 | Journal | Entries for at most the last 1,024 revisions and at most 262,144 facts in total, preallocated; the oldest entries are evicted first, and no entry is ever truncated. The journal keeps a **base revision**: the revision at open or rebuild, advanced to the revision just before the oldest retained entry on each eviction. `since r` is answerable exactly when base ≤ r ≤ now. An entry larger than the whole capacity is stored alone, evicting every older entry (the separately tested exceptional path in CINV6), so the base becomes the revision just before it and its own delta stays answerable and pageable until the next edit evicts it. |
 | CK9 | Line form | ASCII only; one record per line; every line starts with a fixed tag (section 9.2). A document string (designator, value, label text, pin name or number) is written bare only if it matches `[A-Za-z0-9_+-]{1,64}` and is not a tag; otherwise it is quoted with `"`. Inside quotes, `\` and `"` are escaped as `\\` and `\"`, and every character outside printable ASCII (controls, newlines, non-ASCII) is written as `\u{hex}`; every other character, separators included, is literal. Outside quotes the characters `.` `:` `=` `|` `(` `)` `,` and space are structural only. Compound fields: a pin reference is `<designator>.<pin>`, each part in this string form, so `"A.B".C` and `A."B.C"` differ; a pin-to-net pair is `<pin>:<net name>`; a generated name is `N(<pin reference>)` or `N(wire:<id>)`, always bare, and no document string can produce it bare because `(` forces quoting. Section 9.2 gives the grammar per record. |
-| CK10 | Byte budgets | `budget` is per request, default 12,288 bytes, maximum 32,768 (CB11). A request holds at most 8 views. Each view gets an equal share of the budget, and a share a view does not use passes to the next view in order. A view whose share is below CK15's minimum is not run: it returns only an elision line whose cursor runs it alone. |
+| CK10 | Byte budgets | `budget` is per request, default 12,288 bytes, maximum 32,768 (CB11). A request holds at most 8 views. After reserving the fully encoded envelope and mandatory metadata for each channel, each view gets an equal share of the remaining budget, and a share a view does not use passes to the next view in order. A view whose share is below CK15's minimum is not run: it returns only an elision line whose cursor runs it alone. |
 | CK11 | Recognition limits | 10,000 search steps per anchor, after which the result says `truncated`. Pattern radius at most 3 hops, hubs excluded (CD12). |
-| CK12 | Schema | The `context` operation is an optional addition to `omnia.agent/1` (AK7 allows adding an operation as a minor change). The line grammar has its own version, `lines/1`, stated in each view's legend. The operation adds three error codes to 9.4 of mcp-plan.md: `stale_cursor`, `unknown_revision` and `ambiguous_handle {candidates}`. |
-| CK13 | Handles | Typed handles are unambiguous: item ids (`part:3`, `wire:7`, `label:2`, AQ5), pins `part:3#1` (pin index), and circuit keys (`net:"VCC"`, `net:pin:3.1`). Names are aliases. Resolution collects **every** entity of the types the argument accepts whose alias matches (designators `R3`, pin references `R3.2`, net display names and candidate names `VCC`, `N(R3.2)`); exactly one match binds, more than one is refused with all candidates as typed handles sorted by their handle text, so the error is the same whichever index finds a match first; it is never bound silently. The name index maps each alias to a sorted list of entities. An unknown handle lists the closest valid names. A pin whose part has no library metadata for it (a legacy sheet whose stored pins differ from the symbol) is shown by index as `R3#1`. |
-| CK14 | Cursors | Opaque. A cursor binds the view, its arguments and the revision, and is passed back as `{"cursor": "<c>"}` in place of a view. Used at another revision it is the tool error `stale_cursor` with a hint to re-run the view; a document's pages are lossless within one revision. Cursors are valid while the document is open. Moving to a different view uses a typed handle (CK13), not a cursor: `focus` gives `net:"GND"`, and `{"net": {"name": "net:\"GND\""}}` starts the member pages. |
-| CK15 | Page minimum and long records | A view's share below 2,048 bytes is not run (CK10); a request budget below 4,096 bytes is raised to 4,096. In both formats a record is split, never dropped: in `lines` a long record continues on lines tagged `+`; in `json` a long row is split into fragments with the same `key` and `part: n of m`, whose list fields (pins, members) concatenate in order. A document string longer than 1,024 bytes is shown as its first 256 bytes plus `+<n> bytes` and a `text` handle, and `{"text": {"of": "<handle>", "cursor"?}}` pages the whole string, so every page makes progress and no fragment exceeds the minimum share. |
+| CK12 | Schema | The `context` operation is an optional addition to `omnia.agent/1` (AK7 allows adding an operation as a minor change). The line grammar has its own version, `lines/1`, stated in each view's legend. The operation adds three error codes to 9.4 of mcp-plan.md: `stale_cursor`, `unknown_revision` and `ambiguous_handle {candidate_count, candidates}`. |
+| CK13 | Handles | Typed handles are unambiguous: item ids (`part:3`, `wire:7`, `label:2`, AQ5), pins `part:3#1` (pin index), and circuit keys (`net:"VCC"`, `net:pin:3.1`). Names are aliases. Resolution collects **every** entity of the types the argument accepts whose alias matches (designators `R3`, pin references `R3.2`, net display names and candidate names `VCC`, `N(R3.2)`); exactly one match binds, more than one is refused with the total candidate count and the longest sorted prefix of complete typed handles that fits the fully encoded JSON error in both channels (CK10, CD10). The prefix may be empty. Candidate details have no continuation and the count exposes any omission. The error is independent of index lookup order. Unknown-handle suggestions use the same bounded-prefix rule. The name index maps each alias to a sorted list of entities. Unknown-handle suggestions are ordered by closeness, then handle text. A pin whose part has no library metadata for it (a legacy sheet whose stored pins differ from the symbol) is shown by index as `R3#1`. |
+| CK14 | Cursors | Opaque. A cursor binds the view, its arguments and the revision, and is passed back as `{"cursor": "<c>"}` in place of a view. Used at another revision it is the tool error `stale_cursor` with a hint to re-run the view; a document's pages are lossless within one revision. These ordinary cursors require the same open document. Edit-delta cursors and their text handles follow the session-scoped lifetime in CD14. Moving to a different view uses a typed handle (CK13), not a cursor: `focus` gives `net:"GND"`, and `{"net": {"name": "net:\"GND\""}}` starts the member pages. |
+| CK15 | Page minimum and long records | A view's share below 2,048 bytes is not run (CK10); a request budget below 4,096 bytes is raised to 4,096. In both formats a record is split, never dropped: in `lines` a long record continues on lines tagged `+`; in `json` a long row is split into fragments with the same `key` and `part: n of m`, whose list fields (pins, members) concatenate in order. A document string longer than 1,024 bytes is shown as its first 256 bytes plus `+<n> bytes` and a `text` handle, and `{"text": {"of": "<handle>", "cursor"?}}` pages the whole string, with a UTF-8 boundary for each slice. The 256-byte preview is an upper bound. Shorten previews and split strings or list fields as needed using their final encoded sizes in both channels, including quoting, nested JSON escapes, cursor and fragment metadata. Reserve room for continuation before packing. Use bounded fragment identifiers when the logical key itself needs text fragments. Size mandatory cursor and elision metadata so eight elided views fit the minimum request budget. Each running page must advance by at least one fragment and every fragment must fit the minimum share. A dedicated continuation page may carry the remaining string via the text handle. |
 
 ## 5. Architecture
 
@@ -262,7 +262,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   "same inputs, same output" unless keys are saved in the file (CQ1).
 - The anchor is chosen by designator, then geometry, then id, as AGENTS.md's tie-break rule
   asks. The display name derived from it is therefore independent of insertion order, and the
-  key differs between two insertion orders only by the id mapping (CINV3). Choosing by id first
+  key is equivalent between insertion orders under the id mapping (CINV3). Unrelated edits preserve the anchor and key. Choosing by id first
   would not: inserting R2 before R1 would name the net `N(R2.1)` instead of `N(R1.2)`.
 - The cost of the anchor rule: when an unlabelled net's anchor pin leaves it, or its part is
   renamed so that another pin sorts lower, its key changes. The journal reports that as a
@@ -321,8 +321,14 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 - `since {revision}` is the **net effect** between the state at `revision` and now: a k-way
   merge of the sorted entries after `revision` that sums and drops zeros, in O(F log k) for F
   facts over k entries. An edit followed by its undo consolidates to nothing. There is no
-  separate lineage: events are derived from before-and-after membership at query time, by
-  these rules in order, each member used once:
+  separate lineage. For endpoints r0 and r1, seed from the current fact set and reverse retained
+  entries after each endpoint (undo an addition by removing it and undo a removal by restoring
+  it). An implementation can restrict this reconstruction to keys touched by the queried interval and their full
+  pin and label memberships, including unchanged members and display names. For a historical
+  r1, include keys and members recoverable only from the retained suffix. Use the consolidated
+  diff to identify changes and the reconstructed endpoint sets to classify events. CB4 times
+  reconstruction and classification as part of rendering a since page. Classify in this order,
+  each member used once:
   1. `split`: the members of one before-key now lie in two or more after-keys, each holding at
      least two of them or the original key; one event names all after-keys.
   2. `merge`: two or more before-keys, each with at least two members, now share one
@@ -340,7 +346,9 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   delta. Opening or rebuilding sets `base` to the current revision, so the first edit after
   open is answerable from `base` (and CD14 works on it). C1.4 tests each boundary right after
   open, after a rebuild and after an eviction.
-- Test oracle (CINV4): the diff of two full fact-set snapshots, kept by tests only.
+- Test oracles (CINV4): compare the consolidated facts to the diff of two full snapshots.
+  Independently classify events from the complete endpoint memberships and names from those
+  snapshots and compare the event stream, including CTC-key-06 and CTC-key-07.
 
 ### CD7 Layout for speed. PROPOSED
 
@@ -372,7 +380,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 - When a view does not fit its budget, it stops at a record boundary (or splits one record,
   CK15) and ends with an elision line: what was left out, how many, and the cursor that fetches
   it. At one revision, following every cursor reconstructs the unbudgeted view exactly
-  (CINV7); across an edit the cursor is refused (CK14), so pages never skip or repeat rows.
+  (CINV7). Ordinary cursors expire on an edit (CK14). CD14 defines edit-delta continuation.
 - Two formats with the same content: `lines` (CK9, the default, for models to read) and `json`
   (typed rows, for programs). Agents write JSON arguments and never have to produce the line
   form: a study of compact notations found accuracy falls when models must write them [Ref7].
@@ -408,7 +416,12 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   for this tool and format only (CQ3).
 - Bytes: both channels travel, so the wire carries about twice the view; the model sees one.
   CB11 bounds each channel separately. C2.3 tests schema validation, escaping, metadata and
-  the per-channel limits in all three AK1 revisions.
+  the per-channel limits in all three AK1 revisions. The compact text exception applies only
+  to successful `omnia_context` responses in `lines` format. Edit responses and all errors
+  keep the serialized JSON text copy. With CD14 opted in, pack the circuit field within the
+  remaining fully encoded edit envelope in both channels. If the envelope cannot fit mandatory
+  metadata and at least one fragment with a continuation when needed, return a bounded `limit_exceeded` before committing the edit.
+  Use fixed-size error metadata and omit echoed input when needed to meet the ceiling.
 
 ### CD11 Findings run where their cost allows. PROPOSED
 
@@ -474,6 +487,19 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
   are byte-identical (AINV2 extended). An idempotent replay returns the stored bytes,
   `circuit` included, and a replay with a different `circuit` option is
   `idempotency_conflict` (AINV7).
+- A paged edit delta is an immutable result in the owning agent session. Its bounded opaque
+  cursor binds the open document instance, starting revision, canonical operations, resolved
+  format and budget, and fragment position, with a separate cursor namespace from live views.
+  Use the same result identity for a preview and its matching apply. Store the frozen delta
+  and text fragments, so a cursor submitted to `context` resolves against that result even
+  before apply and after live revisions advance. A different edit at the same starting revision
+  has a different identity.
+- Retain the result for as long as any AK5 cache entry can replay it, including through
+  `request_status`. For results without that protection, retain the most recent AK5 results
+  per session by creation order. Eviction, session end or document close invalidates the
+  cursor with `stale_cursor`. On close, keep replay bytes under the existing idempotency rules.
+  Continuation ends at the final frozen fragment. Record retained memory and page preparation
+  cost in C2.2 diagnostics without changing any budget threshold.
 - The parts plan's `set_param` and `update_part_def` operations are edits on the same path, so
   they take the same `circuit` option and report `param` and `def` events (XD8).
 
@@ -553,8 +579,7 @@ followed by where it applies.
   SD14's finite-number amendment stays scoped to `sim.*`. FH0's binary format stays separate
   from the RON migration.
   *In this plan:* section 5 (crate ownership), CD14.
-- **XD9 Ids and budgets.** Context §16 citation ids `S1`–`S33` are renamed `Ref1`–`Ref33` (they
-  clash with canvas spikes). ERC001–ERC008 are registered as diagnostic codes. Every budget
+- **XD9 Ids and budgets.** Context §16 uses citation ids `Ref1`–`Ref33`, distinct from canvas spike ids. ERC001–ERC008 are registered as diagnostic codes. Every budget
   keeps its threshold (PB5, CB1, SB1–SB3, B9, UB10, AB2); SB3's Run measurement includes
   context/snapshot acquisition, and SB1/SB2 evidence distinguishes cold, incremental and cached.
   *In this plan:* section 16 and every citation; section 3 (no threshold changed). C1.7
@@ -569,17 +594,17 @@ Each has a test; the roadmap task that adds it is in brackets.
 | --- | --- |
 | CINV1 | `omnia-circuit` never mutates a `Doc` and does not depend on GPUI, an async runtime or `omnia-agent`; `omnia-doc` does not depend on it. [C1.2] |
 | CINV2 | After every step of a random sequence of commands (including `SetText` renames and duplicate designators), undos and redos, the incrementally updated circuit equals `Circuit::build` on the same document: graph, keys, names, outline cache, tier 0 and 1 findings. [C1.3, C1.6, C3.1] |
-| CINV3 | A document rebuilt with its items inserted in another order renders identical views after replacing every id-bearing token (item ids, `net:pin:` and `net:wire:` keys, `N(wire:<id>)` names, cursors) with its counterpart under the id mapping. Items that agree in every content and geometry field render identical lines, so their relative order cannot show. [C1.5] |
-| CINV4 | For any r0 < r1 within the retained journal, the consolidated journal over (r0, r1] equals the diff of the two snapshots' fact sets; an edit followed by its undo consolidates to nothing. [C1.4] |
+| CINV3 | A document rebuilt with its items inserted in another order renders identical views after replacing every id-bearing token (item ids, `net:pin:` and `net:wire:` keys, `N(wire:<id>)` names, cursors) with its counterpart under the id mapping. For content-and-geometry ties, map indistinguishable items by ascending id within each tied group, preserving references and tied anchors. Use order-preserving mapped ranks for sorted typed handles within such groups. Compare decoded cursor bindings and positions under the same mapping. [C1.5] |
+| CINV4 | For any r0 < r1 within the retained journal, the consolidated journal over (r0, r1] equals the diff of the two snapshots' fact sets; an edit followed by its undo consolidates to nothing. Independently classify events from full endpoint snapshots and compare with journal-derived events, including retained memberships and historical endpoints. [C1.4] |
 | CINV5 | No view is answered from a circuit whose revision differs from the document's. [C1.3, C2.1] |
-| CINV6 | Allocation proof, counting `alloc` and `realloc`, each test with a negative control that must count above zero. Warm means: after `build`, plus one pass of the same fixed case set. Then query and render paths allocate nothing; a rerun of the same fixed edit cases through `update` allocates nothing (the journal is preallocated, CK8; CSR slices have the spare capacity the warm pass gave them). Excluded and stated: the first computation of a lazy tier 2 result per revision, compaction (which runs only on idle), and edits that introduce new strings. [C1.7] |
-| CINV7 | Every elision states a count and a cursor. At one revision, following every cursor from the budgeted view reconstructs the unbudgeted view exactly, including hub member lists and records split by CK15; a cursor used after an edit is refused with `stale_cursor`. [C1.5] |
+| CINV6 | Allocation proof, counting `alloc` and `realloc`, each test with a negative control that must count above zero. Warm means: after `build`, plus one pass of the same fixed case set. Then query and render paths allocate nothing; a rerun of the same fixed edit cases through `update` allocates nothing (the journal is preallocated, CK8; CSR slices have the spare capacity the warm pass gave them). Excluded and stated: the first computation of a lazy tier 2 result per revision, compaction (which runs only on idle), edits that introduce new strings, and allocation of the single oversized journal entry in CK8 (only when its fact count exceeds 262,144). Separately count that path with a one-over-capacity entry, verify that only its storage allocates, verify lossless paging and eviction, and rerun the warm zero-allocation check on the next ordinary edit. [C1.7] |
+| CINV7 | Every elision states a count and a cursor. At one revision, following every cursor from the budgeted view reconstructs the unbudgeted view exactly, including hub member lists and records split by CK15; ordinary cursors used after an edit return `stale_cursor`; frozen edit-delta pages and text handles reconstruct the same result throughout CD14 retention. [C1.5, C2.2] |
 | CINV8 | Every finding names at least one handle and its rule id; every recognised structure carries an evidence tier; nothing below `exact` is listed among facts. [C1.6, C4.1] |
 | CINV9 | For arbitrary label, designator and value text, the line form parses back to the same records, and no text can produce a line that is not its own record. [C1.5] |
 | CINV10 | No output depends on hash-map iteration order: enforced by the crate's `clippy.toml` and checked by CINV3. [C1.2] |
-| CINV11 | No `context` response exceeds the CB11 ceiling, and no default response exceeds the default. [C2.1] |
+| CINV11 | Fully serialized channels, including envelopes, escaped fragments and errors, stay within CB11 and the effective CK10 budget for context and opted-in edits. [C2.1, C2.2, C2.3] |
 | CINV12 | After every `apply`, `undo` and `redo`, `net_delta` applied to the previous logical partition of pins, wires and labels, with `NetId`s remapped through `renumbered`, reproduces the partition and the `NetId`s `Doc` reports; `modified` lists exactly the items whose stored fields changed; `!net_delta.is_empty() ⇒ nets_changed`. [C1.1] |
-| CINV13 | An alias that matches more than one entity is refused with `ambiguous_handle` and the sorted candidates; it is never bound to one of them. [C1.5] |
+| CINV13 | An alias that matches more than one entity is refused with `ambiguous_handle` with the exact count and the bounded sorted prefix from CK13, even if no complete handle fits. [C1.5] |
 | CINV14 | `Circuit::bindings` answers only when the circuit's revision equals the document's, and carries that revision. Every pin of every live part appears exactly once, on the net connectivity reports for it; the ground evidence is exactly the declared set of CK4 and is unchanged by any name or topology heuristic; the result equals the one a fresh `Circuit::build` gives, and is identical across insertion orders after the id mapping (CINV3). [C1.9] |
 
 ## 8. Scenarios
@@ -591,6 +616,7 @@ Each is a test with the required result. Agent transcripts live beside the A1 on
 | --- | --- | --- |
 | CTC-key-01 | Resistors R1 (`part:0`) and R2 (`part:1`); one wire from R1 pin 2 to R2 pin 1; no labels. Delete the wire | Before: the joined net has anchor R1.2, key `net:pin:0.1`, name `N(R1.2)` (R1.1 and R2.2 are single-pin nets, unchanged throughout). After: the joined net becomes `N(R1.2)` (key unchanged) and `N(R2.1)` (key `net:pin:1.0`); `since` shows `E move R2.1 N(R1.2) -> N(R2.1)`: only one member left, so CD6 rule 4 applies, not a split |
 | CTC-key-06 | R1.2, R2.1 and R3.1 on one unlabelled net (wire R1.2 to R2.1, wire R2.1 to R3.1); delete the first wire | The original key `net:pin:0.1` survives on R1.2; R2.1 and R3.1 form `N(R2.1)`; `since` shows `E split N(R1.2) -> N(R1.2) N(R2.1)` |
+| CTC-key-07 | Move two pins from a net to another existing net while no member stays on the original key and a single member goes to a third key | Each transferred pin is a move. Compare with CTC-key-06, where stationary membership on the original key qualifies the split. Check both classifications again with later edits beyond the queried endpoint. |
 | CTC-key-02 | Net labelled `VCC`; move an unrelated part | Key `net:"VCC"` unchanged; `since` empty |
 | CTC-key-03 | Build the CTC-key-01 sheet with R2 inserted before R1 | Name `N(R1.2)` in both; views identical after the id mapping (CINV3) |
 | CTC-key-05 | Two parts both designated `R3` on one unlabelled net through pin 1; move them so their pin positions swap, membership unchanged; then undo | The anchor follows the pin with the lower position; key and name change as CK1 says; incremental equals rebuild after the move and after the undo |
@@ -612,15 +638,18 @@ Each is a test with the required result. Agent transcripts live beside the A1 on
 | CTC-order-01 | Two parts both `R3`, values `1k` and `2k`, built in both insertion orders | Identical outline bytes: the `1k` line first in both (CINV3) |
 | CTC-view-01 | `focus R3` on `10k` | One call; ≤ 1 KB; each pin's net and that net's other members (hubs as count and handle) |
 | CTC-view-02 | `outline` of `10k` at the default budget, then follow every cursor | Pages concatenate to the unbudgeted outline (CINV7); each page ≤ CB11 |
-| CTC-view-03 | `net` on a 400-pin hub at a 4,096-byte budget, following every cursor; then an edit between two pages; then a part with a 5,000-byte value, in both formats | Pages reconstruct all 400 members; the cursor after the edit is refused with `stale_cursor`; the value shows 256 bytes plus a `text` handle whose pages return all 5,000 bytes; JSON fragments concatenate to the unbudgeted row |
+| CTC-view-03 | `net` on a 400-pin hub at a 4,096-byte budget, following every cursor; then an edit between two pages; then a part with a 5,000-byte value, in both formats | Pages reconstruct all 400 members; the cursor after the edit is refused with `stale_cursor`; the value shows up to 256 bytes plus a `text` handle whose pages return all 5,000 bytes; JSON fragments concatenate to the unbudgeted row |
 | CTC-view-04 | 8 views at a 4,096-byte budget | Views whose share is below 2,048 bytes return one elision line each with a cursor that runs them alone; following them reconstructs every view |
+| CTC-view-05 | Page values made of control characters, quotes, backslashes and non-ASCII scalars, including strings below the raw-length cutoff | Each fully encoded channel fits, cursors advance, and reassembly recovers the exact strings in both formats. |
 | CTC-hub-01 | A ground part and a label `GND` on a 400-pin net; `focus` on a part tied to it | `GND (400 pins)` and the typed handle `net:"GND"`; no inline member list; `{"net": {"name": "net:\"GND\""}}` pages the members |
 | CTC-handle-01 | Two parts both designated `R3`, and a label with text `R3` | `focus R3` is refused with `ambiguous_handle` listing `net:"R3"`, `part:<a>` and `part:<b>`, sorted by handle text; `focus part:<a>` succeeds |
+| CTC-handle-02 | Resolve a duplicate alias with thousands of matches, including typed keys too large to fit after JSON escaping | The error includes the exact total and only the fitting sorted prefix, possibly empty. Both channels fit even at the minimum budget. |
 | CTC-inj-01 | Label text containing a newline, `|`, `.`, `:`, quotes, non-ASCII and an instruction-like sentence; a designator `A.B` with pin `C` and a designator `A` with pin name `B.C` | Each is one quoted, escaped token; `"A.B".C` and `A."B.C"` stay distinct; everything parses back to the same text (CINV9) |
 | CTC-rec-01 | Two resistors in series from a declared rail to ground, tap to an op-amp input | Divider at `exact`, ratio at `derived`, citing both resistors and three nets |
 | CTC-rec-02 | Eight RC channels, one with a different resistor value | One `same topology` group of 8; `identical` group of 7; the odd channel named with its differing value |
 | CTC-mcp-01 | `omnia_context` with `outline` and `findings` over MCP, in both formats, plus one request that fails with each CK12 error, in all three AK1 revisions | Exact transcripts; for `lines`, the `structuredContent.result.views[*].lines` joined equal the text block; results validate against the `outputSchema`; errors carry the 9.4 envelope; each channel's serialized length is within CB11 (CD10) |
 | CTC-apply-01 | From one starting revision on two forks: `preview` then `apply` with `circuit: {}` a wire joining R1.2 to `VCC`; and the same `apply` without `circuit`; then a no-op; then an idempotent replay | Preview and apply `circuit` fields are byte-identical and hold `E move R1.2 N(R1.2) -> VCC`; the request without `circuit` returns exactly today's bytes; the no-op gives an empty view; the replay returns the stored bytes |
+| CTC-apply-02 | Page a large escaped preview delta before apply, apply the same operations and options, perform another edit, then replay by idempotency key and request status | Preview and apply have identical circuit bytes, including cursors. All paths page the same frozen delta and text. Check both formats, fully encoded outer envelopes, and expiry after retention ends. |
 
 ## 9. Views
 
@@ -922,7 +951,7 @@ Each has a default. Build to the default; the owner's dated answer replaces it h
 | --- | --- | --- |
 | CQ1 | Persist net keys in the document, so unlabelled nets keep their key when their anchor pin leaves? | No: anchor rule (CK1), derived. Revisit with churn numbers from C1.4. |
 | CQ2 | Ask the parts plan to extend PD5's roles (separate power input and power output, open collector and emitter, tri-state, free, unspecified)? Without a power-source role, `power.undriven` cannot be checked. | Build to PD5's seven roles plus engine-only `unspecified`; `power.undriven` stays off; the owner raises it against the parts plan. XD5 (2026-11-23) keeps this default; symbol class (sim S1.1) is a separate type and does not answer it. |
-| CQ3 | For `omnia_context`, put the compact lines in both result channels instead of a JSON text copy (CD10)? | Yes, for this tool only. |
+| CQ3 | For `omnia_context`, put the compact lines in both result channels instead of a JSON text copy (CD10)? | Yes, for successful lines responses from this tool only. |
 | CQ4 | Retire or alias `omnia_inspect`, `omnia_query` and `omnia_nets` once `omnia_context` exists? | Keep them as built; decide after the HC3 run. |
 | CQ5 | Line syntax: `1:VCC` or `1->VCC`; designators or ids as handles? | ASCII `:`; designators and net names as handles, ids accepted in arguments. |
 | CQ6 | Byte budgets 12 KB default, 32 KB ceiling? | Yes; re-set from C2.4's token measurement. |
@@ -995,19 +1024,21 @@ as a hint to check, not a fact.
 
 ### 16.2 Software documentation, source code and reports
 
-Cited only as evidence for the claim named; no product is endorsed or depended on.
+The source labels describe the cited features. Ref25–Ref26 and Ref29–Ref33 retain
+product-identifying destinations for traceability. The owner decides at HC1 whether those
+links may remain under AGENTS.md hard rule 1.
 
 | Id | Source | Supports |
 | --- | --- | --- |
 | Ref22 | Query-based incremental computation library book, "The red-green algorithm". <https://salsa-rs.github.io/salsa/reference/algorithm.html> | CD1: revision stamps, backdating, durability |
 | Ref23 | Rust compiler development guide, incremental compilation. <https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation.html> | CD1: early cutoff by result fingerprints |
 | Ref24 | Differential dataflow README. <https://github.com/TimelyDataflow/differential-dataflow> | CD1: changes as signed records |
-| Ref25 | Open-source schematic editor manual, version 9, and its connection-graph source. <https://docs.kicad.org/9.0/en/eeschema/eeschema.html>, <https://gitlab.com/kicad/code/kicad/-/raw/master/eeschema/connection_graph.cpp> | CK2: label priority and ties |
-| Ref26 | The same editor's SPICE netlist exporter source. <https://gitlab.com/kicad/code/kicad/-/raw/master/eeschema/netlist_exporters/netlist_exporter_spice.cpp> | CD13: only some names map to node `0` |
+| Ref25 | Schematic label precedence. [Source](https://docs.kicad.org/9.0/en/eeschema/eeschema.html), [Source](https://gitlab.com/kicad/code/kicad/-/raw/master/eeschema/connection_graph.cpp) | CK2: label priority and ties |
+| Ref26 | Ground mapping during export. [Source](https://gitlab.com/kicad/code/kicad/-/raw/master/eeschema/netlist_exporters/netlist_exporter_spice.cpp) | CD13: only some names map to node `0` |
 | Ref27 | Open-source graph library, Weisfeiler-Lehman hash source and notes. <https://networkx.org/documentation/stable/_modules/networkx/algorithms/graph_hashing.html> | CD12: hash values changed between versions |
 | Ref28 | Open-source network analysis library, Leiden clustering reference. <https://search.r-project.org/CRAN/refmans/igraph/html/cluster_leiden.html> | CD12: reproducible only with a fixed seed |
-| Ref29 | AI lab engineering article, "Writing effective tools for agents". <https://www.anthropic.com/engineering/writing-tools-for-agents> | CD8, CD9: consolidated tools, concise responses, meaningful names |
-| Ref30 | AI lab engineering article, "Advanced tool use". <https://www.anthropic.com/engineering/advanced-tool-use> | CD9: input examples raised complex-parameter accuracy from 72% to 90% |
-| Ref31 | A coding agent's MCP documentation: tool-output warning at 10,000 tokens and default cap at 25,000. <https://code.claude.com/docs/en/mcp> | CB11 |
-| Ref32 | *(user report)* Issue: text block dropped when `structuredContent` is present. <https://claudeissues.com/issue/79944-mcp-tool-response-text-content-block-dropped-when-structuredcontent-is-also-pres> | CD10 |
-| Ref33 | *(user report)* Editor forum: results with only `structuredContent` silently dropped. <https://forum.cursor.com/t/mcp-tool-results-containing-only-structuredcontent-are-silently-dropped/167346> | CD10 |
+| Ref29 | Consolidated tool design. [Source](https://www.anthropic.com/engineering/writing-tools-for-agents) | CD8, CD9: consolidated tools, concise responses, meaningful names |
+| Ref30 | Tool input examples. [Source](https://www.anthropic.com/engineering/advanced-tool-use) | CD9: input examples raised complex-parameter accuracy from 72% to 90% |
+| Ref31 | Tool-output size guidance. [Source](https://code.claude.com/docs/en/mcp) | CB11 |
+| Ref32 | Text-channel delivery report. [Source](https://claudeissues.com/issue/79944-mcp-tool-response-text-content-block-dropped-when-structuredcontent-is-also-pres) | CD10 |
+| Ref33 | Structured-channel delivery report. [Source](https://forum.cursor.com/t/mcp-tool-results-containing-only-structuredcontent-are-silently-dropped/167346) | CD10 |
