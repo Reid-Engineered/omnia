@@ -92,6 +92,9 @@ impl Policy {
     }
 
     /// A policy with explicit decisions for tiers 1, 2 and 3. Tier 0 is always allowed.
+    ///
+    /// Note: tier 1 (`Edit`) approval enforcement for `apply`/`undo`/`redo` is wired in app mode
+    /// (A4); A1 headless enforces tiers 2 and 3 on `save` and dirty `close`.
     pub fn custom(
         roots: Roots,
         tier1: TierDecision,
@@ -242,16 +245,18 @@ pub struct ApprovalStore {
 impl ApprovalStore {
     /// Checks `effect` against `policy` and an optional echoed `approval` (AD7, AINV9).
     ///
-    /// Returns `Ok(())` when allowed or when `echo` matches and consumes a pending challenge.
-    pub fn check(
+    /// Returns `Ok(Some(approval_id))` when `echo` matched a pending challenge (call
+    /// [`Self::consume`] once the guarded operation succeeds so retryable I/O errors do not
+    /// burn the grant), or `Ok(None)` when `policy` allows the tier unconditionally.
+    pub fn verify(
         &mut self,
         policy: &Policy,
         effect: &GuardedEffect,
         echo: Option<&ApprovalEcho>,
-    ) -> Result<(), AgentError> {
+    ) -> Result<Option<String>, AgentError> {
         let tier = effect.tier();
         match policy.decision(tier) {
-            TierDecision::Allow => Ok(()),
+            TierDecision::Allow => Ok(None),
             TierDecision::Deny => Err(AgentError::new(ErrorKind::ApprovalDenied)),
             TierDecision::RequireEcho => {
                 let kind = effect.kind();
@@ -262,8 +267,7 @@ impl ApprovalStore {
                     && entry.digest == digest
                     && echo.effect_digest == digest
                 {
-                    self.pending.remove(&echo.approval_id);
-                    return Ok(());
+                    return Ok(Some(echo.approval_id.clone()));
                 }
                 let approval_id = self.issue(kind, &digest);
                 Err(AgentError::new(ErrorKind::ApprovalRequired {
@@ -274,6 +278,44 @@ impl ApprovalStore {
                 }))
             }
         }
+    }
+
+    /// Issues an `approval_required` error for `effect` (or `approval_denied` if `policy` denies
+    /// its tier), used when a prerequisite flag such as `discard_unsaved` is absent.
+    pub fn require(&mut self, policy: &Policy, effect: &GuardedEffect) -> AgentError {
+        let tier = effect.tier();
+        if policy.decision(tier) == TierDecision::Deny {
+            return AgentError::new(ErrorKind::ApprovalDenied);
+        }
+        let kind = effect.kind();
+        let digest = effect.digest();
+        let approval_id = self.issue(kind, &digest);
+        AgentError::new(ErrorKind::ApprovalRequired {
+            approval_id,
+            tier: tier.as_u8(),
+            effect: kind,
+            effect_digest: digest,
+        })
+    }
+
+    /// Consumes a grant returned by [`Self::verify`] after the guarded operation succeeds.
+    pub fn consume(&mut self, grant: Option<String>) {
+        if let Some(id) = grant {
+            self.pending.remove(&id);
+        }
+    }
+
+    /// Checks and immediately consumes `effect` (convenience wrapper over [`Self::verify`] and
+    /// [`Self::consume`]).
+    pub fn check(
+        &mut self,
+        policy: &Policy,
+        effect: &GuardedEffect,
+        echo: Option<&ApprovalEcho>,
+    ) -> Result<(), AgentError> {
+        let grant = self.verify(policy, effect, echo)?;
+        self.consume(grant);
+        Ok(())
     }
 
     /// Returns the existing `approval_id` for `(effect, digest)`, or issues a fresh one.

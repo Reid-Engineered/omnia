@@ -66,14 +66,14 @@ impl Roots {
                     "configured root path is not a directory",
                 ));
             }
-            out.push(canon);
+            if !out.contains(&canon) {
+                out.push(canon);
+            }
         }
-        out.sort();
-        out.dedup();
         Ok(Self { dirs: out })
     }
 
-    /// The canonicalised root directories, sorted and deduplicated.
+    /// The canonicalised root directories, in configured order (deduplicated).
     pub fn as_slice(&self) -> &[PathBuf] {
         &self.dirs
     }
@@ -94,7 +94,7 @@ impl Roots {
     /// root is refused immediately with `path_outside_root`. Missing files that stay inside a
     /// root fail with `io_error` rather than `path_outside_root`.
     pub fn resolve_read(&self, raw: &str) -> Result<PathBuf, AgentError> {
-        let parsed = parse_user_path(raw)?;
+        let parsed = parse_user_path(raw, &self.dirs)?;
         if self.dirs.is_empty() {
             return Err(outside());
         }
@@ -129,7 +129,7 @@ impl Roots {
     /// any symlink along the path or at the target that escapes the roots (or is dangling) is
     /// refused with `path_outside_root`.
     pub fn resolve_write(&self, raw: &str) -> Result<WriteTarget, AgentError> {
-        let parsed = parse_user_path(raw)?;
+        let parsed = parse_user_path(raw, &self.dirs)?;
         if self.dirs.is_empty() {
             return Err(outside());
         }
@@ -355,54 +355,54 @@ fn outside() -> AgentError {
     AgentError::new(ErrorKind::PathOutsideRoot)
 }
 
-/// Parses and lexically screens `raw` in both Windows and POSIX path forms (`AINV12`).
+/// Parses and lexically screens `raw` in both Windows and POSIX path forms (`AINV12`), before any
+/// filesystem or network call is issued.
 ///
 /// Rejects:
 /// - empty strings and NUL bytes;
 /// - any `..` segment across either `/` or `\` separators;
 /// - cross-platform absolute / prefixed forms that cannot reside inside a root on this host
-///   (e.g. `C:\...`, `C:rel`, `\\server\share` on POSIX; rooted `/foo` or `\\?\...` outside roots
-///   on Windows);
-/// - colons inside relative path segments (blocks Windows alternate data streams and
-///   drive-relative paths like `C:foo.ron` on both OSes).
-fn parse_user_path(raw: &str) -> Result<ParsedPath, AgentError> {
+///   (e.g. `C:\...`, `C:rel`, `\\server\share` on POSIX; rooted `/foo` on Windows);
+/// - Windows UNC, device (`\\.\...`), and verbatim (`\\?\...`) prefixes unless `raw` lexically
+///   starts with one of the configured `roots` (so arbitrary UNC paths like `\\attacker\share`
+///   never trigger SMB/NTLM connections or device probes);
+/// - colons inside path segments beyond a valid Windows drive prefix (blocks Windows alternate
+///   data streams and drive-relative paths like `C:foo.ron` on both OSes).
+fn parse_user_path(raw: &str, roots: &[PathBuf]) -> Result<ParsedPath, AgentError> {
     if raw.is_empty() || raw.contains('\0') {
         return Err(outside());
     }
 
-    // Detect UNC / extended-length device prefixes (`\\...` or `//...`) in both OS forms.
     let starts_double_slash = raw.starts_with("\\\\") || raw.starts_with("//");
-    // Detect Windows drive prefix (`X:` where X is an ASCII letter).
     let bytes = raw.as_bytes();
     let has_drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
 
-    // Check every lexical segment split on BOTH `/` and `\` for `..`.
-    let tail_after_prefix = if has_drive {
-        &raw[2..]
-    } else if starts_double_slash {
-        raw.trim_start_matches(['\\', '/'])
-    } else {
-        raw
-    };
-    for seg in tail_after_prefix.split(['/', '\\']) {
-        if seg == ".." {
+    // Strip any valid Windows verbatim prefix (`\\?\C:` or `\\?\UNC\`) before scanning segments
+    // for `..` and colons, while refusing all unconfigured UNC/device/verbatim prefixes up front.
+    if starts_double_slash {
+        if !cfg!(windows) {
             return Err(outside());
         }
-        // Reject colons inside segments (Windows alternate data streams / drive-relative tricks).
-        if seg.contains(':') {
+        // On Windows, refuse every leading `\\` or `//` (UNC, `\\.\` device, `\\?\` verbatim)
+        // unless it lexically matches a configured root's canonical or display prefix, so no
+        // filesystem or SMB network call is ever made for an outside UNC/device path.
+        let rest = match_windows_prefixed_root(raw, roots).ok_or_else(outside)?;
+        for seg in rest.split(['/', '\\']) {
+            if seg == ".." || seg.contains(':') {
+                return Err(outside());
+            }
+        }
+        return Ok(ParsedPath::Absolute(PathBuf::from(raw)));
+    }
+
+    let tail_after_prefix = if has_drive { &raw[2..] } else { raw };
+    for seg in tail_after_prefix.split(['/', '\\']) {
+        if seg == ".." || seg.contains(':') {
             return Err(outside());
         }
     }
 
     if cfg!(windows) {
-        if starts_double_slash {
-            // Allow `\\?\...` or UNC only if Windows considers it absolute and it later resolves
-            // inside a configured root; reject bare `\\` or `//`.
-            if tail_after_prefix.is_empty() {
-                return Err(outside());
-            }
-            return Ok(ParsedPath::Absolute(PathBuf::from(raw)));
-        }
         if has_drive {
             // `C:foo` (drive-relative, no separator after `:`) is ambiguous and refused.
             let rest = &raw[2..];
@@ -416,8 +416,8 @@ fn parse_user_path(raw: &str) -> Result<ParsedPath, AgentError> {
             return Err(outside());
         }
     } else {
-        // On POSIX, Windows drive letters and UNC prefixes are never valid inside a POSIX root.
-        if has_drive || starts_double_slash {
+        // On POSIX, Windows drive letters are never valid inside a POSIX root.
+        if has_drive {
             return Err(outside());
         }
         if raw.starts_with('/') {
@@ -443,6 +443,49 @@ fn parse_user_path(raw: &str) -> Result<ParsedPath, AgentError> {
         return Err(outside());
     }
     Ok(ParsedPath::Relative(rel))
+}
+
+/// Checks whether a Windows `\\...` or `//...` raw path lexically starts with one of the
+/// configured roots (matching either canonical `\\?\...` or display `\\server\share...`),
+/// returning the remaining tail after the root prefix if matched.
+fn match_windows_prefixed_root<'a>(raw: &'a str, roots: &[PathBuf]) -> Option<&'a str> {
+    let norm_raw: String = raw
+        .chars()
+        .map(|c| {
+            if c == '/' {
+                '\\'
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect();
+    for root in roots {
+        let canon = root.to_string_lossy();
+        let display = display_path(root);
+        for prefix in [canon.as_ref(), display.as_str()] {
+            if !prefix.starts_with("\\\\") {
+                continue;
+            }
+            let norm_prefix: String = prefix
+                .chars()
+                .map(|c| {
+                    if c == '/' {
+                        '\\'
+                    } else {
+                        c.to_ascii_lowercase()
+                    }
+                })
+                .collect();
+            let trimmed = norm_prefix.trim_end_matches('\\');
+            if norm_raw.starts_with(trimmed) {
+                let tail = &raw[trimmed.len()..];
+                if tail.is_empty() || tail.starts_with('\\') || tail.starts_with('/') {
+                    return Some(tail);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Formats a canonical path for wire responses, stripping Windows' `\\?\` verbatim prefix when
@@ -507,12 +550,20 @@ fn map_load_error(err: io::Error) -> AgentError {
     )
 }
 
-/// Serialises `doc` as RON v2 and writes it atomically to `target` via a sibling temporary file.
+/// Serialises `doc` as RON v2 and writes it atomically to `target` via a sibling temporary file,
+/// enforcing [`MAX_FILE_BYTES`] (AK2) so every saved file can be reopened within the limit.
 pub fn save_doc(doc: &Doc, target: &Path) -> Result<(), AgentError> {
     let mut bytes = Vec::new();
     doc.save(&mut bytes).map_err(|_| {
         AgentError::with_message(ErrorKind::IoError, "the document could not be serialised")
     })?;
+    let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if len > MAX_FILE_BYTES {
+        return Err(AgentError::new(ErrorKind::LimitExceeded {
+            limit: Limit::FileBytes,
+            value: len,
+        }));
+    }
     write_staged_with(target, |file| file.write_all(&bytes))
 }
 
@@ -946,6 +997,48 @@ mod tests {
             let resolved = roots.resolve_read("inner_link/b.ron").unwrap();
             assert_eq!(resolved, cb);
         }
+
+        // Configured root order is preserved (not lexicographically re-sorted): passing root_b
+        // first resolves relative writes under root_b.
+        let reversed = Roots::new([&root_b, &root_a]).unwrap();
+        let target_b = reversed.resolve_write("new.ron").unwrap();
+        assert!(target_b.path.starts_with(&reversed.as_slice()[0]));
+        assert!(
+            target_b
+                .path
+                .starts_with(fs::canonicalize(&root_b).unwrap())
+        );
+    }
+
+    #[test]
+    fn windows_unc_and_device_paths_are_refused_lexically_without_probing() {
+        let base = TempDir::new("unc-no-probe");
+        let roots = Roots::new([base.path()]).unwrap();
+        let started = std::time::Instant::now();
+        for bad in [
+            r"\\192.0.2.1\share\x.ron",
+            r"\\.\pipe\omnia-nonexistent",
+            r"\\?\C:\Windows\win.ini",
+            r"\\?\UNC\192.0.2.1\share\x.ron",
+            "//192.0.2.1/share/x.ron",
+        ] {
+            assert_eq!(
+                roots.resolve_read(bad).unwrap_err().code(),
+                ErrorCode::PathOutsideRoot,
+                "read {bad}"
+            );
+            assert_eq!(
+                roots.resolve_write(bad).unwrap_err().code(),
+                ErrorCode::PathOutsideRoot,
+                "write {bad}"
+            );
+        }
+        // Lexical rejection must never wait on SMB/network timeouts.
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "UNC/device refusal took {:?}, suggesting a network/device probe",
+            started.elapsed()
+        );
     }
 
     #[test]

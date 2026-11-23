@@ -592,30 +592,36 @@ Rule-1 scan of the changed files done. Nothing measured.
 
 2026-11-23 A1.6 done — new `crates/omnia-agent/src/{files.rs, approval.rs}`, wired into
 `service.rs` and re-exported from `lib.rs` (no new dependencies; INV12/AINV8 xtask test passes).
-`files.rs`: `Roots` canonicalises configured root directories (`Roots::empty` refuses every path);
-lexical screening rejects empty paths, NUL bytes, `..` in both POSIX `/` and Windows `\` forms,
-colons/ADS/drive-relative paths, and foreign absolute or UNC prefixes; top-down ancestor checks
+`files.rs`: `Roots` canonicalises configured root directories in configured order (`Roots::empty`
+refuses every path); lexical screening runs before any filesystem or network call and rejects
+empty paths, NUL bytes, `..` in both POSIX `/` and Windows `\` forms, colons in non-prefix
+segments (blocking ADS/drive-relative paths), and foreign absolute, UNC, device (`\\.\`), or
+verbatim (`\\?\`) prefixes unless matching a configured root; top-down ancestor checks
 canonicalise every existing directory inside roots so symlinks, Windows NTFS junctions, and
-dangling links that escape roots all return `path_outside_root` without leaking filesystem
-existence. `open_doc` enforces `MAX_FILE_BYTES` (AK2) before and during reading, maps unsupported
-RON versions to `unsupported_file_version`, and maps corrupt files to `io_error` without echoing
-file text (AD14). `save_doc` / `write_staged_with` serialises in memory, writes a unique sibling
-`.omnia-save-<pid>-<seq>.tmp` file, syncs, and renames over the target, cleaning up the temp file
-on failure so existing files remain untouched. `approval.rs`: `Tier`, `TierDecision`, `Policy`
-(`Policy::headless` implements AQ4; `Policy::custom` supports explicit decisions including
-`Deny`), `GuardedEffect` with 64-bit FxHash digests (`ed-<16 hex>`, AQ10) bound to effect kind,
-`doc_id`, `revision`, and canonical path / `preview_id`, and per-session `ApprovalStore` (one-shot
-`ap-<n>` challenges, reusing the active id for repeated unapproved calls so AINV5 holds).
-`service.rs`: `AgentService::new(host, policy)` / `headless_with_roots(roots)`, `open`, `save`,
-and dirty `close` (requiring both `discard_unsaved: true` and matching tier-3 approval), with
-`DocEntry` tracking canonical path and `saved_revision`. Updated `mcp-plan.md` sections 11.4a,
-12.1 and 14 (Rule 19). Tests (`omnia-agent` lib now 111 passing): 128-case AINV12 proptest over
-POSIX and Windows traversal/absolute/UNC/drive-relative/ADS/NUL and symlink/NTFS-junction escape
-paths; AINV9 tests for file overwrite and dirty close (including revision invalidation, one-shot
-consumption, and `Deny` policy); ATC-save-01 (tier-2 new file, tier-3 overwrite challenge + echo +
-idempotent replay, clean close, reopen + inspect); ATC-path-01 at both `Roots` and service levels;
-half-way staged-write failure keeping original bytes and cleaning temp files; AK2 size and version
-checks; multi-root resolution. Checks run locally and passing on Windows: `cargo fmt --all
---check`; workspace clippy `-D warnings`; `omnia-bench` clippy with `scene-counts,readback` `-D
-warnings`; `cargo test -p omnia-agent -p omnia-doc -p omnia-symbols -p xtask`; `cargo deny check`.
-Full `cargo test --workspace` left to CI. Rule-1 scan done. Nothing measured.
+dangling links that escape roots all return `path_outside_root` without probing outside targets
+or leaking filesystem existence. `open_doc` enforces `MAX_FILE_BYTES` (AK2) before and during
+reading, maps unsupported RON versions to `unsupported_file_version`, and maps corrupt files to
+`io_error` without echoing file text (AD14). `save_doc` / `write_staged_with` serialises in
+memory, enforces `MAX_FILE_BYTES` (AK2), writes a unique sibling `.omnia-save-<pid>-<seq>.tmp`
+file, syncs, and renames over the target, cleaning up the temp file on failure so existing files
+remain untouched. `approval.rs`: `Tier`, `TierDecision`, `Policy` (`Policy::headless` implements
+AQ4; `Policy::custom` supports explicit decisions including `Deny`), `GuardedEffect` with 64-bit
+FxHash digests (`ed-<16 hex>`, AQ10) bound to effect kind, `doc_id`, `revision`, and canonical
+path / `preview_id`, and per-session `ApprovalStore` (one-shot `ap-<n>` challenges, reusing the
+active id for repeated unapproved calls so AINV5 holds, and consuming a grant only after the
+guarded operation succeeds). `service.rs`: `AgentService::new(host, policy)` /
+`headless_with_roots(roots)`, `open`, `save`, and dirty `close` (always requiring
+`discard_unsaved: true` regardless of policy, plus matching tier-3 approval), with `DocEntry`
+tracking canonical path and `saved_revision`. Updated `mcp-plan.md` sections 11.4a, 12.1 and 14
+(Rule 19). Tests (`omnia-agent` lib now 113 passing): 128-case AINV12 proptest over POSIX and
+Windows traversal/absolute/UNC/drive-relative/ADS/NUL and symlink/NTFS-junction escape paths;
+lexical UNC/device no-probe timing test; AINV9 tests for file overwrite and dirty close
+(including `Allow` without `discard_unsaved`, `Deny` on save, revision invalidation, and
+one-shot consumption); ATC-save-01 (tier-2 new file, tier-3 overwrite challenge + echo +
+idempotent replay, clean close, reopen + inspect); ATC-path-01 at both `Roots` and service
+levels; half-way staged-write failure keeping original bytes and cleaning temp files; AK2 size
+and version checks; multi-root configured-order resolution. Checks run locally and passing on
+Windows: `cargo fmt --all --check`; workspace clippy `-D warnings`; `omnia-bench` clippy with
+`scene-counts,readback` `-D warnings`; `cargo test -p omnia-agent -p omnia-doc -p omnia-symbols
+-p xtask`; `cargo deny check`. Full `cargo test --workspace` left to CI. Rule-1 scan done.
+Nothing measured.

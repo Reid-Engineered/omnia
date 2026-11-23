@@ -786,28 +786,41 @@ Added at A1.5 (2026-11-22: `src/service.rs`, `src/host.rs`, `src/ops.rs`, `src/p
 
 As built at A1.6 (`src/files.rs`, `src/approval.rs`, `src/service.rs`, 2026-11-23):
 
-- `Roots` canonicalises every configured root directory up front (must exist and be a
-  directory; `Roots::empty()` refuses every path with `path_outside_root`).
-- Path screening runs lexically across both POSIX (`/`) and Windows (`\`) forms (rejecting
-  empty paths, NUL bytes, any `..` segment, colons in relative segments / drive-relative / ADS,
-  and foreign absolute or UNC prefixes), then walks ancestors top-down with `symlink_metadata`
-  and `canonicalize` so escaping or dangling symlinks and non-existent paths outside roots all
-  answer `path_outside_root` without leaking filesystem existence.
-- Relative `open` paths search configured roots in order (refusing an escaping symlink under
-  any root immediately); relative `save` paths resolve under the first root. Display paths
-  returned on the wire strip Windows' `\\?\` verbatim prefix so they round-trip cleanly.
+- `Roots` canonicalises every configured root directory up front in configured order
+  (deduplicated; must exist and be a directory; `Roots::empty()` refuses every path with
+  `path_outside_root`).
+- Path screening runs lexically across both POSIX (`/`) and Windows (`\`) forms before any
+  filesystem or network call (rejecting empty paths, NUL bytes, any `..` segment, colons in
+  non-prefix path segments — conservative on POSIX as well as blocking Windows ADS and
+  drive-relative paths — and foreign absolute, UNC, device `\\.\`, or verbatim `\\?\` prefixes
+  unless a Windows prefixed path lexically starts with a configured root). Ancestors are then
+  walked top-down with `symlink_metadata` and `canonicalize` so escaping or dangling symlinks,
+  Windows NTFS junctions, and non-existent paths outside roots all answer `path_outside_root`
+  without probing outside targets or leaking filesystem existence. Under the local same-user
+  threat model, a narrow TOCTOU window remains between validation and `open`/`rename`; stored
+  document paths are re-validated before every `save`.
+- Relative `open` paths search configured roots in configured order (refusing an escaping link
+  under any root immediately); relative `save` paths resolve under the first configured root.
+  Display paths returned on the wire strip Windows' `\\?\` verbatim prefix so they round-trip
+  cleanly.
 - `open` enforces `MAX_FILE_BYTES` (AK2) from file metadata and via a bounded `Read::take`,
-  maps version mismatches from `Doc::load` to `unsupported_file_version`, and maps corrupt
-  files to `io_error` without echoing file text (AD14).
-- `save` serialises in memory, writes to a unique sibling `.omnia-save-<pid>-<seq>.tmp` file,
-  calls `sync_all`, and renames over the target, removing the temporary file on any failure so
-  an existing file stays untouched.
+  maps `Doc::load`'s version mismatch to `unsupported_file_version` (note: because `Sheet` uses
+  `deny_unknown_fields`, a future version with new fields currently surfaces as `io_error`
+  until `omnia-doc` adds a typed version error), and maps corrupt files to `io_error` without
+  echoing file text (AD14).
+- `save` serialises in memory, enforces `MAX_FILE_BYTES` (AK2) so every saved file can be
+  reopened, writes to a unique sibling `.omnia-save-<pid>-<seq>.tmp` file, calls `sync_all`,
+  and renames over the target, removing the temporary file on any failure so an existing file
+  stays untouched.
 - `Policy::headless(roots)` implements AQ4 (tiers 0–2 allowed; tier 3 requires an echoed
-  `ApprovalEcho`). Effect digests are 64-bit FxHashes (`ed-<16 hex>`, AQ10) of a domain tag,
-  effect kind, `doc_id`, `revision`, and target (canonical path or `preview_id`). Pending
-  challenges live per session (`ap-<n>`, capped at 64): repeating an unapproved request returns
-  the same `approval_id` (AINV5); a matching echo consumes the challenge once (AINV9).
-  `Policy::custom` allows explicit tier decisions (`Allow`, `RequireEcho`, `Deny`).
+  `ApprovalEcho`; tier 1 enforcement on `apply`/`undo`/`redo` is wired in app mode in A4).
+  Effect digests are 64-bit FxHashes (`ed-<16 hex>`, AQ10) of a domain tag, effect kind,
+  `doc_id`, `revision`, and target (canonical path or `preview_id`). Pending challenges live
+  per session (`ap-<n>`, capped at 64): repeating an unapproved request returns the same
+  `approval_id` (AINV5); a matching echo is consumed only after the guarded operation succeeds
+  so a retryable `io_error` does not burn the grant (AINV9). Closing a dirty document always
+  requires `discard_unsaved: true` regardless of policy. `Policy::custom` allows explicit tier
+  decisions (`Allow`, `RequireEcho`, `Deny`).
 
 ### 12.2 App-hosted channel (A4)
 

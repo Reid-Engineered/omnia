@@ -603,14 +603,16 @@ impl<H: DocHost> AgentService<H> {
             }
         };
         let policy = &self.policy;
-        self.sessions
+        let grant = self
+            .sessions
             .get_mut(&session)
             .expect("handle checked the session")
             .approvals
-            .check(policy, &effect, a.approval.as_ref())?;
+            .verify(policy, &effect, a.approval.as_ref())?;
         files::save_doc(self.host.doc(t.handle)?, &target.path)?;
-        let entry = self
-            .session_mut(session)
+        let s = self.session_mut(session);
+        s.approvals.consume(grant);
+        let entry = s
             .docs
             .get_mut(&t.doc_id)
             .expect("target checked the document");
@@ -635,28 +637,29 @@ impl<H: DocHost> AgentService<H> {
             .ok_or_else(|| AgentError::new(ErrorKind::DocumentNotFound))?
             .saved_revision;
         let dirty = t.revision != saved_revision;
+        let mut grant = None;
         if dirty {
-            // Discarding unsaved changes is tier 3 (AD7, AINV9). Both `discard_unsaved: true`
-            // and a matching approval are required; without `discard_unsaved`, no echo is
-            // accepted so the caller must explicitly opt in on retry.
+            // Discarding unsaved changes is tier 3 (AD7, AINV9). `discard_unsaved: true` is
+            // always required regardless of tier policy, and then policy approval is verified.
             let effect = GuardedEffect::DiscardUnsaved {
                 doc_id: t.doc_id,
                 revision: t.revision,
             };
-            let echo = if a.discard_unsaved {
-                a.approval.as_ref()
-            } else {
-                None
-            };
             let policy = &self.policy;
-            self.sessions
+            let approvals = &mut self
+                .sessions
                 .get_mut(&session)
                 .expect("handle checked the session")
-                .approvals
-                .check(policy, &effect, echo)?;
+                .approvals;
+            if !a.discard_unsaved {
+                return Err(approvals.require(policy, &effect));
+            }
+            grant = approvals.verify(policy, &effect, a.approval.as_ref())?;
         }
         self.host.remove(t.handle)?;
-        self.session_mut(session).docs.remove(&t.doc_id);
+        let s = self.session_mut(session);
+        s.approvals.consume(grant);
+        s.docs.remove(&t.doc_id);
         Ok(Output::Closed(CloseResult { discarded: dirty }))
     }
 
@@ -1722,6 +1725,74 @@ mod tests {
             json!({"op": "open", "params": {"path": "a.ron"}}),
         );
         assert_eq!(error(&r).code(), ErrorCode::PathOutsideRoot);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn custom_policy_enforces_discard_flag_under_allow_and_denies_save_under_deny() {
+        let base =
+            std::env::temp_dir().join(format!("omnia-agent-policy-custom-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let existing = base.join("exist.ron");
+        files::save_doc(&Doc::new(), &existing).unwrap();
+        let original_bytes = std::fs::read(&existing).unwrap();
+
+        // 1. Tier 3 Allow still requires `discard_unsaved: true` on dirty close (AINV9).
+        let allow_policy = crate::Policy::custom(
+            Roots::new([&base]).unwrap(),
+            crate::TierDecision::Allow,
+            crate::TierDecision::Allow,
+            crate::TierDecision::Allow,
+        );
+        let mut svc_allow = Service::new(HeadlessHost::new(), allow_policy);
+        let s = svc_allow.open_session();
+        let d = new_doc(&mut svc_allow, s);
+        send(
+            &mut svc_allow,
+            s,
+            &apply_req(d, 0, &[label_op(0, 0, "A")], None, None),
+        );
+        let refused = call(
+            &mut svc_allow,
+            s,
+            json!({"op": "close", "params": {"doc_id": "d1"}}),
+        );
+        assert_eq!(error(&refused).code(), ErrorCode::ApprovalRequired);
+        assert!(svc_allow.document(s, d).is_some());
+        let allowed = call(
+            &mut svc_allow,
+            s,
+            json!({"op": "close", "params": {"doc_id": "d1", "discard_unsaved": true}}),
+        );
+        assert_eq!(
+            result(&allowed),
+            &Output::Closed(CloseResult { discarded: true })
+        );
+
+        // 2. Tier 3 Deny refuses overwrite with `approval_denied` and leaves file untouched.
+        let deny_policy = crate::Policy::custom(
+            Roots::new([&base]).unwrap(),
+            crate::TierDecision::Allow,
+            crate::TierDecision::Allow,
+            crate::TierDecision::Deny,
+        );
+        let mut svc_deny = Service::new(HeadlessHost::new(), deny_policy);
+        let s2 = svc_deny.open_session();
+        let d2 = new_doc(&mut svc_deny, s2);
+        send(
+            &mut svc_deny,
+            s2,
+            &apply_req(d2, 0, &[label_op(0, 0, "B")], None, None),
+        );
+        let denied = call(
+            &mut svc_deny,
+            s2,
+            json!({"op": "save", "params": {"doc_id": "d1", "path": "exist.ron"}}),
+        );
+        assert_eq!(error(&denied).code(), ErrorCode::ApprovalDenied);
+        assert_eq!(std::fs::read(&existing).unwrap(), original_bytes);
 
         let _ = std::fs::remove_dir_all(&base);
     }
