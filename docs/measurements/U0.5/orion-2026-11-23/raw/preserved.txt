@@ -1,0 +1,2 @@
+630a2b20d67b0db18ee55d20cb0878010d6b53956e026f77e3da8b6fd152a973  /home/marcus/omnia/target/release/deps/doc_io-b88bda9c5d343f96
+HEAD=0507b1c4299cdd2b666ec13230de7481f98bfe7e
