@@ -345,8 +345,11 @@ returns a `Change` that the views use to decide what to repaint.
 
 ### D6 Text: cached shaped lines, bucketed sizes. DECIDED
 
-- Each label keeps one `ShapedLine` for the current size bucket (K11, G15). A frame only
-  calls `paint`.
+- Each label shapes one `ShapedLine` at its 100%-zoom base size (K8) and caches it until its
+  text changes or the item is deleted (G15). On paint, metrics and glyph offsets scale linearly
+  to the active K11 0.5 px size bucket (capped at `MAX_FONT_PX`) and glyphs emit directly at
+  that bucket's font size, so zooming across buckets or moving across scale factors never
+  reshapes on the hot path.
 - Positions are exact; only the glyph size is bucketed, so the error is under a quarter pixel.
 - Labels stay horizontal for every part orientation (G14).
 - Labels are culled by the same index query as everything else.
