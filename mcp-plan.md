@@ -371,6 +371,25 @@ Decoding rules, fixed at A1.3 (2026-11-21; amended by its three review rounds th
   job ids `j<n>`, in the canonical decimal of AD12's item ids; ids fit `u32` (items) or `u64`
   (documents, jobs).
 
+JSON-lines and the command line, as built at A1.7 (2026-11-23, `crates/omnia-cli`):
+
+- `omnia serve` reads one envelope per line (`\n` or `\r\n`; a final line may lack its end)
+  and writes one response per line, flushed after each. Lines that are empty or only JSON
+  whitespace are skipped. One stream is one session (11.1); a bad line is answered and the
+  session goes on.
+- The `"id"` is a string or a 64-bit integer. A line is decoded in `Request::from_slice`'s
+  order: AK2 on the raw line (its length without the line end), `parse_strict`, then the `id`
+  is lifted off the object and the rest goes to `Request::from_envelope_value`, so duplicate
+  keys (a second `id` included) are still refused. Any other `id` is `schema_violation` at
+  `/id`. The response line is the response with `"id"` written as its first field; a line that
+  is over AK2, does not parse, or has a refused `id` is answered without one. A line without
+  an `id` is answered with exactly the bytes `omnia call` prints for the same bytes (AD1).
+- `omnia call` takes the envelope as one argument, or `-` to read all of standard input, and
+  answers it on a session that ends with the call. A request that does not decode is answered
+  with its refusal on stdout and exit 1, like any tool error.
+- AK2 is enforced while reading: at most one byte past AK2 of a line or of standard input is
+  kept, and the refusal reports the full length.
+
 ### 9.2 Edit operations
 
 | Operation | Params | `Command` |
@@ -1004,6 +1023,16 @@ Command line:
 | `omnia call --root DIR '<request>'` | One request, one response; exit 0 success, 1 tool error, 2 usage error |
 | `omnia serve --root DIR` | JSON-lines session on stdin and stdout |
 | `omnia mcp --root DIR` | MCP server on stdio |
+
+As built at A1.7: `--root DIR` (or `--root=DIR`) is repeatable, and a root that does not exist
+or is not a directory is a usage error; with no root every path is `path_outside_root`.
+`omnia capabilities` prints the `result` of a `capabilities` request, byte for byte. `omnia
+schema` without a name lists the published names, one per line; `omnia schema NAME` (a `.json`
+suffix is accepted) prints the committed file's bytes, and an unknown name is a usage error.
+`omnia call ... -` reads the request from standard input. Exit codes: 0 success; 1 a tool
+error, or an I/O failure on the standard streams; 2 a usage error. `serve` exits 0 at the end
+of its input. Standard output carries only results; usage errors and diagnostics go to
+standard error. `help` prints the usage. `omnia mcp` is A1.8's.
 
 ## 15. Dependencies and risks
 
