@@ -152,7 +152,7 @@ own in turn.
   reverse insertion order gives byte-identical output up to the id mapping (AINV5);
   ATC-read-01 and ATC-net-01 pass.
 
-### A1.5 Service core · todo
+### A1.5 Service core · done
 - Lane: agent · Depends: A1.1, A1.2, A1.4 · Read: mcp-plan.md section 11; INV4; AD2 to AD5; AINV1 to AINV7
 - Owns: `crates/omnia-agent/src/{service.rs, ops.rs, preview.rs, diff.rs, host.rs}`
 - Do: sessions; the headless `DocHost`; operation-to-`Command` conversion; fork preview; the
@@ -162,9 +162,9 @@ own in turn.
   AINV3, AINV4, AINV6 and AINV7; a grep test shows `omnia-agent` calls no `Doc` mutator but
   `apply`, `undo` and `redo` (AINV1); ATC-edit-01 to ATC-edit-06 pass.
 
-### A1.6 Files, roots and approvals · todo
+### A1.6 Files, roots and approvals · done
 - Lane: agent · Depends: A1.5 · Read: mcp-plan.md section 12.1; AD7; AINV9, AINV12
-- Owns: `crates/omnia-agent/src/{files.rs, approval.rs}`
+- Owns: `crates/omnia-agent/src/{files.rs, approval.rs, service.rs}`
 - Do: root canonicalisation; RON v2 open within AK2; staged save; the tier policy; effect
   digests.
 - Done when: the AINV12 property test passes with `..`, absolute paths and symlinks, in both
@@ -527,3 +527,101 @@ clippy, omnia-bench clippy with `scene-counts,readback`, tests of omnia-agent, x
 omnia-doc and omnia-symbols ran locally and pass; `cargo deny` passes bans, licences and
 sources and fails only advisories, on the known `RUSTSEC-2026-0592` (`url 2.5.8`), which is
 being fixed separately. The full `cargo test --workspace` is left to CI. Nothing measured.
+
+2026-11-22 A1.5 done — new `crates/omnia-agent/src/{host.rs, ops.rs, preview.rs, diff.rs,
+service.rs}`, their `mod` and `pub use` lines in `lib.rs`, and `rustc-hash = "2"` in the crate's
+`Cargo.toml` (section 14 lists it; already in Cargo.lock and canvas plan section 10, MIT OR
+Apache-2.0; GPUI-free and runtime-free, the INV12/AINV8 xtask test passes). `host.rs`: the
+`DocHost` trait (`insert`, `remove`, `doc`, `apply`, `undo`, `redo`, `gesture_active`; an
+unknown handle is `document_not_found`) and `HeadlessHost`, which forwards each edit to the
+`Doc` method of the same name. `ops.rs`: operations to one `Command` (one operation is its own
+command, several a `Batch`), `place_part` through `SymbolLibrary::place_command` (AD11). The
+follow policy and `with_wires` come from the session's WK10 `WiringPrefs` until A2.2 and A2.3
+add the fields. `preview.rs`: `run` (fork plus `Doc::apply`) and `preview_id`, an FxHash of a
+domain tag, `doc_id`, base revision, the operations' canonical JSON and those preferences.
+`diff.rs`: the dirty-bounded diff, one page of at most 500 entries (added, then removed, then
+modified). `service.rs`: `AgentService` with sessions, dispatch of every available operation,
+`expected_revision` on validate, preview, apply, undo and redo, `preview_mismatch`, the AK5
+idempotency cache (oldest evicted first), `request_status`, revision-checked undo and redo, AK6
+on `new`, and `in_form`/`handle_in`, which rewrite envelope-space error pointers for the MCP
+arguments form (A1.4's handoff). `apply` previews on a fork first, so every refusal and the
+diff come before the live document moves, then commits the same command. Choices, written into
+mcp-plan.md (11.2 and 11.3 "as built" notes, a new 11.4a, section 14's sketch): a success or a
+non-retryable failure is stored under its key, a retryable one is not (it applied nothing and
+invites a retry), so `request_status` reports `failed` only for non-retryable errors; a
+preview id is not stored, since a matching hash is by construction the id a preview of the same
+request returns (11.3), so apply needs no record of previews; responses about an open document
+carry `doc_id` and its revision after the request, errors included, and `document_not_found`,
+`idempotency_conflict`, `capabilities` and `request_status` carry neither; an unknown session
+is `internal`. Interim until A1.6: `open`, `save`, and `close` of a dirty document are
+`unsupported_in_mode` (discarding is tier 3); `close` of a clean document works. Deviations
+from section 14's sketch, recorded there: `handle(session, &Request)` has no `CallContext` and
+there is no `poll_job` (A3.1 adds both); `new(host)` takes no policy (A1.6 adds one);
+`DocHost` gains `insert` and `remove`, wraps the document results in an outer
+`Result<_, AgentError>` for unknown handles, and has no `request_approval` yet (A4). Tests
+(31 new; omnia-agent lib now 100): property tests with 64 cases each over random sheets built
+through the service and random batches of all seven operations (missing ids, unknown symbols,
+off-lattice moves, zero-length wires, wrong text fields mixed in): AINV2 (preview change and
+diff equal apply's, `validate`'s change equal, the after-state `==` an independent fork, the diff
+equal a brute-force comparison of every item, refusals identical); AINV3 (on twin services,
+reads, validate and preview, stale ones included, leave the document `==` with the same history
+cursor, and the next five undo and redo responses are byte-identical); AINV4 and AINV6 (random
+apply, undo and redo at revision offsets with right, wrong or no preview ids); AINV7 (a key
+pool with exact replays: identical bytes, no change; conflicts; `request_status` against a
+model). AINV1 is a source scan: it finds every `&mut self` method of `impl Doc` in
+`omnia-doc/src`, checks that the public ones are exactly `apply`, `undo` and `redo` and that no
+public function takes `&mut Doc`, then checks that no file under `omnia-agent/src` calls any of
+the others. ATC-edit-01 to ATC-edit-06 are unit tests, ATC-edit-06 with the person's edit made
+through `host_mut`. Every response a test produces is validated against the committed
+`schema/<op>.response.json` read from disk and decodes back equal. Also unit tests for
+request_status, conflicts, cache eviction at 257 keys, AK6, close, sessions, nothing to undo or
+redo, error codes per refusal, capabilities, both error-pointer forms, and AINV5 (reversed key
+order gives the same bytes). The service tests are inline in `service.rs` (about 1,600 lines),
+because a `service/tests.rs` file would be outside **Owns**. For A1.6: wiring `open`, `save`
+and dirty `close` changes `service.rs` (dispatch, a path on the session's document entry,
+`saved_revision` on save), so A1.6's **Owns** needs `service.rs` beside `files.rs` and
+`approval.rs`; `AgentService::adopt` (crate-private) registers an opened document under AK6;
+`approval_required` is retryable and therefore never cached. For A1.7 and A1.8: one
+`open_session` per process or stream, then `handle_in` with the request's `Form`. For A1.10: a
+`preview` is one fork, one apply and the diff; an `apply` is that plus the commit. Checks run
+locally and passing: `cargo fmt --all --check`; `cargo clippy --workspace --all-targets -- -D
+warnings`; `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D
+warnings`; `cargo test` of omnia-agent, omnia-doc, omnia-symbols and xtask; `cargo deny check`
+(advisories, bans, licences and sources ok). The full `cargo test --workspace` is left to CI.
+Rule-1 scan of the changed files done. Nothing measured.
+
+2026-11-23 A1.6 done — new `crates/omnia-agent/src/{files.rs, approval.rs}`, wired into
+`service.rs` and re-exported from `lib.rs` (no new dependencies; INV12/AINV8 xtask test passes).
+`files.rs`: `Roots` canonicalises configured root directories in configured order (`Roots::empty`
+refuses every path); lexical screening runs before any filesystem or network call and rejects
+empty paths, NUL bytes, `..` in both POSIX `/` and Windows `\` forms, colons in non-prefix
+segments (blocking ADS/drive-relative paths), and foreign absolute, UNC, device (`\\.\`), or
+verbatim (`\\?\`) prefixes unless matching a configured root; top-down ancestor checks
+canonicalise every existing directory inside roots so symlinks, Windows NTFS junctions, and
+dangling links that escape roots all return `path_outside_root` without probing outside targets
+or leaking filesystem existence. `open_doc` enforces `MAX_FILE_BYTES` (AK2) before and during
+reading, maps unsupported RON versions to `unsupported_file_version`, and maps corrupt files to
+`io_error` without echoing file text (AD14). `save_doc` / `write_staged_with` serialises in
+memory, enforces `MAX_FILE_BYTES` (AK2), writes a unique sibling `.omnia-save-<pid>-<seq>.tmp`
+file, syncs, and renames over the target, cleaning up the temp file on failure so existing files
+remain untouched. `approval.rs`: `Tier`, `TierDecision`, `Policy` (`Policy::headless` implements
+AQ4; `Policy::custom` supports explicit decisions including `Deny`), `GuardedEffect` with 64-bit
+FxHash digests (`ed-<16 hex>`, AQ10) bound to effect kind, `doc_id`, `revision`, and canonical
+path / `preview_id`, and per-session `ApprovalStore` (one-shot `ap-<n>` challenges, reusing the
+active id for repeated unapproved calls so AINV5 holds, and consuming a grant only after the
+guarded operation succeeds). `service.rs`: `AgentService::new(host, policy)` /
+`headless_with_roots(roots)`, `open`, `save`, and dirty `close` (always requiring
+`discard_unsaved: true` regardless of policy, plus matching tier-3 approval), with `DocEntry`
+tracking canonical path and `saved_revision`. Updated `mcp-plan.md` sections 11.4a, 12.1 and 14
+(Rule 19). Tests (`omnia-agent` lib now 113 passing): 128-case AINV12 proptest over POSIX and
+Windows traversal/absolute/UNC/drive-relative/ADS/NUL and symlink/NTFS-junction escape paths;
+lexical UNC/device no-probe timing test; AINV9 tests for file overwrite and dirty close
+(including `Allow` without `discard_unsaved`, `Deny` on save, revision invalidation, and
+one-shot consumption); ATC-save-01 (tier-2 new file, tier-3 overwrite challenge + echo +
+idempotent replay, clean close, reopen + inspect); ATC-path-01 at both `Roots` and service
+levels; half-way staged-write failure keeping original bytes and cleaning temp files; AK2 size
+and version checks; multi-root configured-order resolution. Checks run locally and passing on
+Windows: `cargo fmt --all --check`; workspace clippy `-D warnings`; `omnia-bench` clippy with
+`scene-counts,readback` `-D warnings`; `cargo test -p omnia-agent -p omnia-doc -p omnia-symbols
+-p xtask`; `cargo deny check`. Full `cargo test --workspace` left to CI. Rule-1 scan done.
+Nothing measured.

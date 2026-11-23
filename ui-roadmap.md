@@ -237,6 +237,9 @@ without being drawn.
   Esc; the close button goes through the close path (U2.4 completes it; until then it closes).
 - Done when: UTC-menu-keys and UTC-menu-mouse pass headless; the menu's paint count on `SheetView`
   is 0; `debug_bounds` of the bar matches UK2.
+- Note (2026-11-23, U4.2): Place > Part is built from `parts::picker::part_menu()` (categories in
+  strip order, empty ones disabled) and the "In use" entries from `in_use_entries()`, so the menu
+  mirrors the picker's popovers exactly.
 
 ### U1.6 Toolbar · done
 - Lane: shell · Depends: U1.3, U1.4 · Read: UD3, UD19, UK3
@@ -322,6 +325,9 @@ without being drawn.
   `Doc::parts().count()` on change until U2.1; nets shown from U2.1).
 - Done when: UTC-new and UTC-tabs pass headless; UINV8's property test (random switches with
   camera and selection changes between them) passes.
+- Note (2026-11-23, U4.2): on activation and on each document change, call
+  `PartPicker::follow_document` (through `Toolbar::picker()`) with the active `Doc`; until then the
+  "In use" picker shows 0 parts.
 
 ### U2.3 File actions · todo
 - Lane: shell · Depends: U2.2 · Read: UD7, UD8, UG4, UG10, D8
@@ -383,7 +389,7 @@ without being drawn.
 
 ## Milestone U3: Home, First boot, preferences and theme
 
-### U3.1 Text field · todo
+### U3.1 Text field · done
 - Lane: shell · Depends: U1.3 · Read: UD16, UG13, `gpui/examples/input.rs`
 - Owns: `crates/omnia-app/src/widgets/text_field.rs`, `THIRD_PARTY.md` (attribution)
 - Do: a single-line field per UD16 in key context `TextField`.
@@ -456,7 +462,7 @@ without being drawn.
   drag by the header, raise and focus on click, Esc to the sheet, close, clamping after resizes.
 - Done when: UTC-instrument passes headless (sheet paint count 0 throughout).
 
-### U4.2 Part picker · todo
+### U4.2 Part picker · done
 - Lane: shell · Depends: U1.6 · Read: UD2, UK3, T2.3's symbol list
 - Owns: `crates/omnia-app/src/parts/picker.rs`
 - Do: each place-strip button opens a popover of that category's built-in symbols (empty
@@ -690,3 +696,19 @@ Esc close. All five standard checks pass on a Windows development machine (certi
 budget); `cargo run -p omnia-app -- --frames 60` exits 0. Deviations: the toolbar is not yet embedded
 in the window (workspace layout is U1.7, as with U1.3/U1.4); U4.3 owns overflow at small sizes.
 2026-11-22 U2.1 done — Status catch-up only; no code change. PR #70 (`t3/history-cursor-counts`) was merged on 2026-11-18 (merge `90383fa`) after its review on `t3/review-undo-history`, but the roadmap still read `doing`. The five `Doc` methods (`history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count`), the cursor property test `u2_1_cursor_identity_over_random_command_undo_redo`, and `utc_saved_point_at_doc_level` / `utc_branch_at_doc_level` are on `main`, and CI is green at `e09169b`. U2.2 can now use `HistoryMark::Cursor` from the start.
+
+2026-11-22 U3.1 done — Added the single-line `TextField` (UD16, UG13) with a themed
+placeholder and focus ring (UINV1), horizontal caret scrolling, keyboard and mouse selection,
+clipboard editing, and GPUI IME composition with UTF-16 ranges. Line separators become spaces.
+`TextFieldEvent::Changed` reports committed edits. Enter and Escape emit `Submit` and `Cancel`.
+Updated UD3 to record that the focused field handles its editing keystrokes before keymap dispatch.
+This keeps the shared bindings in the registry (UINV4). UTC-type-r verifies that lower- and
+uppercase input reach the field while Rotate and document Undo/Redo remain inactive.
+Attributed the GPUI input example in `THIRD_PARTY.md`.
+Headless tests cover typing, navigation, selection, clipboard, deletion and IME composition.
+The allocation test observed zero allocations in warmed Omnia paint code for both the placeholder
+and populated text, with a caret and a selection. Formatting, workspace Clippy, bench Clippy with
+`scene-counts,readback`, app tests, workspace tests and `cargo deny check` all passed on a Windows
+development machine.
+2026-11-23 U4.2 done — Part picker (UD2, UD4, UK3, UINV5). New `crates/omnia-app/src/parts/picker.rs` (`parts/mod.rs`, a `lib.rs` mod line, and an `omnia-symbols` path dependency in `crates/omnia-app/Cargo.toml`). `PartPicker` is a cached view holding the twelve place-strip buttons and the "In use · N parts" picker. Each non-empty category opens a popover of its built-in symbols from T2.3's library, and empty categories are disabled buttons. The "In use" list is `in_use_entries(doc)`: symbol, display name and count, ordered by name then lowest id. Its counts sum to `Doc::part_count`, and it is disabled while the document is empty. Choosing a row dispatches `PlacePart { symbol }`, gated by `place_part_enabled` (`CanvasEdits::place`, off until U5.2). With the flag off, every row is disabled and a direct `choose` re-checks `enabled` first, so nothing is dispatched (UINV5). Chosen, not in the plan: the symbol-to-category table `SYMBOL_CATALOG` (resistor, potentiometer and capacitor under Basic; diode under Diodes; op-amp under Analog; ground under Sources), with a test that keeps it complete. Place > Part is not built yet (U1.5 owns the menu bar); `part_menu()` and `in_use_entries()` are the data it must read so the menu and the popovers stay identical. Outside the owned files: `crates/omnia-app/src/chrome/toolbar.rs` (U1.6, done; U4.3 not started) now embeds `PartPicker` with `.cached(..)` at `PART_PICKER_WIDTH` in place of its disabled strip and "In use" button. `in_use_label` and the in-use count moved to the picker, and its tests were updated to match. Headless tests: every category and the "In use" picker open by mouse and by keyboard (Enter and Space; Esc returns focus to the button); a second press closes without reopening; the rows match `part_menu` and the document; flag off dispatches nothing, flag on dispatches once and closes; the picker renders on a place-flag flip only while a popover is open; hover across an open popover and the strip never re-renders a cached sibling. GPUI fact for the owner (pinned revision): `Window::focus` calls `refresh()`, and a refreshing window re-renders every cached view (`view.rs`, `!window.refreshing`). GPUI also focuses a focusable element on mouse-down. So any click on a focusable chrome control (the existing toolbar buttons too) and any popover that takes focus for Esc and Tab re-renders `SheetView`. This conflicts with UINV2 ("menu open"), UTC-instrument ("sheet paint count 0 throughout") and UTC-menu-keys as written. It needs an owner decision, recorded as a new UG fact, before U1.5, U4.1 and U4.5. Visuals use plain text rows (no symbol thumbnails) until the U3.7/U4.7 goldens. All five standard checks pass on a Windows development machine (certifies nothing).
+2026-11-23 U4.2 review fixes — Independent review (GPT-6.2 Sol, PR #96). Fixed: (1) a second press that closes a popover through click-outside now leaves focus on its button, so Enter reopens it (before, focus stayed on the removed panel); (2) focus leaving an open popover closes it (`on_focus_out`, notify deferred past the draw), so Tab past disabled rows no longer strands an open popover out of Esc's reach; (3) the module comment no longer claims open and close spare the sheet, and states the GPUI focus-refresh fact instead. Regression tests for (1) and (2). Pending integrations recorded as notes on U1.5 (Place > Part reads `part_menu`/`in_use_entries`) and U2.2 (feed `follow_document` from the active document). Not changed: the same-tick suppression reset (a separate press before the executor ticks is swallowed; real input always crosses a tick, and the toolbar's analysis picker uses the same pattern); the PR attribution footer.

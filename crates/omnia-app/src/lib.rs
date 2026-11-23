@@ -2,6 +2,7 @@ pub mod actions;
 pub mod assets;
 pub mod chrome;
 pub mod keymap;
+pub mod parts;
 pub mod status_bar;
 pub mod theme;
 pub mod widgets;

@@ -431,7 +431,7 @@ of the `canvas` lane.
   difference. Set `needs-human`; after the owner approves, commit the renders as goldens
   and set `done`.
 
-### T3.4 Gate: milestone 3 · todo
+### T3.4 Gate: milestone 3 · done
 - Lane: bench · Depends: T3.3
 - Do: `bench run --sheet text --script pan` and `zoom`: p99 < 16.7 ms (B3). Re-run the whole
   T2.7 table with text on. Run the golden tests.
@@ -1872,3 +1872,72 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        12 goldens 0 differing pixels) pass locally; `cargo deny check` passes
                        bans/licenses/sources but reports pre-existing `RUSTSEC-2026-0592` on
                        `url 2.5.8` in `Cargo.lock` (out of T3.3 scope). No new dependencies.
+2026-11-22 T3.4 needs-human — Milestone 3 gate prepared; awaiting Orion reference campaign
+                       (`docs/measurements/T3.4/gate.py`). Registered bundled `Inter-Medium.ttf`
+                       and `Inter-SemiBold.ttf` in `crates/omnia-bench/src/harness.rs`
+                       (`register_sheet_fonts`, called in `run`, `idle`, and `start_child` for
+                       `Sheet::Stress(_)` and `S5`, fulfilling T3.1's handoff note). Froze
+                       `docs/measurements/T3.4/gate.py` (160 invocations across 100%/125%:
+                       `start-empty`, `start-1k`, `text-pan`, `text-zoom`, `1k-pan`, `1k-zoom`,
+                       `10k-pan`, `10k-zoom`; 10 rotating repetitions, full attribution, no B4
+                       known limit) and verified it with `docs/measurements/T3.4/test_gate.py`
+                       (4/4 pass). Windows golden suite (`cargo test -p omnia-golden`): all 12
+                       images (`inverting-amp` and `wien-oscillator`, both themes, 1.0/1.25/1.5)
+                       matched with 0 differing pixels. Non-reference Windows diagnostics
+                       (i7-14650HX, Intel UHD Graphics driver 32.0.101.7088 active, Windows 11
+                       26200, 1536x864 logical / 1920x1080 device @ 1.25 scale, 165 Hz, AC,
+                       Silent; certifies nothing; `docs/measurements/T3.4.md`): B10 holds
+                       (`ours.max == 0`) on all 6 motion runs; `start` delta +23.668 ms;
+                       `text-pan` p99 2.216 ms, `1k-pan` 1.587 ms, `10k-pan` 2.056 ms.
+                       Diagnostic risks flagged for Orion (hypotheses, unprofiled): `text-zoom`
+                       hit 25.854 ms p99 (max 35.226 ms, 2,897 total allocs/frame p99; suspected
+                       label reshaping across K11 buckets), and zoom sweeps added ~200 MB private
+                       memory over same-machine pan (`10k-zoom` 373.71 MB vs `10k-pan` 171.07 MB;
+                       suspected non-evicting glyph atlas growth). Independent review (Claude
+                       Sonnet 5.5) approved with minor findings (addressed). Standard checks pass
+                       locally (fmt, workspace clippy, bench feature clippy, omnia-bench and
+                       omnia-golden tests, cargo deny check). No new dependencies.
+2026-11-23 T3.4 needs-human — Orion reference campaign 1 (`4802b62`, binary SHA-256
+                       `eba0bfaa4abd006b028791d4ad0f4a3972343959fe034d2e3a44c6c8bf134770`,
+                       160/160 runs on i5-7300U / HD Graphics 620 / Wayland eDP-1 1920x1080
+                       @ 60 Hz, AC, performance governor; summary and metadata in
+                       `docs/measurements/T3.4/orion-2026-11-23-before-fix/`, full raw JSON
+                       archived on Orion at
+                       `/home/marcus/omnia-archive/T3.4/orion-2026-11-23-before-fix`) failed
+                       B3 missed-refresh attribution on zoom (`text-zoom` 9/10 at s100 & s125,
+                       `1k-zoom` 9/10 at s100 & 6/10 at s125; 9 of 72,000 frames > 25.0 ms).
+                       All numeric budgets passed (`B2` 38.96/45.55 ms, `B3` pan 1.32–2.21 ms,
+                       `B3` zoom p99 7.27–9.20 ms, `B4` 10k-pan 1.75–2.14 ms & 10k-zoom
+                       7.83–8.46 ms 10/10, `B9` 151–174 MB < 300 MB, `B10` ours.max == 0).
+                       Root cause: `TextCache` reshaped up to 700 visible labels synchronously
+                       on every K11 0.5 px bucket transition (`paint_ms` max 11.20–15.71 ms,
+                       `allocs_per_frame.total` max 17,337–20,362). Applied D6/G15 base-size
+                       shaping fix in `crates/omnia-canvas/src/sheet/text.rs` (shape once at
+                       K8 base size 17/13 px, scale metrics & glyph offsets linearly to the
+                       active K11 bucket on paint; `canvas-plan.md` D6/G15 updated in lockstep).
+                       Non-reference Windows check (`1536x864`, 125%, 165 Hz; certifies
+                       nothing): `text-zoom` p99 25.85 -> 1.35 ms, `1k-zoom` p99 9.42 ->
+                       1.68 ms, `total` allocs max 10, 0 late, 12/12 goldens 0 differing px.
+                       Standard checks pass locally. Status stays `needs-human` pending Orion
+                       re-run. No new dependencies.
+2026-11-23 T3.4 done — Orion reference campaign 2 (`3224084`, binary SHA-256
+                       `faea6b7fdc52be5b40ae5aa4aea252eeca8f8947b0fc5a404a82f11ca1ba0744`,
+                       160/160 runs on i5-7300U / HD Graphics 620 / Wayland eDP-1 1920x1080
+                       @ 60 Hz, AC, performance governor, `kde-inhibit --power --screenSaver`,
+                       archived in `docs/measurements/T3.4/orion-2026-11-23-v2/`) certified
+                       PASS on every budget at both 100% (`s100`) and 125% (`s125`) with
+                       zero over-limit frames across all 120 motion runs (72,000 frames).
+                       `B2` startup delta 38.307 / 43.105 ms (< 300); `B3` `text-pan` p99
+                       2.081 / 1.299 ms (worst 4.424 / 4.964 ms, 10/10), `text-zoom` p99
+                       3.064 / 2.486 ms (worst 3.990 / 3.781 ms, 10/10), `1k-pan` p99
+                       1.814 / 1.461 ms (worst 4.493 / 3.254 ms, 10/10), `1k-zoom` p99
+                       2.849 / 2.209 ms (worst 4.305 / 5.345 ms, 10/10); `B4` `10k-pan` p99
+                       2.075 / 1.635 ms (worst 5.345 / 5.181 ms, 10/10), `10k-zoom` p99
+                       4.975 / 4.901 ms (worst 13.107 / 8.077 ms, 10/10); `B9` `10k` private
+                       memory 150.242–173.492 MB (`s100`) and 149.070–171.189 MB (`s125`, all
+                       < 300 MB); `B10` `allocs_per_frame.ours.max == 0` across all 120 runs.
+                       Windows golden suite (`cargo test -p omnia-golden`): 12/12 images
+                       matched with 0 differing pixels on `3224084`. Unlocks T4.3 (Milestone 4).
+                       (This clean 10/10 pass also covers the full no-known-limit T2.7 table
+                       required by T2.9; T2.9 left for its own status update.) No new
+                       dependencies.

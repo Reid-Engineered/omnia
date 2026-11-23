@@ -10,6 +10,7 @@ gpui.workspace = true
 gpui_platform.workspace = true
 omnia-canvas = { path = "../omnia-canvas" }
 omnia-doc = { path = "../omnia-doc" }
+omnia-symbols = { path = "../omnia-symbols" }
 omnia-theme = { path = "../omnia-theme" }
 
 [dev-dependencies]
