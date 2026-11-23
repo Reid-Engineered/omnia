@@ -171,9 +171,10 @@ own in turn.
   Windows and POSIX forms; AINV9 holds for overwriting and for discarding unsaved changes;
   ATC-save-01 and ATC-path-01 pass; a write that fails half-way keeps the old file.
 
-### A1.7 Command line · todo
+### A1.7 Command line · done
 - Lane: agent · Depends: A1.6 · Read: mcp-plan.md sections 9.1 and 14
-- Owns: `crates/omnia-cli/` (`Cargo.toml`, `src/main.rs`, `src/call.rs`, `src/jsonl.rs`)
+- Owns: `crates/omnia-cli/` (`Cargo.toml`, `src/main.rs`, `src/call.rs`, `src/jsonl.rs`);
+  the INV12 crate-list line in `xtask/src/main.rs` (adds `omnia-cli`, per the A1.3 handoff)
 - Do: `omnia capabilities`, `omnia schema`, `omnia call`, `omnia serve`; exit codes 0, 1, 2;
   logs to stderr only.
 - Done when: transcript tests show the same request gives byte-identical results through
@@ -625,3 +626,63 @@ Windows: `cargo fmt --all --check`; workspace clippy `-D warnings`; `omnia-bench
 `scene-counts,readback` `-D warnings`; `cargo test -p omnia-agent -p omnia-doc -p omnia-symbols
 -p xtask`; `cargo deny check`. Full `cargo test --workspace` left to CI. Rule-1 scan done.
 Nothing measured.
+
+2026-11-23 A1.7 done — new crate `crates/omnia-cli`, binary `omnia` (deps `omnia-agent` and
+`serde_json`, both in canvas plan section 10 and Cargo.lock, so no licence to log; the
+workspace's `crates/*` glob already makes it a member). `main.rs` parses arguments by hand and
+dispatches; `call.rs` answers one envelope (argument text, or `-` for standard input) on a
+session that ends with the call; `jsonl.rs` is `omnia serve`, one session per stream, one
+response line per request line, flushed after each. `omnia capabilities` prints the `result`
+of a `capabilities` request byte for byte; `omnia schema` lists the published names and
+`omnia schema NAME` prints a committed schema's bytes. Exit codes: 0 success, 1 a tool error
+(a request that does not decode included) or an I/O failure on the standard streams, 2 a usage
+error (unknown command or option, missing or extra request, a `--root` that is not a
+directory, an unknown schema name); `serve` exits 0 at the end of its input. Standard output
+carries only results; usage errors and diagnostics go to standard error. As the A1.3 log asked,
+the JSON-lines `id` is lifted after `parse_strict` and the rest goes to
+`Request::from_envelope_value`, so duplicate keys (a second `id` included) are still refused;
+AK2 is checked on the raw line first. Choices, written into mcp-plan.md (a new "as built at
+A1.7" note after the 9.1 decoding rules, and one under section 14's command-line table): the
+`id` is a string or a 64-bit integer, anything else `schema_violation` at `/id`; the response
+line puts `"id"` first and is otherwise the bytes `call` prints; a line over AK2, unparseable or
+with a refused `id` is answered without one; empty and whitespace-only lines are skipped;
+`\r\n` reads like `\n`; reading keeps at most one byte past AK2 and reports the full length.
+AINV8: the INV12 xtask crate list now includes `omnia-cli` (the change A1.3 deferred here).
+Tests (9, inline in `main.rs`, run on in-process byte streams through the same `run` that
+`main` calls, since `tests/transcripts/` is A1.8's): AD1, a corpus of 26 single requests
+(successes, every step of 9.1's order of checks, AK2 at exactly the limit and one byte over,
+AK4, ATC-path-01's `..`, a missing and a non-ASCII path, AINV5 reversed keys) gives the same
+bytes through `call REQUEST`, `call -`, and `serve` with `\n`, `\r\n` or no final line end,
+each validated against its operation's published response schema, with call's exit code
+following the outcome; the same lines with string, positive and negative integer ids differ
+only by the echo (or, when nothing can be echoed, equal `call` on the same bytes); a session
+transcript (ATC-edit-01 loop with the preview id, AINV7 replay, `request_status`, ATC-edit-02,
+nets, undo, redo, a tier 2 save, a tier 3 overwrite challenged and echoed, a malformed line
+mid-session, close, reopen, inspect) with mixed line ends and blank lines equals, line for
+line, what the service answers in-process plus the echoed ids; an oversized line is refused
+with its full length and the session goes on; bad ids; `capabilities` equals the call's
+result; `schema` equals every committed file (CRLF-normalised, as AINV11 reads them); 16
+usage errors exit 2 with empty stdout; a closed stdout exits 1 with the reason on stderr. The
+real binary was also run by hand on Windows (call, serve, capabilities, schema). Checks run
+locally on Windows and passing: `cargo fmt --all --check`; `cargo clippy --workspace
+--all-targets -- -D warnings`; `cargo clippy -p omnia-bench --all-targets --features
+scene-counts,readback -- -D warnings`; `cargo test --workspace`; `cargo deny check` (advisories,
+bans, licences, sources ok; a first attempt failed to load the advisory database with a
+Windows paging-file error during a parallel build, and passed when rerun alone). Rule-1 scan
+of the changed files done. Nothing measured.
+
+2026-11-23 A1.7 done (review fixes) — independent review (a model other than the author) of
+8649cb7 requested changes; all fixed on the same branch. (1) Blocking: `serve` dropped a `\r`
+at the end of the input even with no `\n` after it, so an unterminated line ending in `\r`
+differed from `call -` on the same bytes (an AK2-plus-one line was accepted, and a malformed
+`{\r` reported another column). `jsonl.rs` now drops the `\r` only of a consumed `\r\n`; new
+test `a1_7_ad1_a_carriage_return_at_the_end_of_input_is_part_of_the_line` covers `{\r`
+(column counted), a line of exactly AK2 bytes ending in `\r` (accepted) and one byte over
+(refused with the full length) through `call -`, `call REQUEST` and `serve`, plus the same
+lines with a `\n` after them; it fails on the old code. mcp-plan.md 9.1's A1.7 note says so.
+(2) Blocking: A1.7's **Owns** line now lists the INV12 crate-list line in `xtask/src/main.rs`,
+as A1.3's handoff required. (3) The `call` usage text shows `[--] REQUEST` and says to put `--`
+before a request that starts with `-`; a test checks that `call -1` is a usage error and
+`call -- -1` is answered like `serve` answers `-1`; section 14's A1.7 note mentions `--`.
+Checks rerun locally on Windows, all passing: fmt, workspace clippy, omnia-bench clippy with
+`scene-counts,readback`, `cargo test --workspace`, `cargo deny check`. Nothing measured.
