@@ -265,24 +265,29 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
 - Who binds what:
   - `Shell` and `Workspace` bind every modifier shortcut: Ctrl+N, O, S, Shift+S, W, Q, Z, Y,
     Shift+Z, X, C, V, A, comma, =, -, 0, 1, 2, 3, Tab, Shift+Tab, F1, F10, F11, and Delete.
-  - `Sheet` binds the single-key canvas tools from T5.2 (R, X, Y, W, Esc, and Space as T1.5 and
-    T6.2 use it), so typing in a text field can never rotate a part.
+  - `Sheet` binds the single-key canvas tools from T5.2 (R, X, Y, W, and Space as T1.5 and
+    T6.2 use it), so typing in a text field can never rotate a part. Esc is not bound in `Sheet`
+    (UQ14): the shell's `NavCancel` handler calls `SheetCanvas::cancel` (T5.2) when the sheet is
+    the key target.
   - The focused `TextField` handles its editing keystrokes before keymap dispatch (Ctrl+A,
     Ctrl+C, Ctrl+V, Ctrl+X, arrows, Backspace, Delete). It consumes document undo and redo
     keystrokes while focused. Text insertion goes through GPUI's input handler.
-  - `Dialog` binds arrows, Enter, Esc and Tab.
+  - Navigation keys are bound once, in `Shell`, so no two active contexts share one (UINV4)
+    and they resolve on every context stack, with or without `Workspace`: Up, Down, Left, Right,
+    Enter, Esc, Tab and Shift+Tab map to `NavUp`, `NavDown`, `NavLeft`, `NavRight`,
+    `NavConfirm`, `NavCancel`, `NavNext` and `NavPrev`. No other context binds these keys;
+    `Dialog`, a Tab-focused chrome control and the `Home` menu handle the `Nav*` actions with
+    `on_action`, which runs before `Shell`'s handler because they are deeper on the dispatch path.
+    Space on a Tab-focused chrome control is handled by that control's own key-down listener, not
+    by a binding.
   - Key target routing (UQ14). Menus, popovers and instrument frames never take GPUI focus from a
-    pointer or from F10/Alt+letter; the `KeyTarget` router (`Sheet`, `Menu`, `Popover(id)`,
-    `Instrument(id)`) holds which one receives keys. `Workspace` binds Up, Down, Left, Right,
-    Enter, Space, Tab and Shift+Tab to overlay actions (`OverlayUp` … `OverlayNext`,
-    `OverlayPrev`). These bindings are on the dispatch path whenever focus is inside the workspace,
-    so they resolve while the sheet is focused; when the key target is `Sheet` their handlers
-    call `cx.propagate()` (Tab then moves focus per UINV12). For a key that a deeper focused
-    context also binds (today `Sheet`'s Esc), the router registers `capture_action` for that
-    context's action on the `Workspace` element and, when the key target is not `Sheet`, handles
-    it and calls `cx.stop_propagation()`, so the overlay's Esc wins over the sheet's. The UINV4
-    keymap test covers the overlay bindings; a new deeper binding on one of these keys must add
-    its action to the router's capture list (U1.5 test).
+    pointer, from F10 or Alt+letter, or when they close; the `KeyTarget` router (`Sheet`, `Menu`,
+    `Popover(id)`, `Instrument(id)`) records which one receives keys. When nothing deeper handled
+    a `Nav*` action, the router's handler on the root sends it to the key target: an open menu,
+    popover or instrument gets it and the event stops; with the target `Sheet`, `NavCancel` calls
+    `SheetCanvas::cancel` (a no-op until T5.2 provides it), `NavNext` and `NavPrev` move focus per
+    UINV12, and the rest do nothing. Esc therefore closes an overlay whether the sheet or a
+    Tab-focused toolbar control has focus, and needs no canvas binding.
 - Undo, Redo, Cut, Copy, Paste, Delete and Select All are shell actions. Their handlers call the
   active canvas's public methods (`undo`, `redo`, `cut`, `copy`, `paste`, `delete_selection`,
   `select_all`; section 14 adds these to T5.2, T5.3 and T7.1). So the shortcut works wherever
@@ -893,7 +898,7 @@ kept every default and approved section 14 as written.
 | UQ11 | The mockup shows command-key glyphs; the targets are Windows and Linux. | Show "Ctrl+N" style text. | Default kept (UH0, 2026-11-23). |
 | UQ12 | IEC symbol preference before an IEC symbol set is compiled? | Stored only; the sheet keeps the built-in set. | Default kept (UH0, 2026-11-23). |
 | UQ13 | Print (toolbar, File)? | Shown disabled; no print plan exists. | Default kept (UH0, 2026-11-23). |
-| UQ14 | At the pinned revision `Window::focus` calls `refresh()`, which re-renders every cached view, and a mouse-down focuses a focusable element (UG15). Chrome clicks and popovers that take focus would therefore repaint `SheetView`, against UINV2, UB3, UTC-menu-keys and UTC-instrument. Accept the repaint and reword those, or keep pointer input in the chrome from moving focus? | None (raised by U4.2 after UH0's draft). | 2026-11-23 (UH0): keep UINV2, UB3 and their paint counts. Neither a pointer action in the chrome nor F10/Alt+letter calls `Window::focus`; mouse-down focus is suppressed on chrome controls (UG15). The workspace root holds a key target (`Sheet`, `Menu`, `Instrument(id)`); menus, popovers and instrument frames become the key target, not the focused element, and receive arrows, Enter, Esc and Tab through `capture_action` listeners on the `Workspace` element, which run before the sheet's handlers (UD2, UD3, UD5; UTC-menu-keys and UTC-instrument reworded to say GPUI focus stays on the sheet, paint counts unchanged). GPUI focus moves only for keyboard traversal (Tab, F6, UINV12) and for dialogs and text fields, which need the input handler; such a move is not a shell-only change under UINV2. If U1.5 finds this cannot be built at the pinned revision, it is set to `blocked (UQ14)` and returns to the owner; the invariants are not reworded to fit. |
+| UQ14 | At the pinned revision `Window::focus` calls `refresh()`, which re-renders every cached view, and a mouse-down focuses a focusable element (UG15). Chrome clicks and popovers that take focus would therefore repaint `SheetView`, against UINV2, UB3, UTC-menu-keys and UTC-instrument. Accept the repaint and reword those, or keep pointer input in the chrome from moving focus? | None (raised by U4.2 after UH0's draft). | 2026-11-23 (UH0): keep UINV2, UB3 and their paint counts. Neither a pointer action in the chrome nor F10/Alt+letter calls `Window::focus`; mouse-down focus is suppressed on chrome controls (UG15). The workspace root holds a key target (`Sheet`, `Menu`, `Instrument(id)`); menus, popovers and instrument frames become the key target, not the focused element, and receive arrows, Enter, Esc and Tab through `Nav*` actions bound once in `Shell` and routed by the root's `KeyTarget` router (Esc is no longer a `Sheet` binding; T5.2 provides `SheetCanvas::cancel` instead) (UD2, UD3, UD5; UTC-menu-keys and UTC-instrument reworded to say GPUI focus stays on the sheet, paint counts unchanged). GPUI focus moves only for keyboard traversal (Tab, F6, UINV12) and for dialogs and text fields, which need the input handler; such a move is not a shell-only change under UINV2. If U1.5 finds this cannot be built at the pinned revision, it is set to `blocked (UQ14)` and returns to the owner; the invariants are not reworded to fit. |
 
 ## 14. Changes to the canvas and wiring plans
 
@@ -914,7 +919,7 @@ wiring files stay authoritative for their ids.
 | canvas-roadmap.md T4.3 | Also provide `select_all` (Ctrl+A is bound by the shell, UD3). |
 | canvas-roadmap.md T4.5 | Also provide `zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation), used by View and the toolbar. |
 | canvas-roadmap.md T5.1 | Follow-up for doc lane task U2.1: `history_cursor`, `can_undo`, `can_redo`. |
-| canvas-roadmap.md T5.2 | Bind R, X, Y, W, Esc (and T1.5/T6.2's Space) in key context `Sheet`. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and `CanvasEvent::History`. The keymap conflict test (UINV4) covers T5.2's bindings. |
+| canvas-roadmap.md T5.2 | Bind R, X, Y, W (and T1.5/T6.2's Space) in key context `Sheet`; provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and `CanvasEvent::History`. The keymap conflict test (UINV4) covers T5.2's bindings. |
 | canvas-roadmap.md T5.3 | Provide `delete_selection`. |
 | canvas-roadmap.md T7.1 | Ctrl+C, Ctrl+X, Ctrl+V are bound by the shell; T7.1 provides `cut`, `copy`, `paste`. |
 | canvas-roadmap.md T7.3 | The floating frame, drag, stacking and focus come from ui-roadmap.md U4.1. T7.3 supplies the animated stub content inside that frame, keeps `bench run --script pan --instrument` and its done-when; `instrument_host.rs` holds the content only. |
