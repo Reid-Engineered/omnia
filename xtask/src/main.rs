@@ -39,7 +39,7 @@ mod tests {
     #[test]
     fn inv12_document_and_symbols_are_gpui_independent() {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        for package in ["omnia-doc", "omnia-symbols", "omnia-agent"] {
+        for package in ["omnia-doc", "omnia-symbols", "omnia-agent", "omnia-cli"] {
             let output = Command::new(env!("CARGO"))
                 .current_dir(workspace)
                 .args([

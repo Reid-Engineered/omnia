@@ -3567,6 +3567,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "omnia-cli"
+version = "0.1.0"
+dependencies = [
+ "omnia-agent",
+ "serde_json",
+]
+
+[[package]]
 name = "omnia-doc"
 version = "0.1.0"
 dependencies = [
