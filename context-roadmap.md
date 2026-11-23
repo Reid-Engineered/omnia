@@ -7,7 +7,7 @@ and simulation files; `XD` ids are the cross-plan decisions recorded in context-
 section 6.1.
 
 This roadmap runs beside the others. Milestone C1 touches the new `circuit` lane and one `doc`
-task, C1.1, which waits for parts P2.1–P2.3 and sim S1.1 (XD7); C1.9 gives sim S1.2 its
+task, C1.1, which waits for parts P2.1–P2.3 and C1.9 (XD7); C1.9 gives sim S1.2 its
 bindings (XD4); C2 adds to the agent lane after A1.8; C3 waits for the parts plan's
 milestone P2.
 
@@ -48,7 +48,7 @@ As in AGENTS.md: `cargo fmt --all --check`, `cargo clippy --workspace --all-targ
 | Lane | Owns | Needs GPUI |
 | --- | --- | --- |
 | `circuit` (new) | `crates/omnia-circuit/`, `context-plan.md`, `context-roadmap.md` | No |
-| `doc` | The lineage token in `crates/omnia-doc/src/doc.rs` (C1.9); `Change::net_delta`, `edited_parts`, `modified_wires` and `modified_labels` in `command.rs` and `undo.rs`, and their source in `connectivity.rs` (C1.1). Both after parts P2.1–P2.3 and sim S1.1, one at a time (XD7) | No |
+| `doc` | The lineage token in `crates/omnia-doc/src/doc.rs` (C1.9); `Change::net_delta`, `edited_parts`, `modified_wires` and `modified_labels` in `command.rs` and `undo.rs`, and their source in `connectivity.rs` (C1.1). Both after parts P2.1–P2.3, one at a time, C1.9 first (XD7) | No |
 | `agent` | The `context` operation in `crates/omnia-agent/` and its MCP mapping in `crates/omnia-cli/` (C2) | No |
 | `bench` | `crates/omnia-bench/benches/circuit.rs`, `docs/measurements/C*.md` | No |
 
@@ -68,9 +68,9 @@ As in AGENTS.md: `cargo fmt --all --check`, `cargo clippy --workspace --all-targ
 | Circuit task | Waits for (other roadmaps) | Can start |
 | --- | --- | --- |
 | C0.1, C0.2 | nothing | now |
-| C1.1 | parts P2.1–P2.3, sim S1.1 and C1.9 `done` (XD7; C1.9 edits `doc.rs` first), then no open task owning `doc.rs`, `command.rs`, `undo.rs`, `io.rs` or `connectivity.rs` (CQ10) | after HC1 and those tasks |
+| C1.1 | parts P2.1–P2.3 and C1.9 `done` (XD7; C1.9 edits `doc.rs` first), then no open task owning `doc.rs`, `command.rs`, `undo.rs`, `io.rs` or `connectivity.rs` (CQ10) | after HC1 and those tasks |
 | C1.2 | nothing | after HC1 |
-| C1.9 | sim S1.1 (symbol class); sim S1.2 waits for C1.9 (XD4) | after C1.2 and S1.1 |
+| C1.9 | sim S1.1 (symbol class); parts P2.3 (releases `doc.rs`, XD7); sim S1.2 waits for C1.9 (XD4) | after C1.2, S1.1 and P2.3 |
 | C1.3 to C1.7 | nothing beyond C1.1 and C1.9 | after HC1 |
 | C2.1, C2.2 | A1.8 | after C1.8 and A1.8 |
 | C2.5 | A1.9 (creates the agent contract) | after C2.4 and A1.9 |
@@ -85,8 +85,8 @@ As in AGENTS.md: `cargo fmt --all --check`, `cargo clippy --workspace --all-targ
 ```
 C0.1 -> C0.2 [HC1]
 HC1 -> C1.2 (circuit)
-C1.2 + sim S1.1 -> C1.9 (bindings, lineage token) -> sim S1.2 (lowering, XD4)
-C1.9 + parts P2.1-P2.3 + sim S1.1 -> C1.1 (doc)
+C1.2 + sim S1.1 + parts P2.3 -> C1.9 (bindings, lineage token) -> sim S1.2 (lowering, XD4)
+C1.9 + parts P2.1-P2.3 -> C1.1 (doc)
 C1.1 + C1.9 -> C1.3 -> C1.4 -> C1.5 -> C1.6 -> C1.7 -> C1.8 [HC2]
 HC2 + A1.8 -> C2.1 -> C2.2 -> C2.3 -> C2.4;  C2.4 + A1.9 -> C2.5 [HC3]
 HC2 + parts P2 -> C3.1 -> C3.2;  C3.2 + A1.9 -> C3.3 [HC4]
@@ -131,8 +131,8 @@ HC2 + (A3.1 or A4.1) -> C5.1          HC2 + measured split tails (CQ7) -> C5.2
 ## Milestone C1: the engine
 
 ### C1.1 Net delta in `Change` · todo
-- Lane: doc · Depends: C0.2; parts P2.1, P2.2 and P2.3; sim S1.1; C1.9 (which edits `doc.rs`
-  first); CQ10 (XD7) · Read: D2, INV10,
+- Lane: doc · Depends: C0.2; parts P2.1, P2.2 and P2.3; C1.9 (which edits `doc.rs` first);
+  CQ10 (XD7) · Read: D2, INV10,
   CD2, CINV12, section 6.1 (XD7); parts-plan.md PD8 (change visibility); T2.8 measurements
 - Owns: `Change` and `ChangeAcc` in `crates/omnia-doc/src/command.rs`; the `Change` that
   `undo` and `redo` build in `crates/omnia-doc/src/undo.rs`; delta recording in
@@ -163,7 +163,7 @@ HC2 + (A3.1 or A4.1) -> C5.1          HC2 + measured split tails (CQ7) -> C5.2
 ### C1.9 Bindings and ground evidence for lowering · todo
 Numbered after C1.8 because it was added later (XD4); it lands right after C1.2, before the
 journal and the views, so that sim S1.2 can start.
-- Lane: circuit, doc · Depends: C1.2, sim S1.1 (symbol class; S1.1 also releases `doc.rs`,
+- Lane: circuit, doc · Depends: C1.2; sim S1.1 (symbol class); parts P2.3 (releases `doc.rs`,
   XD7) · Read: section 6.1 (XD4, XD5), CK1, CK3, CK4, CD13, CD18, CINV5, CINV14, section 12
   (`Bindings`, `DocLineage`); sim-plan.md SD7, SK10, SQ3
 - Owns: `crates/omnia-circuit/src/bindings.rs`; `crates/omnia-circuit/tests/bindings.rs`; the
@@ -464,3 +464,12 @@ CTC-bind-02; the `net` view's member order follows). Coordinator decision: parts
 ERC003 crosswalk row states the partial overlap (a parseable legacy value still fails sim
 preflight for lack of a model binding); the five-name `ground.name_only` list is recorded as
 broader than XD4's `GND` case and advisory only. PR #100 body updated. Nothing measured.
+
+2026-11-23 C0.1 cross-plan alignment, sim #104 follow-up — the parts plan (`66f9e49`) now
+records the XD7 order as parts P2.1–P2.3, then context, because sim S1.1 no longer owns any
+`omnia-doc` file (sim S0.2, PR #104). Removed C1.1's gate on S1.1 (CQ10, C1.1 Depends, Lanes,
+where-each-task-fits, dependency overview, section 13). C1.9 keeps S1.1 for symbol class and
+now also waits for parts P2.3 before adding the lineage token to `doc.rs`; section 15 asks the
+parts plan to show C1.9 before C1.1 in its order line. Section 9.4's crosswalk gains ERC009
+(no simulation model) and ERC010 (conflicting rail voltage) as sim-only rows, and the ERC001
+row names `ground.missing`'s non-`Ground`-part condition, which sim ERC001 now uses.

@@ -606,7 +606,10 @@ followed by where it applies.
   open task owns those files. `SetParam` and every instance an `UpdatePartDef` touches appear in
   `Change`, undo/redo, context invalidation and `since`, and SD11 stale-result handling, even
   when topology and display text are unchanged.
-  *In this plan:* CD2, CD5, CD6, CQ10, task C1.1.
+  *Update 2026-11-23 (sim S0.2, PR #104; parts plan at `66f9e49`):* S1.1 no longer owns any
+  `omnia-doc` file, so the order is parts P2.1–P2.3, then context. Within the context plan,
+  C1.9's lineage token in `doc.rs` (CD18) comes before C1.1.
+  *In this plan:* CD2, CD5, CD6, CD18, CQ10, tasks C1.1 and C1.9.
 - **XD8 Crates and agent surface.** `omnia-parts` (catalog, import), `omnia-circuit` (derived
   circuit facts), `omnia-sim` + adapters (execution, results); all headless, dependencies
   one-way. Parts' `set_param`/`update_part_def` use the existing preview/apply edit path and
@@ -826,7 +829,7 @@ shared cases map; each side keeps its own extra cases.
 
 | ERC code | Context finding ids | Shared predicate |
 | --- | --- | --- |
-| ERC001 | `ground.missing`, `ground.name_only` (the hint for a `GND` label alone) | Declared ground evidence, CK4, read from C1.9 |
+| ERC001 | `ground.missing`, `ground.name_only` (the hint for a `GND` label alone) | Declared ground evidence, CK4, read from C1.9, with `ground.missing`'s condition: at least one part whose symbol class is not `Ground` |
 | ERC002 | `designator.duplicate` | Case folding and blank designators, as defined above |
 | ERC003 | none for modelled parts (typed parameter validation, PD6 and PD10, refuses bad values at `apply`); `value.unparsed` for legacy unmodelled parts | The parts plan's typed parameter validation. The overlap is partial: `value.unparsed` covers only unparseable legacy text, while a legacy unmodelled part whose value parses still fails sim preflight because it has no model binding (`sim: None`, PD8), which no context finding reports |
 | ERC004 | `source_loop`, where the predicates coincide | A loop of ideal voltage sources, read from C1.9's bindings |
@@ -834,6 +837,8 @@ shared cases map; each side keeps its own extra cases.
 | ERC006 | `pin.unconnected`, `net.single_pin` | A pin alone on its net (with roles, not for `no_connect`) |
 | ERC007 | none: retired (XD2) | — |
 | ERC008 | none: a model-required supply check that sim owns; context exposes the shared pin facts (`power`-role pins and their nets, C1.9 and C3.1) | Sim's rule; SQ8's implicit ±15 V supply does not satisfy it and downgrades it to a warning |
+| ERC009 | none: simulation only (no simulation model) | — |
+| ERC010 | none: simulation only (conflicting rail voltage) | — |
 
 `designator.blank`, `label.dangling`, `net.no_pins`, `names.*`, `pin.no_connect_wired`,
 `input.undriven`, `power.undriven`, `output.conflict`, `dc_path.none`,
@@ -980,8 +985,8 @@ column to `omnia-circuit`. A crate not listed there needs its licence logged fir
 
 | Risk | Mitigation | Early test |
 | --- | --- | --- |
-| C1.1 changes `command.rs`, `undo.rs` and `connectivity.rs`, which wiring, parts and simulation tasks own in turn | C1.1 waits for parts P2.1–P2.3 and sim S1.1, then until no open task owns them (XD7, CQ10) | C1.1 |
-| Simulation lowering waits on this engine | C1.9 is small, read-only and depends only on C1.2 and S1.1, not on the net delta or the views | C1.9 |
+| C1.1 changes `command.rs`, `undo.rs` and `connectivity.rs`, which wiring and parts tasks own in turn | C1.1 waits for parts P2.1–P2.3 and C1.9, then until no open task owns them (XD7, CQ10) | C1.1 |
+| Simulation lowering waits on this engine | C1.9 is small and read-only apart from the lineage token; it depends on C1.2, sim S1.1 (symbol class) and parts P2.3 (which releases `doc.rs`), not on the net delta or the views | C1.9 |
 | Recording `net_delta` inside `apply` eats the worst case's 0.08 ms headroom | Record facts connectivity already computes; measure paired against the command-boundary cases; if the boundary fails, the task is `blocked` with numbers, never a looser threshold | C1.1 |
 | The parts plan is not merged, so pins have no roles | Milestones C1 and C2 need no roles; tier 1 waits for C3.1 | C1.6 |
 | A giant ground net makes recompute or splits slow | Hubs are never listed or walked; split tails measured at C1.8; C5.2 if needed | C1.8 |
@@ -1006,7 +1011,7 @@ Each has a default. Build to the default; the owner's dated answer replaces it h
 | CQ7 | Add the spanning-forest bit and batched search to connectivity (11.1)? | Only if C1.1 or C1.8 shows split tails, on any net with many wires, including wire-only nets that CK7's pin count does not call hubs. |
 | CQ8 | Hub threshold: more than 32 pins, or kind `power` or `ground`? | Yes. |
 | CQ9 | Does stage 3 lowering take pin-to-net bindings and the ground reference from this engine, rather than a second derivation? | **Answered 2026-11-23 by XD4** (coordinator, owner-delegated): yes. The stage 3 lowering is `omnia-sim`'s (`CircuitIr`, node ordering, device expansion, source maps, diagnostics mapping, SPICE text; sim S1.2) and consumes C1.9's revision-matched bindings and declared ground evidence. There is no parts-plan netlister: the parts plan supplies definitions (roles, terminal order, parameters) only. Ground evidence follows sim SQ3's default (CK4); CD13's heuristics never reach the bindings. |
-| CQ10 | May C1.1 change `Change`, `undo.rs` and connectivity while W2.2 is `needs-human` (its measurement only) and W3.4 to W3.6 are open? | The order is fixed by XD7 (2026-11-23): parts P2.1–P2.3, then sim S1.1, then C1.1. C1.1 starts only after those are `done` and when no other open task owns `doc.rs`, `command.rs`, `undo.rs`, `io.rs` or `connectivity.rs`; the owner confirms at HC1 which wiring tasks still hold them. |
+| CQ10 | May C1.1 change `Change`, `undo.rs` and connectivity while W2.2 is `needs-human` (its measurement only) and W3.4 to W3.6 are open? | The order is fixed by XD7 (2026-11-23, updated by sim PR #104: S1.1 owns no `omnia-doc` file): parts P2.1–P2.3, then C1.9's lineage token in `doc.rs`, then C1.1. C1.1 starts only after those are `done` and when no other open task owns `doc.rs`, `command.rs`, `undo.rs`, `io.rs` or `connectivity.rs`; the owner confirms at HC1 which wiring tasks still hold them. |
 | CQ11 | Use a graph library for the matcher? | No: a hand-written matcher in the crate, so determinism and step caps stay under our control. |
 
 ## 15. Changes to other files
@@ -1028,7 +1033,7 @@ Applied by C0.2 after HC1, for the decisions HC1 keeps:
 | mcp-plan.md 13 | The safe loop orients with `omnia_context` and verifies with the `circuit` delta |
 | canvas-plan.md section 10 | Use column: `rustc-hash`, `smallvec`, `serde_json`, `hdrhistogram` in `omnia-circuit` |
 | canvas-plan.md section 9 (`Change`) and D2 | `net_delta`, `edited_parts`, `modified_wires` and `modified_labels` beside P2.2's `modified` (CD2), once C1.1 fixes their shape; any amendment to `nets_changed`'s meaning |
-| parts-plan.md (once merged) | Section 13: CQ2 raised as a parts question if the owner wants it. (Its "definitions and bindings" wording and XD4 are already in PR #85.) |
+| parts-plan.md (once merged) | Section 13: CQ2 raised as a parts question if the owner wants it. (Its "definitions and bindings" wording and XD4 are already in PR #85.) Its XD7 order line `P2.3 -> context C1.1` gains C1.9's lineage token before C1.1 (CD18) |
 
 Recorded for the other plans' own tasks (XD1–XD9 say each plan records its own amendments;
 this plan edits neither file):
