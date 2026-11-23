@@ -201,6 +201,9 @@ root re-render replays the sheet's previous primitives (G6) and does not run `Sh
 code. Hover, menu, toolbar, status, toast and instrument-frame changes notify only their own view
 (UINV2). The only shell actions that repaint the sheet are the ones D7 already allows: a theme
 change, a scale-factor change, and a viewport change from a dock resize, at most once per frame.
+Independently of the shell, GPUI itself refreshes the window, and so repaints the sheet once,
+when input switches between mouse and keyboard (UG17); whether that repaint is accepted is UQ15,
+and until it is answered the counts in UINV2, UB3 and the UTC rows stay as written.
 
 ## 6. Decisions
 
