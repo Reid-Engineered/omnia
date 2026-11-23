@@ -200,13 +200,14 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   command yet); `plan_follow` on a selection with no boundary points returns an empty plan
   and allocates nothing.
 
-### W2.2 Move and Reorient with follow · needs-human
+### W2.2 Move and Reorient with follow · blocked (WB3 fails on Orion: median p99 51.2 ms vs 2 ms)
 - Lane: doc · Depends: W2.1 · Read: WD3, WINV1, WINV2, WINV4, INV4, INV10
 - Owns: `crates/schematic-doc/src/command.rs`, `undo.rs` (after T5.1)
 - Scope approved 2026-11-17: mechanical caller migrations in document tests and the
   command benchmark, plus the WB3 benchmark. Windows checks only; no Orion runs.
 - Implementation and Windows checks complete; WB3 remains uncertified. See
-  `docs/measurements/W2.2.md`. No reference-machine run is authorized this session.
+  `docs/measurements/W2.2.md`. The 2026-11-23 Orion campaign measured WB3 at a median p99 of
+  51.2 ms (see the log), so W2.2 is blocked on WB3.
 - Do: `Move` and `Reorient` carry a `FollowPolicy`; `apply` calls `plan_follow`, applies the
   plan and the move as one change, splits wires under landed pins and ends (TC-move-14),
   normalises, and pushes one inverse that restores every removed wire under its old id. A
@@ -776,3 +777,4 @@ step; assertions unchanged. Open for the owner: at a point holding a selected pi
 foreign pin and a wire end, the run follows the moved pin and the foreign pin loses its
 wired connection; WINV1 does not say which side keeps the wire. For the AddWires/T6.1
 owner: `AddWires` still accepts off-lattice ends. Evidence: docs/measurements/W2.2.md.
+2026-11-23 W2.2 Orion campaign - blocked (WB3 fails). Owner-approved section 2.1 run on Orion, done remotely by the coordinating agent: per-apply sampling added to the WB3 bench and the frozen `docs/measurements/W2.2/run.sh` committed (`6729f8e`) before the timed run; ten passes of 100 applies of a follow-enabled `Move` of 100 parts on seed-42 `Parts10k`. Median of pass p99s 51.151 ms (range 46.770-84.264) against WB3's < 2 ms; median p50 about 42 ms. AC and `performance` governor held in every snapshot; Baloo suspended. Threshold unchanged. Next: profile `Doc::apply(Move { follow })` on `Parts10k` in a doc-lane follow-up. Evidence: `docs/measurements/W2.2/orion-2026-11-23/`.

@@ -240,7 +240,9 @@ an `H*`, `HW*` or `HA*` checkpoint, or marks a budget met. Human checkpoints sta
 ### AD11 Parts are placed by symbol name. DECIDED
 
 `place_part` names a symbol (`Resistor-IEEE-Standard`). Pins and bounds come from
-`SymbolLibrary::place_command` (A1.2), the same helper the canvas place tool uses.
+`SymbolLibrary::place_command` (A1.2). The agent-lane adoption of `omnia-parts` uses
+`Catalog::place_symbol` to embed the symbol's default definition (`PD11`). See
+[parts-plan.md](parts-plan.md) section 14 for the atomic placement and primary-value edit.
 
 ### AD12 Units and ids. DECIDED
 
@@ -396,13 +398,19 @@ JSON-lines and the command line, as built at A1.7 (2026-11-23, `crates/omnia-cli
 
 | Operation | Params | `Command` |
 | --- | --- | --- |
-| `place_part` | `symbol`, `at`, `orient`, `designator`, `value` | `PlacePart` via `place_command` |
+| `place_part` | `symbol`, `at`, `orient`, `designator`, `value` | `PlacePart` via `place_command`; after parts catalog adoption, `Catalog::place_symbol(symbol, at, orient, designator, Some(value))`, which builds one `PlacePart` carrying the primary-value override (AD11; parts §14) |
 | `add_wires` | `wires: [[a, b], …]` | `AddWires` (split and merge inside `apply`, T6.1) |
 | `add_label` | `at`, `text` | `AddLabel` |
 | `move` | `items`, `delta`; `invert_follow` from A2.2 | `Move` |
 | `reorient` | `items`, `pivot`, `by`; `invert_follow` from A2.2 | `Reorient` |
 | `delete` | `items`; `with_wires` from A2.3 | `Delete` |
 | `set_text` | `item`, `field` (`designator`, `value`, `label`), `text` | `SetText` |
+
+Future minor schema additions once `omnia-doc` lands `parts-plan.md` `PD8` (`P2.2`): `set_param`,
+`list_parts` and `update_part_def`. `set_param` and `update_part_def` are edit operations: they
+use the existing preview/apply edit path, and their effects appear in change deltas like any
+other edit (cross-plan decision XD8, 2026-11-23). `list_parts` is a read operation: it reads the
+document's definitions and the catalog, changes nothing, and has no preview or apply step.
 
 `invert_follow` means exactly what holding Alt at commit means (WK3), applied to the session's
 `WiringPrefs` (WK10). It exists only once W2.2 has added `FollowPolicy` to the code.
