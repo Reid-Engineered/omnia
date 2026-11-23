@@ -599,6 +599,13 @@ amended decision:
   because v2 files and goldens store raw ids.
 - The existing v2 goldens stay unchanged. The simulation plan builds its own modelled Wien
   oscillator fixture (`S2.2`, `XD1`).
+- **Stress sheets stay fixed** (added 2026-11-23, re-review of #85). The `omnia-bench` stress
+  sheets (`100`, `1k`, `10k`, dense wiring, text heavy) back certified Orion budgets (for example
+  `T2.7`, `T3.4`), and today the generator draws from every built-in symbol. Before any symbol is
+  added, `P1.4` pins the generator to an explicit, fixed list of today's six `SymbolId`s, in
+  today's order, so every existing sheet stays item-for-item identical for every seed. A sheet
+  that should contain new symbols is a new named `StressSheet` variant; existing variants never
+  change. The pin protects the later symbol additions by `S1.1` and `S3.2` as well.
 
 ### XD cross-plan decisions (coordinator, owner-delegated, 2026-11-23)
 
@@ -882,6 +889,7 @@ and follow `PK11`.
 | Untrusted `.opart`, `.omnia` or agent command contains host-executing `.control` / `shell` directives or ZIP bombs | `PK3` streaming caps + one `PD10` validator on every ingress | `PTC-hostile-opart`, `PTC-hostile-embedded` |
 | Equal pin counts hide a wrong terminal order | Explicit stored-index → number → terminal mapping (`PD5`); geometry taken from the definition and checked in order by `validate_instance` (`PD8`) | `PTC-pin-order`, `PTC-instance-refuse` |
 | A save between `P2.2` and `P2.3` drops definitions or overrides | `save` refuses such documents until the v3 writer lands (`PD8`) | `PTC-no-lossy-save` |
+| Adding symbols silently changes the stress sheets behind certified budgets | `P1.4` pins the generator to today's symbol list before adding symbols; new symbols go into new named sheets (`PD11`) | Stress-sheet fingerprint test (`P1.4`) |
 | Workspace-wide breakage from `Part`/`Command` changes | `Part` unchanged; the task that changes `PlacePart`, `Command` or `Change` owns every construction site and exhaustive match (`P2.2`) | Standard checks on `P2.1`, `P2.2` |
 | `StoredPart` growth or map cloning slows `Doc::fork` (`AB2`) or `10k` load (`PB4`, `UB10`) | Store only non-default overrides (empty on default parts); deduplicate definitions; measure | `PB4` bench + `AB2` check |
 | Divergence between RON v3 and the proposed binary `.omnia` format | The definition table maps 1:1 to a single `PART_DEFS` binary section (`PQ8`); `FH0` stays separate (`XD8`) | `FH0` alignment |
