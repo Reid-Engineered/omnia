@@ -71,7 +71,7 @@ Checked at `f4fd588`.
 | Fresh ids are allocated deterministically: arena append, geometry order for splits (D2) | `arena.rs`, `route.rs` | A full copy of a document allocates the same ids as the original. |
 | `Change.dirty` covers the old and new bounds of every touched item | `command.rs` (`Change` docs), `tests/change_contract.rs` | A diff can be computed exactly by querying `dirty` before and after. |
 | `Doc` derives only `Debug` and `Default`: no `Clone`, no fork, no `DocSnapshot` | `doc.rs` | Missing prerequisite for preview and for D8 background jobs: task A1.1. |
-| The code's `Command` has `Move { items, delta }` and `Delete(Vec<ItemId>)`; no `follow`, `with_wires`, `DragSegment` or `Paste` | `command.rs` | The canvas plan section 9 sketch is ahead of the code. Schema v1 follows the code; fields are added as W2.2, W3.2, W3.5 and T7.1 merge. |
+| The code's `Command` has `Move { items, delta }` and `Delete(Vec<ItemId>)`; no `follow`, `with_wires`, `DragSegment` or `Paste` | `command.rs` | The canvas plan section 9 sketch is ahead of the code. Schema v1 follows the code; fields are added as W2.2, W3.2, W3.5 and T7.1 merge. Updated at A1.3 (2026-11-21): `follow`, `with_wires` and `DragSegment` are now in the code; schema v1 still has exactly the section 9.2 operations, `invert_follow` and `with_wires` arrive with A2.2 and A2.3, and no task yet exposes `DragSegment`. |
 | No public type derives serde; only the private RON records in `io.rs` do | `io.rs` | The wire schema is a separate DTO layer. Internal types do not become a public contract. |
 | `PlacePart` needs the caller's `local_pins` and `local_bounds` | `command.rs` | A shared helper in `omnia-symbols` builds it from a symbol (A1.2). |
 | `render_to_image` exists on Windows only (G12) | AGENTS.md | Visual checks for agents use an SVG render, not a GPU screenshot (A2.4). |
@@ -222,6 +222,8 @@ Enforced in `omnia-agent`, not in any user interface, so every surface meets the
   although `Doc` treats them as unordered sets.
 - Nets are keyed canonically: lowest pin `(part id, pin index)`, else lowest wire id, else
   lowest label id. Raw `NetId`s are never exposed; a `NetId` is valid only until the next edit.
+  A net's members are sorted, and nets are listed in key order: pin keys by `(part, pin)`, then
+  wire keys, then label keys (A1.4).
 - DTOs contain no hash maps and no floats; field order is fixed by struct order.
 - The same document and request give byte-identical JSON (AINV5).
 
@@ -312,6 +314,63 @@ On failure `result` is replaced by `error` (9.4). Requests through `omnia call` 
 serve` are `{"op": "<operation>", "params": { }, "idempotency_key": "..."}`; JSON-lines adds
 an `"id"` that the response echoes. All objects reject unknown fields.
 
+Decoding rules, fixed at A1.3 (2026-11-21; amended by its three review rounds the same day):
+
+- Two wire forms, one meaning. The envelope above is what `omnia call` and `omnia serve` read;
+  `params` is always present (`{}` for `capabilities` and `new`). Over MCP a tool's
+  `arguments` are the params object itself, with `idempotency_key` beside the params fields on
+  the operations section 11.2 names (schema `<op>.arguments`). Both decode to the same request.
+  `idempotency_key` anywhere else is a `schema_violation`.
+- Order of checks, the same for both forms: raw input over AK2 is `limit_exceeded`; malformed
+  JSON, a duplicate object key, or a number that is not a 64-bit integer written without
+  fraction or exponent is `invalid_request` (`-0` is read as `0`); in the envelope, a missing
+  `op` or `params` or a non-string `op` is `schema_violation`; an operation the catalog does
+  not list is `unknown_operation`; over AK3 or AK4 is `limit_exceeded`; an `idempotency_key`
+  on an operation that takes none is `schema_violation` at `/idempotency_key` ("unknown
+  field"), also on `request_status`, whose own params field of that name an envelope key never
+  fills; then the params, with any `idempotency_key` placed beside the params fields, are
+  validated against `<op>.arguments` and any mismatch is `schema_violation {path}`; then the
+  DTOs are decoded; last, AK2 on the canonical forms (below). In the envelope, an unknown field,
+  and an `idempotency_key` written inside the params of an operation whose params have no such
+  field (`/params/idempotency_key`), are ordered among the params fields by name; a fault on the
+  params object itself comes first, and the envelope's field wins a tie.
+- AK2 bounds the raw input and both canonical forms. A request is accepted, by either decoder
+  or by `Request::new`, only if `Request::to_json` and `Request::to_arguments` are both at most
+  8 MiB, so whatever is accepted or built can be sent in either form. The value reported is the
+  larger form's size; the envelope is always the larger. MCP arguments whose canonical
+  encoding is exactly 8 MiB are therefore refused, because the envelope they imply is longer;
+  raw input padded with whitespace to 8 MiB is still accepted when both canonical forms fit.
+- A refusal of well-formed JSON (a duplicate key, a number's spelling) has no position in its
+  message, so both forms report it alike. Malformed JSON keeps the parser's line and column,
+  which refer to the raw input.
+- The two forms give the same error code, details and message for the same fault; the JSON
+  Pointer differs only by the envelope's `/params`. Messages do not repeat the path. A
+  property test decodes mutated inputs through both forms and compares the errors.
+- The decoder refuses everything the published schema refuses (nulls for optional fields,
+  arrays in place of objects, out-of-range ids and numbers). Beyond the schema it checks only:
+  the request size, duplicate keys, the integer spelling of numbers, and that bounds have
+  `min <= max` on both axes. Property tests mutate valid requests and responses and check
+  that the decoder and the published schema agree on every result but these.
+- `path` is a JSON Pointer to the first failure, found by visiting object keys in byte order;
+  when no alternative of a union matches, the failure with the most pointer segments is
+  reported, the first on a tie. The same request with its keys in another order gets the same
+  error bytes (AINV5).
+- What the API can build, it can read back. `Request`, `Response` and the stored response of
+  `request_status` have private fields and checked constructors (`Request::new`,
+  `Response::new`, `StoredResponse::new`), and `Bounds` holds only a valid rectangle, so every
+  value serializes to a document its own decoder accepts. Property tests build values from
+  parts that may break the rules and check that whatever is accepted decodes back to itself.
+- A successful response whose result belongs to a document (`new`, `open`, `close`,
+  `inspect`, `query`, `nets`, `validate`, `preview`, `apply`, `undo`, `redo`, `save`) carries
+  `doc_id` and `revision`, which a client needs for AD4; the schema requires them and
+  `Response::new` refuses a result without them. Audited at the same time: no other result has
+  a field a client must have that the schema leaves optional (`path` is absent for a new
+  document, `next_cursor` on the last page, `dirty` for a no-op, and `inspect` returns only
+  what `include` names).
+- An absent optional field is omitted from responses, never `null`. Document ids are `d<n>` and
+  job ids `j<n>`, in the canonical decimal of AD12's item ids; ids fit `u32` (items) or `u64`
+  (documents, jobs).
+
 ### 9.2 Edit operations
 
 | Operation | Params | `Command` |
@@ -325,7 +384,8 @@ an `"id"` that the response echoes. All objects reject unknown fields.
 | `set_text` | `item`, `field` (`designator`, `value`, `label`), `text` | `SetText` |
 
 Future minor schema additions once `omnia-doc` lands `parts-plan.md` `PD8` (`P2.2`): `set_param`,
-`list_parts` and `update_part_def`.
+`list_parts` and `update_part_def`. They use the existing preview/apply edit path, and their
+effects appear in change deltas like any other edit (cross-plan decision XD8, 2026-11-23).
 
 `invert_follow` means exactly what holding Alt at commit means (WK3), applied to the session's
 `WiringPrefs` (WK10). It exists only once W2.2 has added `FollowPolicy` to the code.
@@ -353,6 +413,38 @@ Future minor schema additions once `omnia-doc` lands `parts-plan.md` `PD8` (`P2.
 `apply` returns the same shape without `preview_id` and `base_revision`. The diff is paged by
 AK4; `truncated` says so.
 
+As built at A1.3: `before` and `after` of a modified item carry all of its fields (a part's
+`symbol`, `at`, `orient`, `designator` and `value`; a wire's `a` and `b`; a label's `at` and
+`text`); the example above abbreviates them. `change.dirty` is omitted for a validated no-op.
+`validate` returns `{base_revision, change}`; `undo` and `redo` return `{change}`.
+
+Read results as built at A1.4 (`src/read.rs`, 2026-11-22):
+
+- Paging (AK4) is keyset paging. `next_cursor` is the id of the last item on the page (for
+  example `wire:7`) and is present exactly when more items follow, so a last page that is
+  exactly full has none. The next page holds the items after the cursor in canonical order, so
+  a cursor stays usable across edits: removed items vanish and none repeats. A `cursor` that is
+  not an item id is `schema_violation` at `/params/cursor`; a `limit` of 0 at `/params/limit`;
+  over AK4 is `limit_exceeded {page_size}` first, as in the decoder. The read layer reports
+  envelope-space pointers; the MCP form drops the leading `/params` (9.1).
+- `query` modes: `envelope` is `Doc::query` (a part's body and pins), `within` is
+  `Doc::query_within` (WD8 Enclosed), `touching` is `Doc::query_touching` (WD8 Intersecting),
+  with those functions' inclusive edge rules. `inspect`'s `area` pages the items the `envelope`
+  mode finds there; its summary and nets always cover the whole document. `cursor` and `limit`
+  are checked whether or not `include` names `items`.
+- A net is one of `omnia-doc`'s nets (D2): wire ends, pins and labels at points, joined by
+  wires and by equal label text. Every live pin, wire and label is in exactly one net, and a
+  lone pin or label is a net of its own. `nets {at}` is empty when no wire end, pin or label sits
+  exactly at `at` (a wire's interior is no connection point); `nets {wire}` on a missing wire is
+  `unknown_item`. The nets are grouped through `Doc::net_of` and `Doc::net_at`; no `NetId`
+  leaves `read.rs`.
+- A part's `symbol` is its symbol's name from the library; a part whose symbol id the library
+  lacks makes an items read `internal`, never a guessed name.
+- The symbol catalog (`omnia://symbols`, 10.2) is `read::SymbolInfo {name, bounds, width,
+  height, pins: [{number, at}]}`, in symbol id order, with `width` and `height` the bounds'
+  extent in nanometres (K7's placed size) and pins in the order a `PinRef` indexes. It has no
+  committed schema yet: resources are A1.8's, which publishes one beside the resource.
+
 ### 9.4 Errors
 
 ```json
@@ -372,12 +464,24 @@ AK4; `truncated` says so.
 | --- | --- |
 | Protocol and schema | `invalid_request`, `schema_violation {path}`, `unknown_operation`, `limit_exceeded {limit, value}`, `unsupported_in_mode`, `protocol_version_unsupported` |
 | Resolution | `document_not_found`, `unknown_symbol`, `unknown_item` |
-| From `CommandError` | `out_of_bounds`, `invalid_wire`, `missing_item`, `duplicate_item`, `invalid_text_field`; later `follow_no_route {from, to, blocker}`, `segment_blocked {blocker}` |
-| Concurrency | `stale_revision {expected, actual}`, `preview_mismatch`, `idempotency_conflict`, `user_gesture_in_progress`, `nothing_to_undo` |
+| From `CommandError` | `out_of_bounds`, `invalid_wire`, `missing_item {item}`, `duplicate_item {item}`, `invalid_text_field {item, field}`, `follow_no_route {from, to, blocker}` (`Follow`), `segment_blocked {blocker}` (`Segment`), `wire_capture {wire, blocker}` (`Capture`), `off_lattice {at}` (`OffLattice`) |
+| Concurrency | `stale_revision {expected, actual}`, `preview_mismatch`, `idempotency_conflict`, `user_gesture_in_progress`, `nothing_to_undo`, `nothing_to_redo` |
 | Approval | `approval_required {approval_id, tier, effect, effect_digest}`, `approval_denied` |
 | Files | `path_outside_root`, `file_exists`, `io_error`, `unsupported_file_version` |
 | Jobs | `cancelled`, `job_not_found` |
 | Other | `internal` |
+
+Amended at A1.3 (2026-11-21), so the plan follows the code. The wiring tasks had already added
+`Segment`, `Follow`, `Capture` and `OffLattice` to `CommandError`, so all of them have codes
+now and AINV10's exhaustive mapping covers them; `Capture` and `OffLattice` gained the new codes
+`wire_capture` and `off_lattice`. The three item codes carry the ids `CommandError` already
+holds. `nothing_to_redo` is added for `omnia_redo`. `limit` is one of `request_bytes`,
+`file_bytes`, `operations`, `page_size`, `open_documents`; `effect` one of `edit`,
+`write_file`, `overwrite_file`, `discard_unsaved`. A `blocker` is
+`{"kind": "pin", "part", "pin"}`, `{"kind": "wire_end" | "wire_body" | "overlap", "wire"}` or
+`{"kind": "sheet"}`. Codes without details carry `"details": {}`. `retryable` is fixed per code:
+true for `stale_revision`, `user_gesture_in_progress`, `approval_required` and `io_error`. The
+schema pins it per code and the decoder refuses an error whose flag contradicts its code.
 
 ### 9.5 Schema files
 
@@ -385,6 +489,23 @@ JSON Schemas for every request, response and operation are generated by a hand-w
 in `omnia-agent` and committed under `crates/omnia-agent/schema/`. A test regenerates them and
 fails on any difference (AINV11), the way `cargo xtask tokens` is checked. No schema crate is
 added (AQ3).
+
+As built at A1.3: dialect JSON Schema 2020-12; files `request.json` and `response.json` cover
+every available operation, and each available operation has `<op>.params.json` (its `params`
+in the envelope), `<op>.arguments.json` (its MCP `inputSchema`: the params plus
+`idempotency_key` where 11.2 allows it) and `<op>.response.json` (its envelope, the MCP
+`outputSchema`), each self-contained with `$defs`. Operations the catalog does not list yet
+(the A3 job tools) have no committed files. Keys are printed sorted, so the bytes do not depend
+on `serde_json` features. The schemas state the ranges the codecs hold: id patterns spell
+exactly `0..=4294967295` (items) or `0..=18446744073709551615` (documents, jobs), every 64-bit
+integer has its maximum, and bounds corners lie inside K1. The decoders validate against these
+same schemas with a hand-written validator for the keywords the module emits (section 9.1). It
+compares integers exactly, also beyond 64 bits. `response.json` ties each result to its
+envelope: a document's result requires `doc_id` and `revision` there too. Every envelope schema
+forbids `result` and `error` together on its own (`not`), whatever its branches require.
+After a deliberate change, `OMNIA_BLESS_SCHEMAS=1 cargo test -p omnia-agent ainv11` rewrites
+the directory; without the variable the test only compares. Property tests check that every
+serialized DTO validates against its published schema text, with no codec in the check.
 
 ## 10. MCP mapping
 
@@ -398,7 +519,7 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_new` | 0 | not destructive | A1 |
 | `omnia_open {path}` | 0 | read-only | A1 |
 | `omnia_inspect {doc_id, include, area?, cursor?, limit?}` | 0 | read-only, idempotent | A1 |
-| `omnia_query {doc_id, area, mode: envelope \| within \| touching}` | 0 | read-only, idempotent | A1 |
+| `omnia_query {doc_id, area, mode: envelope \| within \| touching, cursor?, limit?}` | 0 | read-only, idempotent | A1 |
 | `omnia_nets {doc_id, at? \| wire?}` | 0 | read-only, idempotent | A1 |
 | `omnia_validate {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |
 | `omnia_preview {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |
@@ -409,10 +530,18 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_request_status {idempotency_key}` | 0 | read-only | A1 |
 | `omnia_route`, `omnia_snap`, `omnia_hit` | 0 | read-only, idempotent | A2 |
 | `omnia_render_svg {doc_id, area?, theme}` | 0 | read-only, idempotent | A2 |
-| `omnia_job_status`, `omnia_job_cancel` | 0 | — | A3 |
+| `omnia_job_status`, `omnia_job_cancel` | 0 | — | A3; not listed before A3.1 |
 
 Every tool declares an `inputSchema` and an `outputSchema`. A result carries
 `structuredContent` (the 9.1 envelope) and a text block with the same JSON.
+
+A tool's arguments are its operation's params, plus `idempotency_key` for `omnia_apply`,
+`omnia_undo`, `omnia_redo` and `omnia_save` (11.2); the `inputSchema` is `<op>.arguments` and
+the adapter decodes it with `Request::from_arguments`, which gives the same request as the
+envelope. `tools/list` is built from the catalog, and the catalog lists only operations whose
+milestone is delivered (`OpSpec::available`): an operation that is defined but not available
+keeps its DTOs, is refused as `unknown_operation`, and has no committed schema. The job tools
+are unavailable until A3.1 turns them on.
 
 Tool failures are results with `isError: true` and the structured error, so the model can read
 and correct them. Only malformed JSON-RPC messages and unknown tool names are JSON-RPC protocol
@@ -446,11 +575,11 @@ Static, versioned with the schema, each with a transcript fixture:
 
 | Direction | Message | When |
 | --- | --- | --- |
-| Server to client | `notifications/resources/updated` | A subscribed document's revision changes |
+| Server to client | `notifications/resources/updated` | A subscribed document's revision changes, or a subscribed job's state or progress changes (A3) |
 | Server to client | `notifications/resources/list_changed` | Documents open or close; jobs start (A3) |
-| Server to client | `notifications/progress` | Jobs with a `progressToken` (A3) |
+| Server to client | `notifications/progress` | While the request that supplied the `progressToken` is in flight (A3, 11.5) |
 | Server to client | `notifications/message` | Logging, level-filtered |
-| Client to server | `notifications/cancelled` | Sets the request's cancel token |
+| Client to server | `notifications/cancelled` | Names an in-flight request by `requestId` and sets its cancel token; a returned job is cancelled with `omnia_job_cancel` |
 
 The catalog is fixed for a mode, so `tools/list_changed` is sent only when app mode attaches
 or detaches (A4). stdout carries only protocol messages; logs go to stderr.
@@ -511,14 +640,34 @@ only the storage lifetime of those handles (11.1): they expire when it exits.
 
 ### 11.2 Idempotency
 
-- `idempotency_key` is optional on apply, undo, redo and save.
+- `idempotency_key` is optional on apply, undo, redo and save, and refused on every other
+  operation. In the envelope it sits beside `op` and `params`; in MCP tool arguments it sits
+  beside the params fields (9.1). `request_status` takes the key as its only param.
 - The session caches key, canonical request hash and full response for AK5 entries.
 - The same key with the same request returns the stored bytes and applies nothing (AINV7). The
   same key with another request is refused with `idempotency_conflict`.
-- After a lost reply, `omnia_request_status(key)` answers `not_run`, `applied {revision,
-  response}` or `failed {error}`.
+- After a lost reply, `omnia_request_status(key)` answers `not_run`, `applied {op, revision,
+  response}` or `failed {error}`. `op` names the stored request's operation, one of apply,
+  undo, redo and save, and `response` is a successful response of that operation; a request
+  that failed is reported as `failed`. Schema and decoder both refuse any other combination.
 - `expected_revision` alone already makes a blind retry safe: it is refused as stale and never
   applies twice.
+
+As built at A1.5 (`src/service.rs`, 2026-11-22):
+
+- The canonical request hash is a 64-bit FxHash of `Request::to_json`, the envelope both wire
+  forms decode to, so a replay may arrive in either form (ATC-edit-03). The cache is checked
+  before anything else about a keyed request, including whether its document exists.
+- Stored: every success, and every failure whose code is not retryable (`missing_item`,
+  `document_not_found` and so on), which `request_status` reports as `failed`. Not stored: a
+  retryable failure (`stale_revision`, `user_gesture_in_progress`, and from A1.6
+  `approval_required` and `io_error`). It applied nothing and its code invites a retry, so a
+  retry under the same key is a fresh attempt, and `request_status` answers `not_run` until an
+  entry is stored. `idempotency_conflict` is never stored.
+- When AK5 entries are held, the oldest is evicted first. An evicted key answers `not_run`
+  (AQ11: retention is per session, in memory); a blind retry of its request is then refused as
+  stale, as above.
+- `idempotency_conflict` and `request_status` responses carry no `doc_id` or `revision`.
 
 ### 11.3 Preview identity
 
@@ -526,6 +675,15 @@ only the storage lifetime of those handles (11.1): they expire when it exits.
 `base_revision`, the canonical operation bytes and the follow policy. `apply` with a
 `preview_id` hashes its own request; a difference is refused with `preview_mismatch`. The hash
 binds a commit to its preview and an approval to an effect. It is not a security token (AQ10).
+
+As built at A1.5 (`src/preview.rs`): the hash input is a domain tag, the `doc_id` and the base
+revision as fixed-width integers, the length and bytes of the operations' canonical JSON, and
+the session's wiring preferences that shape their commands: the follow policy
+(`follow_on_move`, the pin threshold, `invert`) and `delete_wires_with_part` (see 11.4a).
+Nothing is stored: an id that matches is the id a preview of exactly this request at this
+revision returns, so `apply` needs no record of earlier previews. A preview id from another
+document, revision or operation list is `preview_mismatch`; a stale `expected_revision` is
+refused first.
 
 ### 11.4 Undo and redo
 
@@ -535,6 +693,53 @@ binds a commit to its preview and an approval to an effect. It is not a security
   No new document API is needed.
 - If the person edited in between, the agent is refused with `stale_revision` and cannot undo
   the person's work (ATC-edit-06).
+
+### 11.4a Request handling as built at A1.5
+
+Added at A1.5 (2026-11-22: `src/service.rs`, `src/host.rs`, `src/ops.rs`, `src/preview.rs`,
+`src/diff.rs`).
+
+- Order of checks for a document request: the session; for a keyed request the idempotency
+  cache (11.2); `doc_id` (`document_not_found`); for `apply`, `undo` and `redo` a gesture
+  (`user_gesture_in_progress`); `expected_revision` (`stale_revision`), also for `validate`
+  and `preview`; for `apply` the `preview_id` (`preview_mismatch`); the symbol names
+  (`unknown_symbol`); then the document's own verdict on the one `Command` (the
+  `CommandError` codes of 9.4). `undo` and `redo` with nothing to step are `nothing_to_undo`
+  and `nothing_to_redo`.
+- Operations become commands one to one (9.2). Fields the schema does not carry yet come from
+  the session's `WiringPrefs` (WK10 defaults): `move` and `reorient` use
+  `follow_policy(false)` (the modifier released, until A2.2 adds `invert_follow`), and
+  `delete` uses `delete_wires_with_part` (false, until A2.3 adds `with_wires`).
+- `validate` and `preview` apply the command to a fork (`Doc::fork`) and only read the live
+  document. `apply` previews first, so every refusal and the diff are found before the live
+  document is touched (AINV4), then commits the same command through `DocHost::apply`; its
+  `Change` equals the preview's (AINV2).
+- The diff (9.3) is computed from `Change.dirty`: `added` and `removed` are the change's ids
+  read in the after and before documents, `modified` the other ids `Doc::query` finds in
+  `dirty` in either document whose fields differ. It is one page of at most AK4's default
+  (500) entries, filled from `added`, then `removed`, then `modified`, each sorted by kind and
+  id; `truncated` says whether any were left out. The change always lists every id.
+- A response about an open document carries its `doc_id` and its revision after the request,
+  errors included (a refusal reports the unchanged revision). `document_not_found` carries
+  neither, nor do `capabilities`, `request_status` and `idempotency_conflict`.
+- `new` registers an empty document at revision 0 with `saved_revision` 0, and enforces AK6: a
+  ninth open document is `limit_exceeded {open_documents, 9}`. `doc_id`s count from `d1` per
+  session and are never reused. Sessions are separate: their documents and keys do not mix.
+- Files and approvals (built at A1.6, see 12.1): `open`, `save`, and `close` (including dirty
+  documents) are wired through `Policy`, `Roots`, and the session's `ApprovalStore`. `open`
+  validates paths inside roots, checks AK6 before reading, enforces AK2 and RON v2, and records
+  the canonical path and `saved_revision`. `save` re-validates a stored path or resolves a
+  supplied `path` (untitled `save` without `path` is `schema_violation` at `/params/path`),
+  guards overwrites at tier 3 and new files at tier 2, writes via a sibling temporary file, and
+  updates `path` and `saved_revision`. `close` of a clean document answers `{discarded: false}`;
+  `close` of a dirty document requires both `discard_unsaved: true` and a matching tier 3
+  approval and answers `{discarded: true}`.
+- Error pointers: the service reports envelope-space pointers (`/params/cursor`, as `read.rs`
+  does). `service::in_form(response, Form::Arguments)`, which `AgentService::handle_in`
+  applies, drops the leading `/params` for the MCP arguments form (`/params` alone becomes
+  `""`), also inside a `request_status` that reports a failure. Successes are unchanged.
+- An unknown `SessionId` is `internal`: sessions are issued by the service, so a transport that
+  names another has a bug.
 
 ### 11.5 Jobs, progress and cancellation (A3)
 
@@ -547,18 +752,19 @@ binds a commit to its preview and an approval to an effect. It is not a security
 - A job that edits computes on a fork and commits once at the end, as one `Command`, only if
   the revision has not changed; otherwise it ends `failed` with `stale_revision`. Simulation
   jobs, once planned, never edit the document.
-- MCP: `progressToken` maps to `notifications/progress`; `notifications/cancelled` sets the
-  token. If the pinned revision (AK1) has a native task primitive, jobs map onto it; otherwise
-  the job tools and `omnia://jobs/{id}` with subscriptions are used, and nothing polls.
-  The rule is applied per era. Checked at A0.2 (2026-11-20): 2025-06-18 has no task primitive;
-  2025-11-25 added Tasks to the core, marked experimental and negotiated by capability;
-  2026-07-28 moved them out of the core into the optional `io.modelcontextprotocol/tasks`
-  extension. So under this rule a 2025-11-25 session maps jobs onto Tasks when the client
-  negotiates them, and every other session uses the job tools with `omnia://jobs/{id}`,
-  subscribed through `resources/subscribe` or `subscriptions/listen` by era (10.5). The job
-  tools stay available in every era. Once the tool call that returns a job handle completes,
-  later job updates go through that resource subscription, not `notifications/progress`, which
-  stops when its request completes. A3.2 builds this.
+- MCP: every AK1 revision uses Omnia's job tools (`omnia_job_status`, `omnia_job_cancel`)
+  and `omnia://jobs/{id}` with subscriptions, by era `resources/subscribe` or
+  `subscriptions/listen` (10.5); nothing polls (AQ15). Omnia never advertises tasks: no
+  `capabilities.tasks` in either handshake revision's `initialize` result, and no
+  `io.modelcontextprotocol/tasks` in `server/discover`'s extensions. The published
+  specifications permit all three omissions. For context, checked at A0.2 (2026-11-20):
+  2025-06-18 has no task primitive; 2025-11-25 added Tasks to the core, marked experimental and
+  negotiated by capability; 2026-07-28 moved them into that optional extension.
+- While the request that starts a job is in flight, a `progressToken` on it maps to
+  `notifications/progress`, and `notifications/cancelled` naming that request's `requestId` sets
+  the job's cancel token. Progress stops when the request completes. Once the call has returned
+  the `job_id`, updates go only through the job resource subscription, and the client cancels
+  through `omnia_job_cancel`. A3.2 builds this.
 
 ### 11.6 App mode (A4)
 
@@ -581,6 +787,44 @@ binds a commit to its preview and an approval to an effect. It is not a security
   Overwriting is tier 3.
 - No shell, no arbitrary file read, no environment dump, no plug-ins.
 - Over-limit input is refused with `limit_exceeded`, never truncated.
+
+As built at A1.6 (`src/files.rs`, `src/approval.rs`, `src/service.rs`, 2026-11-23):
+
+- `Roots` canonicalises every configured root directory up front in configured order
+  (deduplicated; must exist and be a directory; `Roots::empty()` refuses every path with
+  `path_outside_root`).
+- Path screening runs lexically across both POSIX (`/`) and Windows (`\`) forms before any
+  filesystem or network call (rejecting empty paths, NUL bytes, any `..` segment, colons in
+  non-prefix path segments — conservative on POSIX as well as blocking Windows ADS and
+  drive-relative paths — and foreign absolute, UNC, device `\\.\`, or verbatim `\\?\` prefixes
+  unless a Windows prefixed path lexically starts with a configured root). Ancestors are then
+  walked top-down with `symlink_metadata` and `canonicalize` so escaping or dangling symlinks,
+  Windows NTFS junctions, and non-existent paths outside roots all answer `path_outside_root`
+  without probing outside targets or leaking filesystem existence. Under the local same-user
+  threat model, a narrow TOCTOU window remains between validation and `open`/`rename`; stored
+  document paths are re-validated before every `save`.
+- Relative `open` paths search configured roots in configured order (refusing an escaping link
+  under any root immediately); relative `save` paths resolve under the first configured root.
+  Display paths returned on the wire strip Windows' `\\?\` verbatim prefix so they round-trip
+  cleanly.
+- `open` enforces `MAX_FILE_BYTES` (AK2) from file metadata and via a bounded `Read::take`,
+  maps `Doc::load`'s version mismatch to `unsupported_file_version` (note: because `Sheet` uses
+  `deny_unknown_fields`, a future version with new fields currently surfaces as `io_error`
+  until `omnia-doc` adds a typed version error), and maps corrupt files to `io_error` without
+  echoing file text (AD14).
+- `save` serialises in memory, enforces `MAX_FILE_BYTES` (AK2) so every saved file can be
+  reopened, writes to a unique sibling `.omnia-save-<pid>-<seq>.tmp` file, calls `sync_all`,
+  and renames over the target, removing the temporary file on any failure so an existing file
+  stays untouched.
+- `Policy::headless(roots)` implements AQ4 (tiers 0–2 allowed; tier 3 requires an echoed
+  `ApprovalEcho`; tier 1 enforcement on `apply`/`undo`/`redo` is wired in app mode in A4).
+  Effect digests are 64-bit FxHashes (`ed-<16 hex>`, AQ10) of a domain tag, effect kind,
+  `doc_id`, `revision`, and target (canonical path or `preview_id`). Pending challenges live
+  per session (`ap-<n>`, capped at 64): repeating an unapproved request returns the same
+  `approval_id` (AINV5); a matching echo is consumed only after the guarded operation succeeds
+  so a retryable `io_error` does not burn the grant (AINV9). Closing a dirty document always
+  requires `discard_unsaved: true` regardless of policy. `Policy::custom` allows explicit tier
+  decisions (`Allow`, `RequireEcho`, `Deny`).
 
 ### 12.2 App-hosted channel (A4)
 
@@ -642,35 +886,85 @@ impl SymbolLibrary {
 // ---- omnia-agent ----
 pub const SCHEMA: &str = "omnia.agent/1";                    // AK7
 
-pub struct AgentService<H: DocHost> { /* sessions, caches, policy, jobs */ }
+// As built at A1.6. Not built yet: `CallContext` and `poll_job` (A3.1 adds `cx` to `handle`
+// and adds `poll_job`).
+pub struct AgentService<H: DocHost = HeadlessHost> { /* host, policy, symbols, catalog, sessions */ }
 impl<H: DocHost> AgentService<H> {
-    pub fn new(host: H, policy: Policy) -> Self;
+    pub fn new(host: H, policy: Policy) -> Self;             // built-in symbol library
+    pub fn with_symbols(host: H, policy: Policy, symbols: Arc<SymbolLibrary>) -> Self;
+    pub fn policy(&self) -> &Policy;
     pub fn catalog(&self) -> &Catalog;
-    pub fn handle(&mut self, session: SessionId, req: Request,
-                  cx: &mut CallContext) -> Response;         // synchronous, deterministic
-    pub fn poll_job(&mut self, job: JobId, budget: Duration,
-                    cx: &mut CallContext) -> JobState;       // the host drives jobs (A3)
+    pub fn symbols(&self) -> &Arc<SymbolLibrary>;
+    pub fn host(&self) -> &H;
+    pub fn host_mut(&mut self) -> &mut H;                    // the host's own (a person's) edits
+    pub fn open_session(&mut self) -> SessionId;
+    pub fn close_session(&mut self, session: SessionId) -> bool;   // drops its documents
+    pub fn doc_handle(&self, session: SessionId, doc_id: DocId) -> Option<DocHandle>;
+    pub fn document(&self, session: SessionId, doc_id: DocId) -> Option<&Doc>;
+    pub fn handle(&mut self, session: SessionId, req: &Request) -> Response; // envelope space
+    pub fn handle_in(&mut self, session: SessionId, req: &Request, form: Form) -> Response;
 }
+impl AgentService<HeadlessHost> {
+    pub fn headless() -> Self;                               // empty roots, AQ4 policy
+    pub fn headless_with_roots(roots: Roots) -> Self;        // AQ4 policy over `roots`
+}
+pub struct Roots { /* canonicalised root directories */ }
+pub struct Policy { /* roots, per-tier decisions (AD7, AQ4) */ }
+pub enum Tier { Read = 0, Edit = 1, WriteFile = 2, Destructive = 3 }
+pub enum TierDecision { Allow, RequireEcho, Deny }
+pub enum GuardedEffect { Edit { .. }, WriteFile { .. }, OverwriteFile { .. }, DiscardUnsaved { .. } }
+pub enum Form { Envelope, Arguments }                        // error pointer space (9.1)
+pub fn in_form(response: Response, form: Form) -> Response;
 
 pub trait DocHost {                       // headless store in A1; Entity<Doc> adapter in A4
+    fn insert(&mut self, doc: Doc) -> Result<DocHandle, AgentError>;   // new; open (A1.6)
+    fn remove(&mut self, h: DocHandle) -> Result<(), AgentError>;      // close
     fn doc(&self, h: DocHandle) -> Result<&Doc, AgentError>;
-    fn apply(&mut self, h: DocHandle, c: Command) -> Result<Change, CommandError>; // Doc::apply
-    fn undo(&mut self, h: DocHandle) -> Option<Change>;
-    fn redo(&mut self, h: DocHandle) -> Option<Change>;
+    fn apply(&mut self, h: DocHandle, c: Command)
+        -> Result<Result<Change, CommandError>, AgentError>;           // Doc::apply
+    fn undo(&mut self, h: DocHandle) -> Result<Option<Change>, AgentError>;  // Doc::undo
+    fn redo(&mut self, h: DocHandle) -> Result<Option<Change>, AgentError>;  // Doc::redo
     fn gesture_active(&self, h: DocHandle) -> bool;          // headless: always false
-    fn request_approval(&mut self, a: &ApprovalRequest) -> ApprovalOutcome;
+    // An unknown handle is `document_not_found`. The approval hook
+    // (`request_approval(&ApprovalRequest) -> ApprovalOutcome`) is added by the task that
+    // first needs a person's approval (A4); headless tiers are decided in the service (A1.6).
 }
 
+// Later (A3.1):
 pub struct CallContext<'a> { pub cancel: &'a CancelToken, pub progress: &'a mut dyn ProgressSink }
 
-pub struct Request { pub op: Operation, pub idempotency_key: Option<String> }
+pub struct Request { /* private: built only by decoding (9.1) */ }
+impl Request {
+    pub fn new(op: Operation, idempotency_key: Option<String>) -> Result<Request, AgentError>;
+    pub fn from_slice(bytes: &[u8]) -> Result<Request, AgentError>;            // envelope
+    pub fn from_arguments(op: OpName, bytes: &[u8]) -> Result<Request, AgentError>; // MCP
+    pub fn op(&self) -> &Operation;
+    pub fn idempotency_key(&self) -> Option<&str>;
+    pub fn to_json(&self) -> String;
+    pub fn to_arguments(&self) -> String;
+}
 pub enum Operation { Capabilities, New, Open(OpenArgs), Close(CloseArgs), Inspect(InspectArgs),
                      Query(QueryArgs), Nets(NetsArgs), Validate(EditArgs), Preview(EditArgs),
                      Apply(ApplyArgs), Undo(RevArgs), Redo(RevArgs), Save(SaveArgs),
                      RequestStatus(KeyArgs), JobStatus(JobArgs), JobCancel(JobArgs) }
-pub struct Response { pub schema: &'static str, pub doc_id: Option<DocId>,
-                      pub revision: Option<u64>, pub outcome: Result<Output, AgentError>,
-                      pub warnings: Vec<Warning> }
+pub struct Response { /* private: schema, doc_id, revision, outcome, warnings */ }
+impl Response {
+    pub fn new(doc_id: Option<DocId>, revision: Option<u64>,
+               outcome: Result<Output, AgentError>) -> Result<Response, InvalidResponse>;
+    pub fn with_warnings(self, warnings: Vec<Warning>) -> Response;
+    pub fn from_slice(op: OpName, bytes: &[u8]) -> Result<Response, serde_json::Error>;
+    pub fn schema(&self) -> &'static str;
+    pub fn doc_id(&self) -> Option<DocId>;
+    pub fn revision(&self) -> Option<u64>;
+    pub fn outcome(&self) -> &Result<Output, AgentError>;
+    pub fn warnings(&self) -> &[Warning];
+    pub fn to_json(&self) -> String;
+}
+pub enum RequestStatus { NotRun, Applied(StoredResponse), Failed { error: AgentError } }
+impl StoredResponse {                     // a success of a keyed operation, checked
+    pub fn new(op: OpName, revision: u64, response: Response)
+        -> Result<StoredResponse, InvalidResponse>;
+}
 ```
 
 Files:
@@ -678,6 +972,7 @@ Files:
 ```
 crates/omnia-agent/
   Cargo.toml        omnia-doc, omnia-symbols, omnia-theme (A2.4), serde, serde_json, rustc-hash
+                    (rustc-hash from A1.5)
   schema/           committed JSON Schemas (AINV11)
   src/lib.rs        module lines, SCHEMA
   src/schema/       DTOs, id/point/orient codecs                     (A1.3)
@@ -750,9 +1045,12 @@ Each has a default. Build to the default; the owner's answer replaces it here.
 | AQ12 | File format for agents | RON v2 test sheets only, labelled as not a product format, until a file plan exists | Default kept. `docs/file-format-proposal.md` now exists but is a proposal; agents move to the product format only when that proposal is decided and a task adds it to the schema. |
 | AQ13 | Build a network transport? | No (HA3) | Default kept: no. HA3 still decides it before any A5 work. |
 | AQ14 | May A1.1 change `omnia-doc` while T2.8 (`blocked`) lists the crate as owned? | Yes: A1.1 touches `fork` and `Clone` derives only, disjoint from T2.8's open measurement | Default kept. Moot since T2.8 is `done`: no other task now lists all of `omnia-doc` as owned. |
+| AQ15 | Map jobs onto the experimental core Tasks of 2025-11-25, or the 2026-07-28 tasks extension? | No: job tools in every era (11.5) | **Answered (owner-delegated):** default adopted. One path in every era; Tasks are experimental in 2025-11-25 and only an optional extension in 2026-07-28. Revisit if a pinned revision makes tasks core and stable. |
 
 HA1 was held on 2026-11-20: the owner delegated it to the agent, asked only AQ2 (because
-the newest revision changed what the default meant), and kept every other default.
+the newest revision changed what the default meant), and kept every other default. AQ15 was
+added after HA1, when review found that 2025-11-25 has experimental core Tasks; the owner
+delegated it the same day.
 
 ## 17. Changes to other files
 

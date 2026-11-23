@@ -1,0 +1,55 @@
+--- a/crates/omnia-canvas/src/sheet.rs
++++ b/crates/omnia-canvas/src/sheet.rs
+@@ -228,12 +228,17 @@
+                 y: view.max.y.saturating_add(margin_nm).min(SHEET_LIMIT_NM),
+             },
+         };
++        let begin = std::time::Instant::now();
+         doc.query(area, items);
++        let queried = std::time::Instant::now();
+         items.sort_unstable_by_key(|id| match *id {
+             ItemId::Part(id) => (0, id.0),
+             ItemId::Wire(id) => (1, id.0),
+             ItemId::Label(id) => (2, id.0),
+         });
++        let sorted = std::time::Instant::now();
++        let mut wires_ready = sorted;
++        let mut wires_emitted = sorted;
+         let part_shapes = || {
+             items.iter().filter_map(|id| match *id {
+                 ItemId::Part(id) => self.masks.symbol(doc.part(id)?, camera, sf),
+@@ -257,6 +262,7 @@
+                 segments.clear();
+                 segments.extend(wire_segments());
+                 segments.sort_unstable();
++                wires_ready = std::time::Instant::now();
+                 let mut iter = segments.iter().copied();
+                 if let Some(mut current) = iter.next() {
+                     for next in iter {
+@@ -268,6 +274,7 @@
+                     draw(current);
+                 }
+             }
++            wires_emitted = std::time::Instant::now();
+             for shape in part_shapes().filter(|s| lod::symbol_box(s.logical_side)) {
+                 let side = stroke_device_px(shape.logical_side, sf);
+                 let scale = f64::from(sf);
+@@ -279,6 +286,7 @@
+             }
+         });
+
++        let boxes_done = std::time::Instant::now();
+         layer(Layer::SymbolsAndDots, &mut |sink| {
+             for shape in part_shapes().filter(|s| !lod::symbol_box(s.logical_side)) {
+                 sink(Mark::Sprite(shape));
+@@ -299,5 +307,10 @@
+                 }
+             }
+         });
++        let end = std::time::Instant::now();
++        eprintln!("PHASE {} {} {} {} {} {} {}",
++            items.len(), (queried-begin).as_nanos(), (sorted-queried).as_nanos(),
++            (wires_ready-sorted).as_nanos(), (wires_emitted-wires_ready).as_nanos(),
++            (boxes_done-wires_emitted).as_nanos(), (end-boxes_done).as_nanos());
+     }
+ }

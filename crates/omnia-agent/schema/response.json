@@ -1,0 +1,2069 @@
+{
+  "$defs": {
+    "ApplySuccess": {
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "result": {
+          "$ref": "#/$defs/EditResult"
+        },
+        "revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema": {
+          "const": "omnia.agent/1"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "doc_id",
+        "revision",
+        "result",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "Blocker": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "pin"
+            },
+            "part": {
+              "$ref": "#/$defs/PartRef"
+            },
+            "pin": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "part",
+            "pin"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wire_end"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireRef"
+            }
+          },
+          "required": [
+            "kind",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wire_body"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireRef"
+            }
+          },
+          "required": [
+            "kind",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "overlap"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireRef"
+            }
+          },
+          "required": [
+            "kind",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "sheet"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Bounds": {
+      "additionalProperties": false,
+      "description": "An axis-aligned rectangle inside the sheet limits. The decoder also requires min <= max on both axes (mcp-plan.md section 9.1).",
+      "properties": {
+        "max": {
+          "$ref": "#/$defs/SheetPoint"
+        },
+        "min": {
+          "$ref": "#/$defs/SheetPoint"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "Catalog": {
+      "additionalProperties": false,
+      "properties": {
+        "edit_operations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "command": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "name": {
+                "enum": [
+                  "place_part",
+                  "add_wires",
+                  "add_label",
+                  "move",
+                  "reorient",
+                  "delete",
+                  "set_text"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "command",
+              "description"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "error_codes": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "$ref": "#/$defs/ErrorCode"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "retryable"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "limits": {
+          "additionalProperties": false,
+          "properties": {
+            "default_page_size": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "file_bytes": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "idempotency_cache_entries": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_page_size": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "open_documents": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "operations_per_request": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "request_bytes": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "request_bytes",
+            "file_bytes",
+            "operations_per_request",
+            "default_page_size",
+            "max_page_size",
+            "idempotency_cache_entries",
+            "open_documents"
+          ],
+          "type": "object"
+        },
+        "operations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "arguments_schema": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "destructive": {
+                "type": "boolean"
+              },
+              "idempotency_key": {
+                "type": "boolean"
+              },
+              "idempotent": {
+                "type": "boolean"
+              },
+              "name": {
+                "$ref": "#/$defs/OpName"
+              },
+              "params_schema": {
+                "type": "string"
+              },
+              "read_only": {
+                "type": "boolean"
+              },
+              "response_schema": {
+                "type": "string"
+              },
+              "tiers": {
+                "items": {
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "tool": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "tool",
+              "tiers",
+              "read_only",
+              "destructive",
+              "idempotent",
+              "idempotency_key",
+              "params_schema",
+              "arguments_schema",
+              "response_schema",
+              "description"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "orientations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "protocol_revisions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "text_fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "units": {
+          "additionalProperties": false,
+          "properties": {
+            "grid_nm": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pin_lattice_nm": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sheet_limit_nm": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "grid_nm",
+            "pin_lattice_nm",
+            "sheet_limit_nm"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "protocol_revisions",
+        "units",
+        "limits",
+        "operations",
+        "edit_operations",
+        "orientations",
+        "text_fields",
+        "error_codes"
+      ],
+      "type": "object"
+    },
+    "Change": {
+      "additionalProperties": false,
+      "properties": {
+        "added": {
+          "items": {
+            "$ref": "#/$defs/ItemRef"
+          },
+          "type": "array"
+        },
+        "dirty": {
+          "$ref": "#/$defs/Bounds"
+        },
+        "nets_changed": {
+          "type": "boolean"
+        },
+        "removed": {
+          "items": {
+            "$ref": "#/$defs/ItemRef"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision",
+        "added",
+        "removed",
+        "nets_changed"
+      ],
+      "type": "object"
+    },
+    "ChangeResult": {
+      "additionalProperties": false,
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/Change"
+        }
+      },
+      "required": [
+        "change"
+      ],
+      "type": "object"
+    },
+    "CloseResult": {
+      "additionalProperties": false,
+      "properties": {
+        "discarded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "discarded"
+      ],
+      "type": "object"
+    },
+    "Diff": {
+      "additionalProperties": false,
+      "properties": {
+        "added": {
+          "items": {
+            "$ref": "#/$defs/Item"
+          },
+          "type": "array"
+        },
+        "modified": {
+          "items": {
+            "$ref": "#/$defs/Modified"
+          },
+          "type": "array"
+        },
+        "removed": {
+          "items": {
+            "$ref": "#/$defs/Item"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "added",
+        "removed",
+        "modified",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "DocId": {
+      "description": "A document id, never reused within a session.",
+      "pattern": "^d(0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]|1844674407370955161[0-4]|18446744073709551615)$",
+      "type": "string"
+    },
+    "DocInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "dirty": {
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "dirty"
+      ],
+      "type": "object"
+    },
+    "EditResult": {
+      "additionalProperties": false,
+      "properties": {
+        "change": {
+          "$ref": "#/$defs/Change"
+        },
+        "diff": {
+          "$ref": "#/$defs/Diff"
+        }
+      },
+      "required": [
+        "change",
+        "diff"
+      ],
+      "type": "object"
+    },
+    "Error": {
+      "additionalProperties": false,
+      "description": "A structured error (AD6, section 9.4).",
+      "oneOf": [
+        {
+          "properties": {
+            "code": {
+              "const": "invalid_request"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "schema_violation"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unknown_operation"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "limit_exceeded"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "enum": [
+                    "request_bytes",
+                    "file_bytes",
+                    "operations",
+                    "page_size",
+                    "open_documents"
+                  ],
+                  "type": "string"
+                },
+                "value": {
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "limit",
+                "value"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unsupported_in_mode"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "protocol_version_unsupported"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "document_not_found"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unknown_symbol"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unknown_item"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "out_of_bounds"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "invalid_wire"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "missing_item"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "item": {
+                  "$ref": "#/$defs/ItemRef"
+                }
+              },
+              "required": [
+                "item"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "duplicate_item"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "item": {
+                  "$ref": "#/$defs/ItemRef"
+                }
+              },
+              "required": [
+                "item"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "invalid_text_field"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "enum": [
+                    "designator",
+                    "value",
+                    "label"
+                  ],
+                  "type": "string"
+                },
+                "item": {
+                  "$ref": "#/$defs/ItemRef"
+                }
+              },
+              "required": [
+                "item",
+                "field"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "follow_no_route"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "blocker": {
+                  "$ref": "#/$defs/Blocker"
+                },
+                "from": {
+                  "$ref": "#/$defs/Point"
+                },
+                "to": {
+                  "$ref": "#/$defs/Point"
+                }
+              },
+              "required": [
+                "from",
+                "to",
+                "blocker"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "segment_blocked"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "blocker": {
+                  "$ref": "#/$defs/Blocker"
+                }
+              },
+              "required": [
+                "blocker"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "wire_capture"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "blocker": {
+                  "$ref": "#/$defs/Blocker"
+                },
+                "wire": {
+                  "$ref": "#/$defs/WireRef"
+                }
+              },
+              "required": [
+                "wire",
+                "blocker"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "off_lattice"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "at": {
+                  "$ref": "#/$defs/Point"
+                }
+              },
+              "required": [
+                "at"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "stale_revision"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "actual": {
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "expected": {
+                  "maximum": 18446744073709551615,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "expected",
+                "actual"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": true
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "preview_mismatch"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "idempotency_conflict"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "user_gesture_in_progress"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": true
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "nothing_to_undo"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "nothing_to_redo"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "approval_required"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {
+                "approval_id": {
+                  "type": "string"
+                },
+                "effect": {
+                  "enum": [
+                    "edit",
+                    "write_file",
+                    "overwrite_file",
+                    "discard_unsaved"
+                  ],
+                  "type": "string"
+                },
+                "effect_digest": {
+                  "type": "string"
+                },
+                "tier": {
+                  "maximum": 255,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "approval_id",
+                "tier",
+                "effect",
+                "effect_digest"
+              ],
+              "type": "object"
+            },
+            "retryable": {
+              "const": true
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "approval_denied"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "path_outside_root"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "file_exists"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "io_error"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": true
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "unsupported_file_version"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "cancelled"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "job_not_found"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        },
+        {
+          "properties": {
+            "code": {
+              "const": "internal"
+            },
+            "details": {
+              "additionalProperties": false,
+              "properties": {},
+              "type": "object"
+            },
+            "retryable": {
+              "const": false
+            }
+          }
+        }
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ErrorCode"
+        },
+        "details": {
+          "type": "object"
+        },
+        "hint": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable",
+        "details"
+      ],
+      "type": "object"
+    },
+    "ErrorCode": {
+      "enum": [
+        "invalid_request",
+        "schema_violation",
+        "unknown_operation",
+        "limit_exceeded",
+        "unsupported_in_mode",
+        "protocol_version_unsupported",
+        "document_not_found",
+        "unknown_symbol",
+        "unknown_item",
+        "out_of_bounds",
+        "invalid_wire",
+        "missing_item",
+        "duplicate_item",
+        "invalid_text_field",
+        "follow_no_route",
+        "segment_blocked",
+        "wire_capture",
+        "off_lattice",
+        "stale_revision",
+        "preview_mismatch",
+        "idempotency_conflict",
+        "user_gesture_in_progress",
+        "nothing_to_undo",
+        "nothing_to_redo",
+        "approval_required",
+        "approval_denied",
+        "path_outside_root",
+        "file_exists",
+        "io_error",
+        "unsupported_file_version",
+        "cancelled",
+        "job_not_found",
+        "internal"
+      ],
+      "type": "string"
+    },
+    "InspectResult": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "$ref": "#/$defs/ItemsPage"
+        },
+        "nets": {
+          "items": {
+            "$ref": "#/$defs/Net"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "$ref": "#/$defs/Summary"
+        }
+      },
+      "type": "object"
+    },
+    "Item": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/PartRef"
+            },
+            "part": {
+              "$ref": "#/$defs/PartBody"
+            }
+          },
+          "required": [
+            "id",
+            "part"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/WireRef"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireBody"
+            }
+          },
+          "required": [
+            "id",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/LabelRef"
+            },
+            "label": {
+              "$ref": "#/$defs/LabelBody"
+            }
+          },
+          "required": [
+            "id",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ItemRef": {
+      "description": "An item id, 0-based (AQ5).",
+      "pattern": "^(part|wire|label):(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-4]|4294967295)$",
+      "type": "string"
+    },
+    "ItemsPage": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Item"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "LabelBody": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Point"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "text"
+      ],
+      "type": "object"
+    },
+    "LabelRef": {
+      "description": "A label id, 0-based (AQ5).",
+      "pattern": "^label:(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-4]|4294967295)$",
+      "type": "string"
+    },
+    "Modified": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "$ref": "#/$defs/PartBody"
+            },
+            "before": {
+              "$ref": "#/$defs/PartBody"
+            },
+            "id": {
+              "$ref": "#/$defs/PartRef"
+            }
+          },
+          "required": [
+            "id",
+            "before",
+            "after"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "$ref": "#/$defs/WireBody"
+            },
+            "before": {
+              "$ref": "#/$defs/WireBody"
+            },
+            "id": {
+              "$ref": "#/$defs/WireRef"
+            }
+          },
+          "required": [
+            "id",
+            "before",
+            "after"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "after": {
+              "$ref": "#/$defs/LabelBody"
+            },
+            "before": {
+              "$ref": "#/$defs/LabelBody"
+            },
+            "id": {
+              "$ref": "#/$defs/LabelRef"
+            }
+          },
+          "required": [
+            "id",
+            "before",
+            "after"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Net": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/NetKey"
+        },
+        "labels": {
+          "items": {
+            "$ref": "#/$defs/LabelRef"
+          },
+          "type": "array"
+        },
+        "pins": {
+          "items": {
+            "$ref": "#/$defs/PinRef"
+          },
+          "type": "array"
+        },
+        "wires": {
+          "items": {
+            "$ref": "#/$defs/WireRef"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "key",
+        "pins",
+        "wires",
+        "labels"
+      ],
+      "type": "object"
+    },
+    "NetKey": {
+      "description": "Lowest pin, else lowest wire, else lowest label (AD8).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "pin"
+            },
+            "part": {
+              "$ref": "#/$defs/PartRef"
+            },
+            "pin": {
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "part",
+            "pin"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "wire"
+            },
+            "wire": {
+              "$ref": "#/$defs/WireRef"
+            }
+          },
+          "required": [
+            "kind",
+            "wire"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "label"
+            },
+            "label": {
+              "$ref": "#/$defs/LabelRef"
+            }
+          },
+          "required": [
+            "kind",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "NetsResult": {
+      "additionalProperties": false,
+      "properties": {
+        "nets": {
+          "items": {
+            "$ref": "#/$defs/Net"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "nets"
+      ],
+      "type": "object"
+    },
+    "OpName": {
+      "enum": [
+        "capabilities",
+        "new",
+        "open",
+        "close",
+        "inspect",
+        "query",
+        "nets",
+        "validate",
+        "preview",
+        "apply",
+        "undo",
+        "redo",
+        "save",
+        "request_status",
+        "job_status",
+        "job_cancel"
+      ],
+      "type": "string"
+    },
+    "Orient": {
+      "description": "An orientation (AD12).",
+      "enum": [
+        "identity",
+        "rot_90",
+        "rot_180",
+        "rot_270",
+        "flip_x",
+        "flip_x_rot_90",
+        "flip_y",
+        "flip_x_rot_270"
+      ],
+      "type": "string"
+    },
+    "PartBody": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Point"
+        },
+        "designator": {
+          "type": "string"
+        },
+        "orient": {
+          "$ref": "#/$defs/Orient"
+        },
+        "symbol": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "symbol",
+        "at",
+        "orient",
+        "designator",
+        "value"
+      ],
+      "type": "object"
+    },
+    "PartRef": {
+      "description": "A part id, 0-based (AQ5).",
+      "pattern": "^part:(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-4]|4294967295)$",
+      "type": "string"
+    },
+    "PinRef": {
+      "additionalProperties": false,
+      "properties": {
+        "part": {
+          "$ref": "#/$defs/PartRef"
+        },
+        "pin": {
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "part",
+        "pin"
+      ],
+      "type": "object"
+    },
+    "Point": {
+      "description": "[x, y] in integer nanometres (AK8).",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        },
+        {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "PreviewId": {
+      "description": "A 64-bit preview hash (section 11.3); not a security token.",
+      "pattern": "^pv-[0-9a-f]{16}$",
+      "type": "string"
+    },
+    "PreviewResult": {
+      "additionalProperties": false,
+      "properties": {
+        "base_revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "change": {
+          "$ref": "#/$defs/Change"
+        },
+        "diff": {
+          "$ref": "#/$defs/Diff"
+        },
+        "preview_id": {
+          "$ref": "#/$defs/PreviewId"
+        }
+      },
+      "required": [
+        "preview_id",
+        "base_revision",
+        "change",
+        "diff"
+      ],
+      "type": "object"
+    },
+    "RedoSuccess": {
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "result": {
+          "$ref": "#/$defs/ChangeResult"
+        },
+        "revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema": {
+          "const": "omnia.agent/1"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "doc_id",
+        "revision",
+        "result",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "RequestStatus": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "const": "not_run"
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "apply"
+            },
+            "response": {
+              "$ref": "#/$defs/ApplySuccess"
+            },
+            "revision": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "const": "applied"
+            }
+          },
+          "required": [
+            "status",
+            "op",
+            "revision",
+            "response"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "undo"
+            },
+            "response": {
+              "$ref": "#/$defs/UndoSuccess"
+            },
+            "revision": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "const": "applied"
+            }
+          },
+          "required": [
+            "status",
+            "op",
+            "revision",
+            "response"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "redo"
+            },
+            "response": {
+              "$ref": "#/$defs/RedoSuccess"
+            },
+            "revision": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "const": "applied"
+            }
+          },
+          "required": [
+            "status",
+            "op",
+            "revision",
+            "response"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "save"
+            },
+            "response": {
+              "$ref": "#/$defs/SaveSuccess"
+            },
+            "revision": {
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "status": {
+              "const": "applied"
+            }
+          },
+          "required": [
+            "status",
+            "op",
+            "revision",
+            "response"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "$ref": "#/$defs/Error"
+            },
+            "status": {
+              "const": "failed"
+            }
+          },
+          "required": [
+            "status",
+            "error"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SaveResult": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "saved_revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "saved_revision"
+      ],
+      "type": "object"
+    },
+    "SaveSuccess": {
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "result": {
+          "$ref": "#/$defs/SaveResult"
+        },
+        "revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema": {
+          "const": "omnia.agent/1"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "doc_id",
+        "revision",
+        "result",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "SheetPoint": {
+      "description": "[x, y] in integer nanometres inside the K1 sheet limits.",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        {
+          "maximum": 1000000000,
+          "minimum": -1000000000,
+          "type": "integer"
+        },
+        {
+          "maximum": 1000000000,
+          "minimum": -1000000000,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "Summary": {
+      "additionalProperties": false,
+      "properties": {
+        "labels": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "parts": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wires": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "parts",
+        "wires",
+        "labels"
+      ],
+      "type": "object"
+    },
+    "UndoSuccess": {
+      "additionalProperties": false,
+      "properties": {
+        "doc_id": {
+          "$ref": "#/$defs/DocId"
+        },
+        "result": {
+          "$ref": "#/$defs/ChangeResult"
+        },
+        "revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schema": {
+          "const": "omnia.agent/1"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/Warning"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "doc_id",
+        "revision",
+        "result",
+        "warnings"
+      ],
+      "type": "object"
+    },
+    "ValidateResult": {
+      "additionalProperties": false,
+      "properties": {
+        "base_revision": {
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "change": {
+          "$ref": "#/$defs/Change"
+        }
+      },
+      "required": [
+        "base_revision",
+        "change"
+      ],
+      "type": "object"
+    },
+    "Warning": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "WireBody": {
+      "additionalProperties": false,
+      "properties": {
+        "a": {
+          "$ref": "#/$defs/Point"
+        },
+        "b": {
+          "$ref": "#/$defs/Point"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "type": "object"
+    },
+    "WireRef": {
+      "description": "A wire id, 0-based (AQ5).",
+      "pattern": "^wire:(0|[1-9][0-9]{0,8}|[1-3][0-9]{9}|4[0-1][0-9]{8}|42[0-8][0-9]{7}|429[0-3][0-9]{6}|4294[0-8][0-9]{5}|42949[0-5][0-9]{4}|429496[0-6][0-9]{3}|4294967[0-1][0-9]{2}|42949672[0-8][0-9]|429496729[0-4]|4294967295)$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "required": [
+        "error"
+      ]
+    },
+    {
+      "properties": {
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DocInfo"
+            },
+            {
+              "$ref": "#/$defs/CloseResult"
+            },
+            {
+              "$ref": "#/$defs/InspectResult"
+            },
+            {
+              "$ref": "#/$defs/ItemsPage"
+            },
+            {
+              "$ref": "#/$defs/NetsResult"
+            },
+            {
+              "$ref": "#/$defs/ValidateResult"
+            },
+            {
+              "$ref": "#/$defs/PreviewResult"
+            },
+            {
+              "$ref": "#/$defs/EditResult"
+            },
+            {
+              "$ref": "#/$defs/ChangeResult"
+            },
+            {
+              "$ref": "#/$defs/SaveResult"
+            }
+          ]
+        }
+      },
+      "required": [
+        "result",
+        "doc_id",
+        "revision"
+      ]
+    },
+    {
+      "properties": {
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Catalog"
+            },
+            {
+              "$ref": "#/$defs/RequestStatus"
+            }
+          ]
+        }
+      },
+      "required": [
+        "result"
+      ]
+    }
+  ],
+  "not": {
+    "required": [
+      "result",
+      "error"
+    ]
+  },
+  "properties": {
+    "doc_id": {
+      "$ref": "#/$defs/DocId"
+    },
+    "error": {
+      "$ref": "#/$defs/Error"
+    },
+    "result": true,
+    "revision": {
+      "maximum": 18446744073709551615,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schema": {
+      "const": "omnia.agent/1"
+    },
+    "warnings": {
+      "items": {
+        "$ref": "#/$defs/Warning"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema",
+    "warnings"
+  ],
+  "title": "response",
+  "type": "object"
+}

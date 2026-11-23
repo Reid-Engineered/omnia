@@ -93,6 +93,7 @@ T0.0 -> T0.1 -+-> T0.2 (assets)
               +-> T1.3 --------+-> T1.4 -> T1.5 -> T1.6
 T0.6 + T1.6 + T2.1 + T2.2 + T2.3 + T2.4 + T2.8 -> T2.5 -> T2.6 -> T2.7
 T2.7 -> T3.1 -+-> T3.3 [H2] -> T3.4
+T2.7 -> T2.9 (removes the B4 known limit)
 T2.5 -> T3.2 -+
 T2.2 -> T4.1, T4.2 (doc)    T3.4 + T4.2 -> T4.3 -> T4.4, T4.5 -> T4.6
 T2.2 + T2.4 + T4.1 + T4.2 -> T2.8 (doc) -> T2.5
@@ -354,7 +355,7 @@ of the `canvas` lane.
 - Done when: CI fails on a pull request that adds one allocation per frame or 11% more
   primitives, and passes on a no-op pull request.
 
-### T2.7 Gate: milestone 2 · todo
+### T2.7 Gate: milestone 2 · done
 - Lane: bench · Depends: T2.6
 - Do: run and record:
 
@@ -370,9 +371,37 @@ of the `canvas` lane.
   record and set `needs-human`. If B4 misses, apply the "fails at 70k" row of the outcome
   table before reporting.
 
+### T2.9 Far-zoom wire stubs · needs-human
+- Lane: canvas · Depends: T2.7 · Read: D4, D5, K9, plan 2.1 "B4 known limit",
+  `docs/measurements/T2.7-wire.md`, G3, G12
+- Owns: `crates/omnia-canvas/src/sheet.rs`, `crates/omnia-canvas/src/sheet/lod.rs`,
+  `crates/omnia-canvas/src/sheet/wires.rs`
+- Do: build D4's far-zoom wire-stub rule (owner decision 2026-11-18).
+  1. In `lod.rs`, add the stub threshold to K9 (default 2.5 logical px) and
+     `lod::wire_run(length_px) -> bool`.
+  2. In the far-zoom branch of `DocumentCache::draw` (junctions hidden), filter the merged
+     runs from `MergedSegments::visible` by on-screen length `(end - start) × scale`, after
+     merging and before `Segment::bounds`. Keep `MergedSegments` and its cache as they are:
+     the filter depends on the camera and runs every frame, without allocating.
+  3. Leave the near-zoom path, the junction and box rules, and the sprite layer unchanged.
+  4. Record primitive counts with `--features scene-counts` on the 10k zoom script at frames
+     376, 420, 461, 500 and 545 at 100% and 125%, before and after, in
+     `docs/measurements/T2.9.md`. The T2.7 investigation measured 28,278 quads before and
+     8,324 with all 1 to 2 device-px runs removed at 125%.
+  5. Remove the B4 known limit: delete it from plan 2.1, the B4 row and T2.7's table, and
+     delete `far_zoom`/`scope_known_limit` from `docs/measurements/T2.7-wire/gate.py`
+     (or freeze a T2.9 copy of the gate without them) before the timed run.
+- Done when: a unit test (D4, K9) shows a far-zoom run below the threshold is not drawn,
+  one at or above it is, and a long wire made of short collinear segments still draws;
+  B10 holds on 10k zoom (`allocs_per_frame.ours == 0`); goldens unchanged (the T3.2
+  fixture is not at far zoom; if a far-zoom fixture exists by then, update it on Windows
+  and say so); and the full T2.7 table with **no** B4 known limit passes on Orion at 100%
+  and 125%. On another machine: record counts and set `needs-human`. If B4 still misses,
+  stop and ask the owner about Plan B (D4).
+
 ## Milestone 3: text and goldens
 
-### T3.1 Labels · todo
+### T3.1 Labels · done
 - Lane: canvas · Depends: T2.7 · Read: D6, K8, K9, K11, G14, G15
 - Owns: `crates/omnia-canvas/src/sheet/text.rs`
 - Do: designators, values, net labels and pin numbers. One cached `ShapedLine` per label
@@ -390,7 +419,7 @@ of the `canvas` lane.
   reference machine and log that.
 - Done when: the test passes on unchanged code and fails when a wire is moved one pixel.
 
-### T3.3 Wien oscillator fixture · todo → H2
+### T3.3 Wien oscillator fixture · done → H2
 - Lane: bench · Depends: T3.1, T3.2 · Read: `build-omnia.mjs` lines 159 to 234
 - Owns: `tests/golden/wien-oscillator.ron` and its PNGs
 - Do: rebuild the mockup's sheet as a fixture from the coordinates in `build-omnia.mjs`
@@ -402,7 +431,7 @@ of the `canvas` lane.
   difference. Set `needs-human`; after the owner approves, commit the renders as goldens
   and set `done`.
 
-### T3.4 Gate: milestone 3 · todo
+### T3.4 Gate: milestone 3 · done
 - Lane: bench · Depends: T3.3
 - Do: `bench run --sheet text --script pan` and `zoom`: p99 < 16.7 ms (B3). Re-run the whole
   T2.7 table with text on. Run the golden tests.
@@ -1606,3 +1635,309 @@ from source at 15d136bf. Nothing measured; D4 is a hypothesis until T0.6.
                        needed for the cargo xtask golden command); the workspace Cargo.toml
                        gains the tests/golden member; canvas-plan.md section 10 now lists
                        image as a normal dependency of the test-only omnia-golden crate.
+2026-11-17 T2.7 blocked (B3/B4 present intervals) — Ran the fixed Orion Q4 campaign at
+100% and 125%. All 120 invocations completed and replay matched the reference summary.
+B2, frame-time p99, B5, B9 and B10 passed. Five counted intervals missed B3 (one 1k pan)
+or B4 (four 10k zoom). The tested renderer already implements far-zoom simplification.
+D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.md).
+2026-11-18 T2.7 needs-human — Owner decision: scope B4 so 10k far zoom is a known limit,
+                       and plan option B (T2.9). Investigation of the 2026-11-17 wire-cache
+                       campaign: all five counted B4 intervals (49.6 to 54.8 ms) fall in
+                       frames 432 to 487 of the 10k zoom sweep, zoom 5.3% to 9.3%. There the
+                       whole sheet is in view, 28,279 quads + 1,676 sprites (scene-counts,
+                       Windows dev machine, 125%), against 2k to 13k at mid zoom; Orion's
+                       present rises from ~1.8 to ~6 ms and frames alternate 20/30 ms
+                       (mean interval 24 to 25 ms in frames 440 to 479). Each miss is one paint
+                       of 24 to 31 ms (normally ~7.5 ms) at a varying frame (spikes over 15 ms
+                       at frames 408 to 519 in 12 of 20 runs); paint max tracks draw max within
+                       0.7 ms; Omnia allocations 0. Wire merging joins 46 of 20,000 wires:
+                       every far-zoom run is 1 to 2 device px. Row/column rect coalescing
+                       removed 1%; an exact pixel-coverage decomposition would leave ~20k to
+                       22k quads; dropping runs under 3 device px leaves 8,324. Plan 2.1 now
+                       reports 10k-zoom far-zoom (zoom < 31.25%, frames 376 to 545) B4
+                       intervals as KNOWN until T2.9; everything else still gates. gate.py
+                       implements it. Replaying the archived campaign under the scoped gate
+                       passes (4 + 1 known), but it is not a verdict: the rule was written
+                       after the results, so T2.7 closes on a fresh Orion run of the scoped
+                       gate. D4 records the planned stub rule; T2.9 added.
+2026-11-18 T2.7 blocked — Fresh Orion campaign under the scoped B4 (source eda6643, binary
+                       235daecc…, 00:15 to 00:45, AC, powersave, same protocol): status fail.
+                       B4 passed at both scales: 10k zoom 10/10 with 4 (100%) + 1 (125%)
+                       known-limit far-zoom intervals, 41.9 to 52.0 ms at 6.0% to 9.6% zoom;
+                       p99 8.704 / 8.544 ms; B5 max 24.183 ms; B9 max 113.008 MB. B2, B5,
+                       B9, B10 passed. B3 failed: 100% 1k pan run 9, frame 236, interval
+                       26.886 ms (limit 25.0), clause (b); its draw took 12.55 ms against
+                       3.5 to 3.8 ms around it, with a normal present (1.92 ms). This is the
+                       same one-frame paint stall as the far-zoom misses, at 1k load, so
+                       it is not explained by primitive count; c80be1c's campaign had one
+                       1k-pan B3 miss too. Not re-run (measurement rules). Next: a diagnostic
+                       Orion run that records per-frame main-thread CPU time against wall
+                       time around paint, plus scheduler or frequency tracing, to tell
+                       preemption from clock changes. Then decide the fix with the owner.
+                       Evidence: docs/measurements/T2.7-wire/orion-2026-11-18-scoped/.
+2026-11-18 T2.7 blocked (diagnosis) — Two diagnostic Orion campaigns (evidence only;
+                       02:00 and 02:10 EST; 100%, AC, powersave/balance_performance; 10 x 1k
+                       pan + 10 x 10k zoom each) with a new opt-in per-paint probe
+                       (OMNIA_BENCH_PAINT_PROBE, omnia-bench/src/paint_probe.rs; 0 Omnia
+                       allocations). Campaign 1: 22 of 23 stalls on-CPU with no faults or
+                       waits, 1 preemption. Campaign 2 (user cycles, instructions, ref
+                       cycles): 18 of 20 stalls are a low clock: same instructions and cycles
+                       as neighbours, clock 0.67 to 1.07 GHz against up to 3.35 GHz, IPC ~2.2;
+                       the B4-sized ones (41.9 to 51.1 ms) all low clock. 1k pan paints run at
+                       0.77 GHz throughout; 10k zoom reaches 3.35 GHz only under sustained far
+                       zoom. Throttle counters unchanged and 60 C peak: not thermal. Likely
+                       powersave frequency policy. Unconfirmed: needs an A/B with the
+                       performance policy (root) and an owner decision on the GUI-gate
+                       governor (plan 2.1). Report: docs/measurements/T2.7-paint-stall.md.
+                       Dependency: libc 0.2 (MIT OR Apache-2.0, already in the graph) for
+                       omnia-bench on Linux, logged in plan section 10. For the owner of
+                       crates/omnia-bench/src/spike/shell_cache.rs: Linux clippy -D warnings
+                       fails on an unused `window` at line 1657 (CI is Windows-only, so it
+                       never fires there); not changed here.
+2026-11-20 T2.7 done — Owner decision: require the performance CPU governor for Orion GUI
+                       gate runs (plan 2.1, matching CPU-only runs) after the T2.7 paint-stall
+                       A/B campaign (PR #80) showed powersave clock drops caused the 20 stalls
+                       (20 -> 0 under performance; 0 intervals > 2.5 R). Fresh 120-invocation
+                       Orion gate under performance (source bd2c036, binary 235daecc…,
+                       22:49 to 23:19 EST, AC, performance on all 4 CPUs, fullscreen eDP-1
+                       at 60.008 Hz, HD 620 / Mesa Vulkan, kde-inhibit): status pass.
+                       Every budget passed at both 100% and 125%: B2 2.415 / 9.033 ms;
+                       B3 1k-pan p99 1.226 / 0.918 ms, 1k-zoom 1.606 / 1.119 ms;
+                       B4 10k-pan p99 1.563 / 1.186 ms, 10k-zoom 8.055 / 7.952 ms;
+                       B5 max 3.877 ms (1k) / 19.464 ms (10k); B9 max 112.719 MB; B10 0 in
+                       all 80 motion runs. Zero intervals over each budget's limit across all
+                       80 motion runs (1k: 0 over 1.5 R; 10k: 0 over 2.5 R, 0 known-limit
+                       far-zoom intervals, 0 compositor-side exclusions); 10k-zoom still had
+                       451 two-refresh (1.5 to 2.5 R) intervals at far zoom (worst 40.27 ms /
+                       2.42 R in s125/10k-zoom-8), within B4. §2.1 disclosure: harness/agent
+                       processes (t3code, cloudflared, agy_acp_server in all 240 snapshots;
+                       claude in 23; baloo_file_extr in 8; gh in 2) ran during the campaign
+                       (conservative toward failure; owner acknowledged 2026-11-20 under Hard Rule 3). Archive
+                       replays byte-identically (exit 0). T2.9 remains planned for balanced/
+                       powersave laptop headroom and to remove the B4 known limit.
+                       Evidence: docs/measurements/T2.7-wire/orion-2026-11-20-performance/.
+2026-11-21 T2.9 needs-human — D4, D5, K9. Added `lod::MIN_WIRE_RUN_PX = 2.5` and
+                       `lod::wire_run(length_px) -> bool` (hidden below 2.5 logical px, drawn at
+                       or above) in `crates/omnia-canvas/src/sheet/lod.rs`, `Segment::length_px`
+                       in `wires.rs` (i64 subtraction before f64 scaling, INV8), and per-frame
+                       zero-allocation filtering of merged runs in the far-zoom branch of
+                       `DocumentCache::draw` in `sheet.rs` (`MergedSegments` cache, near-zoom
+                       path, junctions, boxes and sprite layer unchanged). Added unit tests
+                       covering the K9 boundary, below/at/above threshold runs, near-zoom
+                       invariance, long wires composed of short collinear segments across
+                       junctions, and zero allocations across far-zoom camera changes. Removed
+                       the B4 known limit from `canvas-plan.md` (§2.1, B4 row, D4) and
+                       `canvas-roadmap.md` (T2.7 table), added the 2.5 logical-px stub
+                       threshold to K9, and froze a clean Orion gate script
+                       `docs/measurements/T2.9/gate.py` without `far_zoom`/`scope_known_limit`
+                       (preserving `docs/measurements/T2.7-wire/gate.py` for archived T2.7
+                       replay). Deviation outside T2.9's Owns list (`bench-baseline/` belongs
+                       to T2.6, owner accepted 2026-11-21): tightened `bench-baseline/1k-zoom.json`
+                       and `bench-baseline/10k-zoom.json` to the new lower deterministic zoom
+                       counts (`10k-zoom` peak quads 28,279 -> 8,325, −70.6%; sweep quads
+                       −54.8%; `1k-zoom` sweep quads −24.0%; pan baselines byte-identical; all
+                       4 cases pass `bench compare` against `main`). Non-reference Windows
+                       measurements
+                       (i7-14650HX, Intel UHD Graphics, Windows 11, 1920x1200 @ 165 Hz, 125%
+                       scaling, AC, Silent; certifies no budget): `--features scene-counts` on
+                       10k zoom at frames 376/420/461/500/545 gives quads before -> after at
+                       1920x1080 (s100): 2944->2944, 16070->1214, 28279->8325, 16791->1273,
+                       3072->3072; at 1536x864 (s125): 1951->1951, 12906->978, 28279->8325,
+                       13379->1011, 1985->1985 (sprites unchanged on every frame); full
+                       600-warmup + 600-frame 10k zoom runs report `allocs_per_frame.ours == 0`
+                       (B10) at both viewports. Standard checks (fmt, workspace clippy,
+                       feature-enabled bench clippy, workspace tests, Windows goldens unchanged,
+                       cargo deny) pass locally. Awaiting the full Orion gate run via
+                       `docs/measurements/T2.9/gate.py` at 100% and 125%.
+                       Evidence: docs/measurements/T2.9.md.
+2026-11-21 T2.9 blocked (Orion gate fail: B3 1k attribution) — D4, D5, K9, plan 2.1. Full
+                       Orion reference campaign, one run, no retries: clean checkout 8fdab7a
+                       (task/T2.9-far-zoom-wire-stubs), release omnia-bench SHA-256
+                       23a80c92...c4567 before and after, i5-7300U, HD Graphics 620 (KBL
+                       GT2) on the Mesa open-source Vulkan driver, Linux 7.2.7 Wayland,
+                       eDP-1 1920x1080 at 60.008 Hz at 100% and 125%, AC online and the
+                       performance governor on all four CPUs in all 240 snapshots, under
+                       kde-inhibit; 120 invocations 21:28:17-21:58:02 EST, all exit 0.
+                       gate.py (docs/measurements/T2.9/gate.py, no far_zoom/KNOWN) recorded
+                       fail. B4 holds with no known limit: zero intervals over 2.5 refreshes
+                       in all 40 10k runs; 10k-zoom p99 5.016 / 4.954 ms and 10k-pan 2.257 /
+                       1.378 ms (< 33.3); B5 worst 15.286 / 9.183 ms (<= 50); B9 92.881 /
+                       94.432 MB (< 300); B10 0 in every cell; B2 delta 4.480 / 6.265 ms
+                       (< 300). B3 frame p99 passes (1k-pan 1.964 / 1.258 ms, 1k-zoom 1.635 /
+                       1.170 ms, < 16.7) as do B5 and B10, but B3's missed-refresh attribution
+                       FAILS in all four 1k cells: 1k-pan 5/10 (100%) and 8/10 (125%),
+                       1k-zoom 8/10 and 7/10 passed. 16 intervals over 1.5 refreshes (25.1 to
+                       39.9 ms), 2 compositor-side, 14 counted (13 fail criterion (b), 1 fails
+                       (c)); none untraced. The T2.7 2026-11-20 campaign on the same machine
+                       passed B3 attribution 10/10 in every cell; this report does not show
+                       the cause (the T2.9 change is in the far-zoom branch only). Plan 2.1
+                       disclosure: other apps were NOT closed; the KDE session, Akonadi,
+                       Baloo, two network tunnel/VPN daemons and the agent harness (T3 Code, t3code,
+                       claude and polling helpers) ran throughout (full list in
+                       docs/measurements/T2.9.md); AC dropped for ~40 s before the campaign
+                       and was online in all 240 snapshots; the governor was set by the
+                       agent minutes before and not restored. A first launch aborted on the
+                       clean-tree check (untracked bench-baseline/__pycache__ from a probe)
+                       before any timed run and was relaunched unchanged. Archive replays
+                       byte-identically (exit 1). Not Plan B: B4 does not miss. Blocked on
+                       the B3 result: the owner decides whether to schedule a fresh section
+                       2.1 campaign at the desk with apps closed (a new campaign, not a
+                       retry of this one) or to rule on these 1k misses. T2.9 is not done.
+                       Owner decision (2026-11-21): keep status `needs-human` (matching T1.6
+                       precedent) and merge PR #86 with this Orion evidence recorded,
+                       deferring the clean §2.1 desk run (apps/Baloo idle) to certify T2.9.
+                       Evidence: docs/measurements/T2.9.md,
+                       docs/measurements/T2.9/orion-2026-11-21/.
+2026-11-21 T3.1 done — Added cached horizontal schematic labels (`crates/omnia-canvas/src/sheet/text.rs`)
+                       for part designators and values (K8/Q3: Inter SemiBold 17 px, `stage/ink`,
+                       stacked on a shared left edge at the 22 px step; `Part` holds one `value`
+                       field today), net labels (Inter Medium 13 px, `stage/ink-secondary`,
+                       injectively escaping `\`, `\n` and `\r` at `Doc::revision` sync time so
+                       distinct multiline/escaped net names stay distinct with zero paint-time
+                       string preparation), and pin numbers on multi-pin symbols (Inter Medium
+                       13 px, `stage/ink-secondary`; single-pin ground/power symbols omit pin
+                       numbers). One cached `ShapedLine` per label and K11 0.5 px size bucket
+                       (capped at 128 px to bound the non-evicting glyph atlas across K4; K8/K11
+                       updated in `canvas-plan.md` per rule 12), reshaped only when bucket, text,
+                       or scale factor changes, with pin numbers shared per `(symbol, pin)` across
+                       parts and deleted, emptied, or edited lines released on `Doc::revision`
+                       changes while keeping slot capacity. Enforced D5/K9 drop order: ordinary
+                       text hides below 6.5 px font size first, then pin numbers hide together
+                       with junction dots below 2.5 px (31.25% zoom); label queries expand by
+                       mirrored label overhang and edge-straddling unshaped labels shape before
+                       culling so viewport culling precedes K9's 700-label cap, which hides
+                       smallest first and breaks equal-size ties by world geometry `(y, x)` then
+                       lowest id. On `Doc::revision` changes only (zero per-frame cost), part
+                       labels pick a deterministic clearance-maximising side via local
+                       `Doc::query`. Direct glyph emission via `Window::paint_glyph` /
+                       `paint_emoji` in one `paint_layer` with device-pixel origin snapping (D4,
+                       D6, G14, G15, S5); no colour literals (INV6) and no `#[allow]` added.
+                       Verification (Windows 11 x64 dev machine — i7-14650HX, RTX 5060 Laptop + UHD
+                       Graphics; non-certifying per Q4 / Hard Rule 3):
+                       `sheet_text_alloc` (headless, including multiline bucket reshapes) and
+                       `sheet_text_render` (real DirectX/DirectWrite backend) both report 0 Omnia
+                       allocations/frame once warm on the canonical `text` stress sheet (matching
+                       `omnia-bench/src/generate.rs` `StressSheet::TextHeavy`, seed 42: 1,000
+                       parts, 2,000 wires, 0 net labels, 12,000 chars), with the real backend
+                       emitting at least 1,004 glyph sprites/frame across 60 pan frames and at
+                       least 6 glyph sprites/frame across 19 text-visible zoom frames of a 30-step
+                       zoom sweep (B10). `sheet_text_render` also verifies rendering at
+                       1.0/1.25/1.5, D5/K9 drop order on both sides of the ordinary-text
+                       (0.45x/0.35x) and pin-number/junction (0.35x visible vs 0.30x hidden)
+                       boundaries, K9's 700-label cap, fractional-pan tile stability, and exact
+                       isolated glyph+emoji atlas stability across two independent K4 zoom sweeps
+                       (excluding SVG/dot tiles: pass 1 = 3 pages / 12,582,912 B / 420 tiles
+                       across 20 emitted peak glyph heights 4..=96 px + 11 emoji tiles; pass 2 =
+                       3 pages / 12,582,912 B / 420 tiles across 20 emitted peak glyph heights
+                       4..=96 px + 11 emoji tiles; identical tile sets).
+                       Headless bench gate (`bench.yml` cases `1k-pan`, `1k-zoom`, `10k-pan`,
+                       `10k-zoom`): `allocs_per_frame.ours.max == 0` and all 24 metrics within 10%.
+                       Files outside T3.1 Owns (`crates/omnia-canvas/src/sheet/text.rs`):
+                       `crates/omnia-canvas/src/sheet.rs` (`TextCache` wiring reusing `Doc::query`
+                       slices + INV7 source list), `crates/omnia-canvas/Cargo.toml` (dev-dep
+                       `gpui/bench-support` already in `Cargo.lock`, zero new crates +
+                       `sheet_text_render` test entry), `crates/omnia-canvas/tests/sheet_text_alloc.rs`,
+                       `crates/omnia-canvas/tests/sheet_text_render.rs`, `canvas-plan.md` (K8/K11
+                       clarifications per rule 12), `tests/golden/tests/sheet.rs` (bundled Inter
+                       registration), and regenerated `tests/golden/inverting-amp-{graphite,gray}-{100,125,150}.png`
+                       goldens (as flagged in T3.2's log). Note for T3.4: `omnia-bench/src/harness.rs`
+                       currently registers Inter only for S5 spike runs, not `Sheet::Stress(_)` runs;
+                       register bundled Inter Medium and SemiBold there before gating `text` on Orion.
+2026-11-22 T3.3 done — H2 approved by owner in the T3.3 task thread (2026-11-22). Built
+                       `tests/golden/wien-oscillator.ron` from `design/build-omnia.mjs` lines
+                       159–234 (11 parts, 31 normal-form wires, 1 net label `N+`, 7 junctions,
+                       9 nets; `20 px = GRID_NM`, origin shifted `(-690, -370)` px so mockup grid
+                       dots align with `GRID_NM` and `(mx, my)` lands at screen `(mx, my)` at 100%
+                       zoom). Kept exact `build-omnia.mjs` coordinates (including off-lattice `C2`
+                       at `y = 456` and left `GND` at `x = 285`) for pixel-exact alignment with
+                       `workspace-graphite.png` — note that those two points sit off
+                       `PIN_LATTICE_NM`, so future tasks calling `assert_normal_form` (`WINV3`) or
+                       `Move`/`DragSegment` on this visual fixture will hit off-lattice wire ends.
+                       Omitted floating oscilloscope, on-sheet `XSC1` symbol/probes, `+12V`/`−12V`
+                       pills, and `R3` interactive box. Extended `tests/golden/src/lib.rs`
+                       (`Shot::content`) and `tests/golden/tests/sheet.rs` (outside Owns, T3.2's
+                       `bench` lane) so fixtures of different logical sizes (`640x400` and
+                       `1366x718`) render in one hidden window; `inverting-amp` goldens are
+                       unchanged. Committed all 6 `wien-oscillator-{graphite,gray}-{100,125,150}.png`
+                       goldens (`1366x718`, `1708x898`, `2049x1077`; `GRAPHITE` and `GRAY`
+                       byte-identical). Rendered on Windows 11 dev laptop (i7-14650HX, Intel UHD
+                       Graphics active on 1920x1200 @ 165 Hz, 125%; RTX 5060 Laptop GPU present on
+                       1920x1080 @ 60 Hz; AC, Silent; non-reference). Side-by-side against cropped
+                       `workspace-graphite.png` and full difference list are in
+                       `docs/measurements/T3.3.md`. Independent review by Claude Opus 5.5 approved
+                       with minor findings (all addressed). Follow-up logged for `sheet/text.rs`:
+                       `R4` automatic label overlaps pin `2` and the right tap wire, and `N+`
+                       baseline touches the horizontal wire. Standard checks: `cargo fmt --all --check`,
+                       workspace clippy, bench feature clippy, and `cargo test --workspace` (all
+                       12 goldens 0 differing pixels) pass locally; `cargo deny check` passes
+                       bans/licenses/sources but reports pre-existing `RUSTSEC-2026-0592` on
+                       `url 2.5.8` in `Cargo.lock` (out of T3.3 scope). No new dependencies.
+2026-11-22 T3.4 needs-human — Milestone 3 gate prepared; awaiting Orion reference campaign
+                       (`docs/measurements/T3.4/gate.py`). Registered bundled `Inter-Medium.ttf`
+                       and `Inter-SemiBold.ttf` in `crates/omnia-bench/src/harness.rs`
+                       (`register_sheet_fonts`, called in `run`, `idle`, and `start_child` for
+                       `Sheet::Stress(_)` and `S5`, fulfilling T3.1's handoff note). Froze
+                       `docs/measurements/T3.4/gate.py` (160 invocations across 100%/125%:
+                       `start-empty`, `start-1k`, `text-pan`, `text-zoom`, `1k-pan`, `1k-zoom`,
+                       `10k-pan`, `10k-zoom`; 10 rotating repetitions, full attribution, no B4
+                       known limit) and verified it with `docs/measurements/T3.4/test_gate.py`
+                       (4/4 pass). Windows golden suite (`cargo test -p omnia-golden`): all 12
+                       images (`inverting-amp` and `wien-oscillator`, both themes, 1.0/1.25/1.5)
+                       matched with 0 differing pixels. Non-reference Windows diagnostics
+                       (i7-14650HX, Intel UHD Graphics driver 32.0.101.7088 active, Windows 11
+                       26200, 1536x864 logical / 1920x1080 device @ 1.25 scale, 165 Hz, AC,
+                       Silent; certifies nothing; `docs/measurements/T3.4.md`): B10 holds
+                       (`ours.max == 0`) on all 6 motion runs; `start` delta +23.668 ms;
+                       `text-pan` p99 2.216 ms, `1k-pan` 1.587 ms, `10k-pan` 2.056 ms.
+                       Diagnostic risks flagged for Orion (hypotheses, unprofiled): `text-zoom`
+                       hit 25.854 ms p99 (max 35.226 ms, 2,897 total allocs/frame p99; suspected
+                       label reshaping across K11 buckets), and zoom sweeps added ~200 MB private
+                       memory over same-machine pan (`10k-zoom` 373.71 MB vs `10k-pan` 171.07 MB;
+                       suspected non-evicting glyph atlas growth). Independent review (Claude
+                       Sonnet 5.5) approved with minor findings (addressed). Standard checks pass
+                       locally (fmt, workspace clippy, bench feature clippy, omnia-bench and
+                       omnia-golden tests, cargo deny check). No new dependencies.
+2026-11-23 T3.4 needs-human — Orion reference campaign 1 (`4802b62`, binary SHA-256
+                       `eba0bfaa4abd006b028791d4ad0f4a3972343959fe034d2e3a44c6c8bf134770`,
+                       160/160 runs on i5-7300U / HD Graphics 620 / Wayland eDP-1 1920x1080
+                       @ 60 Hz, AC, performance governor; summary and metadata in
+                       `docs/measurements/T3.4/orion-2026-11-23-before-fix/`, full raw JSON
+                       archived on Orion at
+                       `/home/marcus/omnia-archive/T3.4/orion-2026-11-23-before-fix`) failed
+                       B3 missed-refresh attribution on zoom (`text-zoom` 9/10 at s100 & s125,
+                       `1k-zoom` 9/10 at s100 & 6/10 at s125; 9 of 72,000 frames > 25.0 ms).
+                       All numeric budgets passed (`B2` 38.96/45.55 ms, `B3` pan 1.32–2.21 ms,
+                       `B3` zoom p99 7.27–9.20 ms, `B4` 10k-pan 1.75–2.14 ms & 10k-zoom
+                       7.83–8.46 ms 10/10, `B9` 151–174 MB < 300 MB, `B10` ours.max == 0).
+                       Root cause: `TextCache` reshaped up to 700 visible labels synchronously
+                       on every K11 0.5 px bucket transition (`paint_ms` max 11.20–15.71 ms,
+                       `allocs_per_frame.total` max 17,337–20,362). Applied D6/G15 base-size
+                       shaping fix in `crates/omnia-canvas/src/sheet/text.rs` (shape once at
+                       K8 base size 17/13 px, scale metrics & glyph offsets linearly to the
+                       active K11 bucket on paint; `canvas-plan.md` D6/G15 updated in lockstep).
+                       Non-reference Windows check (`1536x864`, 125%, 165 Hz; certifies
+                       nothing): `text-zoom` p99 25.85 -> 1.35 ms, `1k-zoom` p99 9.42 ->
+                       1.68 ms, `total` allocs max 10, 0 late, 12/12 goldens 0 differing px.
+                       Standard checks pass locally. Status stays `needs-human` pending Orion
+                       re-run. No new dependencies.
+2026-11-23 T3.4 done — Orion reference campaign 2 (`3224084`, binary SHA-256
+                       `faea6b7fdc52be5b40ae5aa4aea252eeca8f8947b0fc5a404a82f11ca1ba0744`,
+                       160/160 runs on i5-7300U / HD Graphics 620 / Wayland eDP-1 1920x1080
+                       @ 60 Hz, AC, performance governor, `kde-inhibit --power --screenSaver`,
+                       archived in `docs/measurements/T3.4/orion-2026-11-23-v2/`) certified
+                       PASS on every budget at both 100% (`s100`) and 125% (`s125`) with
+                       zero over-limit frames across all 120 motion runs (72,000 frames).
+                       `B2` startup delta 38.307 / 43.105 ms (< 300); `B3` `text-pan` p99
+                       2.081 / 1.299 ms (worst 4.424 / 4.964 ms, 10/10), `text-zoom` p99
+                       3.064 / 2.486 ms (worst 3.990 / 3.781 ms, 10/10), `1k-pan` p99
+                       1.814 / 1.461 ms (worst 4.493 / 3.254 ms, 10/10), `1k-zoom` p99
+                       2.849 / 2.209 ms (worst 4.305 / 5.345 ms, 10/10); `B4` `10k-pan` p99
+                       2.075 / 1.635 ms (worst 5.345 / 5.181 ms, 10/10), `10k-zoom` p99
+                       4.975 / 4.901 ms (worst 13.107 / 8.077 ms, 10/10); `B9` `10k` private
+                       memory 150.242–173.492 MB (`s100`) and 149.070–171.189 MB (`s125`, all
+                       < 300 MB); `B10` `allocs_per_frame.ours.max == 0` across all 120 runs.
+                       Windows golden suite (`cargo test -p omnia-golden`): 12/12 images
+                       matched with 0 differing pixels on `3224084`. Unlocks T4.3 (Milestone 4).
+                       (This clean 10/10 pass also covers the full no-known-limit T2.7 table
+                       required by T2.9; T2.9 left for its own status update.) No new
+                       dependencies.

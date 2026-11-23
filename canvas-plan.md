@@ -70,8 +70,12 @@ runs Linux, while Windows stays the first shipping platform, so these rules appl
   (1920x1080 logical) and at 125% (1536x864 logical). No window larger than the panel. The
   owner chose native 1080p over the brief's 4K; thresholds and budgets are otherwise unchanged.
 - **Refresh.** The panel refreshes at 60 Hz; B3 and B4 are judged against it (60 and 30 fps).
-- **Power and noise.** On AC, the bench window in the foreground, other apps closed. Each
-  result records the power source, CPU governor and power profile.
+- **Power and noise.** On AC, with the `performance` CPU governor (owner decision 2026-11-20,
+  matching CPU-only runs after the T2.7 paint-stall A/B in PR #80 showed `powersave` clock
+  drops caused the paint stalls), the bench window in the foreground, other apps closed. Each
+  result records the power source, CPU governor and power profile. Note: Orion GUI gates
+  certify under `performance`; laptops on default balanced/`powersave` policies can still hit
+  lower-clock paint stretches (T2.9 adds far-zoom headroom).
 - **CPU-only runs.** Owner decision 2026-11-17 (gate-blocker audit section 3.2): a timed run
   with no window or GPU work (for example the command-boundary runner) keeps the reference
   hardware, AC, the `performance` governor, other user apps closed, before/after records of
@@ -168,10 +172,10 @@ All from `build-omnia.mjs` unless marked "chosen". Screen sizes are logical pixe
 | K5 | Wire stroke; symbol stroke | 1.8 px (228,600 nm); 2 px (254,000 nm). Floor: 1 device pixel (Q1). |
 | K6 | Junction dot; grid dot | 8 px diameter (1,016,000 nm); 1.2 px, constant on screen, at least 1 device pixel |
 | K7 | Symbol art box | 150 units square. Placed size: resistor, capacitor, diode 80 px (4 grid steps); op-amp 180 px (9); ground 48 px (2.4, anchored by its pin). |
-| K8 | Text | Designator and value: Inter SemiBold 17 px (Q3). Net label and pin number: Inter Medium 13 px. Secondary value text: Inter Medium 12 px. |
-| K9 | LOD thresholds (chosen) | Text hidden below 6.5 px font size. Pin numbers and junction dots hidden below 2.5 px. Symbol drawn as one filled quad when its box is under 8 px. Visible-label cap (T0.6): at most 700 labels per frame; past that, labels hide smallest first. |
+| K8 | Text | Designator and value: Inter SemiBold 17 px (Q3), stacked on a shared left edge. Net label and pin number: Inter Medium 13 px (single-pin symbols such as ground omit pin numbers; multi-pin symbols show every pin number). Secondary value text: Inter Medium 12 px (reserved for future multi-field parts; `Part` currently holds one `value` field). |
+| K9 | LOD thresholds (chosen) | Text hidden below 6.5 px font size. Pin numbers and junction dots hidden below 2.5 px. Far-zoom merged wire runs hidden below 2.5 px on-screen length once junctions are hidden (D4, T2.9). Symbol drawn as one filled quad when its box is under 8 px. Visible-label cap (T0.6): at most 700 labels per frame; past that, labels hide smallest first. |
 | K10 | Grid density (chosen) | Show every 2^k-th grid point with k keeping on-screen pitch in [20, 40) px. Dots about to drop fade over the top quarter of that range: while the pitch is in [35, 40) the next finer level's extra dots are drawn with alpha rising from 0 at 35 px to full at 40 px. Above 200% zoom k is negative (binary subdivisions of the grid, k = −1 being the K2 pin lattice); k runs from −5 at 3200% to 5 at 5%, every level a whole number of nm (2,540,000 = 2^5 × 79,375). (T1.4) |
-| K11 | Cache buckets (chosen) | Font size quantised to 0.5 px. Symbol sprite sizes on a ladder of ratio 2^(1/4), matching K4. |
+| K11 | Cache buckets (chosen) | Font size quantised to 0.5 px, capped at 128 px to bound the non-evicting glyph atlas across K4 (T3.1). Symbol sprite sizes on a ladder of ratio 2^(1/4), matching K4. |
 | K12 | Spatial index cell (chosen) | 20,320,000 nm (8 grid steps) |
 | K13 | Timing | View animations 150 ms, ease-out, interruptible. Background-job debounce 150 ms (chosen). |
 | K14 | Pointer tolerances (chosen, tunable) | Hit tolerance 4 px. Snap radius 10 px. |
@@ -200,7 +204,7 @@ longer matches the source, stop and record it in the roadmap log.
 | G12 | `Window::render_to_image()` (feature `test-support`) renders the current scene to an RGBA image without presenting; the DirectX renderer implements it. | `window.rs`; `gpui_windows/src/directx_renderer.rs` | Golden-image tests need no screenshots. |
 | G13 | `window.frame_duration_snapshot()` (feature `profiler`) returns histograms of draw time, dirty-to-present time and present interval. GPUI's spans use the `profiling` crate. | `profiler.rs` `FrameDurationSnapshot` | The bench reads GPUI's own histograms. Tracy works through `profiling`. |
 | G14 | Glyph atlas entries are keyed by font, glyph, font size, scale factor and one of 4 horizontal subpixel offsets. `paint_glyph` always uses a unit transform. | `window.rs` `paint_glyph`; `text_system.rs` `SUBPIXEL_VARIANTS_X` | Bucket font sizes (K11). Text cannot be rotated. |
-| G15 | `text_system.shape_line(text, font_size, runs, force_width) -> ShapedLine`; `ShapedLine::paint(origin, line_height, align, align_width, window, cx)`. | `text_system.rs`; `text_system/line.rs` | Cache one `ShapedLine` per label and size bucket. |
+| G15 | `text_system.shape_line(text, font_size, runs, force_width) -> ShapedLine`; `ShapedLine::paint(origin, line_height, align, align_width, window, cx)`. Both Linux (`cosmic_text` `Hinting::Disabled`) and Windows (`DirectWrite` natural measuring) produce size-linear glyph offsets. | `text_system.rs`; `text_system/line.rs` | Cache one base-size `ShapedLine` per label (K8) and scale linearly to the active K11 bucket on direct glyph emission (D6). |
 | G16 | Apps start with `gpui_platform::application().run(..)`; `gpui_platform::headless()` also exists. `window.request_animation_frame()` notifies the current view on the next frame. | `gpui_platform/src/gpui_platform.rs`; `window.rs` | Entry point and animation tick. |
 
 Not settled by reading, so measured in the spike: whether the sprite atlas ever evicts,
@@ -323,7 +327,14 @@ returns a `Change` that the views use to decide what to repaint.
   T1.6 empty-sheet grid baseline. Draw symbols under K9's box threshold as LOD boxes.
   Labels use direct glyph emission, not one
   `ShapedLine::paint` per label (S5: half the cost), with the visible-label cap in K9.
-- Fallback if B4 still misses after far zoom: Plan B (section 8). Ask the owner first.
+- Far-zoom wire stubs (T2.9, owner decision 2026-11-18): once K9 hides junctions, draw a
+  merged wire run only if its on-screen length is at least K9's stub threshold (2.5 logical
+  px), measured after merging, so a long wire made of short segments still draws. On the 10k
+  sheet at 5% to 10% zoom every one of the ~20,000 runs is under the threshold and ~70% of
+  the quads; dropping them leaves ~8,300 quads (box-only), about the load the 1k and
+  mid-zoom frames carry at 60 Hz. The picture changes: at far zoom, parts show without their
+  short stubs.
+- Fallback if B4 still misses after T2.9: Plan B (section 8). Ask the owner first.
 
 ### D5 Level of detail. DECIDED (thresholds K9, K10)
 
@@ -334,8 +345,11 @@ returns a `Change` that the views use to decide what to repaint.
 
 ### D6 Text: cached shaped lines, bucketed sizes. DECIDED
 
-- Each label keeps one `ShapedLine` for the current size bucket (K11, G15). A frame only
-  calls `paint`.
+- Each label shapes one `ShapedLine` at its 100%-zoom base size (K8) and caches it until its
+  text changes or the item is deleted (G15). On paint, metrics and glyph offsets scale linearly
+  to the active K11 0.5 px size bucket (capped at `MAX_FONT_PX`) and glyphs emit directly at
+  that bucket's font size, so zooming across buckets or moving across scale factors never
+  reshapes on the hot path.
 - Positions are exact; only the glyph size is bucketed, so the error is under a quarter pixel.
 - Labels stay horizontal for every part orientation (G14).
 - Labels are culled by the same index query as everything else.
@@ -474,7 +488,9 @@ pub struct PartId(u32);  pub struct WireId(u32);  pub struct LabelId(u32);  pub 
 pub enum ItemId { Part(PartId), Wire(WireId), Label(LabelId) }
 
 pub struct Part { pub symbol: SymbolId, pub at: Pt, pub orient: Orient,
-                  pub designator: Arc<str>, pub value: Arc<str> } // P2.1 (parts-plan.md PD8): adds def: PartDefId and params overrides
+                  pub designator: Arc<str>, pub value: Arc<str> }
+// P2.1 (parts-plan.md PD8, amended 2026-11-23): Part keeps these five fields; each StoredPart also
+// holds def: PartDefId and params (non-default overrides), read via part_def_id/part_params.
 pub struct Wire { pub a: Pt, pub b: Pt }                  // INV1
 pub struct Label { pub at: Pt, pub text: Arc<str> }
 
@@ -483,7 +499,7 @@ pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
                         DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField },
                         Follow(FollowError), Segment(Blocker) } // Follow/Segment: wiring-plan.md W2.2, W3.2
 pub enum Command {
-    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect },
+    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect }, // P2.2 adds def: PlaceDef (parts-plan.md PD8)
     AddWires(Vec<Wire>),
     AddLabel(Label),
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
@@ -497,6 +513,8 @@ pub enum Command {
 }
 pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
+// P2.2 (parts-plan.md PD8, XD7): adds modified: Vec<PartId>, the parts whose params or definition
+// changed (SetParam, every instance of an UpdatePartDef) even when geometry and text did not.
 // added/removed are membership deltas only: an item that keeps its id with new geometry
 // (moved, reoriented, merge survivor, first piece of a split) is in neither; `dirty` covers
 // its old and new bounds. Consumers invalidate from dirty/revision, not the id lists.
@@ -541,8 +559,9 @@ impl Doc {
     pub fn save(&self, w: impl io::Write) -> io::Result<()>;
     pub fn load(r: impl io::Read) -> io::Result<Self>;
     // Version 2 RON embeds local bounds and pins (omnia-symbols depends on omnia-doc).
-    // P2.3 (parts-plan.md PD3, PD8, PK9): Version 3 adds the deduplicated part_defs table and per-part def/params; v2 remains loadable.
-    // P2.1 also adds part_def, part_defs and resolved_param queries on Doc.
+    // P2.3 (parts-plan.md PD3, PD8, PK9): Version 3 adds the deduplicated part_defs table and per-part def/params;
+    // v2 loads by migration to unmodelled definitions. P2.1 adds part_def, part_defs, part_def_id,
+    // part_params and resolved_param queries, and extends PartialEq/content_eq per parts-plan.md PD8.
     // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points, index and connectivity.
     pub fn content_eq(&self, other: &Self) -> bool; // live items, exact live IDs, interior gaps, bounds/pins
     // PartialEq compares persistent state, including revision and every reserved slot (pre-T5.1 contract).
@@ -738,6 +757,7 @@ Build-time steps:
 | `profiling`, `tracy-client` (feature `tracy`) | Spans, on the same timeline as GPUI's | MIT or Apache-2.0 |
 | `hdrhistogram` | Bench percentiles | MIT or Apache-2.0 |
 | `serde_json` | Bench JSON reports; the agent wire schema in `omnia-agent` and `omnia-cli` ([mcp-plan.md](mcp-plan.md) section 15) | MIT or Apache-2.0 |
+| `libc` 0.2 (`omnia-bench` on Linux only; already in the graph through GPUI) | Diagnostic paint probe: thread CPU clock, `getrusage(RUSAGE_THREAD)`, `sched_getcpu` (T2.7 paint-stall investigation, logged 2026-11-18) | MIT OR Apache-2.0 |
 | `resvg` 0.46 (`omnia-bench` feature `readback` only, never default; GPUI already depends on it) | S3/S8 readback reference renders | Apache-2.0 OR MIT |
 | GPUI's Linux `wayland` feature, enabled by `omnia-bench` and `omnia-app` on Linux (transitive, listed below) | Wayland window backend | MIT, MIT OR Apache-2.0, or MIT OR Apache-2.0 OR Zlib |
 | `usvg`, `zip`, `serde_json`, `toml` (xtask only) | Codegen | Apache-2.0 or MIT; `zip` MIT |

@@ -19,6 +19,7 @@
 
 mod lod;
 mod symbols;
+mod text;
 mod wires;
 
 use std::{cell::RefCell, rc::Rc};
@@ -125,6 +126,7 @@ impl SheetDocument {
 #[derive(Debug)]
 struct DocumentCache {
     masks: symbols::Masks,
+    text: RefCell<text::TextCache>,
     scratch: RefCell<Scratch>,
 }
 
@@ -132,6 +134,7 @@ impl Default for DocumentCache {
     fn default() -> Self {
         Self {
             masks: symbols::Masks::new(),
+            text: RefCell::new(text::TextCache::new()),
             scratch: RefCell::default(),
         }
     }
@@ -140,7 +143,9 @@ impl Default for DocumentCache {
 #[derive(Debug, Default)]
 struct Scratch {
     items: Vec<ItemId>,
-    segments: Vec<wires::Segment>,
+    parts_end: usize,
+    wires_end: usize,
+    segments: wires::MergedSegments,
     junctions: Vec<Pt>,
 }
 
@@ -208,6 +213,8 @@ impl DocumentCache {
         let mut scratch = self.scratch.borrow_mut();
         let Scratch {
             items,
+            parts_end,
+            wires_end,
             segments,
             junctions,
         } = &mut *scratch;
@@ -234,17 +241,22 @@ impl DocumentCache {
             ItemId::Wire(id) => (1, id.0),
             ItemId::Label(id) => (2, id.0),
         });
+        *parts_end = items.partition_point(|id| matches!(id, ItemId::Part(_)));
+        *wires_end = items.partition_point(|id| !matches!(id, ItemId::Label(_)));
+        let (parts_end, wires_end) = (*parts_end, *wires_end);
         let part_shapes = || {
-            items.iter().filter_map(|id| match *id {
+            items[..parts_end].iter().filter_map(|id| match *id {
                 ItemId::Part(id) => self.masks.symbol(doc.part(id)?, camera, sf),
                 _ => None,
             })
         };
         let wire_segments = || {
-            items.iter().filter_map(|id| match *id {
-                ItemId::Wire(id) => doc.wire(id).copied().map(wires::Segment::from),
-                _ => None,
-            })
+            items[parts_end..wires_end]
+                .iter()
+                .filter_map(|id| match *id {
+                    ItemId::Wire(id) => doc.wire(id).copied().map(wires::Segment::from),
+                    _ => None,
+                })
         };
 
         layer(Layer::WiresAndBoxes, &mut |sink| {
@@ -254,19 +266,12 @@ impl DocumentCache {
             if diameter.is_some() {
                 wire_segments().for_each(&mut draw);
             } else {
-                segments.clear();
-                segments.extend(wire_segments());
-                segments.sort_unstable();
-                let mut iter = segments.iter().copied();
-                if let Some(mut current) = iter.next() {
-                    for next in iter {
-                        if !current.merge(next) {
-                            draw(current);
-                            current = next;
-                        }
-                    }
-                    draw(current);
-                }
+                segments
+                    .visible(wire_segments())
+                    .iter()
+                    .copied()
+                    .filter(|segment| lod::wire_run(segment.length_px(camera)))
+                    .for_each(draw);
             }
             for shape in part_shapes().filter(|s| lod::symbol_box(s.logical_side)) {
                 let side = stroke_device_px(shape.logical_side, sf);
@@ -369,30 +374,36 @@ impl SheetView {
                     scope.omnia(|| {
                         let mut camera = self.camera.clone();
                         camera.set_viewport(bounds);
+                        let doc = document.doc.read(cx);
                         let ink = gpui_color(self.theme.stage_ink);
-                        document.cache.draw(
-                            document.doc.read(cx),
-                            &camera,
-                            scale_factor,
-                            |_, emit| {
-                                scope.gpui(|| {
-                                    window.paint_layer(|window| {
-                                        scope.omnia(|| {
-                                            emit(&mut |mark| {
-                                                paint_mark(
-                                                    window,
-                                                    cx,
-                                                    mark,
-                                                    scale_factor,
-                                                    ink,
-                                                    scope,
-                                                );
-                                            });
+                        let ink_secondary = gpui_color(self.theme.stage_ink_secondary);
+                        document.cache.draw(doc, &camera, scale_factor, |_, emit| {
+                            scope.gpui(|| {
+                                window.paint_layer(|window| {
+                                    scope.omnia(|| {
+                                        emit(&mut |mark| {
+                                            paint_mark(window, cx, mark, scale_factor, ink, scope);
                                         });
                                     });
                                 });
-                            },
-                        );
+                            });
+                        });
+                        let scratch = document.cache.scratch.borrow();
+                        let text_frame = text::TextFrame {
+                            doc,
+                            parts: &scratch.items[..scratch.parts_end],
+                            labels: &scratch.items[scratch.wires_end..],
+                            camera: &camera,
+                            viewport: bounds,
+                            scale_factor,
+                            ink,
+                            ink_secondary,
+                        };
+                        document
+                            .cache
+                            .text
+                            .borrow_mut()
+                            .paint(&text_frame, window, scope);
                     });
                 }
             });
@@ -589,6 +600,7 @@ mod tests {
             include_str!("sheet/wires.rs"),
             include_str!("sheet/symbols.rs"),
             include_str!("sheet/lod.rs"),
+            include_str!("sheet/text.rs"),
         ];
         for source in sources {
             assert!(!source.contains(concat!("paint_", "path")));
@@ -698,6 +710,135 @@ mod tests {
         assert_eq!(count(1.0), (3, 1));
         assert_eq!(count(0.2), (2, 0));
         assert_eq!(doc.wires().count(), 3);
+    }
+
+    #[test]
+    fn d4_k9_far_zoom_wire_stub_threshold_and_near_zoom_unchanged() {
+        let count = |doc: &Doc, zoom: f64| {
+            let cache = DocumentCache::default();
+            let (view, _) = sheet(zoom, (0.0, 0.0));
+            let mut quads = 0;
+            let mut sprites = 0;
+            cache.draw(doc, view.camera(), 1.25, |_, emit| {
+                emit(&mut |mark| match mark {
+                    Mark::Quad(_) => quads += 1,
+                    Mark::Sprite(_) => sprites += 1,
+                })
+            });
+            (quads, sprites)
+        };
+
+        let pin = omnia_doc::PIN_LATTICE_NM;
+        // At zoom = 0.25 (far zoom: junction diameter 2.0 < 2.5 px), `pin` is exactly 2.5 logical px.
+        let mut at_threshold = Doc::new();
+        at_threshold
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: Pt { x: 0, y: 0 },
+                    b: Pt { x: pin, y: 0 },
+                },
+                Wire {
+                    a: Pt { x: 0, y: GRID_NM },
+                    b: Pt {
+                        x: 0,
+                        y: GRID_NM + pin,
+                    },
+                },
+            ]))
+            .unwrap();
+        assert_eq!(count(&at_threshold, 0.25), (2, 0));
+        // Below 2.5 px (zoom = 0.2 -> 2.0 px): both runs are hidden at far zoom.
+        assert_eq!(count(&at_threshold, 0.2), (0, 0));
+
+        // Strictly below the 2.5 px boundary at zoom = 0.25: hidden at far zoom, drawn at near zoom.
+        let mut just_below = Doc::new();
+        just_below
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: Pt { x: 0, y: 0 },
+                    b: Pt { x: pin - 1, y: 0 },
+                },
+                Wire {
+                    a: Pt { x: 0, y: GRID_NM },
+                    b: Pt {
+                        x: 0,
+                        y: GRID_NM + pin - 1,
+                    },
+                },
+            ]))
+            .unwrap();
+        assert_eq!(count(&just_below, 0.25), (0, 0));
+        assert_eq!(count(&just_below, 1.0), (2, 0));
+
+        // Near-zoom path draws even very short wires (< 2.5 px at 100% zoom).
+        let mut tiny = Doc::new();
+        tiny.apply(Command::AddWires(vec![Wire {
+            a: Pt::ZERO,
+            b: Pt { x: 100_000, y: 0 },
+        }]))
+        .unwrap();
+        assert_eq!(count(&tiny, 1.0), (1, 0));
+    }
+
+    #[test]
+    fn d4_k9_far_zoom_keeps_long_wire_made_of_short_collinear_segments() {
+        let pin = omnia_doc::PIN_LATTICE_NM;
+        let pt = |x, y| Pt {
+            x: x * pin,
+            y: y * pin,
+        };
+        // Two T-junction stubs keep the three collinear horizontal segments separate in Doc.
+        let mut doc = Doc::new();
+        doc.apply(Command::AddWires(vec![
+            Wire {
+                a: pt(0, 0),
+                b: pt(3, 0),
+            },
+            Wire {
+                a: pt(1, 0),
+                b: pt(1, 1),
+            },
+            Wire {
+                a: pt(2, 0),
+                b: pt(2, 1),
+            },
+        ]))
+        .unwrap();
+        assert_eq!(doc.wires().count(), 5);
+        for (_, wire) in doc.wires() {
+            assert_eq!(wire.a.manhattan_distance(wire.b), i64::from(pin));
+        }
+
+        let cache = DocumentCache::default();
+        let draw_count = |zoom: f64| {
+            let (view, _) = sheet(zoom, (0.0, 0.0));
+            let mut quads = 0;
+            let mut sprites = 0;
+            cache.draw(&doc, view.camera(), 1.25, |_, emit| {
+                emit(&mut |mark| match mark {
+                    Mark::Quad(_) => quads += 1,
+                    Mark::Sprite(_) => sprites += 1,
+                })
+            });
+            (quads, sprites)
+        };
+
+        // Near zoom: all 5 wires + 2 junction dots.
+        assert_eq!(draw_count(1.0), (5, 2));
+        // Far zoom 25%: merged horizontal run is 7.5 px and both vertical stubs are 2.5 px -> 3 quads.
+        assert_eq!(draw_count(0.25), (3, 0));
+        // Far zoom 10%: each segment is 1.0 px (< 2.5), so the two stubs drop, while the
+        // merged 3-segment horizontal run is 3.0 px (>= 2.5) and still draws.
+        assert_eq!(draw_count(0.1), (1, 0));
+        // Far zoom 5%: even the merged 3-segment run is 1.5 px (< 2.5), so all drop.
+        assert_eq!(draw_count(0.05), (0, 0));
+
+        // Re-filtering cached merged runs across far-zoom camera changes allocates nothing (B10).
+        ALLOCS.set(Some(0));
+        for zoom in [0.25, 0.1, 0.05, 0.1, 0.25] {
+            std::hint::black_box(draw_count(zoom));
+        }
+        assert_eq!(ALLOCS.replace(None), Some(0));
     }
 
     #[cfg(target_os = "windows")]

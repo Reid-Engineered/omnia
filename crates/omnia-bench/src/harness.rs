@@ -439,12 +439,16 @@ impl RunView {
         }
 
         let diagnostic_trace = self.trace.as_mut().map(|trace| trace.collect());
+        let paint_probe = crate::paint_probe::collect();
         let mut config = self.config.to_json();
         if diagnostic_trace.is_some() {
             // compare requires matching config: traced costs must not be compared to gates.
             config["diagnostic_trace"] = json!(true);
         }
-        Ok(json!({
+        if paint_probe.is_some() {
+            config["paint_probe"] = json!(true);
+        }
+        let mut report = json!({
             "schema": SCHEMA,
             "kind": "run",
             "config": config,
@@ -461,7 +465,11 @@ impl RunView {
             "warnings": warnings,
             "metrics": metrics,
             "diagnostic_trace": diagnostic_trace,
-        }))
+        });
+        if let Some(paint_probe) = paint_probe {
+            report["paint_probe"] = paint_probe;
+        }
+        Ok(report)
     }
 }
 
@@ -483,6 +491,24 @@ pub(crate) fn primitive_counts(window: &Window) -> Value {
     })
 }
 
+/// Registers the bundled Inter weights needed by `SheetView` text rendering (T3.1/T3.4) and
+/// the S5 text spike.
+fn register_sheet_fonts(sheet: Sheet, cx: &App) -> Result<(), String> {
+    if matches!(sheet, Sheet::Stress(_)) || matches!(sheet, Sheet::Spike(c) if c.scene == 5) {
+        cx.text_system()
+            .add_fonts(vec![
+                std::borrow::Cow::Borrowed(
+                    include_bytes!("../../../vendor/fonts/inter/Inter-Medium.ttf").as_slice(),
+                ),
+                std::borrow::Cow::Borrowed(
+                    include_bytes!("../../../vendor/fonts/inter/Inter-SemiBold.ttf").as_slice(),
+                ),
+            ])
+            .map_err(|e| format!("load bundled Inter: {e}"))?;
+    }
+    Ok(())
+}
+
 pub fn run(config: RunConfig) -> Result<Value, String> {
     let tracing = std::env::var_os("OMNIA_BENCH_TRACE").is_some();
     let enabled_trace = tracing && gpui::set_trace_enabled(true);
@@ -492,19 +518,15 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
         Duration::from_secs(60) + Duration::from_millis(100) * (config.frames + config.warmup),
     );
     let result = run_app("run", move |cx, outcome| {
-        if matches!(config.sheet, Sheet::Spike(c) if c.scene==5) {
-            cx.text_system()
-                .add_fonts(vec![std::borrow::Cow::Borrowed(
-                    include_bytes!("../../../vendor/fonts/inter/Inter-SemiBold.ttf").as_slice(),
-                )])
-                .map_err(|e| format!("load bundled Inter: {e}"))?;
-        }
+        register_sheet_fonts(config.sheet, cx)?;
         let options = window_options(config.size, cx, true);
         let frames = config.frames as usize;
         cx.open_window(options, move |_window, cx| {
             #[cfg(not(target_os = "linux"))]
             _window.resize(size(px(config.size.0), px(config.size.1)));
             let trace = tracing.then(|| crate::trace::FrameTrace::new(cx));
+            // Diagnostic only; one sample per paint, warm-up included (paint_probe.rs).
+            crate::paint_probe::enable((config.warmup + config.frames) as usize + 64);
             cx.new(|_| RunView {
                 config,
                 cached: None,
@@ -576,6 +598,7 @@ pub fn idle(config: IdleConfig) -> Result<Value, String> {
     let measure = Duration::from_secs_f64(config.seconds);
     watchdog("idle", config.settle + measure + Duration::from_secs(30));
     run_app("idle", move |cx, outcome| {
+        register_sheet_fonts(config.sheet, cx)?;
         let renders: RenderLog = Rc::new(RefCell::new(Vec::with_capacity(1024)));
         let view_renders = renders.clone();
         let handle = cx
@@ -708,6 +731,11 @@ pub fn start_child(sheet: Sheet, window_size: (f32, f32)) -> Result<(), String> 
     let outcome: Outcome = Rc::new(RefCell::new(None));
     let slot = outcome.clone();
     gpui_platform::application().run(move |cx: &mut App| {
+        if let Err(error) = register_sheet_fonts(sheet, cx) {
+            *slot.borrow_mut() = Some(Err(error));
+            cx.quit();
+            return;
+        }
         let opened = cx.open_window(
             window_options(window_size, cx, false),
             move |_window, cx| {

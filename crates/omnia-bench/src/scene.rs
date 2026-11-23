@@ -168,6 +168,7 @@ impl Element for SceneElement {
         window: &mut Window,
         cx: &mut App,
     ) {
+        crate::paint_probe::begin();
         let start = Instant::now();
         let camera = self.camera;
         let scene = &self.scene;
@@ -175,6 +176,7 @@ impl Element for SceneElement {
             ours(|| scene.borrow_mut().paint(bounds, camera, window, cx));
         });
         self.paint_time.set(Some(start.elapsed()));
+        crate::paint_probe::end();
     }
 }
 

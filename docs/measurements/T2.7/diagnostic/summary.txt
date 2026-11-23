@@ -1,0 +1,44 @@
+Units: ms. Deltas use the median of the other nine runs at the same scale and frame.
+s100 10k-zoom run 2 frame 449 interval 48.575
+  observed query=1.492 item-sort=3.475 wire-prep=5.220 wire-emit=8.313 boxes=3.277 symbols-dots=1.468 other-draw=2.236 present=8.669 signal-gap=14.385
+  excess   query=+0.944 item-sort=+2.722 wire-prep=+3.999 wire-emit=+6.077 boxes=+1.989 symbols-dots=+0.789 other-draw=+0.574 present=+2.881 signal-gap=+1.132
+s100 1k-pan run 4 frame 368 interval 25.779
+  observed query=0.064 item-sort=0.039 wire-prep=0.000 wire-emit=0.142 boxes=0.045 symbols-dots=0.605 other-draw=11.934 present=2.083 signal-gap=10.195
+  excess   query=+0.021 item-sort=+0.000 wire-prep=+0.000 wire-emit=-0.004 boxes=+0.018 symbols-dots=+0.114 other-draw=+8.764 present=+0.231 signal-gap=-0.891
+s100 10k-zoom run 4 frame 464 interval 54.733
+  observed query=2.033 item-sort=6.192 wire-prep=5.252 wire-emit=8.179 boxes=3.587 symbols-dots=1.350 other-draw=2.277 present=8.658 signal-gap=17.136
+  excess   query=+1.522 item-sort=+5.418 wire-prep=+4.054 wire-emit=+6.022 boxes=+2.310 symbols-dots=+0.670 other-draw=+0.660 present=+2.889 signal-gap=+1.992
+s100 10k-zoom run 6 frame 446 interval 58.077
+  observed query=1.516 item-sort=3.514 wire-prep=7.782 wire-emit=10.455 boxes=3.938 symbols-dots=1.741 other-draw=2.711 present=7.444 signal-gap=18.939
+  excess   query=+0.986 item-sort=+2.742 wire-prep=+6.586 wire-emit=+8.111 boxes=+2.660 symbols-dots=+1.065 other-draw=+1.050 present=+1.674 signal-gap=+4.339
+s100 10k-zoom run 8 frame 453 interval 46.157
+  observed query=1.433 item-sort=3.408 wire-prep=5.315 wire-emit=7.398 boxes=2.949 symbols-dots=1.444 other-draw=2.149 present=8.547 signal-gap=13.477
+  excess   query=+0.907 item-sort=+2.648 wire-prep=+4.121 wire-emit=+5.238 boxes=+1.686 symbols-dots=+0.768 other-draw=+0.490 present=+2.809 signal-gap=-0.994
+s100 10k-zoom run 9 frame 444 interval 51.810
+  observed query=1.497 item-sort=3.438 wire-prep=5.210 wire-emit=9.425 boxes=4.043 symbols-dots=1.949 other-draw=2.376 present=9.373 signal-gap=14.461
+  excess   query=+0.967 item-sort=+2.674 wire-prep=+3.892 wire-emit=+7.118 boxes=+2.718 symbols-dots=+1.213 other-draw=+0.672 present=+3.177 signal-gap=+0.396
+s125 10k-zoom run 2 frame 461 interval 45.539
+  observed query=1.570 item-sort=3.137 wire-prep=3.433 wire-emit=4.977 boxes=2.374 symbols-dots=1.155 other-draw=2.058 present=7.615 signal-gap=19.181
+  excess   query=+1.026 item-sort=+2.379 wire-prep=+2.227 wire-emit=+2.752 boxes=+1.128 symbols-dots=+0.475 other-draw=+0.403 present=+1.777 signal-gap=+7.414
+s125 10k-zoom run 4 frame 451 interval 47.528
+  observed query=1.465 item-sort=3.420 wire-prep=5.281 wire-emit=7.564 boxes=3.052 symbols-dots=1.458 other-draw=2.303 present=8.493 signal-gap=14.457
+  excess   query=+0.950 item-sort=+2.660 wire-prep=+4.068 wire-emit=+5.407 boxes=+1.803 symbols-dots=+0.775 other-draw=+0.676 present=+2.655 signal-gap=+0.559
+s125 10k-zoom run 8 frame 446 interval 54.547
+  observed query=1.501 item-sort=3.295 wire-prep=5.152 wire-emit=9.332 boxes=3.738 symbols-dots=1.910 other-draw=2.343 present=9.319 signal-gap=17.875
+  excess   query=+0.962 item-sort=+2.531 wire-prep=+3.937 wire-emit=+7.147 boxes=+2.491 symbols-dots=+1.239 other-draw=+0.682 present=+3.546 signal-gap=+1.681
+s125 10k-zoom run 10 frame 447 interval 49.230
+  observed query=1.557 item-sort=3.324 wire-prep=5.723 wire-emit=9.071 boxes=2.265 symbols-dots=1.246 other-draw=2.182 present=7.706 signal-gap=16.119
+  excess   query=+1.027 item-sort=+2.560 wire-prep=+4.366 wire-emit=+6.941 boxes=+1.011 symbols-dots=+0.569 other-draw=+0.547 present=+1.917 signal-gap=+2.979
+Counted intervals: 10
+s100 10k-zoom frames 440..499 across ten runs, median over 600 frames
+  query=0.528 item-sort=0.764 wire-prep=1.204 wire-emit=2.193 boxes=1.271 symbols-dots=0.681 other-draw=1.658 present=5.772 signal-gap=12.703
+s125 10k-zoom frames 440..499 across ten runs, median over 600 frames
+  query=0.511 item-sort=0.758 wire-prep=1.198 wire-emit=2.149 boxes=1.241 symbols-dots=0.675 other-draw=1.637 present=5.741 signal-gap=8.392
+s100 10k-zoom slowest diagnostic draw in inspected window: run 6 frame 446 31.657 ms
+  excess   query=+0.986 item-sort=+2.742 wire-prep=+6.586 wire-emit=+8.111 boxes=+2.660 symbols-dots=+1.065 other-draw=+1.050 present=+1.674 signal-gap=+4.339
+s100 1k-pan slowest diagnostic draw in inspected window: run 4 frame 368 12.830 ms
+  excess   query=+0.021 item-sort=+0.000 wire-prep=+0.000 wire-emit=-0.004 boxes=+0.018 symbols-dots=+0.114 other-draw=+8.764 present=+0.231 signal-gap=-0.891
+s125 10k-zoom slowest diagnostic draw in inspected window: run 8 frame 446 27.272 ms
+  excess   query=+0.962 item-sort=+2.531 wire-prep=+3.937 wire-emit=+7.147 boxes=+2.491 symbols-dots=+1.239 other-draw=+0.682 present=+3.546 signal-gap=+1.681
+s125 1k-pan slowest diagnostic draw in inspected window: run 4 frame 554 6.147 ms
+  excess   query=+0.008 item-sort=+0.015 wire-prep=+0.000 wire-emit=+0.074 boxes=+0.007 symbols-dots=+0.060 other-draw=+3.359 present=-0.017 signal-gap=+0.720

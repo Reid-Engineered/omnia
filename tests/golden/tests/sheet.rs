@@ -35,6 +35,15 @@ const FIXTURES: &[Fixture] = &[
         center: (0.0, 0.0),
         zoom: 1.0,
     },
+    // T3.3: Wien bridge oscillator rebuilt from `design/build-omnia.mjs` lines 159-234
+    // (1366x718 sheet, 20 px = 1 grid step, origin shifted by (-690, -370) px so mockup grid
+    // dots at 10 + 20k land on world GRID_NM multiples and canvas (mx, my) lands at screen (mx, my)).
+    Fixture {
+        name: "wien-oscillator",
+        size: (1366.0, 718.0),
+        center: (-0.35, -0.55),
+        zoom: 1.0,
+    },
 ];
 
 const THEMES: [(&str, &Theme); 2] = [("graphite", &GRAPHITE), ("gray", &GRAY)];
@@ -62,17 +71,11 @@ fn main() {
         dir,
         Path::new(env!("CARGO_TARGET_TMPDIR")).join("golden-sheet"),
     );
-    // Every fixture shares one window, so the box is the largest fixture; smaller ones would
-    // need their own run. Today there is one.
+    // Every fixture shares one hidden window sized to hold the largest shot; each shot sets
+    // its own logical content box and crops to it.
     let content = FIXTURES.iter().fold(size(px(0.0), px(0.0)), |s, f| {
         size(s.width.max(px(f.size.0)), s.height.max(px(f.size.1)))
     });
-    assert!(
-        FIXTURES
-            .iter()
-            .all(|f| (px(f.size.0), px(f.size.1)) == (content.width, content.height)),
-        "fixtures of different sizes need separate windows"
-    );
 
     let mut docs = Vec::new();
     let mut shots = Vec::new();
@@ -81,7 +84,8 @@ fn main() {
         let file =
             std::fs::File::open(&path).unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
         docs.push(Doc::load(file).unwrap_or_else(|e| panic!("load {}: {e}", path.display())));
-        let viewport = gpui::Bounds::new(point(px(0.0), px(0.0)), content);
+        let shot_size = size(px(fixture.size.0), px(fixture.size.1));
+        let viewport = gpui::Bounds::new(point(px(0.0), px(0.0)), shot_size);
         let grid = f64::from(GRID_NM);
         let center = Pt {
             x: (fixture.center.0 * grid).round() as i32,
@@ -93,6 +97,7 @@ fn main() {
                 shots.push(Shot {
                     name: format!("{}-{theme_name}-{}", fixture.name, scale_tag(scale_factor)),
                     scale_factor,
+                    content: Some(shot_size),
                     prepare: Box::new(move |probe: &mut Probe| {
                         probe.current = index;
                         probe.camera = camera;
@@ -104,6 +109,16 @@ fn main() {
     }
 
     let build = move |_: &mut Window, cx: &mut App| -> Entity<Probe> {
+        cx.text_system()
+            .add_fonts(vec![
+                std::borrow::Cow::Borrowed(
+                    include_bytes!("../../../vendor/fonts/inter/Inter-Medium.ttf").as_slice(),
+                ),
+                std::borrow::Cow::Borrowed(
+                    include_bytes!("../../../vendor/fonts/inter/Inter-SemiBold.ttf").as_slice(),
+                ),
+            ])
+            .expect("register bundled Inter fonts");
         let documents = docs
             .into_iter()
             .map(|doc| SheetDocument::new(cx.new(|_| doc)))

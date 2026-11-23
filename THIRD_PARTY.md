@@ -49,3 +49,10 @@ the mockup uses (400 Regular, 500 Medium, 600 Semibold) are vendored in
 
 SIL Open Font License 1.1, Copyright © 2023 Adobe (Reserved Font Name 'Source'). Full text:
 `vendor/fonts/source-code-pro/LICENSE.md`.
+
+## GPUI input example
+
+The text field (UD16) adapts the input handler and element wiring from
+[GPUI's input example](https://github.com/zed-industries/zed/blob/15d136bf8e72ae43b284183ec46940c009460f5c/crates/gpui/examples/input.rs)
+at the pinned revision. Omnia adds its own key handling, single-line editing, theme tokens
+and shaped-line caching. [Apache License 2.0](https://github.com/zed-industries/zed/blob/15d136bf8e72ae43b284183ec46940c009460f5c/LICENSE-APACHE).

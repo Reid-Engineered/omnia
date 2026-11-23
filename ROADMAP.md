@@ -1,6 +1,6 @@
 # Omnia project roadmap
 
-Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) provides the detailed implementation tasks beneath it, the [wiring roadmap](wiring-roadmap.md) covers wire behaviour, and the [parts plan](parts-plan.md) and [roadmap](parts-roadmap.md) cover component definitions, `.opart`/`.olib` containers and simulation model bindings. The [agent-control plan](mcp-plan.md) and its [roadmap](mcp-roadmap.md) describe how agents and scripts drive Omnia through the same document commands as the editor; that surface serves the stages below and adds no product scope of its own.
+Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) provides the detailed implementation tasks beneath it, the [wiring roadmap](wiring-roadmap.md) covers wire behaviour, the [UI plan](ui-plan.md) and [roadmap](ui-roadmap.md) cover the application shell, the [parts plan](parts-plan.md) and [roadmap](parts-roadmap.md) cover component definitions, `.opart`/`.olib` containers and simulation model bindings, and the [simulation plan](sim-plan.md) and [roadmap](sim-roadmap.md) cover ERC, engines (`ngspice` and `RIS-C`), and virtual instruments. The [agent-control plan](mcp-plan.md) and its [roadmap](mcp-roadmap.md) describe how agents and scripts drive Omnia through the same document commands as the editor; that surface serves the stages below and adds no product scope of its own.
 
 This is an outcome-based roadmap, not a schedule. Stages can overlap, but a stage is complete only when its exit criteria are demonstrated. The first-release scope below is a proposed baseline; open product decisions are recorded at the end.
 
@@ -44,7 +44,7 @@ Define the connection between schematic components and simulation models, circui
 
 **Ready when:** an agreed set of reference circuits produces results within documented tolerances; invalid circuits give actionable diagnostics; a failed or cancelled run leaves the editor usable and the document intact.
 
-**Detailed work / planning needed:** component-to-model bindings, pin roles, typed parameters and `.omnia` embedding are specified in [parts-plan.md](parts-plan.md) (`PD1`–`PD11`) and [parts-roadmap.md](parts-roadmap.md). Still needed: choose the initial engine and analysis types, define engine packaging, and write a simulation execution plan. The README's ngspice/RIS-C direction is an input to this decision.
+**Detailed work:** ERC, netlist lowering, dual simulation engines (`ngspice` + `Reid-Engineered/RIS-C`), analog models, live streaming, virtual instruments (`XSC1`, `XMM1`, `XBP1`, Results dock), and agent simulation tools in the [simulation plan](sim-plan.md) and [simulation roadmap](sim-roadmap.md). Owner decisions (2026-11-23): both engines in parallel from Milestone S1, full analog core (`OP`, `TRAN`, `AC`, `DC`), passives/sources/diode/BJT/MOSFET/op-amp models, and Oscilloscope + Multimeter + Bode Plotter + Results panel in v1. Component definitions, pin roles, typed parameters and embedded model bindings (the definitions and bindings the simulator lowers) are specified in the [parts plan](parts-plan.md) (`PD1`–`PD11`) and [parts roadmap](parts-roadmap.md); lowering to solver input belongs to the simulation plan.
 
 ## 4. Complete the desktop experience
 
@@ -72,12 +72,11 @@ Use feedback from the first complete workflow to prioritize broader component/mo
 
 ## Decisions still open
 
-- Which circuits, component families, and analysis types define the first release?
-- Which simulation engine ships first, and what role does the other engine have?
 - Which operating systems are supported at launch?
 - Does the initial file experience use standalone documents or a project container?
 - What autosave, crash recovery, and file compatibility guarantees are required?
-- Which instruments and result views are essential to the first complete workflow?
+
+*(Answered 2026-11-23 in [sim-plan.md](sim-plan.md) `SD1`–`SD4`: both `ngspice` and `RIS-C` build in parallel from S1; v1 covers `OP`, `TRAN`, `AC`, `DC`, analog core passives/sources/semiconductors/op-amp, and Oscilloscope, Multimeter, Bode Plotter, and Results panel; finer defaults `SQ1`–`SQ10` await `HS1`.)*
 
 ## How to maintain this roadmap
 
