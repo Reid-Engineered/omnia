@@ -11,8 +11,8 @@ It extends [canvas-plan.md](canvas-plan.md), [wiring-plan.md](wiring-plan.md),
 `B`, `K`, `G`, `D`, `INV`, `Q`, `W`-prefixed, `A`-prefixed and `U`-prefixed id is defined in
 those files and still holds. It also depends on two plans that are not yet merged: the
 component-definitions plan `parts-plan.md` / `parts-roadmap.md` (pull request #85, head
-`66f9e49`; `P`-prefixed ids such as `PD5`, `PK4`, `P2.3`) and the circuit context plan
-`context-plan.md` / `context-roadmap.md` (pull request #100, head `6a50b28`; `C`-prefixed ids
+`136a2dd`; `P`-prefixed ids such as `PD5`, `PK4`, `P2.3`) and the circuit context plan
+`context-plan.md` / `context-roadmap.md` (pull request #100, head `674a7d3`; `C`-prefixed ids
 such as `CK4`, `CD13`, `C1.9`). Where this plan cites them, the cross-plan decisions `XD1`–`XD9`
 (section 6) bind both sides. Section 13 lists the changes this plan requests from other plans
 and crates.
@@ -83,16 +83,16 @@ Out of scope for this plan (candidates for post-v1 milestones):
 ## 2. Repository facts this plan rests on
 
 Checked at Omnia `b046bbb` and `Reid-Engineered/RIS-C` `24710eaf`; rows amended at `HS1`
-(2026-11-23) for `XD1`–`XD9`, against parts plan head `66f9e49` and context plan head
-`6a50b28`.
+(2026-11-23) for `XD1`–`XD9`, with follow-up against parts plan head `136a2dd` and context
+plan head `674a7d3`.
 
 | Fact | Where | Consequence |
 | --- | --- | --- |
 | `Reid-Engineered/RIS-C` (`risc-c`, BSD-3-Clause, Edition 2024, Rust 1.91+) already implements classic analog SPICE (`OP`, single-source `DC`, `AC lin\|dec\|oct`, adaptive `TRAN` with BE/Trap/BDF2, `R`/`C`/`L`/`K`/`S`/`W`/`V`/`I`/`E`/`G`/`F`/`H`/`D`/`Q`/`M`, `.model`, `.subckt`, `.ic`, `.nodeset`, `.temp`), validated against `ngspice 47` on Linux/macOS/Windows, with `CompiledCircuit`, concurrent `Simulator`s, and `transient_with` streaming + `ControlFlow::Break(())` cancellation | `Reid-Engineered/RIS-C` `docs/AGENT_INTEGRATION.md`, `docs/COMPATIBILITY.md`, `docs/STATUS.md` | Omnia does **not** re-implement a SPICE solver in-repo. `omnia-sim-risc` wraps the pinned `risc-c` Git crate behind `SimEngine`, obeying `RIS-C` contract rule 8 (integrate via public API, never copy equations). |
 | `RIS-C` does not support runtime behavioral expressions, `.control`, `.measure`, or nested two-source `.dc` | `RIS-C` `docs/COMPATIBILITY.md` | Op-amp macromodels are written as standard SPICE `.subckt`s using `R`/`C`/`E`/`G`/`D` (identical on both `RIS-C` and `ngspice`), all measurements run in `omnia-sim`, and v1 `Analysis::Dc` is single-source. |
-| `omnia-doc` has no UI framework dependency (`INV12`) and owns `Doc`, `Connectivity` (`NetId`, `net_of`, `net_wires`), `Doc::fork()`, and `Doc::revision()` | `crates/omnia-doc/src/` | Simulation crates take a `Doc` snapshot (`Doc::fork()`) and stay 100% GPUI-free (`SINV1`). `omnia-doc` owns connectivity; `omnia-circuit` (context plan) exposes revision-matched pin-to-net bindings and declared ground evidence through the read-only `Circuit::bindings` (context task `C1.9`) that lowering consumes (`XD4`). |
+| `omnia-doc` has no UI framework dependency (`INV12`) and owns `Doc`, `Connectivity` (`NetId`, `net_of`, `net_wires`), `Doc::fork()`, and `Doc::revision()` | `crates/omnia-doc/src/` | Simulation crates take a `Doc` snapshot (`Doc::fork()`) and stay 100% GPUI-free (`SINV1`). Context `C1.9` adds `Doc::lineage()` and exposes pin-to-net bindings and declared ground evidence via `Circuit::bindings`, matched to the document by lineage and revision (`CD18`, `XD4`). |
 | `Part` currently stores `symbol`, `at`, `orient`, `designator: Arc<str>`, and `value: Arc<str>`, inside crate-private `StoredPart` | `crates/omnia-doc/src/doc.rs:53,93` | Parts `PD8` (tasks `P2.1`–`P2.3`) keeps `Part` unchanged and adds `def: PartDefId` and typed, override-only `params` on `StoredPart`, `Command::SetParam`, `Command::UpdatePartDef`, `Change::modified` and the single RON v3 with strict v2 migration (`XD1`). The simulator reads them through `Doc::part_def`, `Doc::part_def_id` and `Doc::resolved_param` and adds no document schema of its own (`SD9`, `SINV10`). |
-| Parts plan (#85, `66f9e49`): one user-value grammar `PK4` in `omnia-doc` `units.rs` (`M` = mega; unit tokens and at most one space defined there); a one-terminal `rail` primitive with a `dc` voltage (`PK6`); shared parameter names `PK12`; embedded definitions carry pin roles and SPICE terminal order (`PD5`) and a `Primitive`/`Model`/`Subckt`/`None` binding (`PD3`); one built-in model tree under `library/` compiled by `cargo xtask parts` (`PD1`, `PD7`) | `parts-plan.md` sections 4, 6, 10 | The simulator has no value parser, no model tree and no model precedence of its own (`SK1`, `SD3`, `XD2`, `XD3`). |
+| Parts plan (#85, `136a2dd`): one user-value grammar `PK4` in `omnia-doc` `units.rs` (`M` = mega; unit tokens and at most one space defined there); a one-terminal `rail` primitive with a `dc` voltage (`PK6`); shared parameter names `PK12`; embedded definitions carry pin roles and SPICE terminal order (`PD5`) and a `Primitive`/`Model`/`Subckt`/`None` binding (`PD3`); one built-in model tree under `library/` compiled by `cargo xtask parts` (`PD1`, `PD7`) | `parts-plan.md` sections 4, 6, 10 | The simulator has no value parser, no model tree and no model precedence of its own (`SK1`, `SD3`, `XD2`, `XD3`). |
 | `omnia-symbols` currently has 6 compiled symbols: `Capacitor-IEEE-NonPolarized`, `Diode-COM-Standard`, `Ground-COM-General`, `IC-COM-OpAmp` (5 pins), `Resistor-IEEE-Potentiometer` (3 pins), and `Resistor-IEEE-Standard` | `crates/omnia-symbols/pins.toml`, `generated.rs` | `pins.toml` has one editing task at a time (`XD5`): parts `P1.4` adds the source symbols its starter parts need, then S1.1 adds the remaining v1 analog symbols from `vendor/electronic-symbols/` (inductor, any independent sources `P1.4` did not add, VCVS/VCCS dependent sources, NPN & PNP BJT, NMOS & PMOS MOSFET, supply-rail tags) and the symbol class, then S3.2 adds instrument/probe artwork. Every existing `SymbolId` stays unchanged. |
 | `canvas-plan.md` D8 specifies background ERC/netlist on a `DocSnapshot` debounced at `K13` (`150 ms`) and single-producer ring buffers per channel drained by floating cached instrument views | `canvas-plan.md:366-378` | `omnia-sim` implements that exact SPSC ring-buffer contract (`SampleRing`) and debounced ERC runner. |
 | `ui-plan.md` reserves toolbar analysis picker, Run/Pause/Stop controls, sim-time pill, status-bar ERC indicator, instruments strip, floating instrument frames (`U4.1`), and Results dock (`U1.7`, `U5.5`) | `ui-plan.md` UK3, UK4, UK6, UK10, UK11 | Milestone S3 wires real simulation state directly into those reserved slots with zero shell redesign. |
@@ -110,7 +110,7 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
 | --- | --- | --- |
 | `SB1` | **ERC latency:** full ERC on `1k` sheet < 5 ms p99; on `10k` sheet < 40 ms p99 (background thread; 0 ms UI stall), on the modelled stress sheets of `SB2`. Evidence reports cold (fresh snapshot, empty caches), incremental (after one edit) and cached (no change since the last run) cases separately, and each case meets the threshold (`XD9`). | `cargo bench -p omnia-bench --bench sim` (Orion) |
 | `SB2` | **Netlist lowering:** embedded definitions + `omnia-circuit` bindings → `CircuitIr` + SPICE text on `1k` sheet < 5 ms p99; on `10k` sheet < 40 ms p99. Measured on the new modelled stress sheets `Modelled1k` and `Modelled10k` (every part bound to a built-in definition, so lowering expands real devices; the existing stress sheets never change, parts `PD11`). Evidence reports cold, incremental (after one edit, through context `C1.3`'s incremental update) and cached cases separately, and each case meets the threshold (`XD9`). | same bench |
-| `SB3` | **Cold run latency (Wien oscillator):** from Run click to first sample in `SampleRing` < 150 ms p99 on `ngspice` and < 50 ms p99 on `RIS-C`. The measured span includes acquiring the document snapshot and the revision-matched `Circuit::bindings` read (or a circuit snapshot), ERC preflight and lowering (`XD9`); context `C1.7` records the bindings read cold and after an incremental update as evidence and gates nothing. | `bench sim --circuit wien --engine ngspice\|risc` (Orion) |
+| `SB3` | **Cold run latency (Wien oscillator):** from Run click to first sample in `SampleRing` < 150 ms p99 on `ngspice` and < 50 ms p99 on `RIS-C`. The measured span includes acquiring the document snapshot and the state-matched `Circuit::bindings` read (or a circuit snapshot), ERC preflight and lowering (`XD9`); context `C1.7` records the bindings read cold and after an incremental update as evidence and gates nothing. | `bench sim --circuit wien --engine ngspice\|risc` (Orion) |
 | `SB4` | **Cancellation latency:** Stop clicked during a heavy transient run returns to `Idle` and frees worker CPU within < 100 ms p99 (no orphan worker processes). | `bench sim --script cancel` (Orion) |
 | `SB5` | **UI isolation during live simulation:** with `1k` sheet open, transient streaming into `XSC1` oscilloscope at `SK8` cadence (`30 Hz`, or `60 Hz` if `SS2` passes), `B3` (< 16.7 ms p99, 0 missed refreshes), `B5` (≤ 33.3 ms), `UB3` (`SheetView` paint count = 0 while only `XSC1` updates), and `B10` (`allocs_per_frame.ours == 0` once `XSC1` buffers are warm) all hold. | `bench ui --sheet 1k --script sim-live` (Orion) |
 | `SB6` | **Memory:** B9 (< 300 MB) holds on `10k` with simulation idle, and `< 300 MB` holds on `1k` with active live simulation + `XSC1` + Results dock; ring buffers and stored results are strictly bounded by `SK6` and `SK7`. | `memory_mb` in `SB5` and `B9` runs (Orion) |
@@ -143,7 +143,7 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
      StatusBar (live ERC badge)                                  |
      XSC1 Oscilloscope / XMM1 / XBP1 / Results                   |
                 |                                                |
-     Doc::fork() + revision (D8)     SampleRing (SPSC, lock-free)|
+     Doc snapshot (lineage, revision) SampleRing (SPSC, lock-free)|
      embedded part defs + typed params (parts PD8, XD1)          |
      omnia-circuit bindings + ground evidence (context, XD4)     |
                 |                          ^                     |
@@ -243,23 +243,23 @@ declared in the part definition, using the parts plan's shared names (`PK12`).
   that kind with a connected pin is `ERC009` ("no simulation model", `SD8`). `Instrument` and
   `Probe` parts are lowered by class (`SD10`); ground and supply rails are lowered from their
   `ground` and `rail` primitive bindings (parts `PK6`).
-- **Default binding at placement (`XD3`).** The shared placement helper (parts `P2.4`
-  `Catalog::place_command`) embeds the catalog definition whenever one exists for the symbol
-  being placed, so a generic op-amp placed from the picker, the agent or a test carries the
-  `SQ8` macromodel binding. Placing through `PlaceDef::Unmodelled` is for migrations and
-  symbols with no catalog definition (requests in section 13).
-- **Supply contract.** A `Model` or `Subckt` binding that needs supplies declares them in the
-  embedded definition, and lowering (S1.2) and ERC (S1.3) read the same declaration:
-  - `supply_terminals`: the terminal indices (into the binding's terminal list) that are supply
-    terminals, each mapped to a pin whose role is `power` (parts `PD5`);
-  - `implicit_supply`: either none, or one finite voltage per supply terminal (the `SQ8`
-    generic op-amp declares `+15 V` and `-15 V`).
-  Lowering a part: if every supply pin is connected (not alone on its net), its terminals are
-  wired to those nets; if none is connected and `implicit_supply` is declared, lowering adds
-  internal DC sources at the declared voltages referenced to node `0` (and `ERC008` is a
-  Warning); otherwise the part is not lowered and `ERC008` is an Error. There is no partial
-  fallback: exactly one of two supply pins connected is an Error. The binding fields belong to
-  the parts plan's `EmbeddedSimBinding` and its `PD10` validator (requested in section 13).
+- **Default binding at placement (`XD3`).** `Catalog::place_symbol(SymbolId, …)` (parts `P2.4`)
+  embeds the definition marked `[symbol] default = true` for the symbol and falls back to
+  `PlaceDef::Unmodelled` when it has no default. The picker and agent use this API, so placing
+  a generic op-amp embeds its `SQ8` macromodel. `Catalog::place_command(source_id, …)` selects a
+  specific definition, as S2.2 does for the Wien fixture's dual-JFET op-amp.
+- **Supply contract.** S1.1 declares supplies for its models and verifies the generic op-amp's
+  declaration. S1.2 lowering and S1.3 ERC read the same `supply: Option<SupplyDecl>` in the
+  embedded `Model` or `Subckt` binding (parts `PD5`, `PD10`). A `SupplyDecl` names `pos` and
+  `neg`, two distinct stored pin indices in the binding's terminal list, both with the `power`
+  role. Its `implicit` field is an optional ordered pair of finite voltages `(pos, neg)`,
+  with `pos > neg`. The `SQ8` generic op-amp declares `(+15 V, −15 V)`.
+  Check the roles in the embedded definition and the pin membership in the context `C1.9`
+  bindings. If both supply pins are connected (each has other pins on its net), lowering wires
+  the terminals to those nets. If neither is connected and `implicit` is present, lowering adds
+  two internal DC sources at those voltages referenced to node `0`, and `ERC008` is a Warning.
+  With exactly one pin connected, or neither connected and no `implicit` pair, `ERC008` is an
+  Error and the part cannot be lowered.
 - **One model source (`XD3`):** the built-in models live in the parts plan's single
   `library/` tree (parts `PD1`, `PD7`, `PK11` licences). S1.1 contributes the `SD3` definitions
   the parts starter set (`PD11`) lacks to that tree, together with the symbols they bind to
@@ -311,12 +311,16 @@ declared in the part definition, using the parts plan's shared names (`PK12`).
 
 - **Ownership (`XD4`).** `omnia-sim` owns lowering: `CircuitIr`, node ordering, device
   expansion, source maps, diagnostics mapping and SPICE text. `omnia-doc` owns connectivity.
-  Lowering consumes the revision-matched pin-to-net bindings and declared ground evidence that
+  Lowering consumes state-matched pin-to-net bindings and declared ground evidence that
   `omnia-circuit` exposes through the read-only `Circuit::bindings` (context task `C1.9`, which
-  precedes S1.2; context `CINV14`); it never re-derives connectivity, and a bindings read whose
-  revision differs from the `Doc` snapshot's is refused as stale. Bindings carry each net's
-  circuit key and current `NetId` side by side; lowering assigns `NodeId`s itself. Device terminals come from the
-  embedded definition's terminal order (parts `PD5`), never from pin count or position.
+  precedes S1.2; context `CD18`, `CINV14`). Before reading any net, lowering compares
+  `(bindings.lineage(), bindings.revision())` to `(doc.lineage(), doc.revision())` and refuses
+  a mismatch as stale. Two forks can have equal revisions after different edits, so S1.2 tests
+  that case as well as a stale revision in the same lineage. `CircuitIr` carries the verified
+  pair for stale-result checks (`SD11`). Bindings carry each net's `CircuitKey` and current
+  `NetId` side by side. Lowering assigns its own `NodeId`s, and S1.2 checks at compile time
+  that `NodeId` has no conversion to or from `CircuitKey` or MCP `NetKey` (`CK1`, `XD4`).
+  The embedded definition supplies the device terminal order (parts `PD5`).
 - `CircuitIr::lower(doc, bindings, analysis, probes)` produces bit-for-bit identical node ids,
   device order, and SPICE netlist text regardless of arena insertion order or hash-map seeding
   (`SINV2`, matching `AGENTS.md` determinism rules: geometry and label/designator before id):
@@ -339,6 +343,8 @@ declared in the part definition, using the parts plan's shared names (`PK12`).
 - Severity levels: **`Error`** (blocks simulation start), **`Warning`** (allows run, shown in
   status bar & Diagnostics), **`Info`**. This Error/Warning policy is the Run gate; context
   finding severities (context plan section 9.4) are advisory and never gate a run (`XD6`).
+- `run_erc(doc, bindings)` checks the document. Run preflight combines those diagnostics with
+  validation of the request's probes against the same bindings before starting the solver.
 - `ERC001`–`ERC008` are registered diagnostic codes (`XD9`); `ERC009` and `ERC010` are added
   at `HS1` as simulation-only codes (coordinator decision on the review of #104). A retired code
   is never reused.
@@ -349,12 +355,12 @@ declared in the part definition, using the parts plan's shared names (`PK12`).
 | --- | --- | --- | --- |
 | `ERC001` | Error | The sheet has at least one part whose symbol class is not `Ground`, and no net carries declared ground evidence (`SK10`, `SQ3`, context `CK4`, read from `C1.9`; the same condition as context `ground.missing`, so an empty sheet raises nothing). A net whose label folds to a ground-like name (`gnd`, `agnd`, `dgnd`, `pgnd`, `vss`, per context `ground.name_only`) without declared evidence adds a hint to label it `0` or place a ground symbol. | `ground.missing`, `ground.name_only` |
 | `ERC002` | Error | Duplicate designator under the context plan's section 9.4 rules: ASCII case folding only (`A`–`Z` to `a`–`z`, no trimming or Unicode normalisation), and a blank designator (empty, or only ASCII spaces and tabs) never joins a duplicate group. Context's `designator.blank` (a blank designator on a part that is not `Ground` or `PowerRail` class) has no ERC code. | `designator.duplicate` |
-| `ERC003` | Error | The shared parse-failure case: a typed parameter the binding needs fails validation (parts `PD6`/`PD10` predicate: unparseable under `PK4`, non-finite, outside its declared bounds, such as `resistance <= 0` or `wiper` outside `0..1`; `apply` already refuses such values, so this guards documents built any other way), or a legacy unmodelled part's free text fails `PK4` (the `value.unparsed` predicate). | typed parameter validation; `value.unparsed` for legacy unmodelled parts |
+| `ERC003` | Error | The shared parse-failure case: a typed parameter the binding needs fails the parts `PD6`/`PD10` predicate (unparseable under `PK4`, non-finite or outside its declared bounds), or a legacy unmodelled part's free text fails `PK4` (the `value.unparsed` predicate). Both `Doc::apply` and the v3 loader refuse invalid typed parameters. Test that predicate at the validation boundary and use an internal fixture for any defensive ERC branch on invalid typed data. | typed parameter validation; `value.unparsed` for legacy unmodelled parts |
 | `ERC004` | Error | Zero-resistance loop of ideal voltage sources or supply rails, or such a source shorted across itself or to ground. | `source_loop`, where the predicates coincide |
-| `ERC005` | Error | Unconnected instrument port, or a probe referencing a missing net. Tested with the instrument parts in S3.2 (`STC-erc-02`). | none (simulation only) |
+| `ERC005` | Error | Document ERC reports an unconnected instrument port by instrument `PartId` and port. Run-request validation also checks its `ProbeSpec`s. A headless probe referencing a missing net is reported by probe name and requested net, with no `PartId`. Both cases block Run and are tested in S3.2 (`STC-erc-02`). | none (simulation only) |
 | `ERC006` | Warning | Floating pin or single-pin net; pins whose role is `no_connect` (parts `PD5`) are exempt. | `pin.unconnected`, `net.single_pin` |
 | `ERC007` | retired | Was "bare `M` on a resistor". Retired by `XD2`: `M` is mega in every user-facing value, so the ambiguity no longer exists. | none |
-| `ERC008` | Error, or Warning when the implicit supply is used | Model-required supply check that this plan owns, over the binding's supply contract (`SD3`) and the shared pin facts (`power`-role pins and their nets, context `C1.9` and `C3.1`). Error: some but not all supply pins are connected, or none is connected and the binding declares no `implicit_supply`. Warning: none is connected and the binding's `implicit_supply` (such as `SQ8`'s `±15 V`) is used. All connected: nothing. | none (context `power.undriven` stays off per `CQ2`) |
+| `ERC008` | Error, or Warning when the implicit supply is used | Model-required supply check using `SupplyDecl` (`SD3`). Read roles from the embedded definition and net membership from `C1.9`. Emit Error for one connected supply pin, or neither connected without an `implicit` pair. Emit Warning when neither is connected and the `implicit` pair is used. Both connected passes. | none (context `power.undriven` stays off per `CQ2`) |
 | `ERC009` | Error | No simulation model: a `Component`-class part with a connected pin whose definition's binding is `None` (every migrated v2 part, every `PlaceDef::Unmodelled` placement), naming the part with the hint to replace it with a library part. | none (simulation only) |
 | `ERC010` | Error | Conflicting rail voltage: two or more `rail` parts with the same rail name (`SD10`) resolve to different `dc` values. Reported before lowering, naming every part in the group. | none (simulation only) |
 
@@ -418,10 +424,14 @@ declared in the part definition, using the parts plan's shared names (`PK12`).
 - **Live-edit policy (`DEFAULT`, `SQ7`):** Editing the schematic while a simulation is `Running`
   stops the live run cleanly and marks results stale with a banner; never mutates a live
   `CircuitIr` mid-solve.
-- **What counts as an edit (`XD7`).** Results go stale on any `Change` whose revision advances,
-  including `Command::SetParam` and every instance an `Command::UpdatePartDef` moves (listed in
-  `Change::modified`, parts `PD8`), even when topology and display text are unchanged, and on
-  undo and redo of those commands.
+- **What counts as a stale result (`XD7`, context `CD18`).** A result carries the lowered
+  circuit's `(lineage, revision)` pair so it can be checked against its originating snapshot.
+  When the controller takes a `Doc::fork()` for a run, it also captures the live document's
+  pair. The fork has its own lineage, so the controller compares the current live pair with
+  the captured live pair. Replacing the live document or advancing its revision makes the
+  results stale. This includes `Command::SetParam`, every instance a `Command::UpdatePartDef`
+  moves (listed in `Change::modified`, parts `PD8`), and undo and redo of those commands even
+  when topology and display text are unchanged.
 
 ### SD12 Bundled `ngspice` licensing and build hygiene. DECIDED (policy, HS1 2026-11-23; exact flags verified at HS2)
 
@@ -449,11 +459,12 @@ declared in the part definition, using the parts plan's shared names (`PK12`).
 ### SD14 Agent / MCP integration. DECIDED (HS1, 2026-11-23; amended per XD8)
 
 - Adds 4 tools to `omnia-agent` (after `A3.4`), classified per `mcp-plan.md` `AD7`:
-  - `sim.erc` (**tier 0 read**): the Run preflight; runs ERC on an open document, returns typed
-    `ErcDiagnostic` list (`SD8`). Circuit views (nets, pins, findings) are served by the context
-    plan's `omnia_context`, not by `sim.*` (`XD8`).
+  - `sim.erc` (**tier 0 read**): runs the document checks for Run preflight on an open document
+    and returns typed `ErcDiagnostic`s (`SD8`). The context plan's `omnia_context` serves circuit
+    views (nets, pins, findings) (`XD8`).
   - `sim.run` (**tier 0 read + bounded worker process execution**): launches `OP`/`TRAN`/`AC`/`DC`
-    on `ngspice` or `RIS-C` via an `A3` cancellable job with progress notifications; mutates no
+    on `ngspice` or `RIS-C` via an `A3` cancellable job with progress notifications. Preflight
+    runs document ERC and validates the request's probes before starting a solver. The job mutates no
     document and runs under `SK11`/`SK12` resource limits (spawns `omnia-ngspice-worker` when
     `engine = "ngspice"`, declared explicitly in the `AD7` policy table in `S4.1`).
   - `sim.results` (**tier 0 read**): paged/decimated waveform slice or operating-point table for
@@ -488,15 +499,16 @@ coordinator decided `XD1`–`XD9`. They bind this plan; the full text is copied 
   contributes extra `SD3` definitions (rails included) to the shared `library/` tree; no second
   deck tree; no model from `Part::value`.
 - **XD4 Bindings, ground and lowering.** `SD7`, `SK10`, `SD13`, section 5; lowering consumes
-  `Circuit::bindings`; S1.2 waits for context task `C1.9`; ground evidence matches context
-  `CK4`; three distinct identity types.
+  `Circuit::bindings` for the same lineage and revision (`CD18`); S1.2 waits for context task
+  `C1.9`; ground evidence matches context `CK4`; three distinct identity types.
 - **XD5 Symbol class vs pin role.** `SD10`; `pins.toml` editing order `P1.4` → S1.1 → S3.2.
 - **XD6 ERC crosswalk.** `SD8` table, matching context section 9.4; Run gate vs advisory
   context severities; case folding and blank designators cited from context section 9.4.
 - **XD7 File ownership order.** `SD11` stale-result rule. S1.1 no longer owns any `omnia-doc`
   file, so its slot in the `omnia-doc` order is empty (section 13).
-- **XD8 Crates and agent surface.** Section 5 dependency direction; `SD14` (`sim.erc` is Run
-  preflight, `omnia_context` serves circuit views, finite-number amendment scoped to `sim.*`).
+- **XD8 Crates and agent surface.** Section 5 dependency direction; `SD14` (`sim.erc` supplies
+  document checks for Run preflight, `omnia_context` serves circuit views, finite-number
+  amendment scoped to `sim.*`).
 - **XD9 Ids and budgets.** `ERC001`–`ERC008` registered (`SD8`; `ERC009`, `ERC010` added as
   simulation-only codes); thresholds unchanged; `SB3`
   includes snapshot and bindings acquisition; `SB1`/`SB2` evidence separates cold, incremental
@@ -523,14 +535,15 @@ Each has a unit or property test; the roadmap task that adds it is in brackets.
 
 ## 8. Reference circuits and scenarios (`STC`)
 
-Every circuit below lives as a committed fixture in `tests/sim/` (crate `omnia-sim-tests`,
-created in S2.1) and runs on **both** `ngspice` and `RIS-C` against analytical solutions and
-each other under `SK2`'s differential tolerances.
+The reference circuits live as committed fixtures in `tests/sim/` (crate `omnia-sim-tests`,
+created in S2.1) and run on both `ngspice` and `RIS-C` under `SK2`'s differential tolerances.
+S2.3 gates those circuits and the headless ERC checks in `STC-erc-01`. S3.2 accepts the
+instrument and probe preflight cases in `STC-erc-02`.
 
 | ID | Circuit / Scenario | Analysis | Expected result |
 | --- | --- | --- | --- |
-| `STC-erc-01` | Missing ground (plus a net labelled `GND` that must raise the `ERC001` hint), an empty sheet that must raise nothing, duplicate `R1` (plus two empty-designator grounds that must pass), `resistance = 0` loaded from a hand-built file, a migrated v2 resistor wired into the circuit with a parseable value, shorted DC sources, floating pin, a `10M` resistor that must pass (`XD2`), an op-amp whose model declares supplies but no `implicit_supply` with both supply pins unconnected, a second one with exactly one supply pin connected, the generic op-amp on its implicit supply, and two `+12V` rails with `dc` `12` and `15` | ERC | Exact `ERC001`–`ERC004`, `ERC006`, `ERC008`, `ERC009` and `ERC010` codes mapped to their `PartId`/`NetId`; the migrated resistor raises `ERC009` and not `ERC003`; `ERC008` is an Error for the first two op-amps and a Warning for the third; no `ERC007` is ever emitted; `Error` blocks run, `Warning` permits run. [S1.3] |
-| `STC-erc-02` | Instrument cases, once instrument parts exist: an `XSC1` with channel B unwired, and a run whose probe names a net that is not on the sheet | ERC | `ERC005` on the unwired port and on the missing net, mapped to the instrument `PartId`; Run blocked. [S3.2] |
+| `STC-erc-01` | Missing ground (including a net labelled `GND`), an empty sheet, duplicate `R1` and two blank-designator grounds, a hand-built v3 file with `resistance = 0`, migrated v2 resistors wired into the circuit with parseable and unparseable values, shorted DC sources, a floating pin, a `10M` resistor (`XD2`), an op-amp with no connected supply pins and no `SupplyDecl::implicit` pair, one with exactly one supply pin connected, the generic op-amp using its implicit supply, and two `+12V` rails with `dc` `12` and `15` | Load validation and ERC | The v3 loader refuses the zero resistance (`PD8`, `PD10`). The valid documents yield the exact `ERC001`–`ERC004`, `ERC006`, `ERC008`, `ERC009` and `ERC010` codes with their `PartId`/`NetId` where applicable. `GND` adds the `ERC001` hint. The empty sheet, blank-designator grounds and `10M` value pass their checks. Both migrated resistors raise `ERC009`, and only the unparseable legacy value raises `ERC003`. `ERC008` is an Error for the first two op-amps and a Warning for the third. `ERC007` is never emitted. Error blocks Run and Warning permits Run. [S1.3] |
+| `STC-erc-02` | An `XSC1` with channel B unwired, and a separate headless run request whose named probe targets an absent net | Document ERC and run-request validation | `ERC005` identifies the unwired channel by instrument `PartId` and port. The headless diagnostic identifies the probe by name and reports its requested net. Both errors block Run. [S3.2] |
 | `STC-lin-01` | Resistive divider + Wheatstone bridge (`10 V`, `1k`/`2k`/`3k`/`4k`) | `OP`, `DC` | Matches closed-form nodal voltages & currents to `SK4` (`1e-7`) on both engines. [S1.5, S1.6, S2.1] |
 | `STC-lin-02` | Dependent-source active network (VCVS `E` + VCCS `G` + resistors) | `OP` | Matches analytical gain and input/output currents to `SK4` on both engines. [S2.1] |
 | `STC-nl-01` | Half-wave `1N4148` diode + `1k` load (`DC` sweep `-2 V..+5 V`) | `OP`, `DC` | Knee voltage (~0.65–0.72 V) and current curve match `ngspice` within `SK5`. [S2.1] |
@@ -595,14 +608,22 @@ pub trait SimRunHandle: Send {
     fn wait(self: Box<Self>) -> Result<SimResult, SimError>;
 }
 
-// Lowering (SD7, XD4). `bindings` comes from `omnia_circuit::Circuit::bindings(&doc)`
-// (context C1.9), which refuses a stale circuit; lowering checks the revision again.
-pub fn lower(
-    doc: &Doc,
-    bindings: &omnia_circuit::Bindings<'_>,
-    analysis: &Analysis,
-    probes: &[ProbeSpec],
-) -> Result<(CircuitIr, SourceMap), LowerError>;
+pub struct CircuitIr {
+    lineage: DocLineage,
+    revision: u64,
+    // Nodes and devices.
+}
+
+impl CircuitIr {
+    // `Circuit::bindings(doc)` checks circuit freshness at acquisition (C1.9).
+    // Check both lineage and revision against `doc` before lowering (SD7, CD18).
+    pub fn lower(
+        doc: &Doc,
+        bindings: &omnia_circuit::Bindings<'_>,
+        analysis: &Analysis,
+        probes: &[ProbeSpec],
+    ) -> Result<(Self, SourceMap), LowerError>;
+}
 
 pub struct SourceMap {
     node_nets: Vec<SmallVec<[NetId; 1]>>,    // NodeId -> nets (many nets per node)
@@ -661,9 +682,9 @@ this plan does not edit those files.
 | `library/` and `THIRD_PARTY.md` (`S1.1`, `S3.2`) | Contribute the `SD3` definitions and models the parts starter set lacks (inductor, current and dependent sources, BJT, MOSFET, op-amp macromodels, `rail` definitions for the rail symbols) with their symbols in S1.1, and the instrument definitions in S3.2, under generic ids and `PK11` licences (`XD3`). |
 | `ui-roadmap.md` `U5.5` / `canvas-roadmap.md` `T7.3` | `S3.3`–`S3.5` supply the real oscilloscope, multimeter, Bode plotter, and Results panel contents inside `U4.1`'s floating frames and `U1.7`'s bottom dock. |
 | `mcp-plan.md` (`S4.1`) | Update §1 out-of-scope simulation bullet (lines 51–54), register `sim.erc`/`sim.run`/`sim.results`/`sim.measure` (tier 0 + bounded worker spawn under `AD7`), and add the `sim.*`-scoped finite-number amendment to `AD8`/`AD12` (`XD8`). |
-| Parts plan (#85, `66f9e49`), request | (1) **Supply contract** (`SD3`): add `supply_terminals` and `implicit_supply` (one finite voltage per supply terminal, or none) to the `Model` and `Subckt` variants of `EmbeddedSimBinding`, with `PD10` checks that each supply terminal maps to a `power`-role pin and each voltage is finite; the `opamp-generic` starter part declares `+15 V`/`-15 V`. (2) **Placement default** (`XD3`): `Catalog::place_command` (`P2.4`) or a symbol-keyed helper beside it embeds the catalog definition whenever one exists for the symbol being placed, and falls back to `PlaceDef::Unmodelled` only when none exists. Items requested earlier at `HS1` (`PK4` units and whitespace, the `rail` primitive and `dc`, the `XD7` order) are answered at `66f9e49`. |
-| `ui-roadmap.md`, request | The U4.2 part picker and U5.2 placement place parts through the shared placement helper above, not through `PlaceDef::Unmodelled`, so placed parts carry their catalog definitions (`XD3`). |
-| Context plan (#100), request | Its head at `6a50b28` records `C1.9` (`Circuit::bindings`), declared ground evidence `CK4` matching `SQ3`, case folding and blank designators and the crosswalk in section 9.4, and `CQ9` answered by `XD4`. Add `ERC009` and `ERC010` to the section 9.4 crosswalk as simulation-only codes with no context finding, and note that `ERC001` uses `ground.missing`'s non-`Ground`-part condition. |
+| Parts plan (#85, `136a2dd`), answered | `PD5` and `PD10` define and validate `SupplyDecl` for `SD3`; `opamp-generic` declares the `SQ8` fallback. `PD11` and `P2.4` define the `[symbol]` default and `Catalog::place_symbol`; `Catalog::place_command` selects by source id. The parts plan also records `PK4` units and whitespace, the `rail` primitive with `dc`, and the `XD7` ownership order. |
+| Picker and agent placement, handoffs recorded in the parts plan (§14) | U4.2 picker placement and U5.2 use `Catalog::place_symbol` (`XD3`), wired by whichever of `P2.4` and `U5.2` ships second. The `omnia-agent` `place_part` operation adopts the same API in the agent lane after `P2.4`. |
+| Context plan (#100, `674a7d3`), answered | `C1.9` supplies the state-matched `Circuit::bindings` (`CD18`) and declared ground evidence (`CK4`, `SQ3`; `CQ9` answered by `XD4`). Section 9.4 defines case folding and blank designators, records the `ERC001` non-`Ground`-part condition, and lists `ERC009` and `ERC010` as simulation-only. |
 
 ## 14. Open questions (`SQ`)
 
@@ -676,10 +697,10 @@ owner's delegation of that date.
 | `SQ1` | Should `omnia-sim-ngspice` always use the isolated `omnia-ngspice-worker` helper process (`SD5`), or allow in-process `libngspice`? | Always use `omnia-ngspice-worker` unless `SS1` shows worker launch exceeds `SB3` (`150 ms`) on Orion. | **Default kept** (HS1, 2026-11-23). `SD5` stays HYPOTHESIS until `SS1`. |
 | `SQ2` | How should bare `1M` on a resistor value be handled (SPICE `1 mΩ` vs human `1 MΩ`)? | Follow SPICE (`1M = 1e-3`, `1Meg = 1e6`) for netlist compatibility and emit `ERC007` warning whenever bare `M` is used on a resistor. | **Replaced by `XD2`** (HS1, 2026-11-23): user-facing `M` is mega and `m` is milli (parts `PK4`, `PQ2`); SPICE number syntax applies only inside model decks; the emitter writes plain numbers; `ERC007` retired. |
 | `SQ3` | Should a net label `"GND"` without a `Ground` symbol count as node `0`? | No — require an explicit `Ground` symbol (or net label `"0"`), and emit a helpful `ERC001` hint if `"GND"` exists without a `Ground` symbol. | **Default kept** (HS1, 2026-11-23), confirmed by `XD4`. |
-| `SQ4` | `Reid-Engineered/RIS-C` is currently a private GitHub repository while `omnia` is public. How should Omnia's CI and contributors fetch `risc-c`? | Add `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` pinned to a reviewed SHA (`24710eaf`), and either make `RIS-C` public or supply a read-only CI token before `S1.5` merges. | **Default kept** (HS1, 2026-11-23); `RIS-C` made public by the owner 2026-11-23, so no CI token is needed. The `allow-git` entry stays pinned to a reviewed SHA. |
+| `SQ4` | How should Omnia's CI and contributors fetch `risc-c`? | Add `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` pinned to a reviewed SHA (`24710eaf`), and either make `RIS-C` public or supply a read-only CI token before `S1.5` merges. | **Default kept** (HS1, 2026-11-23); `RIS-C` made public by the owner 2026-11-23, so no CI token is needed. The `allow-git` entry stays pinned to a reviewed SHA. |
 | `SQ5` | Default input impedance of on-sheet `XSC1` oscilloscope and `XMM1` voltmeter probes? | `10 MΩ` to ground (realistic bench probe; prevents floating-node singularities when attached to capacitive nodes), overridable to ideal open (`∞`) per instrument. | **Default kept** (HS1, 2026-11-23). |
 | `SQ6` | Should `RIS-C` ship enabled in the engine picker in v1 or behind a Preferences toggle? | Visible in the First-boot / Preferences / toolbar engine selector labelled `preview`, with `ngspice` as default (matching `design/build-omnia.mjs:536-537`). | **Default kept** (HS1, 2026-11-23). |
 | `SQ7` | What happens if the user edits the schematic while a simulation is `Running`? | Stop the live run cleanly, mark displayed results/oscilloscope traces with a "Stale — schematic changed" badge, and require clicking Run again (live edit-while-running deferred to post-v1). | **Default kept** (HS1, 2026-11-23); parameter-only edits count (`SD11`, `XD7`). |
-| `SQ8` | Default op-amp model when placing a generic `IC-COM-OpAmp` with neither `props["model"]` nor a known `value` model name? | Built-in behavioral op-amp `.subckt` (`A_OL = 100k`, `GBW = 3 MHz`, `R_in = 1 MΩ`, `R_out = 75 Ω`, diode rail clamp to connected supplies or `±15 V` if supply pins omitted). | **Default behaviour kept** (HS1, 2026-11-23), delivered through the generic op-amp's part definition binding at placement (parts `PD11` `opamp-generic`, `XD3`), not chosen from `Part::value` or a property. Using the implicit `±15 V` raises `ERC008` as a Warning (`SD8`). |
+| `SQ8` | What model should placement by symbol use for a generic `IC-COM-OpAmp`? | Built-in behavioral op-amp `.subckt` (`A_OL = 100k`, `GBW = 3 MHz`, `R_in = 1 MΩ`, `R_out = 75 Ω`, diode rail clamp to connected supplies or `±15 V` if supply pins omitted). | **Default behaviour kept** (HS1, 2026-11-23) through the embedded `opamp-generic` definition (parts `PD11`, `XD3`). Using the implicit `±15 V` raises `ERC008` as a Warning (`SD8`). |
 | `SQ9` | In CI (`windows-latest`), how is `libngspice` provided for `omnia-sim-ngspice` and differential tests? | Pre-built BSD-3-Clause `ngspice` artifact cached/fetched in CI (checksum-pinned, verified at `HS2`); `omnia-sim-risc` tests always run with zero external binaries. | **Default kept** (HS1, 2026-11-23). |
 | `SQ10` | Should `sim.run` over MCP (`S4.1`) allow selecting `engine: "ngspice" \| "risc"`? | Yes — optional `engine` field defaulting to `"ngspice"`, letting agents cross-check circuits on both engines. | **Default kept** (HS1, 2026-11-23). |
