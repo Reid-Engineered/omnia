@@ -77,11 +77,11 @@ Checked at Omnia `b046bbb` and `Reid-Engineered/RIS-C` `24710eaf`.
 | `Reid-Engineered/RIS-C` (`risc-c`, BSD-3-Clause, Edition 2024, Rust 1.91+) already implements classic analog SPICE (`OP`, single-source `DC`, `AC lin\|dec\|oct`, adaptive `TRAN` with BE/Trap/BDF2, `R`/`C`/`L`/`K`/`S`/`W`/`V`/`I`/`E`/`G`/`F`/`H`/`D`/`Q`/`M`, `.model`, `.subckt`, `.ic`, `.nodeset`, `.temp`), validated against `ngspice 47` on Linux/macOS/Windows, with `CompiledCircuit`, concurrent `Simulator`s, and `transient_with` streaming + `ControlFlow::Break(())` cancellation | `Reid-Engineered/RIS-C` `docs/AGENT_INTEGRATION.md`, `docs/COMPATIBILITY.md`, `docs/STATUS.md` | Omnia does **not** re-implement a SPICE solver in-repo. `omnia-sim-risc` wraps the pinned `risc-c` Git crate behind `SimEngine`, obeying `RIS-C` contract rule 8 (integrate via public API, never copy equations). |
 | `RIS-C` does not support runtime behavioral expressions, `.control`, `.measure`, or nested two-source `.dc` | `RIS-C` `docs/COMPATIBILITY.md` | Op-amp macromodels are written as standard SPICE `.subckt`s using `R`/`C`/`E`/`G`/`D` (identical on both `RIS-C` and `ngspice`), all measurements run in `omnia-sim`, and v1 `Analysis::Dc` is single-source. |
 | `omnia-doc` has no UI framework dependency (`INV12`) and owns `Doc`, `Connectivity` (`NetId`, `net_of`, `net_wires`), `Doc::fork()`, and `Doc::revision()` | `crates/omnia-doc/src/` | Simulation crates take a `Doc` snapshot (`Doc::fork()`) and stay 100% GPUI-free (`SINV1`). |
-| `Part` currently stores only `symbol`, `at`, `orient`, `designator: Arc<str>`, and `value: Arc<str>` | `crates/omnia-doc/src/doc.rs:53` | Value covers `10 kΩ`, `22 nF`, `50%`, `TL072`, `12V`, etc.; optional overrides (explicit SPICE model, potentiometer total resistance, source waveform parameters, initial conditions) need an additive `props` map on `Part` (S1.1, RON v3 backward-compatible with v2). |
+| `Part` currently stores `symbol`, `at`, `orient`, `designator: Arc<str>`, and `value: Arc<str>`, inside crate-private `StoredPart` | `crates/omnia-doc/src/doc.rs:53,93` | Keeping `Part` unchanged and storing `props: BTreeMap<Arc<str>, Arc<str>>` on `StoredPart` (read via `Doc::part_props(id)`, edited via `Command::SetPartProp`) preserves every existing `Part { .. }` literal across all crates while bumping RON to v3 (`S1.1`, `SINV10`). |
 | `omnia-symbols` currently has 6 compiled symbols: `Capacitor-IEEE-NonPolarized`, `Diode-COM-Standard`, `Ground-COM-General`, `IC-COM-OpAmp` (5 pins), `Resistor-IEEE-Potentiometer` (3 pins), and `Resistor-IEEE-Standard` | `crates/omnia-symbols/pins.toml`, `generated.rs` | S1.1 adds the missing v1 analog symbols from `vendor/electronic-symbols/` (inductor, independent DC/AC/pulse sources, VCVS/VCCS dependent sources, NPN & PNP BJT, NMOS & PMOS MOSFET, supply-rail tags) plus on-sheet instrument/probe glyphs in S3.2. |
 | `canvas-plan.md` D8 specifies background ERC/netlist on a `DocSnapshot` debounced at `K13` (`150 ms`) and single-producer ring buffers per channel drained by floating cached instrument views | `canvas-plan.md:366-378` | `omnia-sim` implements that exact SPSC ring-buffer contract (`SampleRing`) and debounced ERC runner. |
 | `ui-plan.md` reserves toolbar analysis picker, Run/Pause/Stop controls, sim-time pill, status-bar ERC indicator, instruments strip, floating instrument frames (`U4.1`), and Results dock (`U1.7`, `U5.5`) | `ui-plan.md` UK3, UK4, UK6, UK10, UK11 | Milestone S3 wires real simulation state directly into those reserved slots with zero shell redesign. |
-| `mcp-plan.md` §11 job model (`A3`) is designed for long-running cancellable simulation jobs; `AD7` sets tier 0 = read, tier 1 = undoable doc edit | `mcp-plan.md:53-54`, `AD7` | S4.1 exposes `sim.erc`, `sim.results`, and `sim.measure` as tier 0 reads, and `sim.run` as tier 0 read + bounded worker-process execution over `A3`'s job lifecycle. |
+| `mcp-plan.md` §11 job model (`A3`) is designed for long-running cancellable simulation jobs; `AD7` sets tier 0 = read, tier 1 = undoable doc edit; `AD8`/`AD12` forbid floats in schematic DTOs | `mcp-plan.md:53-54`, `AD7`, `AD8`, `AD12` | S4.1 exposes `sim.erc`, `sim.results`, and `sim.measure` as tier 0 reads, `sim.run` as tier 0 read + bounded worker-process execution over `A3`, and adds an explicit `sim.*`-scoped amendment to `AD8`/`AD12` for finite canonical JSON numbers (while schematic geometry remains integer nm). |
 | `deny.toml` allows `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Zlib`, `Unicode-3.0`, `MPL-2.0` (no GPL/LGPL) and restricts `allow-git` | `deny.toml:10-38` | Bundled `ngspice` builds strictly from its BSD-3-Clause core with zero GPL/LGPL bundled or statically linked (system C/compiler runtimes excepted). Adding `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` (and handling CI access while `RIS-C` is private) is decided at `HS1` (`SQ4`). |
 | `tests/golden/wien-oscillator.ron` models the mockup's Wien bridge oscillator (`R1`/`R2 = 10 kΩ`, `C1`/`C2 = 22 nF`, `R4 = 22 kΩ`, pot `R3 = 50%`, `D1`/`D2 = 1N4148`, `U1 = TL072`, two empty-designator grounds; `f_0 ≈ 723.4 Hz`) | `tests/golden/wien-oscillator.ron` | Used directly (adding `±12 V` supply rails, `R3` total resistance prop, and `XSC1` probes in a sim fixture) as the headline `STC-wien-01` reference circuit for both engines. |
 
@@ -157,7 +157,7 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
 - `omnia-sim`, `omnia-sim-ngspice`, and `omnia-sim-risc` have **zero GPUI dependency** (`SINV1`,
   extending `INV12`). All unit, property, and differential tests run headlessly in standard CI.
 - `omnia-doc` has **zero simulator dependency**. It stores schematic items and opaque key/value
-  part properties (`Part::props`); all SPICE interpretation lives in `omnia-sim`.
+  part properties (`Doc::part_props`); all SPICE interpretation lives in `omnia-sim`.
 - `omnia-canvas` draws on-sheet probe badges, rail tags, and instrument blocks using theme
   tokens (`probe/a`, `probe/b`, `stage/instrument-body`, `stage/tag-bg`, `stage/tag-text`); it
   never imports a simulator crate.
@@ -202,7 +202,7 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
   `R_out`, diode rail-clamped output stage built strictly from `R`/`C`/`E`/`G`/`D` — zero
   behavioral expressions so it runs identically on both `RIS-C` and `ngspice`) plus built-in
   standard macromodels (`TL072`, `LM741`) authored from public datasheet parameters.
-- **Model resolution precedence:** `part.props["model"]` (explicit override) → `part.value`
+- **Model resolution precedence:** `doc.part_props(id)["model"]` (explicit override) → `part.value`
   matching a built-in model name (e.g. `U1` with `value: "TL072"` or `D1` with `value: "1N4148"`)
   → symbol default model (`SQ8` for generic op-amps).
 
@@ -277,17 +277,21 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
 
 ### SD9 Value & parameter storage in `omnia-doc`. PROPOSED (confirmed at HS1)
 
-- `Part` keeps `designator: Arc<str>` and `value: Arc<str>` unchanged so existing canvas/doc/MCP
-  code stays untouched.
-- Add `pub props: BTreeMap<Arc<str>, Arc<str>>` (empty by default, zero overhead when empty;
-  sorted for determinism) to `Part`, edited through a new `Command::SetPartProp` (full undo/redo
-  per `INV4`). Used for optional SPICE model override (`model = "TL072"`), potentiometer total
-  resistance (`resistance = "20k"`), source waveform specs (`waveform = "SIN(0 1 1k)"`,
-  `ac_mag = "1"`), and initial conditions (`ic = "0.1"`).
+- `Part` keeps its exact 5 public fields (`symbol`, `at`, `orient`, `designator`, `value`)
+  unchanged so existing `Part { .. }` literals across `omnia-doc`, `omnia-canvas`, `omnia-bench`,
+  and `omnia-agent` stay unbroken.
+- Store `props: BTreeMap<Arc<str>, Arc<str>>` (empty by default, sorted for determinism) on
+  crate-private `StoredPart`, exposed read-only via `Doc::part_props(id: PartId) -> Option<&BTreeMap<Arc<str>, Arc<str>>>`
+  and mutated solely through `Command::SetPartProp { part, key, value: Option<Arc<str>> }` (full
+  undo/redo per `INV4`). Used for optional SPICE model override (`model = "TL072"`),
+  potentiometer total resistance (`resistance = "20k"`), source waveform specs
+  (`waveform = "SIN(0 1 1k)"`, `ac_mag = "1"`), and initial conditions (`ic = "0.1"`).
 - RON serialisation (`crates/omnia-doc/src/io.rs` `Sheet`) bumps to v3 with seamless
-  backward-compatible load of existing v2 `.ron` files (`props` defaults to empty; unsupported
-  version rejection tests and `ui-plan.md` `UTC-open-bad` bump their rejected example to
-  `version: 4`).
+  backward-compatible load of existing v2 `.ron` files (`props` defaults to empty). `S1.1`
+  updates the unsupported-version rejection tests in `omnia-doc/src/io.rs` and
+  `omnia-agent/src/files.rs` (`version: 3` → `version: 4`), the RON version strings in
+  `omnia-agent/src/{files.rs,catalog.rs}` and `mcp-plan.md` (`AQ12`), and `ui-plan.md`
+  `UTC-open-bad` (`version: 4`).
 
 ### SD10 Supply rails and on-sheet probes/instruments. PROPOSED (confirmed at HS1)
 
@@ -346,6 +350,11 @@ Measured on the Orion reference machine under canvas plan §2.1 (`1920x1080 @ 60
     a completed `sim_run_id`.
   - `sim.measure` (**tier 0 read**): computes `vpp`, `vrms`, `vavg`, `vmin`, `vmax`, `freq`,
     `duty`, `rise_time`, `fall_time`, `bandwidth_3db`, `phase_margin` on any probed net/branch.
+- **Numeric encoding (`AD8`/`AD12` amendment in `S4.1`):** Schematic geometry remains integer
+  nanometres (`AD8`/`AK8`). `S4.1` amends `AD8`/`AD12` exclusively for `sim.*` payloads to permit
+  finite IEEE-754 JSON numbers (rejecting `NaN`/`Inf` with a typed error, normalising `-0.0` to
+  `0.0`, and emitting canonical shortest decimal representation so `AINV5` byte-identical JSON
+  still holds).
 
 ## 7. Invariants
 
@@ -362,7 +371,7 @@ Each has a unit or property test; the roadmap task that adds it is in brackets.
 | `SINV7` | **No silent signal fallback:** unknown or unallocated probe signal names always return a typed error on both `RIS-C` and `ngspice` (never silently returning `0.0`; `RIS-C` contract 4). [S1.5, S1.6] |
 | `SINV8` | **Differential parity:** every `STC-*` reference circuit produces matching results on `RIS-C` and `ngspice` within `SB7` (`SK4`/`SK5`). [S2.1, S2.2] |
 | `SINV9` | **Sheet isolation:** live oscilloscope updates at `SK8` cadence trigger 0 `SheetView` paints (`INV11`, `UB3`) and 0 Omnia heap allocations per warm paint frame (`B10`). [S3.3, S3.6] |
-| `SINV10` | **RON backward compatibility:** loading any existing v2 `.ron` fixture (including `inverting-amp.ron` and `wien-oscillator.ron`) succeeds identically after adding `Part::props` (v3). [S1.1] |
+| `SINV10` | **RON backward compatibility:** loading any existing v2 `.ron` fixture (including `inverting-amp.ron` and `wien-oscillator.ron`) succeeds identically after adding `StoredPart::props` / `Doc::part_props` (RON v3). [S1.1] |
 | `SINV11` | **Licence purity:** bundled `ngspice` build and all Rust simulation crates (including `risc-c` transitive deps) bundle/statically link zero GPL/LGPL code (system C/compiler runtimes excepted); `cargo deny check` stays green. [S0.3, S1.5, S1.6, S4.2] |
 | `SINV12` | **Source-map completeness:** every non-ground `NodeId` and every `DeviceIdx` in `CircuitIr` maps back to a live `NetId` or `PartId` in the source `Doc` snapshot. [S1.2] |
 
@@ -383,7 +392,7 @@ each other under `SK2`'s differential tolerances.
 | `STC-nl-04` | Standalone inverting op-amp fixture (`R1 = 10 kΩ`, `R2 = 22 kΩ`, `V_in = 1 V`, `±12 V` rails) | `OP`, `DC` | `V_out ≈ -2.200 V` in linear region, saturates cleanly near `±12 V` rails; both engines agree within `SK5`. [S2.1] |
 | `STC-ac-01` | First-order RC low-pass (`10 kΩ`, `10 nF`) & RLC bandpass | `AC` (`dec 50 10 1Meg`) | `-3.01 dB` and `-45°` at `f_c = 1/(2πRC) ≈ 1591.5 Hz`; both engines agree within `0.05 dB` / `0.5°`. [S2.1] |
 | `STC-ac-02` | Inverting op-amp closed-loop frequency response (`R1 = 10 kΩ`, `R2 = 22 kΩ`, `TL072` / behavioral GBW) | `AC` | Flat passband `+6.85 dB`, `-20 dB/dec` roll-off at `GBW / (1 + R2/R1)`; both engines agree within `SK5`. [S2.1] |
-| `STC-tran-01` | RC step response (`PULSE 0 5 1m 1u 1u 10m 20m`, `10 kΩ`, `100 nF`) | `TRAN` (`0..15 ms`) | `v(t) = 5(1 - e^{-(t-1ms)/1ms})` within `SK5` on both engines. [S2.1] |
+| `STC-tran-01` | RC step response (`PULSE 0 5 1m 1u 1u 10m 20m`, `10 kΩ`, `100 nF`) | `TRAN` (`0..15 ms`) | Charging step `v(t) = 5(1 - e^{-(t-1ms)/1ms})` over `1..11 ms` and matching exponential decay after `11 ms` within `SK5` on both engines. [S2.1] |
 | `STC-tran-02` | Full-wave diode bridge rectifier with `100 uF` filter cap + `1 kΩ` load (`60 Hz` sine) | `TRAN` (`0..50 ms`) | Peak voltage and ripple match `ngspice` within `SK5`. [S2.1] |
 | `STC-wien-01` | **Headline mockup circuit (derived from `tests/golden/wien-oscillator.ron`):** Wien bridge oscillator (`R1`/`R2 = 10 kΩ`, `C1`/`C2 = 22 nF`, `R4 = 22 kΩ`, pot `R3 = 50%`, `D1`/`D2 = 1N4148`, `U1 = TL072`, `±12 V` rails, `XSC1` on output & `N+`) | `TRAN` (`0..40 ms`) | Self-starts cleanly (via startup transient or small `.ic`), stabilises near `f_0 = 1/(2π · 10k · 22n) ≈ 723.4 Hz`; `RIS-C` and `ngspice` agree within `0.5%` frequency and `1%` Vpp. [S2.2, S3.6] |
 | `STC-err-01` | Deliberately singular / non-convergent circuit & mid-run Stop | `OP`, `TRAN` | Typed `SimError` naming the offending net/part; Stop returns to `Idle` within `100 ms` with zero orphan processes (`SB4`, `SINV5`). [S2.1, S2.3] |
@@ -474,12 +483,12 @@ Applied in task S0.1 (where noted), S0.2 (plan alignments), and S1.1 / S1.5 / S3
 | --- | --- |
 | `AGENTS.md` | Add `sim-plan.md` and `sim-roadmap.md` to Sources of truth and register `S`-prefixed ids (`SB`, `SK`, `SD`, `SINV`, `STC`, `SS`, `SQ`, `HS`, `S0.1`…; note `Milestone S0`–`S4` vs canvas spikes `S1`–`S8`). (Applied in S0.1.) |
 | `ROADMAP.md` | Link `sim-plan.md` and `sim-roadmap.md` in intro and Stage 3; update open product decisions with 2026-11-23 owner answers. (Applied in S0.1.) |
-| `deny.toml` (`S0.2` / `S1.5`) | Add `https://github.com/Reid-Engineered/RIS-C` to `sources.allow-git` after `HS1` approval (`SQ4`). |
-| `crates/omnia-doc` (`S1.1`) | Add `Part::props: BTreeMap<Arc<str>, Arc<str>>` (empty default) + `Command::SetPartProp` + RON v3 (`io.rs` `Sheet` record, backward-compatible v2 read per `SINV10`, unsupported-version test bumped to `version: 4`). |
-| `ui-plan.md` (`S0.2` / `S1.1`) | Bump `UTC-open-bad`'s rejected-version example from `version: 3` to `version: 4` when RON v3 lands in `S1.1` (`UD8`). |
+| `deny.toml` & `.github/workflows/ci.yml` (`S1.5`) | Add `https://github.com/Reid-Engineered/RIS-C` to `sources.allow-git` (after `HS1` approval, `SQ4`) and wire CI fetch access if `RIS-C` remains private. |
+| `.github/workflows/ci.yml` & `scripts/build-ngspice.*` (`S1.6`) | Wire the cached BSD-3-Clause `libngspice` CI artifact (`SQ9`) so `S1.6`, `S2.1`, and `S2.2` run real `ngspice` differential tests in CI before `S4.2` finalises app packaging. |
+| `crates/omnia-doc`, `omnia-agent`, `ui-plan.md`, `mcp-plan.md` (`S1.1`) | Store `props: BTreeMap<Arc<str>, Arc<str>>` on `StoredPart` (`Doc::part_props`, `Command::SetPartProp`; `Part` unchanged), bump RON to v3 with backward-compatible v2 read (`SINV10`), bump rejected-version tests/examples from `version: 3` to `version: 4` in `io.rs`, `omnia-agent/src/files.rs`, and `ui-plan.md` (`UTC-open-bad`), and update RON v2 references in `omnia-agent/src/{files.rs,catalog.rs}` and `mcp-plan.md` (`AQ12`). |
 | `crates/omnia-symbols` (`S1.1`, `S3.2`) | Add symbol role metadata (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`) and compile the remaining v1 analog symbols + on-sheet `XSC1`/`XMM1`/`XBP1` blocks. |
 | `ui-roadmap.md` `U5.5` / `canvas-roadmap.md` `T7.3` | `S3.3`–`S3.5` supply the real oscilloscope, multimeter, Bode plotter, and Results panel contents inside `U4.1`'s floating frames and `U1.7`'s bottom dock. |
-| `mcp-plan.md` (`S4.1`) | Register `sim.erc`, `sim.run` (tier 0 + bounded worker spawn under `AD7`), `sim.results`, and `sim.measure` in the `omnia-agent` catalog once `A3.4` is done. |
+| `mcp-plan.md` (`S4.1`) | Update §1 out-of-scope simulation bullet (lines 51–54), register `sim.erc`/`sim.run`/`sim.results`/`sim.measure` (tier 0 + bounded worker spawn under `AD7`), and add the `sim.*`-scoped finite-number amendment to `AD8`/`AD12`. |
 
 ## 14. Open questions (`SQ`)
 

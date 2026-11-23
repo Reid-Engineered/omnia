@@ -124,7 +124,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 
 ### S0.2 Owner sign-off and plan alignment · todo → HS1
 - Lane: docs · Depends: S0.1 · Read: `sim-plan.md` §13–§14
-- Owns: `sim-plan.md`, `sim-roadmap.md`, `deny.toml` (`allow-git` for `RIS-C` if approved), `ui-plan.md` (`UTC-open-bad` version note)
+- Owns: `sim-plan.md`, `sim-roadmap.md`
 - Do: present `SQ1`–`SQ10` and `SD6`–`SD14` to the owner at `HS1`; record dated answers in `sim-plan.md` and turn all `PROPOSED` decisions into `DECIDED` (only `SD5` stays `HYPOTHESIS` until `SS1`).
 - Done when: `HS1` is signed off by the owner and no `PROPOSED` entries remain in `sim-plan.md`.
 
@@ -145,9 +145,9 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 ## Milestone S1: core IR, ERC, netlist, models, and dual `SimEngine` backends
 
 ### S1.1 Document part properties & v1 analog symbol set · todo
-- Lane: doc, assets · Depends: S0.2 · Read: `sim-plan.md` SD3, SD9, SD10, SINV10; `crates/omnia-doc/src/{doc.rs,command.rs,io.rs}`, `crates/omnia-symbols/{pins.toml,src/lib.rs}`
-- Owns: `crates/omnia-doc/src/{doc.rs,command.rs,io.rs}`, `crates/omnia-symbols/`, `xtask/src/symbols.rs`, `ui-plan.md` (`UTC-open-bad` version bump to `version: 4`)
-- Do: add `Part::props: BTreeMap<Arc<str>, Arc<str>>` (empty default) + `Command::SetPartProp` (with inverse and `INV4` property coverage) + RON v3 (`io.rs` `Sheet` record preserving v2 load per `SINV10`, unsupported-version test bumped to `version: 4`); add `SymbolRole` (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`) and compile the missing v1 analog symbols from `vendor/electronic-symbols/` (inductor, independent DC/AC/pulse sources, VCVS/VCCS dependent sources, NPN & PNP BJT, NMOS & PMOS MOSFET, supply rail tags).
+- Lane: doc, assets · Depends: S0.2 · Read: `sim-plan.md` SD3, SD9, SD10, SINV10; `crates/omnia-doc/src/{doc.rs,command.rs,io.rs}`, `crates/omnia-symbols/{pins.toml,src/lib.rs}`, `crates/omnia-agent/src/{files.rs,catalog.rs}`
+- Owns: `crates/omnia-doc/src/{doc.rs,command.rs,io.rs}`, `crates/omnia-symbols/`, `xtask/src/symbols.rs`, `crates/omnia-agent/src/{files.rs,catalog.rs}`, `ui-plan.md` (`UTC-open-bad`), `mcp-plan.md` (`AQ12`)
+- Do: store `props: BTreeMap<Arc<str>, Arc<str>>` on crate-private `StoredPart` (keeping `Part`'s 5 public fields unchanged so no `Part { .. }` literals break), add `Doc::part_props(id)` and `Command::SetPartProp` (with inverse and `INV4` property coverage), bump RON serialisation to v3 (`io.rs` `Sheet` preserving v2 load per `SINV10`), bump rejected-version tests/examples from `version: 3` to `version: 4` in `io.rs`, `omnia-agent/src/files.rs`, and `ui-plan.md` (`UTC-open-bad`), and update RON v2 strings in `omnia-agent/src/{files.rs,catalog.rs}` and `mcp-plan.md` (`AQ12`); add `SymbolRole` (`Component`, `Ground`, `PowerRail`, `Instrument`, `Probe`) and compile the missing v1 analog symbols from `vendor/electronic-symbols/` (inductor, independent DC/AC/pulse sources, VCVS/VCCS dependent sources, NPN & PNP BJT, NMOS & PMOS MOSFET, supply rail tags).
 - Done when: `INV4`, `INV12`, and `SINV10` tests pass; all existing `tests/golden/*.ron` v2 fixtures load unchanged and all 12 goldens match with 0 differing pixels.
 
 ### S1.2 `omnia-sim` core: values, models, `CircuitIr`, netlist emitter · todo
@@ -170,15 +170,15 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 
 ### S1.5 `omnia-sim-risc`: `SimEngine` adapter over pinned `risc-c` (`OP`/`DC`/`AC`/`TRAN`) · todo
 - Lane: sim-risc · Depends: S1.4 · Read: `sim-plan.md` SD1, SD2, SD6, SD13, SQ4, SINV1, SINV5, SINV7, SINV11; `Reid-Engineered/RIS-C` `docs/AGENT_INTEGRATION.md`
-- Owns: `Cargo.toml` (pinned `risc-c` git dep), `crates/omnia-sim-risc/`
-- Do: create GPUI-free `omnia-sim-risc` wrapping `risc-c` (pinned commit SHA) behind `RiscEngine: SimEngine`; wire `OP`, single-source `DC`, `AC`, and live-streaming `TRAN` (`transient_with` pushing into `SampleRingProducer`, pause gate, `ControlFlow::Break(())` cancellation within `SK11`); map `risc_c::RunError` through `SourceMap` to typed `SimError`; enforce `SINV7` (missing signal name returns error, never `0.0`).
-- Done when: `STC-lin-01` (`OP`/`DC`), `STC-ac-01` (`AC`), `STC-tran-01` (`TRAN`), and `SINV5` cancel test pass on `RIS-C`; `SINV1`, `SINV7`, and `cargo deny check` pass.
+- Owns: `Cargo.toml` (pinned `risc-c` git dep), `deny.toml` (`allow-git` for `RIS-C`), `.github/workflows/ci.yml` (`RIS-C` fetch credentials if still private per `SQ4`), `crates/omnia-sim-risc/`
+- Do: add `https://github.com/Reid-Engineered/RIS-C` to `deny.toml` `allow-git` (per `HS1`/`SQ4`), wire CI fetch access if private, and create GPUI-free `omnia-sim-risc` wrapping `risc-c` (pinned commit SHA) behind `RiscEngine: SimEngine`; wire `OP`, single-source `DC`, `AC`, and live-streaming `TRAN` (`transient_with` pushing into `SampleRingProducer`, pause gate, `ControlFlow::Break(())` cancellation within `SK11`); map `risc_c::RunError` through `SourceMap` to typed `SimError`; enforce `SINV7` (missing signal name returns error, never `0.0`).
+- Done when: `STC-lin-01` (`OP`/`DC`), `STC-ac-01` (`AC`), `STC-tran-01` (`TRAN`), and `SINV5` cancel test pass on `RIS-C`; `SINV1`, `SINV7`, and `cargo deny check` pass in CI.
 
-### S1.6 `omnia-sim-ngspice`: worker IPC & `libngspice` backend (`OP`/`DC`/`AC`/`TRAN`) · todo
-- Lane: sim-ngspice · Depends: S0.3, S1.4 · Read: `sim-plan.md` SD1, SD2, SD5, SD12, SD13, SINV1, SINV5, SINV7, SINV11
-- Owns: `crates/omnia-sim-ngspice/`, `crates/omnia-ngspice-worker/`
-- Do: implement `omnia-ngspice-worker` dynamically loading BSD-3-Clause `libngspice` and speaking binary framed IPC over stdio; implement `NgspiceEngine: SimEngine` for `OP`, `DC`, `AC`, and live-streaming `TRAN` (via `SendData` callback into `SampleRingProducer`), with `SK2` options, `pause`/`resume` (`bg_halt`/`bg_run`), `SourceMap`-mapped error parsing, and `SK11` cancel/kill cleanup.
-- Done when: `STC-lin-01`, `STC-ac-01`, `STC-tran-01` pass on `ngspice`; `SINV5` cancel test leaves 0 orphan worker processes; `SINV1`, `SINV7`, and `cargo deny check` pass.
+### S1.6 `omnia-sim-ngspice`: worker IPC, `libngspice` backend, and CI artifact wiring (`OP`/`DC`/`AC`/`TRAN`) · todo
+- Lane: sim-ngspice · Depends: S0.3, S1.4 · Read: `sim-plan.md` SD1, SD2, SD5, SD12, SD13, SQ9, SINV1, SINV5, SINV7, SINV11
+- Owns: `crates/omnia-sim-ngspice/`, `crates/omnia-ngspice-worker/`, `scripts/build-ngspice.*`, `.github/workflows/ci.yml` (cached BSD-3-Clause `libngspice` CI artifact)
+- Do: implement `omnia-ngspice-worker` dynamically loading BSD-3-Clause `libngspice` and speaking binary framed IPC over stdio; implement `NgspiceEngine: SimEngine` for `OP`, `DC`, `AC`, and live-streaming `TRAN` (via `SendData` callback into `SampleRingProducer`), with `SK2` options, `pause`/`resume` (`bg_halt`/`bg_run`), `SourceMap`-mapped error parsing, and `SK11` cancel/kill cleanup; automate the checksum-pinned BSD-3-Clause `libngspice` CI artifact (`SQ9`, using `S0.3`'s verified configure flags) so `S1.6`, `S2.1`, and `S2.2` run real `ngspice` tests in CI.
+- Done when: `STC-lin-01`, `STC-ac-01`, `STC-tran-01` pass on `ngspice` in CI; `SINV5` cancel test leaves 0 orphan worker processes; `SINV1`, `SINV7`, and `cargo deny check` pass.
 
 ---
 
@@ -214,9 +214,9 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 
 ### S3.2 On-sheet probes, supply rails, and instrument blocks (`XSC1`, `XMM1`, `XBP1`) · todo
 - Lane: sim-ui, assets · Depends: S1.1, T4.3, T5.3 · Read: `sim-plan.md` SD10, SQ5; `canvas-plan.md` Q2; `design/build-omnia.mjs:188-235`
-- Owns: `crates/omnia-symbols/` (instrument/rail art), `crates/omnia-canvas/src/sheet/instruments.rs`
+- Owns: `crates/omnia-symbols/` (instrument/rail art), `crates/omnia-canvas/src/sheet/instruments.rs`, `tests/golden/sim/` (rail & instrument sheet goldens; leaves T3.3's `tests/golden/wien-oscillator-*.png` unchanged)
 - Do: render `+12V`/`-12V` supply rail pills (`stage/tag-bg`, `stage/tag-text`), on-sheet `XSC1`/`XMM1`/`XBP1` instrument blocks (`stage/instrument-body`), and channel A/B probe wires/dots (`probe/a`, `probe/b`); wire instruments strip placement into `Tool::Place`.
-- Done when: goldens render the Wien oscillator with supply rails and `XSC1` matching `workspace-graphite.png`; `INV6` (no colour literals) and `B10` hold.
+- Done when: new goldens in `tests/golden/sim/` render the Wien oscillator with supply rails and `XSC1` matching `workspace-graphite.png` while T3.3's existing goldens remain unchanged; `INV6` (no colour literals) and `B10` hold.
 
 ### S3.3 Floating Oscilloscope (`XSC1`) · todo
 - Lane: sim-ui · Depends: S0.4, S3.1, U4.1 · Read: `sim-plan.md` SD4, SD11, SB5, SK6, SK8, SINV9; `ui-plan.md` UK10; `design/build-omnia.mjs:236-288`
@@ -247,16 +247,16 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 ## Milestone S4: agent simulation tools, bundling, and final Orion gate
 
 ### S4.1 Agent / MCP simulation tools (`omnia-agent`) · todo
-- Lane: sim-agent · Depends: S2.3, A3.4 · Read: `sim-plan.md` SD14, SQ10; `mcp-plan.md` AD7, §10–§11
-- Owns: `crates/omnia-agent/src/sim.rs`, `docs/agent/sim.md`, `mcp-plan.md` (catalog & `AD7` note for `sim.run` bounded worker execution)
-- Do: add `sim.erc` (tier 0), `sim.run` (tier 0 + bounded worker process execution as an `A3` cancellable job with progress updates and `engine: ngspice|risc`), `sim.results` (tier 0), and `sim.measure` (tier 0) to `omnia-agent` catalog and schemas (`AINV11`), exposed automatically over CLI and MCP stdio.
-- Done when: end-to-end headless MCP test builds an RC filter or Wien oscillator, runs `sim.erc`, runs `sim.run` on both engines, cancels a run cleanly, and asserts `sim.measure` frequency within `SK5`.
+- Lane: sim-agent · Depends: S2.3, A3.4 · Read: `sim-plan.md` SD14, SQ10; `mcp-plan.md` §1, AD7, AD8, AD12, AINV5, §10–§11
+- Owns: `crates/omnia-agent/src/sim.rs`, `docs/agent/sim.md`, `mcp-plan.md` (§1 out-of-scope update, catalog, `AD7` note for `sim.run` bounded worker execution, and `sim.*`-scoped finite-number amendment to `AD8`/`AD12`)
+- Do: update `mcp-plan.md` (§1 simulation bullet, `AD7` worker policy, `AD8`/`AD12` `sim.*`-scoped finite canonical JSON numbers); add `sim.erc` (tier 0), `sim.run` (tier 0 + bounded worker process execution as an `A3` cancellable job with progress updates and `engine: ngspice|risc`), `sim.results` (tier 0), and `sim.measure` (tier 0) to `omnia-agent` catalog and schemas (`AINV11`), exposed automatically over CLI and MCP stdio.
+- Done when: end-to-end headless MCP test builds an RC filter or Wien oscillator, runs `sim.erc`, runs `sim.run` on both engines, cancels a run cleanly, verifies `AINV5` canonical JSON and `NaN`/`Inf` rejection, and asserts `sim.measure` frequency within `SK5`.
 
-### S4.2 Bundled `ngspice` build & licence audit · todo → HS2
+### S4.2 Bundled `ngspice` distribution packaging & final licence audit · todo → HS2
 - Lane: sim-ngspice · Depends: S0.3, S2.3 · Read: `sim-plan.md` SD12, SINV11, SQ9
-- Owns: `scripts/build-ngspice.*`, `THIRD_PARTY.md`, `.github/workflows/ci.yml` (sim artifact wiring)
-- Do: automate reproducible BSD-3-Clause `libngspice` builds for Windows and Linux (checksum-pinned, zero GPL/LGPL libraries bundled or statically linked; system C/compiler runtimes excepted), wire CI artifact caching so differential tests run on every PR, and update `THIRD_PARTY.md` (including `RIS-C` attribution).
-- Done when: clean builds pass on Windows and Linux and pass the linked-library audit; `HS2` signed off by owner.
+- Owns: `scripts/build-ngspice.*` (release bundle packaging), `THIRD_PARTY.md`
+- Do: finalise reproducible BSD-3-Clause `libngspice` + `omnia-ngspice-worker` release bundles for Windows and Linux (building on `S1.6`'s CI build script; checksum-pinned, zero GPL/LGPL libraries bundled or statically linked, system C/compiler runtimes excepted) and record full `ngspice` + `RIS-C` attribution in `THIRD_PARTY.md`.
+- Done when: release bundles pass on Windows and Linux and pass the linked-library audit; `HS2` signed off by owner.
 
 ### S4.3 First-boot self-test & Preferences simulator settings · todo
 - Lane: sim-ui · Depends: S4.2, U3.3, U3.5 · Read: `sim-plan.md` SQ6; `design/build-omnia.mjs:536-537`
@@ -266,7 +266,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 
 ### S4.4 Gate: Milestone S4 — final Orion certification · todo → HS4
 - Lane: bench · Depends: S3.6, S4.1, S4.3 · Read: `sim-plan.md` SB1–SB8, SINV1–SINV12; `canvas-plan.md` §2.1
-- Owns: `crates/omnia-bench/src/ui.rs` (`sim-live` and `--sim-idle` bench scripts), `docs/measurements/S4.4/`, `docs/measurements/S4.4.md`
+- Owns: `crates/omnia-bench/src/ui.rs` (`sim-live` bench script), `crates/omnia-bench/src/main.rs` (`--sim-idle` flag on `cmd_idle`), `docs/measurements/S4.4/`, `docs/measurements/S4.4.md`
 - Do: add `bench ui --sheet 1k --script sim-live` and `bench idle --shell --sim-idle`; freeze the Milestone S4 Orion campaign script running `SB1`–`SB8` plus full `B3`/`B4`/`UB3`/`UB4` checks with live Wien oscillator streaming into `XSC1` on both `ngspice` and `RIS-C`; run ten interleaved repetitions at `100%` and `125%` on Orion (`HS4`).
 - Done when: all `SB1`–`SB8` and `SINV1`–`SINV12` pass on Orion and `HS4` is accepted by the owner.
 
