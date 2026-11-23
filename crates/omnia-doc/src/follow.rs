@@ -135,7 +135,8 @@ struct View<'a> {
     /// Planned wires and the first wire of the run each replaces.
     added: Vec<(Wire, WireId)>,
     /// The view's own items by K12 cell; the document's index serves everything else.
-    cells: FxHashMap<(i64, i64), Vec<ItemId>>,
+    /// Each entry carries the item's indexed bounds.
+    cells: FxHashMap<(i64, i64), Vec<(ItemId, Rect)>>,
 }
 
 fn view_cell(v: i32) -> i64 {
@@ -246,7 +247,7 @@ impl<'a> View<'a> {
     fn register(&mut self, item: ItemId, area: Rect) {
         for cy in view_cell(area.min.y)..=view_cell(area.max.y) {
             for cx in view_cell(area.min.x)..=view_cell(area.max.x) {
-                self.cells.entry((cx, cy)).or_default().push(item);
+                self.cells.entry((cx, cy)).or_default().push((item, area));
             }
         }
     }
@@ -272,19 +273,6 @@ impl<'a> View<'a> {
             ItemId::Part(id) => self.moved_part(id).is_none(),
             ItemId::Wire(id) => !self.is_hidden(id) && !self.is_selected(id),
             ItemId::Label(_) => false,
-        }
-    }
-
-    /// Indexed bounds of one of the view's own items.
-    fn own_bounds(&self, item: ItemId) -> Rect {
-        match item {
-            ItemId::Part(id) if id.0 >= self.base_parts => {
-                let at = self.markers[(id.0 - self.base_parts) as usize];
-                Rect { min: at, max: at }
-            }
-            ItemId::Part(id) => self.moved_part(id).expect("own part").envelope,
-            ItemId::Wire(id) => wire_rect(RouteSheet::wire(self, id)),
-            ItemId::Label(_) => unreachable!("the view holds no labels"),
         }
     }
 
@@ -357,9 +345,9 @@ impl RouteSheet for View<'_> {
         let start = out.len();
         let (x0, x1) = (view_cell(area.min.x), view_cell(area.max.x));
         let (y0, y1) = (view_cell(area.min.y), view_cell(area.max.y));
-        let mut take = |list: &Vec<ItemId>| {
-            for &item in list {
-                if self.own_bounds(item).intersects(area) {
+        let mut take = |list: &Vec<(ItemId, Rect)>| {
+            for &(item, bounds) in list {
+                if bounds.intersects(area) {
                     out.push(item);
                 }
             }
@@ -380,6 +368,9 @@ impl RouteSheet for View<'_> {
                     take(list);
                 }
             }
+        }
+        if x0 == x1 && y0 == y1 {
+            return;
         }
         // An item spanning several cells is met once per cell. Sorting makes the result
         // independent of the map's iteration order.
