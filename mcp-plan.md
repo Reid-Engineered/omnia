@@ -240,7 +240,9 @@ an `H*`, `HW*` or `HA*` checkpoint, or marks a budget met. Human checkpoints sta
 ### AD11 Parts are placed by symbol name. DECIDED
 
 `place_part` names a symbol (`Resistor-IEEE-Standard`). Pins and bounds come from
-`SymbolLibrary::place_command` (A1.2), the same helper the canvas place tool uses.
+`SymbolLibrary::place_command` (A1.2). The agent-lane adoption of `omnia-parts` uses
+`Catalog::place_symbol` to embed the symbol's default definition (`PD11`). See
+[parts-plan.md](parts-plan.md) section 14 for the atomic placement and primary-value edit.
 
 ### AD12 Units and ids. DECIDED
 
@@ -396,7 +398,7 @@ JSON-lines and the command line, as built at A1.7 (2026-11-23, `crates/omnia-cli
 
 | Operation | Params | `Command` |
 | --- | --- | --- |
-| `place_part` | `symbol`, `at`, `orient`, `designator`, `value` | `PlacePart` via `place_command` |
+| `place_part` | `symbol`, `at`, `orient`, `designator`, `value` | `PlacePart` via `place_command`; after parts catalog adoption, placement via `Catalog::place_symbol` and any supplied primary value via `SetParam` in the same `apply_batch` transaction (AD11) |
 | `add_wires` | `wires: [[a, b], …]` | `AddWires` (split and merge inside `apply`, T6.1) |
 | `add_label` | `at`, `text` | `AddLabel` |
 | `move` | `items`, `delta`; `invert_follow` from A2.2 | `Move` |

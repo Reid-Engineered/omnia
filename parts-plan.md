@@ -102,7 +102,7 @@ Checked at `9d4b844` (workspace root).
 | `Command::PlacePart { part, local_pins, local_bounds }` is built in `omnia-symbols` (`SymbolLibrary::place_command`), `omnia-agent` (ops, service, tests), `omnia-canvas` (sheet, text, tests) and `omnia-doc` tests | `crates/omnia-symbols/src/lib.rs`, those crates | The task that changes `PlacePart` also owns the mechanical update of every construction site (`P2.2`). |
 | `Doc::save` / `Doc::load` write and accept only RON `version: 2` (`deny_unknown_fields`); `PartialEq for Doc` compares revision and every reserved slot; `content_eq` compares live items and exact live IDs and ignores revision; undo advances revision | `crates/omnia-doc/src/io.rs` | Persistent equality and undo equality are different relations. `PD8` defines both for definitions. |
 | `Change { revision, dirty, added, removed, nets_changed }`; `dirty: None` means a validated no-op | `crates/omnia-doc/src/command.rs` | A parameter edit that changes no geometry or text still needs a visible change (`XD7`). |
-| `omnia-agent` refuses any version other than 2 ("not a valid version 2 test sheet") and tests a `version:3` file as unsupported; `ui-plan.md` `UTC-open-bad` and `mcp-plan.md` `AQ12` say the same | `crates/omnia-agent/src/files.rs`, `ui-plan.md`, `mcp-plan.md` | The v3 bump moves those fixtures to `version:4` in the same task (`P2.3`, `XD1`). |
+| `omnia-agent` refuses any version other than 2 ("not a valid version 2 test sheet") and tests a `version:3` file as unsupported; `ui-plan.md` `UTC-open-bad` and `mcp-plan.md` `AQ12` say the same | `crates/omnia-agent/src/files.rs`, `ui-plan.md`, `mcp-plan.md` | `P2.3` moves the doc and agent fixtures to `version:4` (`XD1`). Whichever of `P2.3` and `U2.3` ships second moves `UTC-open-bad` and its app fixture to `version:4`. |
 | `omnia-symbols` compiles `pins.toml` + vendored SVGs via `cargo xtask symbols` into `generated.rs`; 6 symbols are defined; `SymbolId` is the symbol's index in the compiled order | `crates/omnia-symbols/src/lib.rs`, `pins.toml`, `xtask/src/symbols.rs` | v2 files store raw `SymbolId`s, so adding symbols must not renumber existing ones (`P1.4`). |
 | `omnia-doc` has no UI dependency; `omnia-symbols` depends on `omnia-doc` | `crates/omnia-doc/Cargo.toml`, `crates/omnia-symbols/Cargo.toml` | `omnia-parts` depends on `omnia-doc` and `omnia-symbols` (no GPUI); `omnia-doc` stays independent of `omnia-parts` and `omnia-symbols`. Anything both need (value grammar, definition validator, SPICE screen) lives in `omnia-doc` (`XD2`, `PD10`). |
 | `toml = "1"`, `zip = "9"` (`deflate-flate2-zlib-rs`) and `sha2` are already in `Cargo.lock` and pass `cargo deny check` | `xtask/Cargo.toml`, `Cargo.lock`, `deny.toml` | No new third-party dependency is needed. `deny.toml` governs Rust crates only; bundled model files have their own licence policy (`PK11`). |
@@ -122,8 +122,8 @@ thresholds (`XD9`); these are added. `PB1`–`PB5` are chosen targets, to be ver
 | PB1 | Built-in catalog init (up to 500 compiled parts): < 1 ms, 0 filesystem reads; `B1` (< 400 ms cold start) holds | `crates/omnia-bench/benches/parts.rs` (`P1.5`) |
 | PB2 | Open, verify and resolve one `.opart` archive (up to 1 MiB uncompressed), including model extraction and the `PK5` hash: p99 < 5 ms | same bench |
 | PB3 | Index a user `.olib` or folder containing 500 parts: p99 < 50 ms off the UI thread. Indexing reads manifests and `part.toml` metadata only; model files are not read and no `PK5` hash is computed until a part is first resolved (`PD9`), which `PB2` covers (amended 2026-11-23, owner-delegated, review of #85) | same bench |
-| PB4 | `Doc::save` and `Doc::load` on a `10k` sheet with 50 unique embedded definitions (mix of primitives, `.model` and `.subckt`): `save` stays within `UB10` (< 33.3 ms UI-thread serialise); `load` adds < 5% over the unmodelled `10k` baseline (amended 2026-11-23: measured by a named bench target, not a `bench file` subcommand) | `crates/omnia-bench/benches/parts_doc.rs` (`P2.5`) |
-| PB5 | `Doc::apply(Command::SetParam { .. })` on `10k`: p99 < 0.05 ms; warm canvas paint stays allocation-free (`INV7`) | `crates/omnia-bench/benches/parts_doc.rs` (`P2.5`) + `INV7` check |
+| PB4 | `Doc::save` and `Doc::load` on `Embedded10k` with 50 unique embedded definitions (mix of primitives, `.model` and `.subckt`): `save` stays within `UB10` (< 33.3 ms UI-thread serialise); `load` adds < 5% over the matching unmodelled baseline | `crates/omnia-bench/benches/parts_doc.rs` (`P2.5`) |
+| PB5 | `Doc::apply(Command::SetParam { .. })` on `Embedded10k`: p99 < 0.05 ms; warm canvas paint stays allocation-free (`INV7`) | `crates/omnia-bench/benches/parts_doc.rs` (`P2.5`) + `INV7` check |
 
 ## 4. Constants
 
@@ -522,9 +522,10 @@ amended decision:
   `SymbolLibrary::check_doc(&Doc) -> Result<(), UnknownSymbol>`, which checks every live part's
   symbol and every referenced definition's symbol. Every symbol-aware open path calls
   `check_doc` right after `Doc::load` and refuses the file on error: the agent file host
-  (`P2.3`) and the app's File > Open (the UI task that builds it; `P2.3` records this in
-  `ui-plan.md`). Canvas paint already skips out-of-range ids. `diff_embedded` uses `try_get`
-  and reports `UnknownSymbol` instead of indexing (`PTC-unknown-symbol`).
+  (`P2.3`) and the app's File > Open (whichever of `P2.3` and `U2.3` ships second wires the
+  check and bumps the `UTC-open-bad` fixture to `version:4`). Canvas paint already skips
+  out-of-range ids. `diff_embedded` uses `try_get` and reports `UnknownSymbol`
+  (`PTC-unknown-symbol`).
 - **Pin geometry comes from the definition.** A stored part's local pins and art bounds are its
   definition's. The v3 part record stores no geometry of its own; world pins are rebuilt from
   `def.local_pins`, `at` and `orient` on load. The terminal mapping is therefore consistent by
@@ -649,9 +650,9 @@ amended decision:
   one symbol. `Catalog::place_symbol` is the shared placement helper: it embeds the default
   definition for the symbol whenever one exists (`PlaceDef::Embed`, value from the resolved
   primary), and falls back to `PlaceDef::Unmodelled` only when none exists. So a generic op-amp
-  placed from the symbol picker gets its default binding at placement. The U4.2 picker, U5.2
-  placement and the agent's `place_part` go through it rather than building
-  `PlaceDef::Unmodelled` themselves (section 14). The starter defaults are `resistor`,
+  placed from the U4.2 picker gets its default binding when canvas `T5.3` commits placement
+  through the shell's `U5.2` provider. The agent's `place_part` also uses this helper
+  (section 14). The starter defaults are `resistor`,
   `potentiometer`, `capacitor`, `ground`, `diode-signal` and `opamp-generic`.
 - Supply-rail part definitions (`rail` primitive, `dc` parameter, symbol class `PowerRail`) are
   added with their rail symbols by `S1.1`, through this library (`XD3`, `XD5`).
@@ -660,9 +661,10 @@ amended decision:
   `T2.7`, `T3.4`), and today the generator draws from every built-in symbol. Before any symbol is
   added, `P1.4` pins the generator to an explicit, fixed list of today's six `SymbolId`s, in
   today's order, so every existing sheet stays item-for-item identical (including stored pin
-  coordinates and local bounds) for every seed. A sheet
-  that should contain new symbols is a new named `StressSheet` variant; existing variants never
-  change. The pin protects the later symbol additions by `S1.1` and `S3.2` as well.
+  coordinates and local bounds) for every seed. Use a new named `StressSheet` variant for a
+  workload with new symbols or embedded definitions. `P2.5` adds `Embedded10k` (`embedded-10k`)
+  with 50 unique definitions for `PB4`, `PB5` and the `P3.1` `B9` regression check. The fixed
+  symbol list also protects the existing sheets when `S1.1` and `S3.2` add symbols.
 
 ### XD cross-plan decisions (coordinator, owner-delegated, 2026-11-23)
 
@@ -767,7 +769,7 @@ Each scenario is an automated test with this expected result.
 | PTC-def-lifecycle | Place a modelled part (definition id 1) and delete it: call this state `D`. Branch A: save `D`, load it as `L`, then place the same definition in both `D` and `L`. Branch B: rebuild `D` on a fresh document by replaying the same place and delete (a fork of `D` has no history to undo), then undo the delete and place the same definition again | A: the saved file has `None` at id 1 and the same arena length; `L == D` under `PartialEq`; both placements allocate the same new id 2, since neither document has a referenced record at 1 (`PD8`, `PINV4`). B: undo restores the part with `def == 1` and an equal record (`PINV7`); the new placement reuses id 1 because it is referenced again. |
 | PTC-instance-refuse | Load v3 files whose part records hold (a) an override below its `min`, (b) an undeclared override name, (c) an override of the wrong kind, (d) an override equal to its default; (e) a real override with `raw = "10M"` and `value = 0.01`, (f) a resistor whose `Part::value` differs from its resolved `resistance` text; apply `PlacePart { def: Existing(id) }` whose `local_pins` are the definition's pins with two swapped (same count) | Each file refused at load with an error naming the part and parameter; the command refused with `InvalidInstance`; `Doc` unchanged (`PD8`, `PINV12`). |
 | PTC-update-value | Place two resistors (default `10k`), give the second an override `4.7k`, then `UpdatePartDef` to a definition whose default is `22k`; undo. Then, with a definition pair whose primary moves from parameter `a` to parameter `b`, update a part that already overrides `b` | After the first update the parts show `22k` and `4.7k`; both are in `Change::modified`; undo restores `10k` and `4.7k`. After the second update the part shows its `b` override's `raw` text, and undo restores its old `a` text (`PD8`). |
-| PTC-unknown-symbol | Open a v3 file whose part names `SymbolId(999)` through the agent file host; call `SymbolLibrary::check_doc` and `Catalog::diff_embedded` on the loaded `Doc` | The host refuses the file with a clear error; `check_doc` returns `UnknownSymbol`; `diff_embedded` reports `UnknownSymbol` and does not panic (`PD8`, `PD9`). |
+| PTC-unknown-symbol | Open a v3 file whose part names `SymbolId(999)` through the agent file host and app File > Open; call `SymbolLibrary::check_doc` and `Catalog::diff_embedded` on the `Doc` returned by `Doc::load` | Both hosts refuse the file with a clear error and the app leaves no tab open; `check_doc` returns `UnknownSymbol`; `diff_embedded` reports `UnknownSymbol` and does not panic (`PD8`, `PD9`). |
 | PTC-no-lossy-save | Between `P2.2` and `P2.3`: place a part with `PlaceDef::Embed`, or apply `SetParam`, then call `save`; and save a document of unmodelled parts | The first two saves are refused with `InvalidData` and write nothing usable as a v2 file; the unmodelled document saves byte-identical to before. From `P2.3` the same documents save as v3 and `PINV4` holds (`PD8`). |
 | PTC-batch-intern-refused | Apply a `Batch` of `PlacePart { def: Embed(new) }` followed by an invalid `SetParam` | Refused; the definition arena length, every record, every part, revision and history are unchanged (`PINV7`). |
 | PTC-pin-order | Build two definitions for the same 3-pin symbol, one listing `[[pins]]` in symbol order and one in another order, and a third whose `[sim].pins` swaps two terminals; place each and read terminal-to-pin mappings | The first two give identical embedded pin tables and terminals; the third maps the swapped terminals to the swapped pin indices; a terminal list with the right count but a repeated pin is refused (`PINV11`). |
@@ -997,9 +999,11 @@ Each has a default. All `PQ1`–`PQ8` defaults were accepted by the owner at `HP
 | `AGENTS.md` | Add `parts-plan.md` / `parts-roadmap.md` to the sources-of-truth table, register the `P`-prefixed ids, add `HP*` to hard rule 4. | P0.2 (applied; merged with the simulation registration 2026-11-23) |
 | `ROADMAP.md` | Link `parts-plan.md` in the intro and Stage 2; Stage 3 cites the parts plan for definitions and bindings and the simulation plan for lowering. | P0.2 (applied; updated 2026-11-23) |
 | `canvas-plan.md` section 9 | Comments: `Part` unchanged with `def`/`params` on `StoredPart`; `PlacePart` gains `def: PlaceDef`; `SetParam`, `UpdatePartDef`; `Change::modified`; new `Doc` queries and equality; RON v3 with v2 migration. | P0.2 (applied; updated 2026-11-23). `P2.1`–`P2.3` turn the comments into signatures when they land. |
-| `ui-plan.md` section 1 | Out-of-scope note: Part Libraries and the inspector will consume `omnia-parts::Catalog` and the `Doc` definition queries. `UD15` and `UD19` are not changed: Part libraries stays disabled. Handoffs (updated 2026-11-23): placement from the U4.2 picker and U5.2 goes through `Catalog::place_symbol` (`PD11`), wired by whichever of `P2.4` and `U5.2` ships second; File > Open calls `SymbolLibrary::check_doc` (`PD8`), wired by whichever of `P2.3` and `U2.3` (File actions) ships second. | P0.2 (applied; handoff sentence added 2026-11-23) |
-| `omnia-agent` `place_part` | Builds its command through `Catalog::place_symbol` so agent-placed parts get the default definition (`XD3`). | The agent-lane task that adopts `omnia-parts`, after `P2.4` (handoff) |
+| `ui-plan.md` sections 1 and 8 | Part Libraries and the inspector will consume `omnia-parts::Catalog` and the `Doc` definition queries. File > Open calls `SymbolLibrary::check_doc` after `Doc::load` (`PD8`). Whichever of `P2.3` and `U2.3` ships second wires the check and bumps `UTC-open-bad` and its app fixture from rejected `version:3` to `version:4`. | P0.2 (handoff documented 2026-11-23); P2.3 or U2.3 (implementation) |
+| `omnia-canvas` placement | Add a shell-supplied placement provider hook (for example `SheetCanvas::set_place_provider`). When `Tool::Place(symbol)` commits, use the provider's returned `Command` for the symbol and snapped point, carrying the chosen orientation and designator. | Canvas T5.3 (request) |
+| `omnia-app` placement | Add the workspace `omnia-parts` dependency and install the provider that calls `Catalog::place_symbol` (`PD11`, `XD3`). Test that placing a generic op-amp through the picker and committing it on the canvas stores the `opamp-generic` definition with its default binding. | UI U5.2, after T5.3 and P2.4 (request) |
+| `omnia-agent` `place_part` | Build placement through `Catalog::place_symbol` (`XD3`). When the operation supplies a value for the primary parameter, parse it under `PK4` and follow placement with `SetParam` on the new part's primary parameter in one atomic `apply_batch` transaction. Test preview/apply of a resistor with value `4.7k`, verifying a resistance override of 4,700 Ω and displayed text `4.7k`. Test that a refused value leaves the document unchanged. | The agent-lane task that adopts `omnia-parts`, after `P2.4` (handoff) |
 | `mcp-plan.md` section 9.2 | Note future minor schema additions (`set_param`, `list_parts`, `update_part_def`) on the existing preview/apply path (`XD8`). | P0.2 (applied; updated 2026-11-23) |
 | `docs/file-format-proposal.md` | Reserve section kind `PART_DEFS` for the definition table and per-part `def` + `params`. | P0.2 (applied) |
-| `ui-plan.md` (`UTC-open-bad` `version:3` → `version:4`; "RON version 2" facts) and `mcp-plan.md` (`AQ12` and other "RON v2" mentions) | Record that documents are RON v3 with v2 read by migration. | P2.3, in the same pull request as the code (`XD1`) |
+| `ui-plan.md` ("RON version 2" facts) and `mcp-plan.md` (`AQ12` and other "RON v2" mentions) | Record that documents are RON v3 with v2 read by migration. | P2.3, in the same pull request as the code (`XD1`) |
 | `sim-plan.md`, `sim-roadmap.md`, context plan | Amendments required by `XD1`–`XD9` (withdraw `SD9` props, `SK1` grammar, model precedence; `S1.1` no longer owns `omnia-doc` files, per #104). | Not this plan: their own tasks. |

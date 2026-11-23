@@ -699,6 +699,8 @@ impl SheetCanvas {
     pub fn camera(&self) -> &Camera;
     pub fn status(&self) -> CanvasStatus;
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
+    // T5.3: a shell-supplied placement provider (see parts-plan.md section 14) builds the
+    // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation.
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);
@@ -711,6 +713,7 @@ impl EventEmitter<CanvasEvent> for SheetCanvas {}
 pub struct CountingAlloc;                                  // #[global_allocator]
 pub fn count_allocs<R>(f: impl FnOnce() -> R) -> (R, u64);
 pub enum StressSheet { Parts100, Parts1k, Parts10k, DenseWiring, TextHeavy }
+// Parts P2.5 adds Embedded10k (--sheet embedded-10k) for the B9 regression run (parts PD11).
 pub fn generate(sheet: StressSheet, seed: u64) -> Doc;
 // generate module: SplitMix64 seeds; counts (parts, wire segments): 100=(100,200),
 // 1k=(1_000,2_000), 10k=(10_000,20_000), dense=(1_000,12_000), text=(1_000,2_000).
