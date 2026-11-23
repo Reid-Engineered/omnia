@@ -499,7 +499,7 @@ pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
                         DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField },
                         Follow(FollowError), Segment(Blocker) } // Follow/Segment: wiring-plan.md W2.2, W3.2
 pub enum Command {
-    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect }, // P2.2 adds def: PlaceDef (parts-plan.md PD8)
+    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect }, // P2.2 adds def: PlaceDef and params: Params (parts-plan.md PD8)
     AddWires(Vec<Wire>),
     AddLabel(Label),
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches

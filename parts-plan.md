@@ -172,7 +172,7 @@ thresholds (`XD9`); these are added. `PB1`–`PB5` are chosen targets, to be ver
   |   part_def.rs  EmbeddedPartDef,        |      | omnia-circuit (context)    |
   |                validate(), ParamValue  | ---> |   pin-to-net bindings,     |
   |   StoredPart { def, params }           |      |   ground evidence (XD4)    |
-  |   Command::PlacePart { .., def }       |      +-------------+--------------+
+  |   Command::PlacePart {..,def,params}   |      +-------------+--------------+
   |   Command::SetParam                    |                    v
   |   Command::UpdatePartDef               |      +----------------------------+
   |   RON v3 save / v2 migration           | ---> | omnia-sim: lowering        |
@@ -1006,7 +1006,7 @@ Each has a default. All `PQ1`–`PQ8` defaults were accepted by the owner at `HP
 | --- | --- | --- |
 | `AGENTS.md` | Add `parts-plan.md` / `parts-roadmap.md` to the sources-of-truth table, register the `P`-prefixed ids, add `HP*` to hard rule 4. | P0.2 (applied; merged with the simulation registration 2026-11-23) |
 | `ROADMAP.md` | Link `parts-plan.md` in the intro and Stage 2; Stage 3 cites the parts plan for definitions and bindings and the simulation plan for lowering. | P0.2 (applied; updated 2026-11-23) |
-| `canvas-plan.md` section 9 | Comments: `Part` unchanged with `def`/`params` on `StoredPart`; `PlacePart` gains `def: PlaceDef`; `SetParam`, `UpdatePartDef`; `Change::modified`; new `Doc` queries and equality; RON v3 with v2 migration. | P0.2 (applied; updated 2026-11-23). `P2.1`–`P2.3` turn the comments into signatures when they land. |
+| `canvas-plan.md` section 9 | Comments: `Part` unchanged with `def`/`params` on `StoredPart`; `PlacePart` gains `def: PlaceDef` and initial override `params: Params`; `SetParam`, `UpdatePartDef`; `Change::modified`; new `Doc` queries and equality; RON v3 with v2 migration. | P0.2 (applied; updated 2026-11-23). `P2.1`–`P2.3` turn the comments into signatures when they land. |
 | `ui-plan.md` sections 1 and 8 | Part Libraries and the inspector will consume `omnia-parts::Catalog` and the `Doc` definition queries. File > Open calls `SymbolLibrary::check_doc` after `Doc::load` (`PD8`). Whichever of `P2.3` and `U2.3` ships second wires the check and bumps `UTC-open-bad` and its app fixture from rejected `version:3` to `version:4`. | P0.2 (handoff documented 2026-11-23); P2.3 or U2.3 (implementation) |
 | `omnia-canvas` placement | Add a shell-supplied placement provider hook (for example `SheetCanvas::set_place_provider`). When `Tool::Place(symbol)` commits, use the provider's returned `Command` for the symbol and snapped point, carrying the chosen orientation and designator. | Canvas T5.3 (request) |
 | `omnia-app` placement | Add the workspace `omnia-parts` dependency and install the provider that calls `Catalog::place_symbol` (`PD11`, `XD3`). Test that placing a generic op-amp through the picker and committing it on the canvas stores the `opamp-generic` definition with its default binding. | UI U5.2, after T5.3 and P2.4 (request) |
