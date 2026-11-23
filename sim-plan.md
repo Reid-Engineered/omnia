@@ -343,8 +343,11 @@ declared in the part definition, using the parts plan's shared names (`PK12`).
 - Severity levels: **`Error`** (blocks simulation start), **`Warning`** (allows run, shown in
   status bar & Diagnostics), **`Info`**. This Error/Warning policy is the Run gate; context
   finding severities (context plan section 9.4) are advisory and never gate a run (`XD6`).
-- `run_erc(doc, bindings)` checks the document. Run preflight combines those diagnostics with
-  validation of the request's probes against the same bindings before starting the solver.
+- `run_erc(doc, bindings) -> Result<Vec<ErcDiagnostic>, StaleBindings>` checks the document,
+  first refusing bindings whose `(lineage, revision)` differs from the document's (`CD18`).
+  `validate_probes(doc, bindings, probes) -> Result<Vec<ErcDiagnostic>, StaleBindings>` checks a
+  run request's `ProbeSpec`s (headless `ERC005`). Run preflight combines both before starting
+  the solver.
 - `ERC001`–`ERC008` are registered diagnostic codes (`XD9`); `ERC009` and `ERC010` are added
   at `HS1` as simulation-only codes (coordinator decision on the review of #104). A retired code
   is never reused.
