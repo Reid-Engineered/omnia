@@ -372,7 +372,7 @@ of the `canvas` lane.
   record and set `needs-human`. If B4 misses, apply the "fails at 70k" row of the outcome
   table before reporting.
 
-### T2.9 Far-zoom wire stubs · needs-human
+### T2.9 Far-zoom wire stubs · done
 - Lane: canvas · Depends: T2.7 · Read: D4, D5, K9, plan 2.1 "B4 known limit",
   `docs/measurements/T2.7-wire.md`, G3, G12
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `crates/omnia-canvas/src/sheet/lod.rs`,
@@ -1986,3 +1986,14 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        bench-features clippy, workspace tests incl. 12/12 sheet + 18/18 overlay
                        goldens with 0 differing px, cargo deny). No budgets measured; no new
                        dependencies.
+2026-11-23 T2.9 done — Clean Orion reference gate (owner-approved, run remotely by the
+                       coordinating agent over SSH into the local Wayland session):
+                       `docs/measurements/T2.9/gate.py run` at `main` `b147027`, `performance`
+                       governor and AC in every snapshot, Baloo suspended. Every B2, B3, B4, B5,
+                       B9 and B10 check passes at 100% and 125%, including B4 at far zoom with
+                       no known limit and all B3 missed-refresh attributions (the 2026-11-21
+                       failure). 10k-zoom frame p99 5.016 ms (100%) and 4.893 ms (125%). A first
+                       launch stopped at its pre-run check on a blanked panel with no benchmark
+                       run; it is kept in `orion-2026-11-23/aborted-attempt/`. Evidence in
+                       `docs/measurements/T2.9/orion-2026-11-23/`; `gate.py summarize`
+                       reproduces the summary.
