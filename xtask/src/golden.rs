@@ -10,7 +10,7 @@ const UPDATE_ENV: &str = "OMNIA_GOLDEN_UPDATE";
 
 /// Every golden suite as (package, test target). A suite added elsewhere (U1.9's shell
 /// goldens) adds its line here.
-pub const SUITES: &[(&str, &str)] = &[("omnia-golden", "sheet")];
+pub const SUITES: &[(&str, &str)] = &[("omnia-golden", "sheet"), ("omnia-golden", "overlay")];
 
 /// The command for one suite.
 fn command(cargo: &std::ffi::OsStr, root: &Path, suite: (&str, &str), update: bool) -> Command {

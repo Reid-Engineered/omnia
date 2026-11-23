@@ -28,3 +28,7 @@ omnia-theme = { path = "../../crates/omnia-theme" }
 [[test]]
 name = "sheet"
 harness = false
+
+[[test]]
+name = "overlay"
+harness = false
