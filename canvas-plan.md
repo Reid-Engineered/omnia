@@ -696,11 +696,13 @@ pub struct SheetCanvas { /* private */ }                  // T1.5: camera, Navig
 pub struct Selection { /* canonical sorted, deduplicated ItemIds */ }
 pub struct RubberBand { pub anchor: Pt, pub current: Pt, pub mode: SelectMode, pub additive: bool }
 pub struct SelectionState { /* selection, hovered, rubber_band, SelectMode (WQ3 default Intersecting) */ }
+// SelectionState::from_prefs(&WiringPrefs), SelectionState::apply_prefs(&WiringPrefs)
 pub enum OverlayEvent { SelectionChanged }
 pub struct CachedSheet { /* SheetView wrapper with paint/render counters (D7, INV11) */ }
 pub struct OverlayView { /* doc, CachedSheet (.cached()), camera, theme, SelectionState */ }
 impl OverlayView {
     pub fn new(doc: Entity<Doc>, camera: Camera, theme: &'static Theme, cx: &mut Context<Self>) -> Self;
+    pub fn with_prefs(doc: Entity<Doc>, camera: Camera, theme: &'static Theme, prefs: &WiringPrefs, cx: &mut Context<Self>) -> Self;
     pub fn doc(&self) -> &Entity<Doc>;
     pub fn camera(&self) -> &Camera;
     pub fn theme(&self) -> &'static Theme;
@@ -715,6 +717,7 @@ impl OverlayView {
     pub fn overlay_paint_count(&self) -> u64;
     pub fn overlay_render_count(&self) -> u64;
     pub fn set_select_mode(&mut self, mode: SelectMode, cx: &mut Context<Self>);
+    pub fn apply_prefs(&mut self, prefs: &WiringPrefs, cx: &mut Context<Self>);
     pub fn set_hovered(&mut self, item: Option<ItemId>, cx: &mut Context<Self>);
     pub fn set_selection(&mut self, items: impl IntoIterator<Item = ItemId>, cx: &mut Context<Self>);
     pub fn clear_selection(&mut self, cx: &mut Context<Self>);

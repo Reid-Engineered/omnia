@@ -33,7 +33,10 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style, StyleRefinement,
     Styled, WeakEntity, Window, div, fill, point, px, relative,
 };
-use omnia_doc::{Change, Doc, ItemId, Pt, Rect, Wire, prefs::SelectMode};
+use omnia_doc::{
+    Change, Doc, ItemId, Pt, Rect, Wire,
+    prefs::{SelectMode, WiringPrefs},
+};
 use omnia_theme::Theme;
 
 /// K5 wire stroke width in world nanometres, matching `sheet/wires.rs`.
@@ -212,6 +215,17 @@ impl OverlayView {
         theme: &'static Theme,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::with_prefs(doc, camera, theme, &WiringPrefs::default(), cx)
+    }
+
+    /// Creates an [`OverlayView`] whose initial rubber-band mode comes from `prefs` (WD8, WD12).
+    pub fn with_prefs(
+        doc: Entity<Doc>,
+        camera: Camera,
+        theme: &'static Theme,
+        prefs: &WiringPrefs,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let document = SheetDocument::new(doc.clone());
         let sheet = cx.new(|_| CachedSheet::new(camera.clone(), theme, Some(document)));
         Self {
@@ -219,7 +233,7 @@ impl OverlayView {
             sheet,
             camera,
             theme,
-            state: SelectionState::default(),
+            state: SelectionState::from_prefs(prefs),
             focus: cx.focus_handle(),
             viewport: Bounds::default(),
             anim: None,
@@ -301,6 +315,13 @@ impl OverlayView {
     /// Sets the WD8 rubber-band mode (never notifies `SheetView`).
     pub fn set_select_mode(&mut self, mode: SelectMode, cx: &mut Context<Self>) {
         if self.state.set_select_mode(mode) {
+            cx.notify();
+        }
+    }
+
+    /// Applies wiring preferences (`select_mode`) to the overlay (WD8, WD12; never notifies `SheetView`).
+    pub fn apply_prefs(&mut self, prefs: &WiringPrefs, cx: &mut Context<Self>) {
+        if self.state.apply_prefs(prefs) {
             cx.notify();
         }
     }
@@ -1245,11 +1266,18 @@ mod tests {
     }
 
     fn open_overlay(cx: &mut TestAppContext) -> (OverlayFixture, &mut VisualTestContext) {
+        open_overlay_with_prefs(cx, WiringPrefs::default())
+    }
+
+    fn open_overlay_with_prefs(
+        cx: &mut TestAppContext,
+        prefs: WiringPrefs,
+    ) -> (OverlayFixture, &mut VisualTestContext) {
         let doc = cx.new(|_| test_doc());
         let doc_clone = doc.clone();
         let (overlay, cx) = cx.add_window_view(move |window, cx| {
             let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
-            let view = OverlayView::new(doc_clone, camera, &GRAPHITE, cx);
+            let view = OverlayView::with_prefs(doc_clone, camera, &GRAPHITE, &prefs, cx);
             // Focus the sheet once at open so clicks on the active sheet do not trigger GPUI's
             // focus-change `window.refresh()` (which bypasses `.cached()` for that frame).
             window.focus(view.focus_handle(), cx);
@@ -1582,5 +1610,308 @@ mod tests {
             paints_1,
             "INV11: clicks once focused must not repaint SheetView"
         );
+    }
+
+    fn drag_rubber_band(
+        overlay: &Entity<OverlayView>,
+        cx: &mut VisualTestContext,
+        start: Pt,
+        end: Pt,
+        shift: bool,
+    ) {
+        let mods = if shift {
+            Modifiers::shift()
+        } else {
+            Modifiers::none()
+        };
+        let s0 = screen_of(overlay, cx, start);
+        let s1 = screen_of(overlay, cx, end);
+        let mid = point((s0.x + s1.x) * 0.5, (s0.y + s1.y) * 0.5);
+        cx.simulate_mouse_down(s0, MouseButton::Left, mods);
+        cx.simulate_mouse_move(mid, MouseButton::Left, mods);
+        cx.simulate_mouse_move(s1, MouseButton::Left, mods);
+        assert!(
+            cx.update(|_, cx| overlay.read(cx).rubber_band().unwrap().is_visible()),
+            "rubber band must become visible after drag move"
+        );
+        cx.simulate_mouse_up(s1, MouseButton::Left, mods);
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).rubber_band()), None);
+    }
+
+    fn run_tc_band_half_part(
+        cx: &mut TestAppContext,
+        mode: SelectMode,
+        start_world: Pt,
+        end_world: Pt,
+    ) {
+        let prefs = WiringPrefs::new(true, 10, mode, false).unwrap();
+        let (
+            OverlayFixture {
+                overlay,
+                sheet_notifies,
+                selection_events,
+                ..
+            },
+            cx,
+        ) = open_overlay_with_prefs(cx, prefs);
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).select_mode()), mode);
+        let initial_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+
+        drag_rubber_band(&overlay, cx, start_world, end_world, false);
+
+        match mode {
+            SelectMode::Intersecting => {
+                assert_eq!(
+                    cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+                    vec![ItemId::Part(PartId(0))]
+                );
+                assert_eq!(selection_events.get(), 1);
+            }
+            SelectMode::Enclosed => {
+                assert!(cx.update(|_, cx| overlay.read(cx).selection().is_empty()));
+                assert_eq!(selection_events.get(), 0);
+            }
+        }
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            initial_paints
+        );
+        assert_eq!(sheet_notifies.get(), 0);
+    }
+
+    // Half-covering box over R1 (body x in [-8g, -4g], y in [-2g, 2g]): x in [-10g, -6g], y in [-4g, 4g].
+    #[gpui::test]
+    fn tc_band_01_nw_to_se_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_02_se_to_nw_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_03_ne_to_sw_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_04_sw_to_ne_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_05_nw_to_se_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_06_se_to_nw_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_07_ne_to_sw_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_08_sw_to_ne_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_09_shift_adds_to_existing_selection(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        let (
+            OverlayFixture {
+                overlay,
+                sheet_notifies,
+                selection_events,
+                ..
+            },
+            cx,
+        ) = open_overlay(cx);
+        let initial_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).select_mode()),
+            SelectMode::Intersecting
+        );
+
+        // Existing selection: Label(0) at (0, 4g).
+        let label_pos = screen_of(&overlay, cx, Pt { x: 0, y: 4 * g });
+        cx.simulate_mouse_down(label_pos, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(label_pos, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Label(LabelId(0))]
+        );
+
+        // Shift-drag half-box over R1 in default Intersecting mode -> adds Part(0).
+        drag_rubber_band(
+            &overlay,
+            cx,
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+            true,
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Part(PartId(0)), ItemId::Label(LabelId(0))]
+        );
+
+        // Switch preference to Enclosed via apply_prefs; Shift-drag half-box over C1 -> keeps existing selection.
+        let enclosed_prefs = WiringPrefs::new(true, 10, SelectMode::Enclosed, false).unwrap();
+        cx.update(|_, cx| {
+            overlay.update(cx, |v, cx| v.apply_prefs(&enclosed_prefs, cx));
+        });
+        drag_rubber_band(
+            &overlay,
+            cx,
+            Pt {
+                x: 6 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: 10 * g,
+                y: 4 * g,
+            },
+            true,
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Part(PartId(0)), ItemId::Label(LabelId(0))]
+        );
+
+        // Shift-drag full box enclosing C1 ([3g..10g] x [-4g..4g], avoiding Wire(0) wholly) -> adds Part(1).
+        drag_rubber_band(
+            &overlay,
+            cx,
+            Pt {
+                x: 10 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: 3 * g,
+                y: -4 * g,
+            },
+            true,
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![
+                ItemId::Part(PartId(0)),
+                ItemId::Part(PartId(1)),
+                ItemId::Label(LabelId(0)),
+            ]
+        );
+        assert_eq!(selection_events.get(), 3);
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            initial_paints
+        );
+        assert_eq!(sheet_notifies.get(), 0);
     }
 }
