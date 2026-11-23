@@ -1,7 +1,8 @@
-//! Scripted camera driver. Every frame differs from the one before, so every frame repaints
-//! with fresh pixel snapping and no frame is skipped as identical.
+//! Scripted camera and pointer drivers. Every frame differs from the one before, so every
+//! frame repaints and no frame is skipped as identical.
 //!
-//! T2.6 adds `drag-part`, `drag-wire` and `hover` over real sheets in `scripts.rs`.
+//! `drag-part` and `drag-wire` arrive in milestones 5 and 6; `hover` drives `OverlayView` over
+//! real sheets in `hover.rs` (T4.6).
 
 /// K4: the zoom range the `zoom` script sweeps (5% to 3200%).
 pub use omnia_canvas::camera::{MAX_ZOOM, MIN_ZOOM};
@@ -41,6 +42,9 @@ pub enum Script {
     /// Zooms about the viewport centre, geometrically, over the whole K4 range: from 100%
     /// up to 3200%, down to 5% and back to 100% every [`ZOOM_PERIOD`] frames.
     Zoom,
+    /// Sweeps the pointer across visible parts, wires, labels (when present), and empty space
+    /// over a focused `OverlayView` (T4.6, INV11).
+    Hover,
 }
 
 impl Script {
@@ -48,10 +52,13 @@ impl Script {
         match name {
             "pan" => Ok(Self::Pan),
             "zoom" => Ok(Self::Zoom),
-            "drag-part" | "drag-wire" | "hover" => Err(format!(
+            "hover" => Ok(Self::Hover),
+            "drag-part" | "drag-wire" => Err(format!(
                 "script `{name}` needs real sheets; roadmap T2.6 adds it"
             )),
-            _ => Err(format!("unknown script `{name}` (available: pan, zoom)")),
+            _ => Err(format!(
+                "unknown script `{name}` (available: pan, zoom, hover)"
+            )),
         }
     }
 
@@ -59,6 +66,7 @@ impl Script {
         match self {
             Self::Pan => "pan",
             Self::Zoom => "zoom",
+            Self::Hover => "hover",
         }
     }
 
@@ -73,6 +81,7 @@ impl Script {
                 zoom: zoom_at(frame),
                 ..Camera::default()
             },
+            Self::Hover => Camera::default(),
         }
     }
 }
@@ -129,6 +138,7 @@ mod tests {
     fn parse_scripts() {
         assert_eq!(Script::parse("pan"), Ok(Script::Pan));
         assert_eq!(Script::parse("zoom"), Ok(Script::Zoom));
+        assert_eq!(Script::parse("hover"), Ok(Script::Hover));
         assert!(Script::parse("drag-part").unwrap_err().contains("T2.6"));
         assert!(Script::parse("spin").is_err());
     }

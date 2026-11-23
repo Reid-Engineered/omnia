@@ -10,6 +10,7 @@ pub mod compare;
 pub mod driver;
 pub mod generate;
 pub mod harness;
+pub mod hover;
 pub mod paint_probe;
 pub mod scene;
 #[cfg(feature = "headless")]

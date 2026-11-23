@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "kind": "run",
+  "config": {
+    "sheet": "10k",
+    "script": "pan",
+    "frames": 600,
+    "warmup": 600,
+    "window_logical": [
+      1536.0,
+      864.0
+    ],
+    "scene_counts": false
+  },
+  "scene_details": {
+    "seed": 42,
+    "parts": 10000,
+    "wires": 20000
+  },
+  "spike": null,
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) UHD Graphics",
+      "driver_name": "Intel Corporation",
+      "driver_info": "32.0.101.7088"
+    },
+    "fullscreen": false,
+    "os": "windows",
+    "arch": "x86_64",
+    "logical_cpus": 24,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 165.0
+  },
+  "frames": {
+    "drawn": 600,
+    "on_time": 600,
+    "late": 0,
+    "unmeasured": 0,
+    "wall_s": 7.3098
+  },
+  "warnings": [],
+  "metrics": {
+    "frame_ms": {
+      "mean": 0.8056,
+      "p50": 0.7946,
+      "p95": 0.9231,
+      "p99": 1.1192,
+      "max": 1.2851
+    },
+    "draw_ms": {
+      "mean": 0.8004,
+      "p50": 0.7895,
+      "p95": 0.9175,
+      "p99": 1.1121,
+      "max": 1.2759
+    },
+    "dirty_to_present_ms": {
+      "mean": 1.134,
+      "p50": 1.109,
+      "p95": 1.2902,
+      "p99": 1.4131,
+      "max": 10.2564
+    },
+    "present_interval_ms": {
+      "mean": 6.0589,
+      "p50": 6.0662,
+      "p95": 6.3816,
+      "p99": 6.5987,
+      "max": 15.4255
+    },
+    "paint_samples": 600,
+    "paint_sampling": "every-frame",
+    "paint_ms": {
+      "mean": 0.7575,
+      "p50": 0.7449,
+      "p95": 0.8737,
+      "p99": 1.0528,
+      "max": 1.2187
+    },
+    "allocs_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 8.43,
+        "p50": 8.0,
+        "p95": 8.0,
+        "p99": 18.0,
+        "max": 24.0
+      }
+    },
+    "alloc_bytes_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 1026.4267,
+        "p50": 248.0,
+        "p95": 248.0,
+        "p99": 1752.0,
+        "max": 443368.0
+      }
+    },
+    "late_frames": 0,
+    "missed_refreshes": 1,
+    "present_intervals_over_2_5_refreshes": 1,
+    "max_present_interval_ms": 15.4255,
+    "work_missed_refreshes": 0,
+    "memory_mb": 169.4297,
+    "working_set_mb": 169.7773,
+    "heap_peak_mb": 95.8637
+  },
+  "diagnostic_trace": null
+}

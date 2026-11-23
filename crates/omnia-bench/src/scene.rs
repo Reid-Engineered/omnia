@@ -208,7 +208,7 @@ fn sheet_camera(camera: Camera, bounds: Bounds<Pixels>, scale: f32) -> SheetCame
     view
 }
 
-const STRESS_SEED: u64 = 42;
+pub(crate) const STRESS_SEED: u64 = 42;
 
 struct StressScene {
     kind: StressSheet,
