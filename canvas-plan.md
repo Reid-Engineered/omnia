@@ -693,13 +693,15 @@ pub struct Navigator { /* private */ }                    // T1.5 pan/zoom state
 pub struct SheetCanvas { /* private */ }                  // T1.5: camera, Navigator, SheetView
 // T4.3 (selection.rs, overlay.rs): pure selection/hover/WD8 rubber-band state machine and
 // OverlayView embedding CachedSheet via `.cached()` so transient updates never repaint SheetView.
+// T4.4 (overlay/net.rs): NetHighlight derived from hovered/selected wires (`stage/net-highlight`).
 pub struct Selection { /* canonical sorted, deduplicated ItemIds */ }
 pub struct RubberBand { pub anchor: Pt, pub current: Pt, pub mode: SelectMode, pub additive: bool }
 pub struct SelectionState { /* selection, hovered, rubber_band, SelectMode (WQ3 default Intersecting) */ }
 // SelectionState::from_prefs(&WiringPrefs), SelectionState::apply_prefs(&WiringPrefs)
+pub struct NetHighlight { /* resolved NetIds and deduplicated WireIds */ }
 pub enum OverlayEvent { SelectionChanged }
 pub struct CachedSheet { /* SheetView wrapper with paint/render counters (D7, INV11) */ }
-pub struct OverlayView { /* doc, CachedSheet (.cached()), camera, theme, SelectionState */ }
+pub struct OverlayView { /* doc, CachedSheet (.cached()), camera, theme, SelectionState, NetHighlight */ }
 impl OverlayView {
     pub fn new(doc: Entity<Doc>, camera: Camera, theme: &'static Theme, cx: &mut Context<Self>) -> Self;
     pub fn with_prefs(doc: Entity<Doc>, camera: Camera, theme: &'static Theme, prefs: &WiringPrefs, cx: &mut Context<Self>) -> Self;
@@ -709,6 +711,8 @@ impl OverlayView {
     pub fn focus_handle(&self) -> &FocusHandle;
     pub fn selection(&self) -> &[ItemId];
     pub fn hovered(&self) -> Option<ItemId>;
+    pub fn highlighted_nets(&self) -> &[NetId];
+    pub fn highlighted_wires(&self) -> &[WireId];
     pub fn rubber_band(&self) -> Option<RubberBand>;
     pub fn select_mode(&self) -> SelectMode;
     pub fn sheet_entity(&self) -> &Entity<CachedSheet>;

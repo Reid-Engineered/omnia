@@ -14,6 +14,6 @@ pub use camera_anim::{
     fit_area_camera, fit_rect_camera, fit_sheet_camera, selection_bounds, zoom_to_selection_camera,
 };
 pub use input::{CanvasEvent, CanvasStatus, Navigator, SheetCanvas};
-pub use overlay::{CachedSheet, OverlayEvent, OverlayView};
+pub use overlay::{CachedSheet, NetHighlight, OverlayEvent, OverlayView};
 pub use selection::{RubberBand, Selection, SelectionState};
 pub use sheet::SheetView;

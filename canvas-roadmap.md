@@ -484,7 +484,7 @@ of the `canvas` lane.
   simulated hover moves, a selection change and a rubber-band drag; goldens for selected
   and hovered states exist in both themes.
 
-### T4.4 Net highlight · todo
+### T4.4 Net highlight · done
 - Lane: canvas · Depends: T4.1, T4.3 · Read: D7
 - Owns: `crates/omnia-canvas/src/overlay/net.rs`
 - Do: hovering or selecting a wire repaints its whole net in the overlay in
@@ -2026,3 +2026,35 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        headroom), `cargo deny check`), and `cargo run --release -p omnia-bench
                        -- idle --seconds 2` reported `frames: 0, renders: 0`. No budgets
                        certified; no new dependencies.
+2026-11-23 T4.4 done — implemented `crates/omnia-canvas/src/overlay/net.rs` (`NetHighlight` and
+                       `paint_wires`), integrated into `crates/omnia-canvas/src/overlay.rs`
+                       (`OverlayView::highlighted_nets`, `OverlayView::highlighted_wires`, and
+                       `paint_overlay` Layer 2) and re-exported `NetHighlight` from `lib.rs`
+                       (documented in `canvas-plan.md` section 9 per rule 12). Hovering or
+                       selecting a wire resolves its logical `NetId` via `Doc::net_of`, gathers
+                       every wire in the net via `Doc::net_wires` (including label-bridged
+                       components), deduplicates across hover and multi-wire selection in
+                       canonical ascending `WireId` order, re-resolves on `on_doc_change`, and
+                       paints the net in `stage/net-highlight` (INV6, no colour literals).
+                       Deviations from T4.4's **Owns** (`overlay/net.rs`): minimal integration
+                       edits in `overlay.rs` and `lib.rs`, plan signatures in `canvas-plan.md`,
+                       and golden coverage in `tests/golden/tests/overlay.rs` + PNGs (T4.3 is
+                       `done`). Behaviour update from T4.3: a hovered, unselected wire now
+                       draws its Layer 2 stroke via `net::paint_wires` in `stage/net-highlight`
+                       with the Layer 1 hover halo marking the hovered segment (rather than a
+                       solid `stage/hover` stroke); `overlay-selected` goldens updated because
+                       the fixture selects `WireId(4)`, so its full net (`Wires 4–7`) now
+                       highlights. `NetHighlight` tests verify deterministic resolution across
+                       label bridges and net merges/splits; `inv11_net_highlight_never_repaints_sheet`
+                       verifies every overlay frame paints while `SheetView` stays at 0 extra
+                       paints/notifies across hover, selection, off-screen net merge/split, and
+                       clear (D7, INV11). Review follow-up (Claude Opus 5.5): removed both
+                       `#[allow(clippy::too_many_arguments)]` attributes (Hard Rule 2) by
+                       grouping paint inputs into `OverlayPaintContext` / `WirePaintParams`,
+                       avoided double-sync in `on_doc_change`, added per-step overlay paint
+                       checks and an off-screen delete/split step, compared only `(nets, wires)`
+                       in `NetHighlight::PartialEq`, and dropped the untested no-alloc comment.
+                       All 12/12 sheet and 24/24 overlay goldens match with 0 differing pixels
+                       on Windows; standard checks pass locally (fmt, workspace clippy,
+                       bench-features clippy, workspace tests, golden tests, cargo deny). No
+                       budgets measured; no new dependencies.
