@@ -143,6 +143,7 @@ fact no longer matches, stop and log it.
 | UG13 | GPUI has no text-field element. `examples/input.rs` builds one from `EntityInputHandler` and `ElementInputHandler`. | `gpui/examples/input.rs` | UD16. |
 | UG14 | `Application::with_assets(impl AssetSource)` serves bytes to `svg()`; SVGs rasterise once per size into the atlas (G4). | `app.rs` `with_assets`; `assets.rs` | Icons (UD17). |
 | UG15 | `Window::focus` calls `refresh()`, and a refreshing window re-renders every cached view (`!window.refreshing` in the cache check). A mouse-down on a focusable element focuses it. | `window.rs` `focus`; `view.rs`; `elements/div.rs` (mouse-down focus, which a handler can suppress) | Pointer input in the chrome must not move focus (UQ14). Found by U4.2. |
+| UG16 | `Div::on_click` records the press with `window.refresh()` on mouse-down and refreshes again when the release over the hitbox completes the click. | `elements/div.rs` (click listeners, mouse-down and mouse-up handlers) | Chrome controls activate from their own `on_mouse_down`/`on_mouse_up` handlers with pressed state in the owning view, never `on_click` (UQ14). Found by the UH0 review. |
 
 Not settled by reading, so measured in section 9: whether a `deferred` child of a `.cached()` view
 replays and occludes correctly (US2); what our render code allocates for a view whose only child
@@ -284,14 +285,19 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
     Space on a Tab-focused chrome control is handled by that control's own key-down listener, not
     by a binding.
   - Key target routing (UQ14). Chrome buttons and popover rows suppress GPUI's automatic
-    mouse-down focus (the shared `widgets/` button does it once for all of them). Menus, popovers
+    mouse-down focus and activate from their own mouse-down and mouse-up handlers, not
+    `on_click`, which refreshes the window on press and release (UG16); the shared `widgets/`
+    button does both once for all of them. Menus, popovers
     and instrument frames never take GPUI focus from a pointer, from F10 or Alt+letter, or when they close; the `KeyTarget` router (`Sheet`, `Menu`,
     `Popover(id)`, `Instrument(id)`) records which one receives keys. The router registers
     `capture_action` for every `Nav*` action on the root element; the capture phase runs root
     first, before any focused control's `on_action`. While a menu, popover or instrument is the
     key target, the router hands the action to it and stops propagation, so a Tab-focused toolbar
     button cannot swallow Enter meant for an open menu. Opening a dialog closes any such overlay
-    first, so a focused dialog always receives its keys. With the target `Sheet`, the capture
+    first, so a focused dialog always receives its keys. A focused `TextField` intercepts its
+    editing keys before bindings resolve; while the key target is not `Sheet` it yields Enter,
+    Esc, Up, Down, Left, Right and Tab (it reads the router's target), so they resolve to `Nav*`
+    and reach the open overlay. With the target `Sheet`, the capture
     handler lets the action propagate; if nothing deeper handles it, the root's bubble handler
     acts: `NavCancel` calls
     `SheetCanvas::cancel` (a no-op until T5.2 provides it), `NavNext` and `NavPrev` move focus per
@@ -347,7 +353,7 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
   click raises a frame to the top and makes it the key target (`Instrument(id)`, UQ14) without
   moving GPUI focus, so the sheet is not refreshed; Esc returns the key target to the sheet. Tab
   and F6 may move GPUI focus into a frame (UINV12); that keyboard move is not a shell-only
-  change. Frames are clamped so their header stays inside the sheet area, and they are clamped
+  change, and Esc from a frame that holds real focus also returns GPUI focus to the sheet. Frames are clamped so their header stays inside the sheet area, and they are clamped
   again after a window or dock resize. The strip button for an open instrument shows UK4's dot
   and raises it.
 - Cost: an instrument that animates notifies only its frame; the frame's own paint plus sheet
@@ -882,7 +888,7 @@ names and recovery ids use the process id, time and a counter instead of a UUID 
 | Shortcut conflicts appear as canvas and stage 3 add keys | UINV4 test over the whole keymap, run in CI | U1.4 |
 | The file-chooser portal is missing on a Linux desktop | `FileError::PickerUnavailable` dialog naming the missing service; files can still be opened by drop or command line | US1 machine check |
 | Users lose work to a crash between saves | UD9 recovery copies every 60 s of unsaved work | UTC-recovery |
-| GPUI churn changes action, focus or overlay APIs | Facts UG1 to UG15 re-checked at each upgrade (canvas plan section 10, step 2) | Upgrade routine |
+| GPUI churn changes action, focus or overlay APIs | Facts UG1 to UG16 re-checked at each upgrade (canvas plan section 10, step 2) | Upgrade routine |
 | Shell work starts before canvas editing exists, then has to change | Shell calls only the canvas methods in section 10; `CanvasEdits` flags enable menu items as each canvas task lands (U5.x) | U2.5 tests with flags off and on |
 
 ## 13. Open questions
@@ -907,7 +913,7 @@ kept every default and approved section 14 as written.
 | UQ11 | The mockup shows command-key glyphs; the targets are Windows and Linux. | Show "Ctrl+N" style text. | Default kept (UH0, 2026-11-23). |
 | UQ12 | IEC symbol preference before an IEC symbol set is compiled? | Stored only; the sheet keeps the built-in set. | Default kept (UH0, 2026-11-23). |
 | UQ13 | Print (toolbar, File)? | Shown disabled; no print plan exists. | Default kept (UH0, 2026-11-23). |
-| UQ14 | At the pinned revision `Window::focus` calls `refresh()`, which re-renders every cached view, and a mouse-down focuses a focusable element (UG15). Chrome clicks and popovers that take focus would therefore repaint `SheetView`, against UINV2, UB3, UTC-menu-keys and UTC-instrument. Accept the repaint and reword those, or keep pointer input in the chrome from moving focus? | None (raised by U4.2 after UH0's draft). | 2026-11-23 (UH0): keep UINV2, UB3 and their paint counts. Neither a pointer action in the chrome nor F10/Alt+letter calls `Window::focus`; mouse-down focus is suppressed on chrome controls (UG15). The workspace root holds a key target (`Sheet`, `Menu`, `Instrument(id)`); menus, popovers and instrument frames become the key target, not the focused element, and receive arrows, Enter, Esc and Tab through `Nav*` actions bound once in `Shell` and routed by the root's `KeyTarget` router (Esc is no longer a `Sheet` binding; T5.2 provides `SheetCanvas::cancel` instead) (UD2, UD3, UD5; UTC-menu-keys and UTC-instrument reworded to say GPUI focus stays on the sheet, paint counts unchanged). GPUI focus moves only for keyboard traversal (Tab, F6, UINV12) and for dialogs and text fields, which need the input handler; such a move is not a shell-only change under UINV2. If U1.5 finds this cannot be built at the pinned revision, it is set to `blocked (UQ14)` and returns to the owner; the invariants are not reworded to fit. |
+| UQ14 | At the pinned revision `Window::focus` calls `refresh()`, which re-renders every cached view, and a mouse-down focuses a focusable element (UG15). Chrome clicks and popovers that take focus would therefore repaint `SheetView`, against UINV2, UB3, UTC-menu-keys and UTC-instrument. Accept the repaint and reword those, or keep pointer input in the chrome from moving focus? | None (raised by U4.2 after UH0's draft). | 2026-11-23 (UH0): keep UINV2, UB3 and their paint counts. Neither a pointer action in the chrome nor F10/Alt+letter calls `Window::focus`; mouse-down focus is suppressed on chrome controls (UG15). The workspace root holds a key target (`Sheet`, `Menu`, `Instrument(id)`); menus, popovers and instrument frames become the key target, not the focused element, and receive arrows, Enter, Esc and Tab through `Nav*` actions bound once in `Shell` and routed by the root's `KeyTarget` router (Esc is no longer a `Sheet` binding; T5.2 provides `SheetCanvas::cancel` instead) (UD2, UD3, UD5; UTC-menu-keys and UTC-instrument reworded to say GPUI focus stays on the sheet, paint counts unchanged). Chrome controls activate from their own mouse-down and mouse-up handlers, never `Div::on_click` (UG16). A focused text field yields navigation keys while an overlay is the key target. GPUI focus moves only for keyboard traversal (Tab, F6, UINV12), for dialogs and text fields, which need the input handler, and when a command starts a canvas tool while focus is outside the sheet (U5.2's `PlacePart`: the tool needs `Sheet`'s bindings; at most one sheet repaint). None of these is a shell-only change under UINV2. If U1.5 finds this cannot be built at the pinned revision, it is set to `blocked (UQ14)` and returns to the owner; the invariants are not reworded to fit. |
 
 ## 14. Changes to the canvas and wiring plans
 
