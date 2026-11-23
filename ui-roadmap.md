@@ -107,7 +107,7 @@ without being drawn.
 | U0.2 | UH0 | after UH0 |
 | U1.1 to U1.4, U1.6 to U1.10 | T1.5 (done) | **now** |
 | U1.5 | U0.6 (spikes) | after U0.6 |
-| U2.1 | T5.1 (`needs-human`: must be `done` and merged; it extends `undo.rs` and `doc.rs`) | after T5.1 |
+| U2.1 | T5.1 (done) | done (PR #70) |
 | U2.2 to U2.8 | T2.4 (done) | **now** (after U1.7) |
 | U3.1 to U3.8 | nothing | **now** (after their U dependencies) |
 | U4.1, U4.3 to U4.7 | nothing | **now** (after U1.7) |
@@ -302,7 +302,7 @@ without being drawn.
 
 ## Milestone U2: documents and files
 
-### U2.1 History cursor and counts · doing
+### U2.1 History cursor and counts · done
 - Lane: doc · Depends: T5.1 (`done` and merged) · Read: UD6, D2, INV4
 - Owns: `crates/omnia-doc/src/undo.rs`, `doc.rs` (the five methods only), canvas-plan.md section 9
 - Do: `history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count` as sketched in
@@ -689,3 +689,4 @@ sizes/gaps/order at 1440x900, and click tests cover dispatch, disabled no-ops an
 Esc close. All five standard checks pass on a Windows development machine (certifies no reference
 budget); `cargo run -p omnia-app -- --frames 60` exits 0. Deviations: the toolbar is not yet embedded
 in the window (workspace layout is U1.7, as with U1.3/U1.4); U4.3 owns overflow at small sizes.
+2026-11-22 U2.1 done — Status catch-up only; no code change. PR #70 (`t3/history-cursor-counts`) was merged on 2026-11-18 (merge `90383fa`) after its review on `t3/review-undo-history`, but the roadmap still read `doing`. The five `Doc` methods (`history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count`), the cursor property test `u2_1_cursor_identity_over_random_command_undo_redo`, and `utc_saved_point_at_doc_level` / `utc_branch_at_doc_level` are on `main`, and CI is green at `e09169b`. U2.2 can now use `HistoryMark::Cursor` from the start.
