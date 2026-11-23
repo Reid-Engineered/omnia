@@ -334,5 +334,5 @@ O(F log k); CK14 and CK15 revision-bound cursors and continuation lines for loss
 CK13 typed handles and `ambiguous_handle` (CINV13); CB1 moved out of `Doc::apply` (about
 0.08 ms headroom on the worst certified case); CD10 schema and per-channel byte limits; CD14
 opt-in; CK9 tagged, escaped line grammar; roadmap dependencies, ownership, HC4 and HC5.
-Left to the owner: the review flagged the commit trailer and PR footer, which name the
-authoring tool, under rule 1; they follow the attribution already present on `main`.
+The review also flagged the commit trailer and PR footer, which name the authoring tool, under
+rule 1; the owner confirmed on 2026-11-23 that authoring-tool attribution is an exception.
