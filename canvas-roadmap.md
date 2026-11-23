@@ -1897,3 +1897,26 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        Sonnet 5.5) approved with minor findings (addressed). Standard checks pass
                        locally (fmt, workspace clippy, bench feature clippy, omnia-bench and
                        omnia-golden tests, cargo deny check). No new dependencies.
+2026-11-23 T3.4 needs-human — Orion reference campaign 1 (`4802b62`, binary SHA-256
+                       `eba0bfaa4abd006b028791d4ad0f4a3972343959fe034d2e3a44c6c8bf134770`,
+                       160/160 runs on i5-7300U / HD Graphics 620 / Wayland eDP-1 1920x1080
+                       @ 60 Hz, AC, performance governor; summary and metadata in
+                       `docs/measurements/T3.4/orion-2026-11-23-before-fix/`, full raw JSON
+                       archived on Orion at
+                       `/home/marcus/omnia-archive/T3.4/orion-2026-11-23-before-fix`) failed
+                       B3 missed-refresh attribution on zoom (`text-zoom` 9/10 at s100 & s125,
+                       `1k-zoom` 9/10 at s100 & 6/10 at s125; 9 of 72,000 frames > 25.0 ms).
+                       All numeric budgets passed (`B2` 38.96/45.55 ms, `B3` pan 1.32–2.21 ms,
+                       `B3` zoom p99 7.27–9.20 ms, `B4` 10k-pan 1.75–2.14 ms & 10k-zoom
+                       7.83–8.46 ms 10/10, `B9` 151–174 MB < 300 MB, `B10` ours.max == 0).
+                       Root cause: `TextCache` reshaped up to 700 visible labels synchronously
+                       on every K11 0.5 px bucket transition (`paint_ms` max 11.20–15.71 ms,
+                       `allocs_per_frame.total` max 17,337–20,362). Applied D6/G15 base-size
+                       shaping fix in `crates/omnia-canvas/src/sheet/text.rs` (shape once at
+                       K8 base size 17/13 px, scale metrics & glyph offsets linearly to the
+                       active K11 bucket on paint; `canvas-plan.md` D6/G15 updated in lockstep).
+                       Non-reference Windows check (`1536x864`, 125%, 165 Hz; certifies
+                       nothing): `text-zoom` p99 25.85 -> 1.35 ms, `1k-zoom` p99 9.42 ->
+                       1.68 ms, `total` allocs max 10, 0 late, 12/12 goldens 0 differing px.
+                       Standard checks pass locally. Status stays `needs-human` pending Orion
+                       re-run. No new dependencies.

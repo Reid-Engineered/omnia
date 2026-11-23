@@ -2380,7 +2380,7 @@ mod tests {
                     .flat_map(|r| r.glyphs.iter().map(|g| (r.font_id, g.id)))
                     .collect();
 
-                for target_px in [8.5, 17.0, 34.0, 68.0] {
+                for target_px in [8.5, 17.0, 34.0, 68.0, MAX_FONT_PX] {
                     let bucket = FontBucket::from_logical(target_px).unwrap();
                     let direct = shape_display_line(
                         &text,
@@ -2401,18 +2401,27 @@ mod tests {
                     );
 
                     let scaled = metrics_from_shaped(&base_line, bucket);
-                    let tol = (target_px * 0.02).max(0.25);
+                    // Both cosmic_text (Hinting::Disabled) and DirectWrite (NATURAL) scale glyph
+                    // advances linearly; allow a small tolerance for platform line-metric rounding.
+                    let width_tol = (target_px * 0.005).max(0.05);
+                    let metric_tol = (target_px * 0.02).max(0.25);
                     assert!(
-                        (scaled.width - f64::from(direct.width)).abs() <= tol,
+                        (scaled.width - f64::from(direct.width)).abs() <= width_tol,
                         "scaled width {} vs direct {} for {sample} at {target_px} px",
                         scaled.width,
                         f64::from(direct.width)
                     );
                     assert!(
-                        (scaled.ascent - f64::from(direct.ascent)).abs() <= tol,
+                        (scaled.ascent - f64::from(direct.ascent)).abs() <= metric_tol,
                         "scaled ascent {} vs direct {} for {sample} at {target_px} px",
                         scaled.ascent,
                         f64::from(direct.ascent)
+                    );
+                    assert!(
+                        (scaled.descent - f64::from(direct.descent).max(0.0)).abs() <= metric_tol,
+                        "scaled descent {} vs direct {} for {sample} at {target_px} px",
+                        scaled.descent,
+                        f64::from(direct.descent).max(0.0)
                     );
                 }
             }
