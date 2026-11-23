@@ -275,16 +275,25 @@ change, a scale-factor change, and a viewport change from a dock resize, at most
   - Navigation keys are bound once, in `Shell`, so no two active contexts share one (UINV4)
     and they resolve on every context stack, with or without `Workspace`: Up, Down, Left, Right,
     Enter, Esc, Tab and Shift+Tab map to `NavUp`, `NavDown`, `NavLeft`, `NavRight`,
-    `NavConfirm`, `NavCancel`, `NavNext` and `NavPrev`. No other context binds these keys;
+    `NavConfirm`, `NavCancel`, `NavNext` and `NavPrev`. These are internal actions, not user
+    commands: they are not in `ACTIONS` (so UINV3's menu-entry rule does not apply) and
+    `default_bindings()` adds them beside `FocusMenuBar`, where the UINV4 validator covers them.
+    No other context binds these keys;
     `Dialog`, a Tab-focused chrome control and the `Home` menu handle the `Nav*` actions with
     `on_action`, which runs before `Shell`'s handler because they are deeper on the dispatch path.
     Space on a Tab-focused chrome control is handled by that control's own key-down listener, not
     by a binding.
-  - Key target routing (UQ14). Menus, popovers and instrument frames never take GPUI focus from a
-    pointer, from F10 or Alt+letter, or when they close; the `KeyTarget` router (`Sheet`, `Menu`,
-    `Popover(id)`, `Instrument(id)`) records which one receives keys. When nothing deeper handled
-    a `Nav*` action, the router's handler on the root sends it to the key target: an open menu,
-    popover or instrument gets it and the event stops; with the target `Sheet`, `NavCancel` calls
+  - Key target routing (UQ14). Chrome buttons and popover rows suppress GPUI's automatic
+    mouse-down focus (the shared `widgets/` button does it once for all of them). Menus, popovers
+    and instrument frames never take GPUI focus from a pointer, from F10 or Alt+letter, or when they close; the `KeyTarget` router (`Sheet`, `Menu`,
+    `Popover(id)`, `Instrument(id)`) records which one receives keys. The router registers
+    `capture_action` for every `Nav*` action on the root element; the capture phase runs root
+    first, before any focused control's `on_action`. While a menu, popover or instrument is the
+    key target, the router hands the action to it and stops propagation, so a Tab-focused toolbar
+    button cannot swallow Enter meant for an open menu. Opening a dialog closes any such overlay
+    first, so a focused dialog always receives its keys. With the target `Sheet`, the capture
+    handler lets the action propagate; if nothing deeper handles it, the root's bubble handler
+    acts: `NavCancel` calls
     `SheetCanvas::cancel` (a no-op until T5.2 provides it), `NavNext` and `NavPrev` move focus per
     UINV12, and the rest do nothing. Esc therefore closes an overlay whether the sheet or a
     Tab-focused toolbar control has focus, and needs no canvas binding.
