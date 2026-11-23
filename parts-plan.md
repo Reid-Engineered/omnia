@@ -123,7 +123,7 @@ thresholds (`XD9`); these are added. `PB1`–`PB5` are chosen targets, to be ver
 | PB2 | Open, verify and resolve one `.opart` archive (up to 1 MiB uncompressed), including model extraction and the `PK5` hash: p99 < 5 ms | same bench |
 | PB3 | Index a user `.olib` or folder containing 500 parts: p99 < 50 ms off the UI thread. Indexing reads manifests and `part.toml` metadata only; model files are not read and no `PK5` hash is computed until a part is first resolved (`PD9`), which `PB2` covers (amended 2026-11-23, owner-delegated, review of #85) | same bench |
 | PB4 | `Doc::save` and `Doc::load` on a `10k` sheet with 50 unique embedded definitions (mix of primitives, `.model` and `.subckt`): `save` stays within `UB10` (< 33.3 ms UI-thread serialise); `load` adds < 5% over the unmodelled `10k` baseline (amended 2026-11-23: measured by a named bench target, not a `bench file` subcommand) | `crates/omnia-bench/benches/parts_doc.rs` (`P2.5`) |
-| PB5 | `Doc::apply(Command::SetParam { .. })` on `10k`: p99 < 0.05 ms; canvas pan/zoom stays zero-allocation (`INV2`) | `crates/omnia-bench/benches/parts_doc.rs` (`P2.5`) + `INV2` check |
+| PB5 | `Doc::apply(Command::SetParam { .. })` on `10k`: p99 < 0.05 ms; warm canvas paint stays allocation-free (`INV7`) | `crates/omnia-bench/benches/parts_doc.rs` (`P2.5`) + `INV7` check |
 
 ## 4. Constants
 
@@ -132,15 +132,15 @@ thresholds (`XD9`); these are added. `PB1`–`PB5` are chosen targets, to be ver
 | PK1 | Part manifest schema version | `schema = 1`. Unknown versions are refused with a clear error. |
 | PK2 | Canonical part id | ASCII `^[a-z0-9][a-z0-9._-]{0,63}$` (1 to 64 chars, lowercase). Pack-qualified ids use `<pack>/<id>`. |
 | PK3 | Archive safety limits (`.opart` / `.olib`) | Max compressed file: 8 MiB (`AK2`). Max uncompressed total: 32 MiB. Max single entry: 2 MiB. Max entries: 1,024. Max expansion ratio: 100:1. |
-| PK4 | Numeric grammar for user-facing values (`XD2`) | Case-sensitive SI suffixes (`f`, `p`, `n`, `u`/`µ`, `m`, `k`/`K`, `M`, `G`, `T`) plus `meg`/`MEG` (= `1e6`): `M` is mega and `m` is milli (`PQ2`). Native SPICE number syntax applies only inside model decks. Values handed to lowering are plain finite `f64`s; the emitter writes unambiguous numbers. One parser, in `omnia-doc` (`units.rs`), serves the parts loader, `Doc::apply` and the simulator. |
+| PK4 | Numeric grammar for user-facing values (`XD2`) | `value := number [" "] [prefix] [unit]` after trimming leading and trailing whitespace. `number` is a decimal with optional sign, fraction and exponent (`4.7`, `.5`, `-1e-3`). At most one ASCII space may separate the number from what follows (`10 kΩ`, `10k`); any other inner whitespace is refused. `prefix` is case-sensitive: `f`, `p`, `n`, `u`/`µ` (U+00B5)/`μ` (U+03BC), `m` (milli), `k`/`K`, `M` (mega), `G`, `T`, or `meg`/`MEG` (= `1e6`) (`PQ2`). `unit`, if present, must name the parameter's declared unit: `Ω`/`ohm` (ohm), `F` (farad), `H` (henry), `V` (volt), `A` (ampere), `Hz` (hertz), `s` (second); a mismatched or unknown unit is refused. A prefix letter is read as a prefix only when a unit or nothing follows it, so `1F` is one farad, `10fF` ten femtofarads and `10f` ten femto-units; `F` is never femto. `%` is accepted only for a parameter whose unit is `ratio` and multiplies by `0.01` (`50%` = `0.5`). Embedded-digit forms such as `4k7` are refused in v1. Native SPICE number syntax applies only inside model decks. Values handed to lowering are plain finite `f64`s; the emitter writes unambiguous numbers. One parser, in `omnia-doc` (`units.rs`), serves the parts loader, `Doc::apply` and the simulator. |
 | PK5 | Content hash | Lowercase hex SHA-256 (64 chars) over the canonical encoding of a definition: every field except `source_id` and the hash itself, in a fixed field order, each length-prefixed; text fields (including SPICE text) hashed exactly as stored (`PD3`). Independent of ZIP timestamps, file order, TOML key order or OS line endings (line endings are normalised once, at extraction). Computed by `omnia-parts` only. |
-| PK6 | Built-in primitive kinds | `resistor`, `capacitor`, `inductor`, `potentiometer`, `vsource`, `isource`, `vcvs`, `cccs`, `vccs`, `ccvs`, `ground`, `switch`. |
+| PK6 | Built-in primitive kinds | `resistor`, `capacitor`, `inductor`, `potentiometer`, `vsource`, `isource`, `vcvs`, `cccs`, `vccs`, `ccvs`, `ground`, `switch`, and `rail` (added 2026-11-23, sim S0.2): a one-terminal supply rail whose `dc` parameter is the rail voltage; simulation lowers it as a DC source from the pin's net to node 0. |
 | PK7 | Field size caps | At most 64 parameters per part definition; parameter string max 256 bytes; description max 2,048 bytes; at most 64 tags (32 bytes each); at most 256 pins per part; embedded SPICE text max 2 MiB (`PK3` single entry). |
 | PK8 | Container extensions | `.opart` (single-part ZIP archive), `.olib` (multi-part pack ZIP archive), `.omnia` (schematic document). |
 | PK9 | Document RON version | `version: 3` adds the `part_defs` table and per-part `def` + `params`. `version: 2` loads by strict migration (`PD8`); every other version is refused. |
 | PK10 | Disallowed SPICE content in embedded and imported models | `.control`, `.endc`, `shell`, `system`, `osdi`, `pre_osdi`, `codemodel`, `.csdf`. In archives, any `.include` / `.lib` whose path contains `..`, a drive prefix, a leading `/` or `\`, or names a file outside the archive. In embedded text (documents and commands), any `.include` or `.lib` at all: embedded decks are already flattened. |
 | PK11 | Model licence policy (added 2026-11-23, owner-delegated, review of #85) | Bundled files under `library/models/` carry an SPDX id from this list: `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `CC0-1.0`, or `LicenseRef-public-domain`. This is a separate policy from `deny.toml` (which covers Rust crates); `cargo xtask parts --check` enforces it from a constant table in `xtask/src/parts.rs` and checks that `THIRD_PARTY.md` lists each file (`PQ7`). |
-| PK12 | Parameter names shared with simulation (added 2026-11-23, `XD1`) | `resistance`, `capacitance`, `inductance`, `wiper` (potentiometer ratio, `0..1`), `ic` (initial condition), `waveform` (enum `dc`, `sin`, `pulse`) with its real fields (`dc`, `offset`, `ampl`, `freq`, `delay`, `v1`, `v2`, `rise`, `fall`, `width`, `period`), `ac_mag`, `ac_phase`, and `model` (enum over model entries embedded in the same definition). Definitions use these names when they mean these quantities. |
+| PK12 | Parameter names shared with simulation (added 2026-11-23, `XD1`) | `resistance`, `capacitance`, `inductance`, `wiper` (potentiometer ratio, `0..1`), `ic` (initial condition), `waveform` (enum `dc`, `sin`, `pulse`) with its real fields (`dc`, `offset`, `ampl`, `freq`, `delay`, `v1`, `v2`, `rise`, `fall`, `width`, `period`), `ac_mag`, `ac_phase`, `dc` also as the voltage of a `rail` part (real, unit `V`), and `model` (enum over model entries embedded in the same definition). Definitions use these names when they mean these quantities. |
 
 ## 5. Architecture
 
@@ -415,7 +415,11 @@ Rules enforced by the schema parser (`#[serde(deny_unknown_fields)]`):
   text as entered; `value` is the `PK4` parse. `FiniteF64` can only be built from a finite
   `f64` (NaN and infinities are refused with `CommandError::InvalidParam`) and stores `-0.0` as
   `0.0`; its `Eq` compares bit patterns. Two reals are equal when both `raw` and `value` are
-  equal. This keeps `Eq` on `Part`, `StoredPart`, `Command` and `EmbeddedPartDef`. Enum
+  equal. This keeps `Eq` on `Part`, `StoredPart`, `Command` and `EmbeddedPartDef`. Because
+  `raw` and `value` are stored separately, every real (default or override) must satisfy
+  `parse_value(raw, unit) == value` under `PK4`; `validate` checks defaults and `validate_instance`
+  checks overrides, so a file or command with `raw = "10M"` and `value = 0.01` is refused
+  (amended 2026-11-23, third review of #85). Enum
   variants are stored as `ParamValue::Enum(Arc<str>)`.
 - Parameters are a deterministic sorted map (`BTreeMap<Arc<str>, ParamValue>`) per part, storing
   **only overrides** that differ from the definition's defaults. Unmodified parts store an empty
@@ -474,7 +478,7 @@ amended decision:
     moves every part referencing `from` onto it. It is refused if any of those parts' pin
     geometry or overrides would become invalid. `from` becomes retained.
 - **Instance validation** (amended again 2026-11-23, re-review of #85). One function,
-  `omnia_doc::part_def::validate_instance(def, symbol, local_pins, local_bounds, params)`,
+  `omnia_doc::part_def::validate_instance(def, symbol, local_pins, local_bounds, value, params)`,
   checks one part against its definition, and every path that creates or changes a part's
   definition or overrides calls it: v3 load (each part record), `PlacePart`, `SetParam` (on the
   resulting override map) and `UpdatePartDef` (each moved part against `to`). It checks:
@@ -484,8 +488,26 @@ amended decision:
     order are refused, because the terminal mapping (`PD5`) indexes `def.local_pins`;
   - every override name is declared in `def.params`; its `ParamValue` variant matches the
     declared kind; reals and ints lie within `min`/`max`; enum values are declared variants;
-    text is within `PK7`; and no override equals its default (overrides are stored canonically,
-    so a file holding a default-valued override is refused rather than normalised).
+    text is within `PK7`; every real satisfies `parse_value(raw, unit) == value` (`PD6`); and no
+    override equals its default (overrides are stored canonically, so a file holding a
+    default-valued override is refused rather than normalised);
+  - if `def.primary_param` is set, `Part::value` equals the `raw` text of the resolved primary
+    parameter (override, else default), which is what `PD6` sync maintains.
+- **`UpdatePartDef` refreshes display values.** For each moved part, overrides are kept and
+  validated against `to`. If `to` has a `primary_param` and the part has no override of it,
+  `Part::value` becomes the `raw` text of `to`'s default for it in the same transaction (so a
+  default changing from `10k` to `22k` shows `22k`); if the part has an override, `Part::value`
+  is unchanged. If `to` has no `primary_param`, `Part::value` is unchanged. Undo restores the old
+  text with the old definition (`PTC-update-value`).
+- **Symbol ids are checked where symbols are known.** `omnia-doc` cannot see the symbol library,
+  so a v3 (or v2) file can name a `SymbolId` that does not exist. `omnia-symbols` provides
+  `SymbolLibrary::try_get(id) -> Option<&SymbolDef>` and
+  `SymbolLibrary::check_doc(&Doc) -> Result<(), UnknownSymbol>`, which checks every live part's
+  symbol and every referenced definition's symbol. Every symbol-aware open path calls
+  `check_doc` right after `Doc::load` and refuses the file on error: the agent file host
+  (`P2.3`) and the app's File > Open (the UI task that builds it; `P2.3` records this in
+  `ui-plan.md`). Canvas paint already skips out-of-range ids. `diff_embedded` uses `try_get`
+  and reports `UnknownSymbol` instead of indexing (`PTC-unknown-symbol`).
 - **Pin geometry comes from the definition.** A stored part's local pins and art bounds are its
   definition's. The v3 part record stores no geometry of its own; world pins are rebuilt from
   `def.local_pins`, `at` and `orient` on load. The terminal mapping is therefore consistent by
@@ -495,7 +517,12 @@ amended decision:
   definition's geometry differs from the built-in symbol it names (`PD9`).
 - **Refusal rolls back exactly.** A refused command or batch, including one that interned a new
   definition before a later step failed, leaves the arena length, every record, every part, the
-  revision and the history as they were.
+  revision and the history as they were. The rollback in `apply` and `apply_batch` truncates the
+  definition arena to its length before the command, alongside the item arenas, from the task
+  that adds the arena (`P2.1`): even then, an existing `PlacePart` interns an unmodelled
+  definition, so a refused batch can already allocate one. Transaction tests compare in-memory
+  state (including retained records), not a save/load round trip, because a save cannot
+  represent retained records or, before `P2.3`, modelled definitions.
 - **Change visibility** (`XD7`). `Change` gains `modified: Vec<PartId>`: the parts whose
   `params` or `def` changed. `SetParam` lists its part and `UpdatePartDef` lists every instance
   it moved, even when geometry, text and topology are unchanged; the revision advances and
@@ -553,7 +580,8 @@ amended decision:
   equal hash under a different `source_id` is reported as "same content, different source" and
   never offered as an update. A document record whose `content_hash` no longer matches its own
   content when recomputed by `omnia-parts` is reported as `LocallyModified`, and one whose
-  local pins or bounds differ from the built-in symbol it names as `SymbolMismatch` (`PD8`). In
+  local pins or bounds differ from the built-in symbol it names as `SymbolMismatch`, or whose
+  symbol id is not in the library as `UnknownSymbol` (`PD8`). In
   `Doc`, records with different `source_id`s are different records even if their content is
   equal.
 
@@ -599,11 +627,14 @@ amended decision:
   because v2 files and goldens store raw ids.
 - The existing v2 goldens stay unchanged. The simulation plan builds its own modelled Wien
   oscillator fixture (`S2.2`, `XD1`).
+- Supply-rail part definitions (`rail` primitive, `dc` parameter, symbol class `PowerRail`) are
+  added with their rail symbols by `S1.1`, through this library (`XD3`, `XD5`).
 - **Stress sheets stay fixed** (added 2026-11-23, re-review of #85). The `omnia-bench` stress
   sheets (`100`, `1k`, `10k`, dense wiring, text heavy) back certified Orion budgets (for example
   `T2.7`, `T3.4`), and today the generator draws from every built-in symbol. Before any symbol is
   added, `P1.4` pins the generator to an explicit, fixed list of today's six `SymbolId`s, in
-  today's order, so every existing sheet stays item-for-item identical for every seed. A sheet
+  today's order, so every existing sheet stays item-for-item identical (including stored pin
+  coordinates and local bounds) for every seed. A sheet
   that should contain new symbols is a new named `StressSheet` variant; existing variants never
   change. The pin protects the later symbol additions by `S1.1` and `S3.2` as well.
 
@@ -662,6 +693,9 @@ The simulation and context plans record their own amendments in their own tasks.
   open task owns those files. `SetParam` and every instance an `UpdatePartDef` touches appear in
   `Change`, undo/redo, context invalidation and `since`, and SD11 stale-result handling, even
   when topology and display text are unchanged.
+  *Update 2026-11-23 (sim `S0.2`, pull request #104):* `S1.1` no longer owns any `omnia-doc`
+  file, so the order for `doc.rs`/`command.rs`/`undo.rs`/`io.rs` is parts `P2.1`–`P2.3`, then
+  context `C1.1`.
   *In this plan:* `PD8` (change visibility), parts-roadmap Lanes.
 - **XD8 Crates and agent surface.** `omnia-parts` (catalog, import), `omnia-circuit` (derived
   circuit facts), `omnia-sim` + adapters (execution, results); all headless, dependencies
@@ -703,8 +737,10 @@ Each scenario is an automated test with this expected result.
 | PTC-param-silent | Apply `SetParam("tc1", "1e-3")` on a resistor (not the primary parameter) | Accepted; `Part::value` unchanged; revision advances; `Change::modified == [part]`; undo reports the same part (`XD7`). |
 | PTC-opart-roundtrip | Pack the `opamp-generic` directory into an `.opart`, mount it with `Catalog::mount_opart`, resolve, compare against the unpacked load | Identical definition, identical `content_hash` (`PINV2`), identical resolved SPICE block. |
 | PTC-offline-omnia | Place a custom `.opart` part, save, drop `Catalog`, load | Loads cleanly; `load(save(doc)) == doc`; all metadata, pin roles, param overrides and SPICE `.subckt` intact; ids unchanged (`PINV4`). |
-| PTC-def-lifecycle | Place a modelled part (definition id 1) and delete it: call this state `D`. Branch A: save `D`, load it as `L`, then place the same definition in both `D` and `L`. Branch B (from a fresh copy of `D`): undo the delete, then place the same definition again | A: the saved file has `None` at id 1 and the same arena length; `L == D` under `PartialEq`; both placements allocate the same new id 2, since neither document has a referenced record at 1 (`PD8`, `PINV4`). B: undo restores the part with `def == 1` and an equal record (`PINV7`); the new placement reuses id 1 because it is referenced again. |
-| PTC-instance-refuse | Load v3 files whose part records hold (a) an override below its `min`, (b) an undeclared override name, (c) an override of the wrong kind, (d) an override equal to its default; apply `PlacePart { def: Existing(id) }` whose `local_pins` are the definition's pins with two swapped (same count) | Each file refused at load with an error naming the part and parameter; the command refused with `InvalidInstance`; `Doc` unchanged (`PD8`, `PINV12`). |
+| PTC-def-lifecycle | Place a modelled part (definition id 1) and delete it: call this state `D`. Branch A: save `D`, load it as `L`, then place the same definition in both `D` and `L`. Branch B: rebuild `D` on a fresh document by replaying the same place and delete (a fork of `D` has no history to undo), then undo the delete and place the same definition again | A: the saved file has `None` at id 1 and the same arena length; `L == D` under `PartialEq`; both placements allocate the same new id 2, since neither document has a referenced record at 1 (`PD8`, `PINV4`). B: undo restores the part with `def == 1` and an equal record (`PINV7`); the new placement reuses id 1 because it is referenced again. |
+| PTC-instance-refuse | Load v3 files whose part records hold (a) an override below its `min`, (b) an undeclared override name, (c) an override of the wrong kind, (d) an override equal to its default; (e) a real override with `raw = "10M"` and `value = 0.01`, (f) a resistor whose `Part::value` differs from its resolved `resistance` text; apply `PlacePart { def: Existing(id) }` whose `local_pins` are the definition's pins with two swapped (same count) | Each file refused at load with an error naming the part and parameter; the command refused with `InvalidInstance`; `Doc` unchanged (`PD8`, `PINV12`). |
+| PTC-update-value | Place two resistors (default `10k`), give the second an override `4.7k`, then `UpdatePartDef` to a definition whose default is `22k`; undo | After the update the first shows `22k` and the second `4.7k`; both are in `Change::modified`; undo restores `10k` and `4.7k` (`PD8`). |
+| PTC-unknown-symbol | Open a v3 file whose part names `SymbolId(999)` through the agent file host; call `SymbolLibrary::check_doc` and `Catalog::diff_embedded` on the loaded `Doc` | The host refuses the file with a clear error; `check_doc` returns `UnknownSymbol`; `diff_embedded` reports `UnknownSymbol` and does not panic (`PD8`, `PD9`). |
 | PTC-no-lossy-save | Between `P2.2` and `P2.3`: place a part with `PlaceDef::Embed`, or apply `SetParam`, then call `save`; and save a document of unmodelled parts | The first two saves are refused with `InvalidData` and write nothing usable as a v2 file; the unmodelled document saves byte-identical to before. From `P2.3` the same documents save as v3 and `PINV4` holds (`PD8`). |
 | PTC-batch-intern-refused | Apply a `Batch` of `PlacePart { def: Embed(new) }` followed by an invalid `SetParam` | Refused; the definition arena length, every record, every part, revision and history are unchanged (`PINV7`). |
 | PTC-pin-order | Build two definitions for the same 3-pin symbol, one listing `[[pins]]` in symbol order and one in another order, and a third whose `[sim].pins` swaps two terminals; place each and read terminal-to-pin mappings | The first two give identical embedded pin tables and terminals; the third maps the swapped terminals to the swapped pin indices; a terminal list with the right count but a repeated pin is refused (`PINV11`). |
@@ -761,6 +797,7 @@ pub enum DefUpdateAvailable {
     SameContentDifferentSource { def: PartDefId, library_source_id: Arc<str> },
     LocallyModified { def: PartDefId },
     SymbolMismatch { def: PartDefId },
+    UnknownSymbol { def: PartDefId },
 }
 
 // Packing helpers for export and tests
@@ -773,7 +810,7 @@ Additions in `crates/omnia-doc/` (no `omnia-parts` dependency):
 ```rust
 // ---- omnia-doc: units.rs (P1.1, XD2) ----
 pub struct FiniteF64(f64);                 // finite, -0.0 stored as 0.0, Eq by bits
-pub fn parse_value(text: &str) -> Result<FiniteF64, ValueError>;   // PK4 grammar
+pub fn parse_value(text: &str, unit: Option<&str>) -> Result<FiniteF64, ValueError>; // PK4 grammar
 
 // ---- omnia-doc: spice_screen.rs (P1.2) ----
 pub fn screen_embedded(spice: &str) -> Result<(), ScreenError>;     // PK10, embedded rules
@@ -808,7 +845,7 @@ pub struct EmbeddedParamSpec {
 
 pub enum PrimitiveKind {
     Resistor, Capacitor, Inductor, Potentiometer,
-    VSource, ISource, Vcvs, Cccs, Vccs, Ccvs, Ground, Switch,
+    VSource, ISource, Vcvs, Cccs, Vccs, Ccvs, Ground, Switch, Rail,
 }
 
 pub enum EmbeddedSimBinding {
@@ -835,7 +872,8 @@ pub struct EmbeddedPartDef {               // Eq; validated by validate() on eve
 }
 pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError>;
 pub fn validate_instance(def: &EmbeddedPartDef, symbol: SymbolId, local_pins: &[Pt],
-                         local_bounds: Rect, params: &Params) -> Result<(), InstanceError>; // PD8
+                         local_bounds: Rect, value: &str, params: &Params)
+                         -> Result<(), InstanceError>; // PD8
 
 // ---- omnia-doc: command.rs (P2.2) ----
 pub enum PlaceDef { Unmodelled, Existing(PartDefId), Embed(Arc<EmbeddedPartDef>) }
@@ -855,6 +893,15 @@ pub enum PlaceDef { Unmodelled, Existing(PartDefId), Embed(Arc<EmbeddedPartDef>)
 ```
 
 `Part` itself is unchanged (`PD8`).
+
+Additions in `crates/omnia-symbols/` (`P1.4`):
+
+```rust
+impl SymbolLibrary {
+    pub fn try_get(&self, id: SymbolId) -> Option<&SymbolDef>;
+    pub fn check_doc(&self, doc: &omnia_doc::Doc) -> Result<(), UnknownSymbol>; // PD8
+}
+```
 
 `xtask` additions (`xtask/src/parts.rs`):
 - `cargo xtask parts` — validates `library/` and regenerates `crates/omnia-parts/src/generated.rs`.
@@ -920,4 +967,4 @@ Each has a default. All `PQ1`–`PQ8` defaults were accepted by the owner at `HP
 | `mcp-plan.md` section 9.2 | Note future minor schema additions (`set_param`, `list_parts`, `update_part_def`) on the existing preview/apply path (`XD8`). | P0.2 (applied; updated 2026-11-23) |
 | `docs/file-format-proposal.md` | Reserve section kind `PART_DEFS` for the definition table and per-part `def` + `params`. | P0.2 (applied) |
 | `ui-plan.md` (`UTC-open-bad` `version:3` → `version:4`; "RON version 2" facts) and `mcp-plan.md` (`AQ12` and other "RON v2" mentions) | Record that documents are RON v3 with v2 read by migration. | P2.3, in the same pull request as the code (`XD1`) |
-| `sim-plan.md`, `sim-roadmap.md`, context plan | Amendments required by `XD1`–`XD9` (withdraw `SD9` props, `SK1` grammar, model precedence, `S1.1` ownership order). | Not this plan: their own tasks. |
+| `sim-plan.md`, `sim-roadmap.md`, context plan | Amendments required by `XD1`–`XD9` (withdraw `SD9` props, `SK1` grammar, model precedence; `S1.1` no longer owns `omnia-doc` files, per #104). | Not this plan: their own tasks. |
