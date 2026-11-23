@@ -193,6 +193,57 @@ impl Element for CountedSheet {
     }
 }
 
+/// Lets a caller attribute overlay hover/paint work separately from GPUI calls (B10, Q5).
+pub trait OverlayPaintScope {
+    fn omnia(&self, work: &mut dyn FnMut()) {
+        work();
+    }
+
+    fn gpui(&self, work: &mut dyn FnMut()) {
+        work();
+    }
+}
+
+fn run_omnia<R>(scope: Option<&dyn OverlayPaintScope>, f: impl FnOnce() -> R) -> R {
+    match scope {
+        Some(s) => {
+            let mut out = None;
+            let mut f = Some(f);
+            s.omnia(&mut || {
+                if let Some(f) = f.take() {
+                    out = Some(f());
+                }
+            });
+            out.expect("OverlayPaintScope::omnia must execute its closure")
+        }
+        None => f(),
+    }
+}
+
+fn run_gpui<R>(scope: Option<&dyn OverlayPaintScope>, f: impl FnOnce() -> R) -> R {
+    match scope {
+        Some(s) => {
+            let mut out = None;
+            let mut f = Some(f);
+            s.gpui(&mut || {
+                if let Some(f) = f.take() {
+                    out = Some(f());
+                }
+            });
+            out.expect("OverlayPaintScope::gpui must execute its closure")
+        }
+        None => f(),
+    }
+}
+
+pub(super) fn paint_quad_scoped(
+    window: &mut Window,
+    quad: gpui::PaintQuad,
+    scope: Option<&dyn OverlayPaintScope>,
+) {
+    run_gpui(scope, || window.paint_quad(quad));
+}
+
 /// Transient interactive overlay above a `.cached()` [`SheetView`] (D7, INV11).
 ///
 /// Owns hover, selection, net-highlight, and rubber-band state, registers one sheet-wide hitbox
@@ -209,6 +260,7 @@ pub struct OverlayView {
     anim: Option<ViewAnimation>,
     renders: u64,
     paints: Rc<Cell<u64>>,
+    scope: Option<Rc<dyn OverlayPaintScope>>,
 }
 
 impl EventEmitter<OverlayEvent> for OverlayView {}
@@ -245,7 +297,19 @@ impl OverlayView {
             anim: None,
             renders: 0,
             paints: Rc::new(Cell::new(0)),
+            scope: None,
         }
+    }
+
+    /// Installs an [`OverlayPaintScope`] to separate Omnia hover/paint allocations from GPUI (B10, Q5).
+    pub fn with_paint_scope(mut self, scope: Rc<dyn OverlayPaintScope>) -> Self {
+        self.scope = Some(scope);
+        self
+    }
+
+    /// Replaces or clears the [`OverlayPaintScope`] used for B10 allocation accounting.
+    pub fn set_paint_scope(&mut self, scope: Option<Rc<dyn OverlayPaintScope>>) {
+        self.scope = scope;
     }
 
     pub fn doc(&self) -> &Entity<Doc> {
@@ -562,12 +626,19 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.viewport = bounds;
-        self.camera.set_viewport(bounds);
-        let update = self
-            .state
-            .mouse_move(self.doc.read(cx), &self.camera, event);
-        self.apply_update(update, cx);
+        let scope = self.scope.clone();
+        let update = run_omnia(scope.as_deref(), || {
+            self.viewport = bounds;
+            self.camera.set_viewport(bounds);
+            let doc = self.doc.read(cx);
+            let update = self.state.mouse_move(doc, &self.camera, event);
+            if update.visual_changed || update.selection_changed {
+                self.net_highlight
+                    .sync(doc, self.state.hovered(), self.state.selection());
+            }
+            update
+        });
+        run_gpui(scope.as_deref(), || self.emit_and_notify(update, cx));
         update.ended_drag
     }
 
@@ -632,6 +703,7 @@ impl Render for OverlayView {
                 focus: self.focus.clone(),
                 dragging: self.state.is_rubber_banding(),
                 paints: self.paints.clone(),
+                scope: self.scope.clone(),
             })
     }
 }
@@ -646,6 +718,7 @@ struct OverlayLayer {
     focus: FocusHandle,
     dragging: bool,
     paints: Rc<Cell<u64>>,
+    scope: Option<Rc<dyn OverlayPaintScope>>,
 }
 
 impl Element for OverlayLayer {
@@ -709,19 +782,23 @@ impl Element for OverlayLayer {
         self.paints.set(self.paints.get() + 1);
 
         if let Some(overlay) = self.overlay.upgrade() {
-            let mut camera = self.camera.clone();
-            camera.set_viewport(bounds);
-            let sf = window.scale_factor();
-            let view = overlay.read(cx);
-            let doc = self.doc.read(cx);
-            let ctx = OverlayPaintContext {
-                doc,
-                camera: &camera,
-                bounds,
-                sf,
-                theme: self.theme,
-            };
-            paint_overlay(&view.state, &view.net_highlight, &ctx, window);
+            let scope = self.scope.as_deref();
+            run_omnia(scope, || {
+                let mut camera = self.camera.clone();
+                camera.set_viewport(bounds);
+                let sf = window.scale_factor();
+                let view = overlay.read(cx);
+                let doc = self.doc.read(cx);
+                let ctx = OverlayPaintContext {
+                    doc,
+                    camera: &camera,
+                    bounds,
+                    sf,
+                    theme: self.theme,
+                    scope,
+                };
+                paint_overlay(&view.state, &view.net_highlight, &ctx, window);
+            });
         }
 
         if self.dragging {
@@ -913,45 +990,72 @@ fn wire_rect_dev(
 }
 
 /// Paints a solid four-edge rectangle outline inside `rect` in whole device pixels.
-fn paint_solid_outline(rect: DevRect, thickness: u32, color: Hsla, sf: f32, window: &mut Window) {
+fn paint_solid_outline(
+    rect: DevRect,
+    thickness: u32,
+    color: Hsla,
+    sf: f32,
+    scope: Option<&dyn OverlayPaintScope>,
+    window: &mut Window,
+) {
     let t = thickness.max(1);
     let w = rect.width;
     let h = rect.height;
     let th = t.min(h);
     let tw = t.min(w);
     // Top and bottom bars.
-    window.paint_quad(fill(device_rect(rect.left, rect.top, w, th, sf), color));
+    paint_quad_scoped(
+        window,
+        fill(device_rect(rect.left, rect.top, w, th, sf), color),
+        scope,
+    );
     if h > th {
-        window.paint_quad(fill(
-            device_rect(rect.left, rect.top + f64::from(h - th), w, th, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(rect.left, rect.top + f64::from(h - th), w, th, sf),
+                color,
+            ),
+            scope,
+        );
     }
     // Left and right inner bars.
     if h > th.saturating_mul(2) {
         let inner_h = h - th * 2;
         let inner_top = rect.top + f64::from(th);
-        window.paint_quad(fill(
-            device_rect(rect.left, inner_top, tw, inner_h, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(device_rect(rect.left, inner_top, tw, inner_h, sf), color),
+            scope,
+        );
         if w > tw {
-            window.paint_quad(fill(
-                device_rect(rect.left + f64::from(w - tw), inner_top, tw, inner_h, sf),
-                color,
-            ));
+            paint_quad_scoped(
+                window,
+                fill(
+                    device_rect(rect.left + f64::from(w - tw), inner_top, tw, inner_h, sf),
+                    color,
+                ),
+                scope,
+            );
         }
     }
 }
 
 /// Paints a dashed four-edge rectangle outline (used for Intersecting rubber-band mode).
-fn paint_dashed_outline(rect: DevRect, thickness: u32, color: Hsla, sf: f32, window: &mut Window) {
+fn paint_dashed_outline(
+    rect: DevRect,
+    thickness: u32,
+    color: Hsla,
+    sf: f32,
+    scope: Option<&dyn OverlayPaintScope>,
+    window: &mut Window,
+) {
     let dash = stroke_device_px(BAND_DASH_PX, sf);
     let gap = stroke_device_px(BAND_GAP_PX, sf);
     let step = dash.saturating_add(gap).max(1);
     let t = thickness.max(1);
     if rect.width <= dash || rect.height <= dash {
-        paint_solid_outline(rect, t, color, sf, window);
+        paint_solid_outline(rect, t, color, sf, scope, window);
         return;
     }
     let bottom_y = rect.top + f64::from(rect.height.saturating_sub(t));
@@ -960,34 +1064,57 @@ fn paint_dashed_outline(rect: DevRect, thickness: u32, color: Hsla, sf: f32, win
     let mut x = 0u32;
     while x < rect.width {
         let seg = dash.min(rect.width - x);
-        window.paint_quad(fill(
-            device_rect(rect.left + f64::from(x), rect.top, seg, t, sf),
-            color,
-        ));
-        window.paint_quad(fill(
-            device_rect(rect.left + f64::from(x), bottom_y, seg, t, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(rect.left + f64::from(x), rect.top, seg, t, sf),
+                color,
+            ),
+            scope,
+        );
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(rect.left + f64::from(x), bottom_y, seg, t, sf),
+                color,
+            ),
+            scope,
+        );
         x = x.saturating_add(step);
     }
     // Vertical edges (left & right).
     let mut y = 0u32;
     while y < rect.height {
         let seg = dash.min(rect.height - y);
-        window.paint_quad(fill(
-            device_rect(rect.left, rect.top + f64::from(y), t, seg, sf),
-            color,
-        ));
-        window.paint_quad(fill(
-            device_rect(right_x, rect.top + f64::from(y), t, seg, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(rect.left, rect.top + f64::from(y), t, seg, sf),
+                color,
+            ),
+            scope,
+        );
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(right_x, rect.top + f64::from(y), t, seg, sf),
+                color,
+            ),
+            scope,
+        );
         y = y.saturating_add(step);
     }
 }
 
 /// Paints four crisp corner handle squares on a selected part frame.
-fn paint_corner_handles(rect: DevRect, side: u32, color: Hsla, sf: f32, window: &mut Window) {
+fn paint_corner_handles(
+    rect: DevRect,
+    side: u32,
+    color: Hsla,
+    sf: f32,
+    scope: Option<&dyn OverlayPaintScope>,
+    window: &mut Window,
+) {
     let right = rect.left + f64::from(rect.width);
     let bottom = rect.top + f64::from(rect.height);
     let scale = f64::from(sf);
@@ -997,10 +1124,14 @@ fn paint_corner_handles(rect: DevRect, side: u32, color: Hsla, sf: f32, window: 
         (rect.left, bottom),
         (right, bottom),
     ] {
-        window.paint_quad(fill(
-            centered_square(point(x / scale, y / scale), side, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(
+                centered_square(point(x / scale, y / scale), side, sf),
+                color,
+            ),
+            scope,
+        );
     }
 }
 
@@ -1033,6 +1164,7 @@ struct OverlayPaintContext<'a> {
     bounds: Bounds<Pixels>,
     sf: f32,
     theme: &'static Theme,
+    scope: Option<&'a dyn OverlayPaintScope>,
 }
 
 fn paint_overlay(
@@ -1047,6 +1179,7 @@ fn paint_overlay(
         bounds,
         sf,
         theme,
+        scope,
     } = *ctx;
     let hovered = state.hovered();
     let selection = state.selection();
@@ -1084,186 +1217,286 @@ fn paint_overlay(
         },
     };
 
-    window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        // Layer 1: translucent fills and halos (always underneath crisp outlines).
-        window.paint_layer(|window| {
-            // Hovered item halo (skip when already selected so selection remains visually dominant).
-            if let Some(item) = hovered
-                && !state.is_selected(item)
-                && item_world_bounds(doc, item).is_some_and(|r| r.intersects(visible_padded))
-            {
-                match item {
-                    ItemId::Part(id) => {
-                        if let Some(body) = doc.part_body(id)
-                            && let Some(rect) =
-                                padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), hover_color.opacity(0.18)));
-                        }
-                    }
-                    ItemId::Wire(id) => {
-                        if let Some(&wire) = doc.wire(id)
-                            && let Some(rect) = wire_rect_dev(wire, camera, sf, wire_halo_dev, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), hover_color.opacity(0.55)));
-                        }
-                    }
-                    ItemId::Label(id) => {
-                        if let Some(label) = doc.label(id)
-                            && let Some(rect) =
-                                label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), hover_color.opacity(0.25)));
-                        }
-                    }
-                }
-            }
-
-            // Selected item fills / halos.
-            for &item in selection {
-                if !item_world_bounds(doc, item).is_some_and(|r| r.intersects(visible_padded)) {
-                    continue;
-                }
-                match item {
-                    ItemId::Part(id) => {
-                        if let Some(body) = doc.part_body(id)
-                            && let Some(rect) =
-                                padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), halo_color.opacity(0.22)));
-                        }
-                    }
-                    ItemId::Wire(id) => {
-                        if let Some(&wire) = doc.wire(id)
-                            && let Some(rect) = wire_rect_dev(wire, camera, sf, wire_halo_dev, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), halo_color.opacity(0.50)));
-                        }
-                    }
-                    ItemId::Label(id) => {
-                        if let Some(label) = doc.label(id)
-                            && let Some(rect) =
-                                label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), halo_color.opacity(0.32)));
-                        }
-                    }
-                }
-            }
-
-            // Rubber-band translucent fill.
-            if let Some(band) = band
-                && let Some(rect) = padded_rect_dev(band.world_rect(), 0.0, camera, sf, clip)
-            {
-                window.paint_quad(fill(rect.bounds(sf), halo_color.opacity(0.22)));
-            }
-        });
-
-        // Layer 2: crisp net highlights, outlines, wire highlights, corner handles, and rubber-band border.
-        window.paint_layer(|window| {
-            // T4.4: whole-net wire highlight in `stage/net-highlight` (underneath selection handles).
-            let wire_paint = net::WirePaintParams {
-                camera,
-                visible_padded,
-                sf,
-                width_dev: wire_select_dev,
-                clip,
-                theme,
-            };
-            net::paint_wires(doc, net_highlight.wires(), &wire_paint, window);
-
-            // Hovered item outline (hovered wires are painted by `net::paint_wires` above, with
-            // their Layer 1 hover halo indicating the hovered segment).
-            if let Some(item) = hovered
-                && !state.is_selected(item)
-                && item_world_bounds(doc, item).is_some_and(|r| r.intersects(visible_padded))
-            {
-                match item {
-                    ItemId::Part(id) => {
-                        if let Some(body) = doc.part_body(id)
-                            && let Some(rect) =
-                                padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
-                        {
-                            paint_solid_outline(rect, hover_outline_dev, hover_color, sf, window);
-                        }
-                    }
-                    ItemId::Wire(_) => {}
-                    ItemId::Label(id) => {
-                        if let Some(label) = doc.label(id)
-                            && let Some(rect) =
-                                label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
-                        {
-                            paint_solid_outline(rect, hover_outline_dev, hover_color, sf, window);
-                        }
-                    }
-                }
-            }
-
-            // Selected item outlines, wire strokes, and handles.
-            for &item in selection {
-                if !item_world_bounds(doc, item).is_some_and(|r| r.intersects(visible_padded)) {
-                    continue;
-                }
-                match item {
-                    ItemId::Part(id) => {
-                        if let Some(body) = doc.part_body(id)
-                            && let Some(rect) =
-                                padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
-                        {
-                            paint_solid_outline(rect, select_outline_dev, select_color, sf, window);
-                            paint_corner_handles(rect, handle_dev, select_color, sf, window);
-                        }
-                    }
-                    ItemId::Wire(id) => {
-                        if let Some(&wire) = doc.wire(id) {
-                            if let Some(rect) =
-                                wire_rect_dev(wire, camera, sf, wire_select_dev, clip)
-                            {
-                                window.paint_quad(fill(rect.bounds(sf), select_color));
+    run_gpui(scope, || {
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            // Layer 1: translucent fills and halos (always underneath crisp outlines).
+            window.paint_layer(|window| {
+                run_omnia(scope, || {
+                    // Hovered item halo (skip when already selected so selection remains visually dominant).
+                    if let Some(item) = hovered
+                        && !state.is_selected(item)
+                        && item_world_bounds(doc, item)
+                            .is_some_and(|r| r.intersects(visible_padded))
+                    {
+                        match item {
+                            ItemId::Part(id) => {
+                                if let Some(body) = doc.part_body(id)
+                                    && let Some(rect) =
+                                        padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), hover_color.opacity(0.18)),
+                                        scope,
+                                    );
+                                }
                             }
-                            for end in [wire.a, wire.b] {
-                                let screen = camera.world_to_screen(end);
-                                window.paint_quad(fill(
-                                    centered_square(screen, handle_dev, sf),
-                                    select_color,
-                                ));
+                            ItemId::Wire(id) => {
+                                if let Some(&wire) = doc.wire(id)
+                                    && let Some(rect) =
+                                        wire_rect_dev(wire, camera, sf, wire_halo_dev, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), hover_color.opacity(0.55)),
+                                        scope,
+                                    );
+                                }
+                            }
+                            ItemId::Label(id) => {
+                                if let Some(label) = doc.label(id)
+                                    && let Some(rect) =
+                                        label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), hover_color.opacity(0.25)),
+                                        scope,
+                                    );
+                                }
                             }
                         }
                     }
-                    ItemId::Label(id) => {
-                        if let Some(label) = doc.label(id) {
-                            if let Some(rect) =
-                                label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
-                            {
-                                paint_solid_outline(
+
+                    // Selected item fills / halos.
+                    for &item in selection {
+                        if !item_world_bounds(doc, item)
+                            .is_some_and(|r| r.intersects(visible_padded))
+                        {
+                            continue;
+                        }
+                        match item {
+                            ItemId::Part(id) => {
+                                if let Some(body) = doc.part_body(id)
+                                    && let Some(rect) =
+                                        padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), halo_color.opacity(0.22)),
+                                        scope,
+                                    );
+                                }
+                            }
+                            ItemId::Wire(id) => {
+                                if let Some(&wire) = doc.wire(id)
+                                    && let Some(rect) =
+                                        wire_rect_dev(wire, camera, sf, wire_halo_dev, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), halo_color.opacity(0.50)),
+                                        scope,
+                                    );
+                                }
+                            }
+                            ItemId::Label(id) => {
+                                if let Some(label) = doc.label(id)
+                                    && let Some(rect) =
+                                        label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), halo_color.opacity(0.32)),
+                                        scope,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Rubber-band translucent fill.
+                    if let Some(band) = band
+                        && let Some(rect) =
+                            padded_rect_dev(band.world_rect(), 0.0, camera, sf, clip)
+                    {
+                        paint_quad_scoped(
+                            window,
+                            fill(rect.bounds(sf), halo_color.opacity(0.22)),
+                            scope,
+                        );
+                    }
+                });
+            });
+
+            // Layer 2: crisp net highlights, outlines, wire highlights, corner handles, and rubber-band border.
+            window.paint_layer(|window| {
+                run_omnia(scope, || {
+                    // T4.4: whole-net wire highlight in `stage/net-highlight` (underneath selection handles).
+                    let wire_paint = net::WirePaintParams {
+                        camera,
+                        visible_padded,
+                        sf,
+                        width_dev: wire_select_dev,
+                        clip,
+                        theme,
+                        scope,
+                    };
+                    net::paint_wires(doc, net_highlight.wires(), &wire_paint, window);
+
+                    // Hovered item outline (hovered wires are painted by `net::paint_wires` above, with
+                    // their Layer 1 hover halo indicating the hovered segment).
+                    if let Some(item) = hovered
+                        && !state.is_selected(item)
+                        && item_world_bounds(doc, item)
+                            .is_some_and(|r| r.intersects(visible_padded))
+                    {
+                        match item {
+                            ItemId::Part(id) => {
+                                if let Some(body) = doc.part_body(id)
+                                    && let Some(rect) =
+                                        padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
+                                {
+                                    paint_solid_outline(
+                                        rect,
+                                        hover_outline_dev,
+                                        hover_color,
+                                        sf,
+                                        scope,
+                                        window,
+                                    );
+                                }
+                            }
+                            ItemId::Wire(_) => {}
+                            ItemId::Label(id) => {
+                                if let Some(label) = doc.label(id)
+                                    && let Some(rect) =
+                                        label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
+                                {
+                                    paint_solid_outline(
+                                        rect,
+                                        hover_outline_dev,
+                                        hover_color,
+                                        sf,
+                                        scope,
+                                        window,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Selected item outlines, wire strokes, and handles.
+                    for &item in selection {
+                        if !item_world_bounds(doc, item)
+                            .is_some_and(|r| r.intersects(visible_padded))
+                        {
+                            continue;
+                        }
+                        match item {
+                            ItemId::Part(id) => {
+                                if let Some(body) = doc.part_body(id)
+                                    && let Some(rect) =
+                                        padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
+                                {
+                                    paint_solid_outline(
+                                        rect,
+                                        select_outline_dev,
+                                        select_color,
+                                        sf,
+                                        scope,
+                                        window,
+                                    );
+                                    paint_corner_handles(
+                                        rect,
+                                        handle_dev,
+                                        select_color,
+                                        sf,
+                                        scope,
+                                        window,
+                                    );
+                                }
+                            }
+                            ItemId::Wire(id) => {
+                                if let Some(&wire) = doc.wire(id) {
+                                    if let Some(rect) =
+                                        wire_rect_dev(wire, camera, sf, wire_select_dev, clip)
+                                    {
+                                        paint_quad_scoped(
+                                            window,
+                                            fill(rect.bounds(sf), select_color),
+                                            scope,
+                                        );
+                                    }
+                                    for end in [wire.a, wire.b] {
+                                        let screen = camera.world_to_screen(end);
+                                        paint_quad_scoped(
+                                            window,
+                                            fill(
+                                                centered_square(screen, handle_dev, sf),
+                                                select_color,
+                                            ),
+                                            scope,
+                                        );
+                                    }
+                                }
+                            }
+                            ItemId::Label(id) => {
+                                if let Some(label) = doc.label(id) {
+                                    if let Some(rect) =
+                                        label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
+                                    {
+                                        paint_solid_outline(
+                                            rect,
+                                            select_outline_dev,
+                                            select_color,
+                                            sf,
+                                            scope,
+                                            window,
+                                        );
+                                    }
+                                    let screen = camera.world_to_screen(label.at);
+                                    let dot = stroke_device_px(3.0, sf);
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(centered_square(screen, dot, sf), select_color),
+                                        scope,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Rubber-band border: dashed for Intersecting (WD8/WQ3 default), solid for Enclosed.
+                    if let Some(band) = band
+                        && let Some(rect) =
+                            padded_rect_dev(band.world_rect(), 0.0, camera, sf, clip)
+                    {
+                        match band.mode {
+                            SelectMode::Intersecting => {
+                                paint_dashed_outline(
                                     rect,
-                                    select_outline_dev,
+                                    band_border_dev,
                                     select_color,
                                     sf,
+                                    scope,
                                     window,
                                 );
                             }
-                            let screen = camera.world_to_screen(label.at);
-                            let dot = stroke_device_px(3.0, sf);
-                            window.paint_quad(fill(centered_square(screen, dot, sf), select_color));
+                            SelectMode::Enclosed => {
+                                paint_solid_outline(
+                                    rect,
+                                    band_border_dev,
+                                    select_color,
+                                    sf,
+                                    scope,
+                                    window,
+                                );
+                            }
                         }
                     }
-                }
-            }
-
-            // Rubber-band border: dashed for Intersecting (WD8/WQ3 default), solid for Enclosed.
-            if let Some(band) = band
-                && let Some(rect) = padded_rect_dev(band.world_rect(), 0.0, camera, sf, clip)
-            {
-                match band.mode {
-                    SelectMode::Intersecting => {
-                        paint_dashed_outline(rect, band_border_dev, select_color, sf, window);
-                    }
-                    SelectMode::Enclosed => {
-                        paint_solid_outline(rect, band_border_dev, select_color, sf, window);
-                    }
-                }
-            }
+                });
+            });
         });
     });
 }
@@ -2202,6 +2435,52 @@ mod tests {
             sheet_notifies.get(),
             0,
             "INV11/T4.4: net highlight changes must never notify SheetView"
+        );
+    }
+
+    #[gpui::test]
+    fn overlay_paint_scope_attributes_mouse_move_and_paint(cx: &mut TestAppContext) {
+        struct CountingScope {
+            omnia: Rc<Cell<u64>>,
+            gpui: Rc<Cell<u64>>,
+        }
+        impl OverlayPaintScope for CountingScope {
+            fn omnia(&self, work: &mut dyn FnMut()) {
+                self.omnia.set(self.omnia.get() + 1);
+                work();
+            }
+            fn gpui(&self, work: &mut dyn FnMut()) {
+                self.gpui.set(self.gpui.get() + 1);
+                work();
+            }
+        }
+
+        let omnia_calls = Rc::new(Cell::new(0u64));
+        let gpui_calls = Rc::new(Cell::new(0u64));
+        let scope: Rc<dyn OverlayPaintScope> = Rc::new(CountingScope {
+            omnia: omnia_calls.clone(),
+            gpui: gpui_calls.clone(),
+        });
+
+        let doc = cx.new(|_| test_doc());
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = OverlayView::new(doc, camera, &GRAPHITE, cx).with_paint_scope(scope);
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+
+        let omnia_before = omnia_calls.get();
+        let gpui_before = gpui_calls.get();
+        let wire_pos = screen_of(&overlay, cx, Pt { x: 0, y: 0 });
+        cx.simulate_mouse_move(wire_pos, None, Modifiers::none());
+        assert!(
+            omnia_calls.get() > omnia_before,
+            "B10/T4.6: OverlayPaintScope::omnia must wrap hover and paint work"
+        );
+        assert!(
+            gpui_calls.get() > gpui_before,
+            "B10/T4.6: OverlayPaintScope::gpui must wrap GPUI notify/paint calls"
         );
     }
 }

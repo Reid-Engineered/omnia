@@ -10,7 +10,7 @@
 //! highlighted net happens solely inside [`crate::OverlayView`] and never notifies `SheetView`
 //! (D7, INV11).
 
-use super::{gpui_color, item_world_bounds, wire_rect_dev};
+use super::{OverlayPaintScope, gpui_color, item_world_bounds, paint_quad_scoped, wire_rect_dev};
 use crate::camera::Camera;
 use gpui::{Window, fill};
 use omnia_doc::{Doc, ItemId, NetId, Rect, WireId};
@@ -102,6 +102,7 @@ pub(super) struct WirePaintParams<'a> {
     pub width_dev: u32,
     pub clip: (f64, f64, f64, f64),
     pub theme: &'static Theme,
+    pub scope: Option<&'a dyn OverlayPaintScope>,
 }
 
 /// Paints every visible wire in `wires` in `theme.stage_net_highlight` (INV6).
@@ -130,7 +131,7 @@ pub(super) fn paint_wires(
                 params.clip,
             )
         {
-            window.paint_quad(fill(rect.bounds(params.sf), color));
+            paint_quad_scoped(window, fill(rect.bounds(params.sf), color), params.scope);
         }
     }
 }

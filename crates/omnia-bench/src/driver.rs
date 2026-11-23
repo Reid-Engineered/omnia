@@ -54,7 +54,7 @@ impl Script {
             "zoom" => Ok(Self::Zoom),
             "hover" => Ok(Self::Hover),
             "drag-part" | "drag-wire" => Err(format!(
-                "script `{name}` needs real sheets; roadmap T2.6 adds it"
+                "script `{name}` arrives in milestones 5 and 6 (T5.4 / T6.4)"
             )),
             _ => Err(format!(
                 "unknown script `{name}` (available: pan, zoom, hover)"
@@ -139,7 +139,7 @@ mod tests {
         assert_eq!(Script::parse("pan"), Ok(Script::Pan));
         assert_eq!(Script::parse("zoom"), Ok(Script::Zoom));
         assert_eq!(Script::parse("hover"), Ok(Script::Hover));
-        assert!(Script::parse("drag-part").unwrap_err().contains("T2.6"));
+        assert!(Script::parse("drag-part").unwrap_err().contains("T5.4"));
         assert!(Script::parse("spin").is_err());
     }
 }

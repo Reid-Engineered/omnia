@@ -107,6 +107,8 @@ def make_motion(
     ours=0,
     memory=90.0,
     sheet_paints=0,
+    transitions=None,
+    mismatches=0,
 ):
     parts = 1000 if sheet == "1k" else 10000
     metrics = {
@@ -154,7 +156,8 @@ def make_motion(
         report["hover"] = {
             "overlay_paints": gate.FRAMES,
             "sheet_paints": sheet_paints,
-            "transitions": gate.FRAMES,
+            "transitions": gate.FRAMES if transitions is None else transitions,
+            "mismatches": mismatches,
             "net_highlight_frames": gate.FRAMES // 3,
             "sweep_targets": 72,
         }
@@ -270,6 +273,18 @@ class GateTest(unittest.TestCase):
                 ok = gate.summarize(Path(tmp))
             self.assertFalse(ok)
             self.assertIn("FAIL INV11 10k-hover max SheetView paints", buf.getvalue())
+
+    def test_hover_mismatch_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_campaign(Path(tmp), {("s100", "10k-hover"): {"mismatches": 1}})
+            with self.assertRaisesRegex(ValueError, "incomplete hover exercise"):
+                gate.summarize(Path(tmp))
+
+    def test_hover_short_transitions_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_campaign(Path(tmp), {("s125", "10k-hover"): {"transitions": gate.FRAMES - 1}})
+            with self.assertRaisesRegex(ValueError, "incomplete hover exercise"):
+                gate.summarize(Path(tmp))
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 //! sweeps pointer hover across visible parts, wires (triggering `NetHighlight`), labels (when
 //! present), and empty space while recording `sheet_paints` (expected `0`, INV11) and frame costs.
 
-use crate::alloc::{AllocCounts, ours};
+use crate::alloc::{AllocCounts, not_ours, ours};
 use crate::driver::Script;
 use crate::harness::{
     RunConfig, RunReportInput, build_run_report, register_sheet_fonts, run_app, watchdog,
@@ -14,7 +14,9 @@ use gpui::{
     App, AppContext, Bounds, Context, Entity, FrameDurationSnapshot, IntoElement, Modifiers,
     MouseMoveEvent, Pixels, PlatformInput, Point, Render, Window, point, px, size,
 };
-use omnia_canvas::{Camera as SheetCamera, OverlayView, selection::hit_tolerance_nm};
+use omnia_canvas::{
+    Camera as SheetCamera, OverlayPaintScope, OverlayView, selection::hit_tolerance_nm,
+};
 use omnia_doc::{Doc, Hit, ItemId, Pt, Rect, SHEET_LIMIT_NM, hit_test};
 use omnia_theme::GRAPHITE;
 use serde_json::{Map, Value, json};
@@ -285,6 +287,18 @@ pub fn build_hover_targets(
     Ok(sweep)
 }
 
+pub(crate) struct BenchOverlayScope;
+
+impl OverlayPaintScope for BenchOverlayScope {
+    fn omnia(&self, work: &mut dyn FnMut()) {
+        ours(work);
+    }
+
+    fn gpui(&self, work: &mut dyn FnMut()) {
+        not_ours(work);
+    }
+}
+
 pub(crate) fn mouse_move(position: Point<Pixels>) -> PlatformInput {
     PlatformInput::MouseMove(MouseMoveEvent {
         position,
@@ -306,8 +320,10 @@ struct HoverDriver {
     previous_counts: AllocCounts,
     allocs: Vec<AllocCounts>,
     hover_transitions: u64,
+    hover_mismatches: u64,
     net_highlight_frames: u64,
     last_hovered: Option<ItemId>,
+    expected_hovered: Option<ItemId>,
     started: Instant,
     trace: Option<FrameTrace>,
     outcome: Rc<RefCell<Option<Result<Value, String>>>>,
@@ -346,6 +362,9 @@ impl HoverDriver {
             self.previous_counts = counts;
             let view = self.overlay.read(cx);
             let hovered = view.hovered();
+            if hovered != self.expected_hovered {
+                self.hover_mismatches += 1;
+            }
             if hovered != self.last_hovered {
                 self.hover_transitions += 1;
                 self.last_hovered = hovered;
@@ -362,7 +381,8 @@ impl HoverDriver {
             return false;
         }
 
-        let target = ours(|| self.targets[(step as usize) % self.targets.len()]);
+        let target = self.targets[(step as usize) % self.targets.len()];
+        self.expected_hovered = target.expected;
         window.dispatch_event(mouse_move(target.screen), cx);
         self.step += 1;
         true
@@ -388,6 +408,12 @@ impl HoverDriver {
                 self.config.frames
             ));
         }
+        if self.hover_mismatches > 0 {
+            extra_warnings.push(format!(
+                "hover target mismatch on {} of {} frames",
+                self.hover_mismatches, self.config.frames
+            ));
+        }
 
         let mut report = build_run_report(RunReportInput {
             config: self.config,
@@ -408,6 +434,7 @@ impl HoverDriver {
             "overlay_paints": overlay_paints,
             "sheet_paints": sheet_paints,
             "transitions": self.hover_transitions,
+            "mismatches": self.hover_mismatches,
             "net_highlight_frames": self.net_highlight_frames,
             "sweep_targets": self.targets.len(),
         });
@@ -468,7 +495,10 @@ pub fn run_hover(config: RunConfig) -> Result<Value, String> {
                 size(px(config.size.0), px(config.size.1)),
             );
             let camera = SheetCamera::new(Pt::ZERO, 1.0, viewport);
-            let overlay = cx.new(|cx| OverlayView::new(doc.clone(), camera, &GRAPHITE, cx));
+            let overlay = cx.new(|cx| {
+                OverlayView::new(doc.clone(), camera, &GRAPHITE, cx)
+                    .with_paint_scope(Rc::new(BenchOverlayScope))
+            });
             // T4.3: focus OverlayView at open so clicks/hover never trigger a focus-transfer refresh.
             let focus = overlay.read(cx).focus_handle().clone();
             window.focus(&focus, cx);
@@ -486,8 +516,10 @@ pub fn run_hover(config: RunConfig) -> Result<Value, String> {
                 previous_counts: AllocCounts::now(),
                 allocs: Vec::with_capacity(frames),
                 hover_transitions: 0,
+                hover_mismatches: 0,
                 net_highlight_frames: 0,
                 last_hovered: None,
+                expected_hovered: None,
                 started: Instant::now(),
                 trace,
                 outcome,

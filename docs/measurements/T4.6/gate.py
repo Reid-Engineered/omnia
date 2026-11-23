@@ -290,7 +290,8 @@ def motion(report, sheet, script, scale, viewport):
         hover = report.get("hover") or {}
         if (
             hover.get("overlay_paints") != FRAMES
-            or hover.get("transitions", 0) <= 0
+            or hover.get("transitions") != FRAMES
+            or hover.get("mismatches") != 0
             or hover.get("net_highlight_frames", 0) <= 0
         ):
             raise ValueError(f"incomplete hover exercise: {hover}")

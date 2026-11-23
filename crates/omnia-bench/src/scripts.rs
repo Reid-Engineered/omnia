@@ -6,7 +6,7 @@ use crate::compare::SCHEMA;
 use crate::driver::Script;
 use crate::generate::generate;
 use crate::harness::{RunConfig, primitive_counts};
-use crate::hover::{build_hover_targets, mouse_move};
+use crate::hover::{BenchOverlayScope, build_hover_targets, mouse_move};
 use crate::scene::{BenchScene, STRESS_SEED, SceneElement, Sheet};
 use crate::stats::Summary;
 use gpui::{
@@ -159,7 +159,10 @@ fn run_headless_hover(
             let doc = cx.new(|_| generate(stress, STRESS_SEED));
             doc_entity = Some(doc.clone());
             let camera = SheetCamera::new(Pt::ZERO, 1.0, bounds);
-            let overlay = cx.new(|cx| OverlayView::new(doc, camera, &GRAPHITE, cx));
+            let overlay = cx.new(|cx| {
+                OverlayView::new(doc, camera, &GRAPHITE, cx)
+                    .with_paint_scope(Rc::new(BenchOverlayScope))
+            });
             let focus = overlay.read(cx).focus_handle().clone();
             window.focus(&focus, cx);
             overlay_entity = Some(overlay.clone());
@@ -181,14 +184,22 @@ fn run_headless_hover(
     let mut sweep_primitives = BTreeMap::<String, u64>::new();
     let mut sheet_paints_start = 0u64;
     let mut overlay_paints_start = 0u64;
+    let mut hover_transitions = 0u64;
+    let mut hover_mismatches = 0u64;
+    let mut net_highlight_frames = 0u64;
+    let mut last_hovered = None;
     for frame_index in 0..end {
         if frame_index == config.warmup {
-            (sheet_paints_start, overlay_paints_start) = window.update(|_, _, cx| {
+            (sheet_paints_start, overlay_paints_start, last_hovered) = window.update(|_, _, cx| {
                 let overlay = overlay_entity.read(cx);
-                (overlay.sheet_paint_count(cx), overlay.overlay_paint_count())
+                (
+                    overlay.sheet_paint_count(cx),
+                    overlay.overlay_paint_count(),
+                    overlay.hovered(),
+                )
             });
         }
-        let target = ours(|| targets[(frame_index as usize) % targets.len()]);
+        let target = targets[(frame_index as usize) % targets.len()];
         let before = AllocCounts::now();
         window.update(|_, window, cx| {
             window.dispatch_event(mouse_move(target.screen), cx);
@@ -196,6 +207,20 @@ fn run_headless_hover(
         window.draw();
         if frame_index >= config.warmup {
             ours_per_frame.push(AllocCounts::now().since(before).ours_allocs as f64);
+            let (hovered, has_net) = window.update(|_, _, cx| {
+                let overlay = overlay_entity.read(cx);
+                (overlay.hovered(), !overlay.highlighted_wires().is_empty())
+            });
+            if hovered != target.expected {
+                hover_mismatches += 1;
+            }
+            if hovered != last_hovered {
+                hover_transitions += 1;
+                last_hovered = hovered;
+            }
+            if has_net {
+                net_highlight_frames += 1;
+            }
             let counts = window.update(|_, window, _| primitive_counts(window));
             for (name, count) in counts.as_object().expect("primitive counts are an object") {
                 let count = count.as_u64().expect("primitive count is an integer");
@@ -230,6 +255,9 @@ fn run_headless_hover(
         "hover": {
             "overlay_paints": overlay_paints,
             "sheet_paints": sheet_paints,
+            "transitions": hover_transitions,
+            "mismatches": hover_mismatches,
+            "net_highlight_frames": net_highlight_frames,
             "sweep_targets": targets.len(),
         },
         "metrics": {
