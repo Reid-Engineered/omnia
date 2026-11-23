@@ -4,6 +4,7 @@ pub mod button;
 pub mod icon;
 pub mod popover;
 pub mod splitter;
+pub mod text_field;
 pub mod tooltip;
 
 pub use button::{ButtonGroup, ButtonVariant, IconButton, TextButton};
