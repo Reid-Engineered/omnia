@@ -489,6 +489,8 @@ pub enum ItemId { Part(PartId), Wire(WireId), Label(LabelId) }
 
 pub struct Part { pub symbol: SymbolId, pub at: Pt, pub orient: Orient,
                   pub designator: Arc<str>, pub value: Arc<str> }
+// P2.1 (parts-plan.md PD8, amended 2026-11-23): Part keeps these five fields; each StoredPart also
+// holds def: PartDefId and params (non-default overrides), read via part_def_id/part_params.
 pub struct Wire { pub a: Pt, pub b: Pt }                  // INV1
 pub struct Label { pub at: Pt, pub text: Arc<str> }
 
@@ -497,7 +499,7 @@ pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
                         DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField },
                         Follow(FollowError), Segment(Blocker) } // Follow/Segment: wiring-plan.md W2.2, W3.2
 pub enum Command {
-    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect },
+    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect }, // P2.2 adds def: PlaceDef and params: Params (parts-plan.md PD8)
     AddWires(Vec<Wire>),
     AddLabel(Label),
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
@@ -505,11 +507,14 @@ pub enum Command {
     DragSegment { wire: WireId, offset: i32 }, // wiring-plan.md WD7 (W3.2); nm, signed
     Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false)
     SetText { item: ItemId, field: TextField, text: Arc<str> },
+    // P2.2 (parts-plan.md PD8): SetParam { part, name, value } and UpdatePartDef { from, to }
     Paste { clip: Clip, at: Pt },
     Batch(Vec<Command>),
 }
 pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
+// P2.2 (parts-plan.md PD8, XD7): adds modified: Vec<PartId>, the parts whose params or definition
+// changed (SetParam, every instance of an UpdatePartDef) even when geometry and text did not.
 // added/removed are membership deltas only: an item that keeps its id with new geometry
 // (moved, reoriented, merge survivor, first piece of a split) is in neither; `dirty` covers
 // its old and new bounds. Consumers invalidate from dirty/revision, not the id lists.
@@ -554,6 +559,9 @@ impl Doc {
     pub fn save(&self, w: impl io::Write) -> io::Result<()>;
     pub fn load(r: impl io::Read) -> io::Result<Self>;
     // Version 2 RON embeds local bounds and pins (omnia-symbols depends on omnia-doc).
+    // P2.3 (parts-plan.md PD3, PD8, PK9): Version 3 adds the deduplicated part_defs table and per-part def/params;
+    // v2 loads by migration to unmodelled definitions. P2.1 adds part_def, part_defs, part_def_id,
+    // part_params and resolved_param queries, and extends PartialEq/content_eq per parts-plan.md PD8.
     // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points, index and connectivity.
     pub fn content_eq(&self, other: &Self) -> bool; // live items, exact live IDs, interior gaps, bounds/pins
     // PartialEq compares persistent state, including revision and every reserved slot (pre-T5.1 contract).
@@ -683,6 +691,41 @@ pub fn grid_level(scale: f64) -> GridLevel;              // K10: level, step_nm,
 
 pub struct Navigator { /* private */ }                    // T1.5 pan/zoom state machine (input.rs)
 pub struct SheetCanvas { /* private */ }                  // T1.5: camera, Navigator, SheetView
+// T4.3 (selection.rs, overlay.rs): pure selection/hover/WD8 rubber-band state machine and
+// OverlayView embedding CachedSheet via `.cached()` so transient updates never repaint SheetView.
+pub struct Selection { /* canonical sorted, deduplicated ItemIds */ }
+pub struct RubberBand { pub anchor: Pt, pub current: Pt, pub mode: SelectMode, pub additive: bool }
+pub struct SelectionState { /* selection, hovered, rubber_band, SelectMode (WQ3 default Intersecting) */ }
+pub enum OverlayEvent { SelectionChanged }
+pub struct CachedSheet { /* SheetView wrapper with paint/render counters (D7, INV11) */ }
+pub struct OverlayView { /* doc, CachedSheet (.cached()), camera, theme, SelectionState */ }
+impl OverlayView {
+    pub fn new(doc: Entity<Doc>, camera: Camera, theme: &'static Theme, cx: &mut Context<Self>) -> Self;
+    pub fn doc(&self) -> &Entity<Doc>;
+    pub fn camera(&self) -> &Camera;
+    pub fn theme(&self) -> &'static Theme;
+    pub fn focus_handle(&self) -> &FocusHandle;
+    pub fn selection(&self) -> &[ItemId];
+    pub fn hovered(&self) -> Option<ItemId>;
+    pub fn rubber_band(&self) -> Option<RubberBand>;
+    pub fn select_mode(&self) -> SelectMode;
+    pub fn sheet_entity(&self) -> &Entity<CachedSheet>;
+    pub fn sheet_paint_count(&self, cx: &App) -> u64;
+    pub fn sheet_render_count(&self, cx: &App) -> u64;
+    pub fn overlay_paint_count(&self) -> u64;
+    pub fn overlay_render_count(&self) -> u64;
+    pub fn set_select_mode(&mut self, mode: SelectMode, cx: &mut Context<Self>);
+    pub fn set_hovered(&mut self, item: Option<ItemId>, cx: &mut Context<Self>);
+    pub fn set_selection(&mut self, items: impl IntoIterator<Item = ItemId>, cx: &mut Context<Self>);
+    pub fn clear_selection(&mut self, cx: &mut Context<Self>);
+    pub fn select_all(&mut self, cx: &mut Context<Self>);
+    pub fn cancel_rubber_band(&mut self, cx: &mut Context<Self>);
+    pub fn set_rubber_band_preview(&mut self, anchor: Pt, current: Pt, mode: SelectMode, cx: &mut Context<Self>);
+    pub fn set_camera(&mut self, camera: Camera, cx: &mut Context<Self>);
+    pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
+    pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>);
+    pub fn on_doc_change(&mut self, change: &Change, cx: &mut Context<Self>);
+}
 impl SheetCanvas {
     pub fn new(doc: Entity<Doc>, theme: &'static Theme,
                window: &mut Window, cx: &mut Context<Self>) -> Self;
@@ -691,6 +734,8 @@ impl SheetCanvas {
     pub fn camera(&self) -> &Camera;
     pub fn status(&self) -> CanvasStatus;
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
+    // T5.3: a shell-supplied placement provider (see parts-plan.md section 14) builds the
+    // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation.
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);
@@ -703,6 +748,7 @@ impl EventEmitter<CanvasEvent> for SheetCanvas {}
 pub struct CountingAlloc;                                  // #[global_allocator]
 pub fn count_allocs<R>(f: impl FnOnce() -> R) -> (R, u64);
 pub enum StressSheet { Parts100, Parts1k, Parts10k, DenseWiring, TextHeavy }
+// Parts P2.5 adds Embedded10k (--sheet embedded-10k) for the B9 regression run (parts PD11).
 pub fn generate(sheet: StressSheet, seed: u64) -> Doc;
 // generate module: SplitMix64 seeds; counts (parts, wire segments): 100=(100,200),
 // 1k=(1_000,2_000), 10k=(10_000,20_000), dense=(1_000,12_000), text=(1_000,2_000).
@@ -743,12 +789,12 @@ Build-time steps:
 | Crate | Use | Licence |
 | --- | --- | --- |
 | `gpui`, `gpui_platform` (git, pinned) | UI, rendering, text, input | Apache-2.0, confirmed in source, including the in-repo crates they pull in |
-| `smallvec` | Per-point end lists | MIT or Apache-2.0 |
-| `rustc-hash` | Point map; agent preview ids ([mcp-plan.md](mcp-plan.md) section 11.3) | MIT or Apache-2.0 |
+| `smallvec` | Per-point end lists; `omnia-circuit` member lists ([context-plan.md](context-plan.md)) | MIT or Apache-2.0 |
+| `rustc-hash` | Point map; agent preview ids ([mcp-plan.md](mcp-plan.md) section 11.3); `omnia-circuit` key maps ([context-plan.md](context-plan.md)) | MIT or Apache-2.0 |
 | `serde`, `ron` | Test-sheet save and load | MIT or Apache-2.0 |
 | `profiling`, `tracy-client` (feature `tracy`) | Spans, on the same timeline as GPUI's | MIT or Apache-2.0 |
-| `hdrhistogram` | Bench percentiles | MIT or Apache-2.0 |
-| `serde_json` | Bench JSON reports; the agent wire schema in `omnia-agent` and `omnia-cli` ([mcp-plan.md](mcp-plan.md) section 15) | MIT or Apache-2.0 |
+| `hdrhistogram` | Bench percentiles; `omnia-circuit` diagnostics ([context-plan.md](context-plan.md)) | MIT or Apache-2.0 |
+| `serde_json` | Bench JSON reports; the agent wire schema in `omnia-agent` and `omnia-cli` ([mcp-plan.md](mcp-plan.md) section 15); `omnia-circuit` JSON views ([context-plan.md](context-plan.md)) | MIT or Apache-2.0 |
 | `libc` 0.2 (`omnia-bench` on Linux only; already in the graph through GPUI) | Diagnostic paint probe: thread CPU clock, `getrusage(RUSAGE_THREAD)`, `sched_getcpu` (T2.7 paint-stall investigation, logged 2026-11-18) | MIT OR Apache-2.0 |
 | `resvg` 0.46 (`omnia-bench` feature `readback` only, never default; GPUI already depends on it) | S3/S8 readback reference renders | Apache-2.0 OR MIT |
 | GPUI's Linux `wayland` feature, enabled by `omnia-bench` and `omnia-app` on Linux (transitive, listed below) | Wayland window backend | MIT, MIT OR Apache-2.0, or MIT OR Apache-2.0 OR Zlib |

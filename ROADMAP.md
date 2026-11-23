@@ -1,6 +1,6 @@
 # Omnia project roadmap
 
-Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) provides the detailed implementation tasks beneath it, the [wiring roadmap](wiring-roadmap.md) covers wire behaviour, the [UI plan](ui-plan.md) and [roadmap](ui-roadmap.md) cover the application shell, and the [simulation plan](sim-plan.md) and [roadmap](sim-roadmap.md) cover ERC, engines (`ngspice` and `RIS-C`), and virtual instruments. The [agent-control plan](mcp-plan.md) and its [roadmap](mcp-roadmap.md) describe how agents and scripts drive Omnia through the same document commands as the editor; that surface serves the stages below and adds no product scope of its own.
+Omnia is a desktop application for building electronic schematics and simulating circuits, written in Rust with GPUI. This roadmap describes how the whole product becomes usable. The [canvas roadmap](canvas-roadmap.md) provides the detailed implementation tasks beneath it, the [wiring roadmap](wiring-roadmap.md) covers wire behaviour, the [UI plan](ui-plan.md) and [roadmap](ui-roadmap.md) cover the application shell, the [parts plan](parts-plan.md) and [roadmap](parts-roadmap.md) cover component definitions, `.opart`/`.olib` containers and simulation model bindings, and the [simulation plan](sim-plan.md) and [roadmap](sim-roadmap.md) cover ERC, engines (`ngspice` and `RIS-C`), and virtual instruments. The [agent-control plan](mcp-plan.md) and its [roadmap](mcp-roadmap.md) describe how agents and scripts drive Omnia through the same document commands as the editor; that surface serves the stages below and adds no product scope of its own. The [circuit-context plan](context-plan.md) and its [roadmap](context-roadmap.md) describe the derived circuit model (named nets, pin-to-net bindings, findings, recognised structure and budgeted views) that agents, the app and simulation lowering read.
 
 This is an outcome-based roadmap, not a schedule. Stages can overlap, but a stage is complete only when its exit criteria are demonstrated. The first-release scope below is a proposed baseline; open product decisions are recorded at the end.
 
@@ -34,7 +34,7 @@ Connect component selection, placement, selection, movement, rotation, deletion,
 
 **Ready when:** a user can build an agreed example circuit without developer commands, edit it with predictable wire behavior, undo mistakes, and reopen it with its circuit data intact. File errors and unsaved changes have defined behavior.
 
-**Detailed work:** editing and final integration in the [canvas roadmap](canvas-roadmap.md), wire behavior in the wiring roadmap once it is published. Product file flows and component browsing need planning beyond test-sheet serialization.
+**Detailed work:** editing and final integration in the [canvas roadmap](canvas-roadmap.md), wire behavior in the [wiring roadmap](wiring-roadmap.md), and component definitions, `.opart`/`.olib` containers and deduplicated `.omnia` part embedding in the [parts plan](parts-plan.md) and [parts roadmap](parts-roadmap.md). Product file flows and full library browsing build on top of that schema.
 
 ## 3. Complete the simulation workflow
 
@@ -44,7 +44,7 @@ Define the connection between schematic components and simulation models, circui
 
 **Ready when:** an agreed set of reference circuits produces results within documented tolerances; invalid circuits give actionable diagnostics; a failed or cancelled run leaves the editor usable and the document intact.
 
-**Detailed work:** ERC, netlist lowering, dual simulation engines (`ngspice` + `Reid-Engineered/RIS-C`), analog models, live streaming, virtual instruments (`XSC1`, `XMM1`, `XBP1`, Results dock), and agent simulation tools in the [simulation plan](sim-plan.md) and [simulation roadmap](sim-roadmap.md). Owner decisions (2026-11-23): both engines in parallel from Milestone S1, full analog core (`OP`, `TRAN`, `AC`, `DC`), passives/sources/diode/BJT/MOSFET/op-amp models, and Oscilloscope + Multimeter + Bode Plotter + Results panel in v1.
+**Detailed work:** ERC, netlist lowering, dual simulation engines (`ngspice` + `Reid-Engineered/RIS-C`), analog models, live streaming, virtual instruments (`XSC1`, `XMM1`, `XBP1`, Results dock), and agent simulation tools in the [simulation plan](sim-plan.md) and [simulation roadmap](sim-roadmap.md). Owner decisions (2026-11-23): both engines in parallel from Milestone S1, full analog core (`OP`, `TRAN`, `AC`, `DC`), passives/sources/diode/BJT/MOSFET/op-amp models, and Oscilloscope + Multimeter + Bode Plotter + Results panel in v1. Component definitions, pin roles, typed parameters and embedded model bindings (the definitions and bindings the simulator lowers) are specified in the [parts plan](parts-plan.md) (`PD1`–`PD11`) and [parts roadmap](parts-roadmap.md); lowering to solver input belongs to the simulation plan.
 
 ## 4. Complete the desktop experience
 

@@ -65,6 +65,7 @@ Tasks in different lanes own different files and can run at the same time.
 | `canvas` | `crates/omnia-canvas/`, `crates/omnia-app/` | Yes |
 | `bench` | `crates/omnia-bench/`, `.github/`, `tests/golden/`, `docs/` | Yes |
 | `agent` | `crates/omnia-agent/`, `crates/omnia-cli/`, `docs/agent/`, `mcp-plan.md`, `mcp-roadmap.md` ([mcp-roadmap.md](mcp-roadmap.md)) | No |
+| `circuit` | `crates/omnia-circuit/`, `context-plan.md`, `context-roadmap.md` ([context-roadmap.md](context-roadmap.md)) | No |
 
 ## Milestones
 
@@ -371,7 +372,7 @@ of the `canvas` lane.
   record and set `needs-human`. If B4 misses, apply the "fails at 70k" row of the outcome
   table before reporting.
 
-### T2.9 Far-zoom wire stubs · needs-human
+### T2.9 Far-zoom wire stubs · done
 - Lane: canvas · Depends: T2.7 · Read: D4, D5, K9, plan 2.1 "B4 known limit",
   `docs/measurements/T2.7-wire.md`, G3, G12
 - Owns: `crates/omnia-canvas/src/sheet.rs`, `crates/omnia-canvas/src/sheet/lod.rs`,
@@ -472,7 +473,7 @@ of the `canvas` lane.
   longer settles; a non-grid result is always within the radius, and INV9 is reworded in
   plan section 7 (wiring-plan.md WD5, WINV7). The settling bullet above is historical.
 
-### T4.3 Overlay, hover and selection · todo
+### T4.3 Overlay, hover and selection · done
 - Lane: canvas · Depends: T3.4, T4.2 · Read: D7, INV11, G6, wiring-plan.md WD8
 - Owns: `crates/omnia-canvas/src/overlay.rs`, `selection.rs`
 - Do: `OverlayView`; hover outline; click and shift-click selection; rubber band per WD8
@@ -530,14 +531,17 @@ of the `canvas` lane.
   mouse-up, one undo reverts the whole drag, and Esc mid-drag leaves the revision unchanged.
 
 ### T5.3 Place, move, rotate, mirror, delete · todo
-- Lane: canvas · Depends: T5.2 · Read: D7, K2
-- Owns: `crates/omnia-canvas/src/tool/place.rs`, `tool/move_.rs`, `overlay/ghosts.rs`
+- Lane: canvas · Depends: T5.2 · Read: D7, K2; parts-plan.md §14 (placement provider)
+- Owns: `crates/omnia-canvas/src/tool/place.rs`, `tool/move_.rs`, `overlay/ghosts.rs`; the
+  placement-provider setter on `SheetCanvas` in `crates/omnia-canvas/src/input.rs`
 - Do: place a part from `Tool::Place`; drag-move a selection with ghosts in the overlay and
   the dragged items hidden from the sheet; R, X and Y apply to the ghosts during a drag
   and as a command otherwise; Del deletes. Positions snap to the grid by the part's anchor
-  pin.
+  pin. Committing `Tool::Place(symbol)` asks a shell-supplied placement provider
+  (`SheetCanvas::set_place_provider`, parts §14) for the `Command`, defaulting to
+  `SymbolLibrary::place_command` when none is installed.
 - Done when: simulated-input tests cover place, move, rotate during drag, mirror, delete
-  and undo of each; `SheetView` paints exactly twice per drag (start and end).
+  and undo of each, and a stub provider's command is what placement commits; `SheetView` paints exactly twice per drag (start and end).
 
 ### T5.4 Gate: milestone 5 · todo
 - Lane: bench · Depends: T5.3
@@ -1941,3 +1945,55 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        (This clean 10/10 pass also covers the full no-known-limit T2.7 table
                        required by T2.9; T2.9 left for its own status update.) No new
                        dependencies.
+2026-11-23 T4.3 done — implemented `crates/omnia-canvas/src/selection.rs` (`Selection`,
+                       `RubberBand`, `SelectionState`, `SelectionUpdate`, K14 `hit_tolerance_nm`,
+                       WD8 `query_rubber_band`) and `crates/omnia-canvas/src/overlay.rs`
+                       (`CachedSheet`, `OverlayEvent`, `OverlayView`), re-exported from `lib.rs`
+                       and documented in `canvas-plan.md` section 9 (rule 12). `OverlayView`
+                       embeds `CachedSheet` (a `SheetView` wrapper with real paint/render
+                       counters) via `.cached(StyleRefinement::default().size_full())` and
+                       stacks an absolutely-positioned single-hitbox overlay layer above it
+                       (D7, G6). Selection keeps canonical `(kind, id)` order; click selects,
+                       Shift-click toggles, plain empty-click clears, Shift empty-click keeps;
+                       WD8 rubber band normalises drag direction, supports both `Intersecting`
+                       (WQ3 default via `Doc::query_touching`, dashed border) and `Enclosed`
+                       (via `Doc::query_within`, solid border), reads Shift from the release
+                       event, and releases pointer capture on lost releases; `select_all`
+                       matches `ui-plan.md` section 14. All overlay colours come from
+                       `stage/select`, `stage/select-halo` and `stage/hover` (INV6 passes).
+                       INV11 precondition / pinned-GPUI limitation (disclosed per independent
+                       review B1, matching the open U4.2 focus-refresh decision): at the pinned
+                       GPUI revision (`15d136bf`), `Window::focus` calls `window.refresh()` when
+                       focus changes (`window.rs:2723-2733`), which sets `refreshing = true` and
+                       re-renders every `.cached()` view for that single focus-transfer frame.
+                       The INV11 test focuses `OverlayView` at open and verifies 0 `SheetView`
+                       paints/renders/notifies across 100 hover moves, click/Shift-click/toggle,
+                       rubber-band drags (both modes + Shift-add), `select_all`, off-screen
+                       `on_doc_change`, and bare `Doc` notify, plus negative controls for camera,
+                       on-screen dirty rect, and theme changes; a dedicated test
+                       `unfocused_first_click_triggers_gpui_focus_refresh` pins the unfocused
+                       first-click refresh explicitly. Ownership deviation: added the overlay
+                       golden suite (`tests/golden/tests/overlay.rs`, `tests/golden/Cargo.toml`,
+                       18 PNGs covering `overlay-selected`, `overlay-hovered`, and
+                       `overlay-rubber-band` in Graphite and Gray at 100%/125%/150%) and
+                       registered `("omnia-golden", "overlay")` in `xtask/src/golden.rs` to
+                       satisfy T4.3's golden done-when check. Independent review by Claude
+                       Sonnet 5.5 (high effort): addressed B1 disclosure + test, INV8-clean
+                       world-space `set_rubber_band_preview`, lost-release pointer release,
+                       consistent release-event Shift rule, `set_camera`/`set_theme` no-op
+                       guards, D7 `Doc` notify test, and complete plan section 9 sketch.
+                       Standard checks pass locally on Windows (fmt, workspace clippy,
+                       bench-features clippy, workspace tests incl. 12/12 sheet + 18/18 overlay
+                       goldens with 0 differing px, cargo deny). No budgets measured; no new
+                       dependencies.
+2026-11-23 T2.9 done — Clean Orion reference gate (owner-approved, run remotely by the
+                       coordinating agent over SSH into the local Wayland session):
+                       `docs/measurements/T2.9/gate.py run` at `main` `b147027`, `performance`
+                       governor and AC in every snapshot, Baloo suspended. Every B2, B3, B4, B5,
+                       B9 and B10 check passes at 100% and 125%, including B4 at far zoom with
+                       no known limit and all B3 missed-refresh attributions (the 2026-11-21
+                       failure). 10k-zoom frame p99 5.016 ms (100%) and 4.893 ms (125%). A first
+                       launch stopped at its pre-run check on a blanked panel with no benchmark
+                       run; it is kept in `orion-2026-11-23/aborted-attempt/`. Evidence in
+                       `docs/measurements/T2.9/orion-2026-11-23/`; `gate.py summarize`
+                       reproduces the summary.

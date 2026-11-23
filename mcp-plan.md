@@ -240,7 +240,9 @@ an `H*`, `HW*` or `HA*` checkpoint, or marks a budget met. Human checkpoints sta
 ### AD11 Parts are placed by symbol name. DECIDED
 
 `place_part` names a symbol (`Resistor-IEEE-Standard`). Pins and bounds come from
-`SymbolLibrary::place_command` (A1.2), the same helper the canvas place tool uses.
+`SymbolLibrary::place_command` (A1.2). The agent-lane adoption of `omnia-parts` uses
+`Catalog::place_symbol` to embed the symbol's default definition (`PD11`). See
+[parts-plan.md](parts-plan.md) section 14 for the atomic placement and primary-value edit.
 
 ### AD12 Units and ids. DECIDED
 
@@ -371,11 +373,32 @@ Decoding rules, fixed at A1.3 (2026-11-21; amended by its three review rounds th
   job ids `j<n>`, in the canonical decimal of AD12's item ids; ids fit `u32` (items) or `u64`
   (documents, jobs).
 
+JSON-lines and the command line, as built at A1.7 (2026-11-23, `crates/omnia-cli`):
+
+- `omnia serve` reads one envelope per line (`\n` or `\r\n`; a final line may lack its end)
+  and writes one response per line, flushed after each. Only a consumed `\r\n` drops its
+  `\r`: a `\r` at the end of the input with no `\n` after it is part of the last line, as it is
+  of `omnia call -`'s input. Lines that are empty or only JSON
+  whitespace are skipped. One stream is one session (11.1); a bad line is answered and the
+  session goes on.
+- The `"id"` is a string or a 64-bit integer. A line is decoded in `Request::from_slice`'s
+  order: AK2 on the raw line (its length without the line end), `parse_strict`, then the `id`
+  is lifted off the object and the rest goes to `Request::from_envelope_value`, so duplicate
+  keys (a second `id` included) are still refused. Any other `id` is `schema_violation` at
+  `/id`. The response line is the response with `"id"` written as its first field; a line that
+  is over AK2, does not parse, or has a refused `id` is answered without one. A line without
+  an `id` is answered with exactly the bytes `omnia call` prints for the same bytes (AD1).
+- `omnia call` takes the envelope as one argument, or `-` to read all of standard input, and
+  answers it on a session that ends with the call. A request that does not decode is answered
+  with its refusal on stdout and exit 1, like any tool error.
+- AK2 is enforced while reading: at most one byte past AK2 of a line or of standard input is
+  kept, and the refusal reports the full length.
+
 ### 9.2 Edit operations
 
 | Operation | Params | `Command` |
 | --- | --- | --- |
-| `place_part` | `symbol`, `at`, `orient`, `designator`, `value` | `PlacePart` via `place_command` |
+| `place_part` | `symbol`, `at`, `orient`, `designator`, `value` | `PlacePart` via `place_command`; after parts catalog adoption, `Catalog::place_symbol(symbol, at, orient, designator, Some(value))`, which builds one `PlacePart` carrying the primary-value override (AD11; parts §14) |
 | `add_wires` | `wires: [[a, b], …]` | `AddWires` (split and merge inside `apply`, T6.1) |
 | `add_label` | `at`, `text` | `AddLabel` |
 | `move` | `items`, `delta`; `invert_follow` from A2.2 | `Move` |
@@ -383,12 +406,28 @@ Decoding rules, fixed at A1.3 (2026-11-21; amended by its three review rounds th
 | `delete` | `items`; `with_wires` from A2.3 | `Delete` |
 | `set_text` | `item`, `field` (`designator`, `value`, `label`), `text` | `SetText` |
 
+Future minor schema additions once `omnia-doc` lands `parts-plan.md` `PD8` (`P2.2`): `set_param`,
+`list_parts` and `update_part_def`. `set_param` and `update_part_def` are edit operations: they
+use the existing preview/apply edit path, and their effects appear in change deltas like any
+other edit (cross-plan decision XD8, 2026-11-23). `list_parts` is a read operation: it reads the
+document's definitions and the catalog, changes nothing, and has no preview or apply step.
+
+Added at context C0.2 (HC1, 2026-11-23), both minor changes under AK7 (context-plan.md CK12):
+the read operation `context {doc_id, views, budget?, format?}`, available from context C2.1,
+answers the views of context-plan.md section 9 against one revision in one call (CD9); and,
+from context C2.2, `preview` and `apply` take an optional request field
+`circuit: {format?, budget?}`. When the field is absent, request and response bytes are exactly
+as before.
+
 `invert_follow` means exactly what holding Alt at commit means (WK3), applied to the session's
 `WiringPrefs` (WK10). It exists only once W2.2 has added `FollowPolicy` to the code.
 
 ### 9.3 Results of edits
 
-`preview` and `apply` return:
+`preview` and `apply` return the result below. With the optional `circuit` request field
+(9.2, context-plan.md CD14) the result also carries `circuit`: the `since` view for exactly
+that edit, byte-identical between a preview and its matching apply at the same format and
+budget, and part of the stored idempotent replay (AINV2, AINV7). Otherwise they return:
 
 ```json
 {
@@ -465,6 +504,7 @@ Read results as built at A1.4 (`src/read.rs`, 2026-11-22):
 | Approval | `approval_required {approval_id, tier, effect, effect_digest}`, `approval_denied` |
 | Files | `path_outside_root`, `file_exists`, `io_error`, `unsupported_file_version` |
 | Jobs | `cancelled`, `job_not_found` |
+| Context (context-plan.md CK12, from C2.1) | `stale_cursor`, `unknown_revision`, `ambiguous_handle {candidate_count, candidates}` |
 | Other | `internal` |
 
 Amended at A1.3 (2026-11-21), so the plan follows the code. The wiring tasks had already added
@@ -518,8 +558,8 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_query {doc_id, area, mode: envelope \| within \| touching, cursor?, limit?}` | 0 | read-only, idempotent | A1 |
 | `omnia_nets {doc_id, at? \| wire?}` | 0 | read-only, idempotent | A1 |
 | `omnia_validate {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |
-| `omnia_preview {doc_id, expected_revision, operations}` | 0 | read-only, idempotent | A1 |
-| `omnia_apply {doc_id, expected_revision, operations, preview_id?, idempotency_key?}` | 1 | not destructive, not idempotent | A1 |
+| `omnia_preview {doc_id, expected_revision, operations, circuit?}` | 0 | read-only, idempotent | A1 |
+| `omnia_apply {doc_id, expected_revision, operations, preview_id?, idempotency_key?, circuit?}` | 1 | not destructive, not idempotent | A1 |
 | `omnia_undo`, `omnia_redo {doc_id, expected_revision}` | 1 | not destructive | A1 |
 | `omnia_save {doc_id, path?, approval?}` | 2 or 3 | destructive | A1 |
 | `omnia_close {doc_id, discard_unsaved?, approval?}` | 0 or 3 | destructive | A1 |
@@ -527,9 +567,14 @@ Tier is the AD7 tier. Annotations are MCP tool annotations.
 | `omnia_route`, `omnia_snap`, `omnia_hit` | 0 | read-only, idempotent | A2 |
 | `omnia_render_svg {doc_id, area?, theme}` | 0 | read-only, idempotent | A2 |
 | `omnia_job_status`, `omnia_job_cancel` | 0 | — | A3; not listed before A3.1 |
+| `omnia_context {doc_id, views, budget?, format?}` | 0 | read-only, idempotent | context C2.1 (`circuit?` on preview and apply: C2.2) |
 
 Every tool declares an `inputSchema` and an `outputSchema`. A result carries
-`structuredContent` (the 9.1 envelope) and a text block with the same JSON.
+`structuredContent` (the 9.1 envelope) and a text block with the same JSON. One exception
+(context-plan.md CD10, CQ3): for a successful `omnia_context` response in `lines` format,
+`structuredContent` is still the 9.1 envelope (its views hold `lines: [string]`) and the text
+block is those lines joined by newlines instead of the serialized JSON. `format: "json"`
+responses, errors and every other tool keep the serialized JSON text.
 
 A tool's arguments are its operation's params, plus `idempotency_key` for `omnia_apply`,
 `omnia_undo`, `omnia_redo` and `omnia_save` (11.2); the `inputSchema` is `<op>.arguments` and
@@ -555,6 +600,7 @@ errors.
 | `omnia://doc/{doc_id}/nets` | Canonical nets | Yes |
 | `omnia://symbols`, `omnia://symbols/{name}` | Pins, bounds, placed size (K7) | No |
 | `omnia://jobs/{job_id}` | Job state (A3) | Yes |
+| `omnia://doc/{doc_id}/context` | The context summary view (context-plan.md CD8), cacheable; built by context C2.3 | `updated` on every revision change |
 
 Tools duplicate the key resources because client support for resources varies.
 
@@ -850,10 +896,12 @@ protocol's authorization flow, TLS and a threat-model review by the owner.
   ids, params or symbol names, edit the only copy of a file.
 - The safe loop:
   1. `omnia_capabilities`.
-  2. `omnia_open` or `omnia_new`, then `omnia_inspect`.
+  2. `omnia_open` or `omnia_new`, then `omnia_inspect`; from context C2, orient with
+     `omnia_context` instead.
   3. `omnia_preview` the batch; read the predicted pins and ids.
   4. `omnia_apply` with `preview_id`, `expected_revision` and `idempotency_key`.
-  5. `omnia_nets` to check connectivity.
+  5. `omnia_nets` to check connectivity; from context C2, read the `circuit` delta that
+     `omnia_apply` returns when asked (context-plan.md CD14).
   6. From A2, `omnia_render_svg`, and look at it.
   7. `omnia_save` to a new path; check the response; reopen and compare.
 
@@ -1004,6 +1052,17 @@ Command line:
 | `omnia call --root DIR '<request>'` | One request, one response; exit 0 success, 1 tool error, 2 usage error |
 | `omnia serve --root DIR` | JSON-lines session on stdin and stdout |
 | `omnia mcp --root DIR` | MCP server on stdio |
+
+As built at A1.7: `--root DIR` (or `--root=DIR`) is repeatable, and a root that does not exist
+or is not a directory is a usage error; with no root every path is `path_outside_root`.
+`omnia capabilities` prints the `result` of a `capabilities` request, byte for byte. `omnia
+schema` without a name lists the published names, one per line; `omnia schema NAME` (a `.json`
+suffix is accepted) prints the committed file's bytes, and an unknown name is a usage error.
+`omnia call ... -` reads the request from standard input; `--` ends the options, so a request
+that starts with `-` is written `omnia call -- REQUEST`. Exit codes: 0 success; 1 a tool
+error, or an I/O failure on the standard streams; 2 a usage error. `serve` exits 0 at the end
+of its input. Standard output carries only results; usage errors and diagnostics go to
+standard error. `help` prints the usage. `omnia mcp` is A1.8's.
 
 ## 15. Dependencies and risks
 
