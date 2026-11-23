@@ -3,10 +3,9 @@
 //! The file, edit and zoom groups and the run controls are generated from the
 //! single action registry ([`crate::actions::ACTIONS`]) through
 //! [`crate::actions::toolbar_actions`]; no label, icon or shortcut is written
-//! here for a registered action. The place strip shows the twelve mockup
-//! category buttons, all disabled until the part picker lands (U4.2); the
-//! "In use" picker is likewise present but disabled until U4.2 supplies its
-//! list. The analysis picker, Run, Pause, Stop and the simulation-time pill
+//! here for a registered action. The place strip and the "In use" picker are
+//! the [`PartPicker`] view (U4.2), embedded with `.cached(..)` so its popovers
+//! and its part count never re-render the toolbar. The analysis picker, Run, Pause, Stop and the simulation-time pill
 //! render the UD19 unavailable state while `CommandState::sim` is
 //! [`SimState::Unavailable`].
 //!
@@ -17,20 +16,23 @@
 //! enabled state, and the simulation state behind the time pill. Flipping a
 //! `CommandState` field the toolbar does not show (`tab_count`, the dock
 //! toggles, `theme`, `canvas_edits.delete`, `canvas_edits.place`, ...) never
-//! re-renders it.
+//! re-renders it; `canvas_edits.place` is the picker's to show.
 
 use crate::actions::{
     ActionSpec, CommandState, SimState, ToolbarGroup, action_spec, toolbar_actions,
 };
 use crate::keymap;
+use crate::parts::PartPicker;
+use crate::parts::picker::PART_PICKER_WIDTH;
 use crate::theme;
 use crate::widgets::{
     ButtonGroup, Icon, IconButton, Popover, PopoverCloseEvent, PopoverCloseReason, TextButton,
 };
 use gpui::{
     Context, Entity, FocusHandle, IntoElement, KeyDownEvent, MouseButton, OperatingSystem, Render,
-    Role, Subscription, Window, div, prelude::*, px,
+    Role, StyleRefinement, Subscription, Window, div, prelude::*, px,
 };
+use omnia_symbols::SymbolLibrary;
 use std::time::Duration;
 
 /// Toolbar height (UK3).
@@ -69,8 +71,8 @@ pub const SIM_TIME_PLACEHOLDER: &str = "—";
 
 /// One place-strip category button (mockup order, `design/build-omnia.mjs`).
 ///
-/// The glyphs are the vendored Tabler icons nearest each category; the real
-/// symbol glyphs and popovers arrive with the part picker (U4.2, T2.3).
+/// The glyphs are the vendored Tabler icons nearest each category; each
+/// button opens its category's popover in [`PartPicker`] (U4.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlaceCategory {
     pub id: &'static str,
@@ -189,7 +191,7 @@ impl ShownState {
 pub struct Toolbar {
     state: Entity<CommandState>,
     shown: ShownState,
-    in_use_count: usize,
+    picker: Entity<PartPicker>,
     open_picker: Option<ToolbarPicker>,
     /// Set when the popover closed on this very press (click-outside fires on
     /// mouse-down before the trigger's own handler); the trigger press that
@@ -212,10 +214,11 @@ impl Toolbar {
                 cx.notify();
             }
         });
+        let picker = cx.new(|cx| PartPicker::new(state.clone(), SymbolLibrary::builtin(), cx));
         Self {
             state,
             shown,
-            in_use_count: 0,
+            picker,
             open_picker: None,
             suppress_analysis_press: false,
             analysis_focus: cx.focus_handle(),
@@ -230,17 +233,9 @@ impl Toolbar {
         &self.state
     }
 
-    /// Number of parts shown by the "In use" picker (supplied by U4.2).
-    pub fn in_use_count(&self) -> usize {
-        self.in_use_count
-    }
-
-    /// Sets the "In use" part count; notifies only when it changes.
-    pub fn set_in_use_count(&mut self, count: usize, cx: &mut Context<Self>) {
-        if count != self.in_use_count {
-            self.in_use_count = count;
-            cx.notify();
-        }
+    /// The place strip and "In use" picker view (U4.2).
+    pub fn picker(&self) -> &Entity<PartPicker> {
+        &self.picker
     }
 
     /// Which picker popover is open, if any.
@@ -262,15 +257,6 @@ impl Toolbar {
     /// How many times this view has rendered (tests check the shown-value rule).
     pub fn render_count(&self) -> u64 {
         self.renders
-    }
-}
-
-/// Label of the "In use" picker for `count` parts (UK3: "In use · N parts").
-pub fn in_use_label(count: usize) -> String {
-    if count == 1 {
-        "In use · 1 part".to_owned()
-    } else {
-        format!("In use · {count} parts")
     }
 }
 
@@ -338,18 +324,6 @@ impl Render for Toolbar {
         let sim_unavailable = state.sim == SimState::Unavailable;
         let analysis_spec = action_spec("simulate.transient");
         let analysis_enabled = analysis_spec.is_some_and(|spec| (spec.enabled)(&state));
-        let in_use = in_use_label(self.in_use_count);
-
-        // Place strip: twelve category buttons, disabled until U4.2.
-        let mut place_strip = ButtonGroup::new("toolbar-place-strip").aria_label("Place parts");
-        for category in PLACE_CATEGORIES {
-            place_strip = place_strip.child(
-                IconButton::new(format!("toolbar-place-{}", category.id), category.icon)
-                    .aria_label(category.label)
-                    .tooltip(category.label)
-                    .disabled(true),
-            );
-        }
 
         // Run controls from the Sim registry group: Run is the primary text
         // button, Pause and Stop are icon buttons (UK3).
@@ -469,42 +443,15 @@ impl Render for Toolbar {
                             .bg(theme::color(active.rule)),
                     ),
             )
-            .child(place_strip)
-            .child(div().w(px(TOOLBAR_GROUP_GAP)).flex_none())
-            // "In use · N parts" picker: present, disabled until U4.2.
+            // Place strip, gap and "In use · N parts" picker: the cached
+            // part-picker view (U4.2, UD4).
             .child(
-                div()
-                    .id("toolbar-in-use")
-                    .debug_selector(|| "toolbar-in-use".to_owned())
-                    .role(Role::Button)
-                    .aria_label(in_use.clone())
-                    .aria_description("unavailable")
-                    .tab_stop(false)
-                    .flex()
-                    .flex_row()
-                    .flex_none()
-                    .items_center()
-                    .justify_between()
-                    .w(px(IN_USE_PICKER_WIDTH))
-                    .h(px(PICKER_HEIGHT))
-                    .px(px(12.0))
-                    .rounded(px(9.0))
-                    .bg(theme::color(active.bg_inset))
-                    .border_1()
-                    .border_color(theme::color(active.rule))
-                    .cursor_default()
-                    .child(
-                        div()
-                            .font_family("Inter")
-                            .text_size(px(12.0))
-                            .text_color(theme::color(active.text_muted))
-                            .child(in_use),
-                    )
-                    .child(
-                        Icon::new("chevron-down")
-                            .size(px(16.0))
-                            .color(active.text_muted),
-                    ),
+                self.picker.clone().cached(
+                    StyleRefinement::default()
+                        .flex_none()
+                        .w(px(PART_PICKER_WIDTH))
+                        .h(px(PICKER_HEIGHT)),
+                ),
             )
             // Right-aligned simulation cluster (UK3).
             .child(div().flex_1().min_w_0())
@@ -827,7 +774,7 @@ mod tests {
         );
         assert!(
             !shown(&|s| s.canvas_edits.place = true),
-            "place strip stays disabled until U4.2, so place must not render"
+            "the place flag is shown by the cached PartPicker, never the toolbar"
         );
         // `untitled` alone shows only when it is the reason Save is enabled.
         let mut untitled_only = base;
@@ -839,9 +786,6 @@ mod tests {
             ShownState::from_state(&untitled_on),
             "untitled enables Save when unmodified"
         );
-        assert_eq!(in_use_label(0), "In use · 0 parts");
-        assert_eq!(in_use_label(1), "In use · 1 part");
-        assert_eq!(in_use_label(11), "In use · 11 parts");
         assert_eq!(PLACE_CATEGORIES.len(), 12);
     }
 
@@ -990,6 +934,13 @@ mod tests {
 
         let place = cx.debug_bounds("toolbar-place-strip").expect("place strip");
         assert_eq!(place.size.height, px(PICKER_HEIGHT));
+        assert_eq!(
+            place.size.width,
+            px(crate::parts::picker::PLACE_STRIP_WIDTH)
+        );
+        let picker = cx.debug_bounds("part-picker").expect("part picker");
+        assert_eq!(picker.size.width, px(PART_PICKER_WIDTH));
+        assert_eq!(picker.origin.x, place.origin.x);
         for selector in [
             "toolbar-place-sources",
             "toolbar-place-basic",
@@ -1088,8 +1039,8 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(h.saves.get(), 1, "disabled Save must not dispatch");
 
-        // Disabled place-strip and run controls dispatch nothing.
-        let place_center = cx.debug_bounds("toolbar-place-analog").unwrap().center();
+        // Disabled place-strip buttons and run controls dispatch nothing.
+        let place_center = cx.debug_bounds("toolbar-place-logic").unwrap().center();
         cx.simulate_click(place_center, Modifiers::none());
         let run_center = cx.debug_bounds("toolbar-simulate.run").unwrap().center();
         cx.simulate_click(run_center, Modifiers::none());
@@ -1144,15 +1095,34 @@ mod tests {
             "Escape should close the analysis popover"
         );
 
-        // In-use count is the toolbar's own shown value.
-        let before = toolbar_renders(cx, &h.toolbar);
+        // The in-use count belongs to the cached picker: changing it renders
+        // the picker once. GPUI re-runs its ancestors (this toolbar, the root)
+        // and replays the cached sibling, which never re-renders (U4.2, UD4).
+        let picker = cx.update(|_, cx| h.toolbar.read(cx).picker().clone());
+        let library = SymbolLibrary::builtin();
+        let mut doc = omnia_doc::Doc::new();
+        doc.apply(library.place_command(
+            omnia_symbols::SymbolId(5),
+            omnia_doc::Pt::ZERO,
+            omnia_doc::Orient::IDENTITY,
+            "R1".into(),
+            "1k".into(),
+        ))
+        .expect("place R1");
+        let sibling_before = cx.update(|_, cx| h.sibling.read(cx).renders);
+        let picker_before = cx.update(|_, cx| picker.read(cx).render_count());
         cx.update(|_, cx| {
-            h.toolbar.update(cx, |toolbar, cx| {
-                toolbar.set_in_use_count(11, cx);
-            });
+            picker.update(cx, |picker, cx| picker.follow_document(&doc, &library, cx));
         });
         cx.run_until_parked();
-        assert_eq!(toolbar_renders(cx, &h.toolbar) - before, 1);
-        assert_eq!(cx.update(|_, cx| h.toolbar.read(cx).in_use_count()), 11);
+        assert_eq!(
+            cx.update(|_, cx| h.sibling.read(cx).renders),
+            sibling_before
+        );
+        assert_eq!(
+            cx.update(|_, cx| picker.read(cx).render_count()) - picker_before,
+            1
+        );
+        assert_eq!(cx.update(|_, cx| picker.read(cx).in_use_total()), 1);
     }
 }
