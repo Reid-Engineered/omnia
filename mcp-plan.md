@@ -222,6 +222,8 @@ Enforced in `omnia-agent`, not in any user interface, so every surface meets the
   although `Doc` treats them as unordered sets.
 - Nets are keyed canonically: lowest pin `(part id, pin index)`, else lowest wire id, else
   lowest label id. Raw `NetId`s are never exposed; a `NetId` is valid only until the next edit.
+  A net's members are sorted, and nets are listed in key order: pin keys by `(part, pin)`, then
+  wire keys, then label keys (A1.4).
 - DTOs contain no hash maps and no floats; field order is fixed by struct order.
 - The same document and request give byte-identical JSON (AINV5).
 
@@ -411,6 +413,33 @@ As built at A1.3: `before` and `after` of a modified item carry all of its field
 `symbol`, `at`, `orient`, `designator` and `value`; a wire's `a` and `b`; a label's `at` and
 `text`); the example above abbreviates them. `change.dirty` is omitted for a validated no-op.
 `validate` returns `{base_revision, change}`; `undo` and `redo` return `{change}`.
+
+Read results as built at A1.4 (`src/read.rs`, 2026-11-22):
+
+- Paging (AK4) is keyset paging. `next_cursor` is the id of the last item on the page (for
+  example `wire:7`) and is present exactly when more items follow, so a last page that is
+  exactly full has none. The next page holds the items after the cursor in canonical order, so
+  a cursor stays usable across edits: removed items vanish and none repeats. A `cursor` that is
+  not an item id is `schema_violation` at `/params/cursor`; a `limit` of 0 at `/params/limit`;
+  over AK4 is `limit_exceeded {page_size}` first, as in the decoder. The read layer reports
+  envelope-space pointers; the MCP form drops the leading `/params` (9.1).
+- `query` modes: `envelope` is `Doc::query` (a part's body and pins), `within` is
+  `Doc::query_within` (WD8 Enclosed), `touching` is `Doc::query_touching` (WD8 Intersecting),
+  with those functions' inclusive edge rules. `inspect`'s `area` pages the items the `envelope`
+  mode finds there; its summary and nets always cover the whole document. `cursor` and `limit`
+  are checked whether or not `include` names `items`.
+- A net is one of `omnia-doc`'s nets (D2): wire ends, pins and labels at points, joined by
+  wires and by equal label text. Every live pin, wire and label is in exactly one net, and a
+  lone pin or label is a net of its own. `nets {at}` is empty when no wire end, pin or label sits
+  exactly at `at` (a wire's interior is no connection point); `nets {wire}` on a missing wire is
+  `unknown_item`. The nets are grouped through `Doc::net_of` and `Doc::net_at`; no `NetId`
+  leaves `read.rs`.
+- A part's `symbol` is its symbol's name from the library; a part whose symbol id the library
+  lacks makes an items read `internal`, never a guessed name.
+- The symbol catalog (`omnia://symbols`, 10.2) is `read::SymbolInfo {name, bounds, width,
+  height, pins: [{number, at}]}`, in symbol id order, with `width` and `height` the bounds'
+  extent in nanometres (K7's placed size) and pins in the order a `PinRef` indexes. It has no
+  committed schema yet: resources are A1.8's, which publishes one beside the resource.
 
 ### 9.4 Errors
 

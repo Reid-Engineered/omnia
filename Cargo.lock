@@ -3518,6 +3518,7 @@ name = "omnia-agent"
 version = "0.1.0"
 dependencies = [
  "omnia-doc",
+ "omnia-symbols",
  "proptest",
  "serde",
  "serde_json",

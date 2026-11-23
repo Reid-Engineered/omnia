@@ -10,6 +10,7 @@
 
 pub mod catalog;
 pub mod error;
+pub mod read;
 pub mod schema;
 
 pub use catalog::{Catalog, EditOpName, OpName, OpSpec};
