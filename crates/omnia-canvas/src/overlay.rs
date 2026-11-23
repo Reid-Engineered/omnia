@@ -17,6 +17,11 @@ use std::{cell::Cell, rc::Rc};
 
 use crate::{
     camera::Camera,
+    camera_anim::{
+        CameraAnimation, ViewAnimation, fit_rect_camera, fit_sheet_camera, viewport_center,
+        zoom_to_selection_camera,
+    },
+    input::wheel_factor,
     selection::{RubberBand, SelectionState, SelectionUpdate},
     sheet::{SheetDocument, SheetView},
     snap_px::{centered_square, device_rect, round_device, stroke_device_px, to_device},
@@ -192,6 +197,8 @@ pub struct OverlayView {
     theme: &'static Theme,
     state: SelectionState,
     focus: FocusHandle,
+    viewport: Bounds<Pixels>,
+    anim: Option<ViewAnimation>,
     renders: u64,
     paints: Rc<Cell<u64>>,
 }
@@ -214,6 +221,8 @@ impl OverlayView {
             theme,
             state: SelectionState::default(),
             focus: cx.focus_handle(),
+            viewport: Bounds::default(),
+            anim: None,
             renders: 0,
             paints: Rc::new(Cell::new(0)),
         }
@@ -225,6 +234,19 @@ impl OverlayView {
 
     pub fn camera(&self) -> &Camera {
         &self.camera
+    }
+
+    pub fn viewport(&self) -> Bounds<Pixels> {
+        self.viewport
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.anim.is_some()
+    }
+
+    /// Cancels any active view animation immediately from the current camera position (K13).
+    pub fn cancel_animation(&mut self) -> bool {
+        self.anim.take().is_some()
     }
 
     pub fn theme(&self) -> &'static Theme {
@@ -341,8 +363,61 @@ impl OverlayView {
         }
     }
 
+    /// Starts a 150 ms ease-out view animation (K13) from the current camera to `target`.
+    pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>) {
+        let anim = CameraAnimation::new(self.camera.clone(), target, self.viewport);
+        if anim.is_noop() {
+            self.anim = None;
+            return;
+        }
+        self.anim = Some(ViewAnimation::start(anim, cx));
+        self.sheet.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
+    /// Animates the camera to fit `rect` in the current viewport with default margins.
+    pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>) {
+        self.animate_to(fit_rect_camera(rect, self.viewport), cx);
+    }
+
+    /// Animates the camera to fit all items in the sheet (or origin at 100% if empty).
+    pub fn fit_sheet(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let target = fit_sheet_camera(Some(self.doc.read(cx)), self.viewport);
+        self.animate_to(target, cx);
+    }
+
+    /// Animates the camera to fit the current selection. Returns `false` if nothing live is
+    /// selected.
+    pub fn zoom_to_selection(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(target) =
+            zoom_to_selection_camera(self.doc.read(cx), self.state.selection(), self.viewport)
+        else {
+            return false;
+        };
+        self.animate_to(target, cx);
+        true
+    }
+
+    /// Animates a K4 zoom of `steps` notches about the viewport centre (`ui-plan.md` section 14).
+    pub fn zoom_step(&mut self, steps: i32, _window: &mut Window, cx: &mut Context<Self>) {
+        if steps == 0 {
+            return;
+        }
+        let mut target = self
+            .anim
+            .as_ref()
+            .map_or_else(|| self.camera.clone(), |a| a.target().clone());
+        target.set_viewport(self.viewport);
+        target.zoom_about(
+            viewport_center(self.viewport),
+            wheel_factor(f64::from(steps)),
+        );
+        self.animate_to(target, cx);
+    }
+
     /// Updates the camera and invalidates both the cached sheet and the overlay when changed (D7).
     pub fn set_camera(&mut self, camera: Camera, cx: &mut Context<Self>) {
+        self.anim = None;
         if self.camera.zoom() == camera.zoom()
             && self.camera.world_to_screen(Pt::ZERO) == camera.world_to_screen(Pt::ZERO)
             && self.camera.visible() == camera.visible()
@@ -372,6 +447,7 @@ impl OverlayView {
 
     /// Replaces the displayed document, clearing transient state and invalidating both views.
     pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>) {
+        self.anim = None;
         let document = SheetDocument::new(doc.clone());
         self.doc = doc;
         let had_selection = !self.state.selection().is_empty();
@@ -413,6 +489,7 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.viewport = bounds;
         self.camera.set_viewport(bounds);
         let update = self
             .state
@@ -427,6 +504,7 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.viewport = bounds;
         self.camera.set_viewport(bounds);
         let update = self
             .state
@@ -446,6 +524,7 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.viewport = bounds;
         self.camera.set_viewport(bounds);
         let update = self.state.mouse_up(self.doc.read(cx), &self.camera, event);
         self.apply_update(update, cx);
@@ -454,8 +533,30 @@ impl OverlayView {
 }
 
 impl Render for OverlayView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        if let Some(anim) = &self.anim {
+            let (next_cam, finished) = anim.step(self.viewport, cx);
+            self.camera = next_cam.clone();
+            self.sheet.update(cx, |sheet, _| {
+                sheet.camera = next_cam;
+            });
+            if finished {
+                self.anim = None;
+            } else {
+                window.request_animation_frame();
+                let overlay = cx.entity().downgrade();
+                let sheet = self.sheet.clone();
+                window.on_next_frame(move |_, cx| {
+                    if overlay
+                        .read_with(cx, |o, _| o.is_animating())
+                        .unwrap_or(false)
+                    {
+                        sheet.update(cx, |_, cx| cx.notify());
+                    }
+                });
+            }
+        }
         div()
             .relative()
             .size_full()
@@ -529,7 +630,10 @@ impl Element for OverlayLayer {
     ) -> Self::PrepaintState {
         // Keep the overlay's camera viewport aligned with layout bounds without notifying.
         self.overlay
-            .update(cx, |overlay, _| overlay.camera.set_viewport(bounds))
+            .update(cx, |overlay, _| {
+                overlay.viewport = bounds;
+                overlay.camera.set_viewport(bounds);
+            })
             .ok();
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }

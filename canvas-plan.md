@@ -725,20 +725,51 @@ impl OverlayView {
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>);
     pub fn on_doc_change(&mut self, change: &Change, cx: &mut Context<Self>);
+    pub fn viewport(&self) -> Bounds<Pixels>;
+    pub fn is_animating(&self) -> bool;
+    pub fn cancel_animation(&mut self) -> bool;
+    pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>);
+    pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>);
+    pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
+    pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
+    pub fn zoom_step(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>);
 }
+// T4.5 (camera_anim.rs): 150 ms ease-out view animations driven by `request_animation_frame` (K13, G16).
+pub const VIEW_ANIM_DURATION: Duration;                    // 150 ms (K13)
+pub const FIT_FILL_FRACTION: f64;                          // 0.9 (5% margin per side)
+pub fn ease_out(t: f64) -> f64;
+pub fn doc_bounds(doc: &Doc) -> Option<Rect>;
+pub fn selection_bounds(doc: &Doc, selection: &[ItemId]) -> Option<Rect>;
+pub fn fit_rect_camera(rect: Rect, viewport: Bounds<Pixels>) -> Camera;
+pub fn fit_area_camera(rect: Rect, viewport: Bounds<Pixels>) -> Camera;
+pub fn fit_sheet_camera(doc: Option<&Doc>, viewport: Bounds<Pixels>) -> Camera;
+pub fn zoom_to_selection_camera(doc: &Doc, selection: &[ItemId], viewport: Bounds<Pixels>) -> Option<Camera>;
+pub struct CameraAnimation { /* pure K13 ease-out transition, exact target completion */ }
+pub struct ViewAnimation { /* GPUI clock-bound wrapper over CameraAnimation */ }
 impl SheetCanvas {
     pub fn new(doc: Entity<Doc>, theme: &'static Theme,
                window: &mut Window, cx: &mut Context<Self>) -> Self;
     // The shell document integration (U2.2) supplies the live entity to the T2.5 renderer.
-    // Until then the navigation shell uses `new(camera: Camera, theme, cx)`.
+    // Until then the navigation shell uses `new(camera: Camera, theme, cx)` with optional `with_doc`/`set_doc`.
+    pub fn with_doc(self, doc: Entity<Doc>) -> Self;
+    pub fn set_doc(&mut self, doc: Option<Entity<Doc>>, cx: &mut Context<Self>);
+    pub fn doc(&self) -> Option<&Entity<Doc>>;
     pub fn camera(&self) -> &Camera;
+    pub fn viewport(&self) -> Bounds<Pixels>;
     pub fn status(&self) -> CanvasStatus;
+    pub fn is_animating(&self) -> bool;
+    pub fn cancel_animation(&mut self) -> bool;
+    pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>);
+    pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>);
+    pub fn fit_doc(&mut self, doc: &Doc, cx: &mut Context<Self>);
+    pub fn zoom_to_selection_in(&mut self, doc: &Doc, selection: &[ItemId], cx: &mut Context<Self>) -> bool;
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
     // T5.3: a shell-supplied placement provider (see parts-plan.md section 14) builds the
     // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation.
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);
+    pub fn zoom_step(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>);
     pub fn selection(&self) -> &[ItemId];
 }
 impl Render for SheetCanvas { /* ... */ }
