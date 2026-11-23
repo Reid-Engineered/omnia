@@ -37,7 +37,7 @@ pub fn watchdog(what: &'static str, limit: Duration) {
 
 type Outcome = Rc<RefCell<Option<Result<Value, String>>>>;
 
-fn run_app(
+pub(crate) fn run_app(
     what: &str,
     open: impl FnOnce(&mut App, Outcome) -> Result<(), String> + 'static,
 ) -> Result<Value, String> {
@@ -73,7 +73,11 @@ fn content(
     }
 }
 
-fn window_options(size_logical: (f32, f32), cx: &App, unthrottled: bool) -> WindowOptions {
+pub(crate) fn window_options(
+    size_logical: (f32, f32),
+    cx: &App,
+    unthrottled: bool,
+) -> WindowOptions {
     let bounds = Bounds::centered(None, size(px(size_logical.0), px(size_logical.1)), cx);
     let mut options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -116,7 +120,7 @@ pub(crate) fn environment(window: &Window, cx: &App) -> Value {
     })
 }
 
-fn memory_metrics(metrics: &mut Map<String, Value>) {
+pub(crate) fn memory_metrics(metrics: &mut Map<String, Value>) {
     let mb = |bytes: u64| round(bytes as f64 / (1024.0 * 1024.0));
     if let Some(memory) = sys::memory() {
         metrics.insert("memory_mb".into(), json!(mb(memory.private_bytes)));
@@ -295,81 +299,199 @@ impl Render for RunView {
     }
 }
 
+pub(crate) struct RunReportInput<'a> {
+    pub config: RunConfig,
+    pub scene_details: Option<Value>,
+    pub window: &'a Window,
+    pub cx: &'a App,
+    pub base: &'a FrameDurationSnapshot,
+    pub allocs: &'a [AllocCounts],
+    pub paint_ms: &'a mut [f64],
+    pub paint_sampling: &'static str,
+    pub paint_samples: usize,
+    pub started: Instant,
+    pub trace: Option<&'a mut crate::trace::FrameTrace>,
+    pub extra_metrics: Map<String, Value>,
+    pub extra_warnings: Vec<String>,
+}
+
+pub(crate) fn build_run_report(input: RunReportInput<'_>) -> Result<Value, String> {
+    let RunReportInput {
+        config,
+        scene_details,
+        window,
+        cx,
+        base,
+        allocs,
+        paint_ms,
+        paint_sampling,
+        paint_samples,
+        started,
+        trace,
+        extra_metrics,
+        extra_warnings,
+    } = input;
+    let end = window.frame_duration_snapshot();
+    let delta = |later, earlier| stats::delta(later, earlier).ok_or("histogram subtraction failed");
+
+    let baseline_draws = base.draw_duration_histogram.len();
+    let draw = delta(&end.draw_duration_histogram, &base.draw_duration_histogram)?;
+    let dirty_to_present = delta(
+        &end.dirty_to_present_histogram,
+        &base.dirty_to_present_histogram,
+    )?;
+    let present_interval = delta(
+        &end.present_interval_histogram,
+        &base.present_interval_histogram,
+    )?;
+    let by_refresh: Vec<_> = end
+        .by_refresh_interval
+        .iter()
+        .map(|later| {
+            match base
+                .by_refresh_interval
+                .iter()
+                .find(|earlier| earlier.refresh_interval == later.refresh_interval)
+            {
+                Some(earlier) => later.since(earlier),
+                None => later.clone(),
+            }
+        })
+        .collect();
+    let work = stats::merged(by_refresh.iter().map(|r| &r.work));
+    let sum = |f: fn(&gpui::RefreshIntervalFrames) -> u64| by_refresh.iter().map(f).sum::<u64>();
+    let drawn = draw.len();
+    let on_time = sum(|r| r.frames_on_time);
+    let late = sum(|r| r.frames_late);
+    let unmeasured = sum(|r| r.frames_unmeasured);
+    // GPUI's own count: refreshes a frame's *work* overran. Not the B3 metric.
+    let work_missed = sum(|r| r.missed_refreshes);
+    // B3/B4 (owner decision 2026-11-16, T1.6): a present interval longer than 1.5 refresh
+    // intervals is a missed refresh; B4 allows none longer than 2.5.
+    let refresh_nanos = window
+        .refresh_interval(cx)
+        .map(|interval| interval.as_nanos() as u64);
+    let over = |threshold| {
+        refresh_nanos.map(|r| stats::count_over_refreshes(&present_interval, r, threshold))
+    };
+
+    let mut ours_allocs: Vec<f64> = allocs.iter().map(|a| a.ours_allocs as f64).collect();
+    let mut total_allocs: Vec<f64> = allocs.iter().map(|a| a.total_allocs as f64).collect();
+    let mut ours_bytes: Vec<f64> = allocs.iter().map(|a| a.ours_bytes as f64).collect();
+    let mut total_bytes: Vec<f64> = allocs.iter().map(|a| a.total_bytes as f64).collect();
+    let alloc_json = |samples: &mut Vec<f64>| {
+        Summary::from_samples(samples).map_or(Value::Null, |s| s.to_json())
+    };
+
+    let mut metrics = Map::new();
+    insert_summary(
+        &mut metrics,
+        "frame_ms",
+        work.as_ref().and_then(Summary::from_nanos),
+    );
+    insert_summary(&mut metrics, "draw_ms", Summary::from_nanos(&draw));
+    insert_summary(
+        &mut metrics,
+        "dirty_to_present_ms",
+        Summary::from_nanos(&dirty_to_present),
+    );
+    insert_summary(
+        &mut metrics,
+        "present_interval_ms",
+        Summary::from_nanos(&present_interval),
+    );
+    metrics.insert("paint_samples".into(), json!(paint_samples));
+    metrics.insert("paint_sampling".into(), json!(paint_sampling));
+    insert_summary(&mut metrics, "paint_ms", Summary::from_samples(paint_ms));
+    metrics.insert(
+        "allocs_per_frame".into(),
+        json!({ "ours": alloc_json(&mut ours_allocs), "total": alloc_json(&mut total_allocs) }),
+    );
+    metrics.insert(
+        "alloc_bytes_per_frame".into(),
+        json!({ "ours": alloc_json(&mut ours_bytes), "total": alloc_json(&mut total_bytes) }),
+    );
+    metrics.insert("late_frames".into(), json!(late));
+    metrics.insert("missed_refreshes".into(), json!(over(1.5)));
+    metrics.insert(
+        "present_intervals_over_2_5_refreshes".into(),
+        json!(over(2.5)),
+    );
+    metrics.insert(
+        "max_present_interval_ms".into(),
+        json!((!present_interval.is_empty()).then(|| round(present_interval.max() as f64 / 1e6))),
+    );
+    metrics.insert("work_missed_refreshes".into(), json!(work_missed));
+    memory_metrics(&mut metrics);
+    metrics.extend(extra_metrics);
+
+    #[cfg(feature = "scene-counts")]
+    metrics.insert("primitives".into(), primitive_counts(window));
+
+    let mut warnings = Vec::new();
+    // The baseline should hold exactly the warm-up draws.
+    if baseline_draws != u64::from(config.warmup) {
+        warnings.push(format!(
+            "baseline snapshot covers {baseline_draws} draws, expected {} warm-up frames",
+            config.warmup
+        ));
+    }
+    if drawn != u64::from(config.frames) {
+        warnings.push(format!(
+            "GPUI drew {drawn} frames, expected {}",
+            config.frames
+        ));
+    }
+    if allocs.len() != config.frames as usize {
+        warnings.push(format!("sampled {} frames", allocs.len()));
+    }
+    if paint_sampling == "every-frame" && paint_samples != config.frames as usize {
+        warnings.push(format!("sampled paint on {paint_samples} frames"));
+    }
+    if refresh_nanos.is_none() {
+        warnings.push("refresh interval unknown: missed refreshes not counted".into());
+    }
+    if !window.is_window_active() {
+        warnings.push("window was not active: present intervals are not recorded".into());
+    }
+    warnings.extend(extra_warnings);
+
+    let diagnostic_trace = trace.map(|trace| trace.collect());
+    let paint_probe = crate::paint_probe::collect();
+    let mut cfg = config.to_json();
+    if diagnostic_trace.is_some() {
+        // compare requires matching config: traced costs must not be compared to gates.
+        cfg["diagnostic_trace"] = json!(true);
+    }
+    if paint_probe.is_some() {
+        cfg["paint_probe"] = json!(true);
+    }
+    let mut report = json!({
+        "schema": SCHEMA,
+        "kind": "run",
+        "config": cfg,
+        "scene_details": scene_details,
+        "spike": match config.sheet { Sheet::Spike(c) => Some(c.json()), _ => None },
+        "environment": environment(window, cx),
+        "frames": {
+            "drawn": drawn,
+            "on_time": on_time,
+            "late": late,
+            "unmeasured": unmeasured,
+            "wall_s": round(started.elapsed().as_secs_f64()),
+        },
+        "warnings": warnings,
+        "metrics": metrics,
+        "diagnostic_trace": diagnostic_trace,
+    });
+    if let Some(paint_probe) = paint_probe {
+        report["paint_probe"] = paint_probe;
+    }
+    Ok(report)
+}
+
 impl RunView {
     fn report(&mut self, window: &mut Window, cx: &App) -> Result<Value, String> {
-        let end = window.frame_duration_snapshot();
-        let base = self.baseline.as_ref().ok_or("no baseline snapshot")?;
-        let delta =
-            |later, earlier| stats::delta(later, earlier).ok_or("histogram subtraction failed");
-
-        let baseline_draws = base.draw_duration_histogram.len();
-        let draw = delta(&end.draw_duration_histogram, &base.draw_duration_histogram)?;
-        let dirty_to_present = delta(
-            &end.dirty_to_present_histogram,
-            &base.dirty_to_present_histogram,
-        )?;
-        let present_interval = delta(
-            &end.present_interval_histogram,
-            &base.present_interval_histogram,
-        )?;
-        let by_refresh: Vec<_> = end
-            .by_refresh_interval
-            .iter()
-            .map(|later| {
-                match base
-                    .by_refresh_interval
-                    .iter()
-                    .find(|earlier| earlier.refresh_interval == later.refresh_interval)
-                {
-                    Some(earlier) => later.since(earlier),
-                    None => later.clone(),
-                }
-            })
-            .collect();
-        let work = stats::merged(by_refresh.iter().map(|r| &r.work));
-        let sum =
-            |f: fn(&gpui::RefreshIntervalFrames) -> u64| by_refresh.iter().map(f).sum::<u64>();
-        let drawn = draw.len();
-        let on_time = sum(|r| r.frames_on_time);
-        let late = sum(|r| r.frames_late);
-        let unmeasured = sum(|r| r.frames_unmeasured);
-        // GPUI's own count: refreshes a frame's *work* overran. Not the B3 metric.
-        let work_missed = sum(|r| r.missed_refreshes);
-        // B3/B4 (owner decision 2026-11-16, T1.6): a present interval longer than 1.5 refresh
-        // intervals is a missed refresh; B4 allows none longer than 2.5.
-        let refresh_nanos = window
-            .refresh_interval(cx)
-            .map(|interval| interval.as_nanos() as u64);
-        let over = |threshold| {
-            refresh_nanos.map(|r| stats::count_over_refreshes(&present_interval, r, threshold))
-        };
-
-        let mut ours_allocs: Vec<f64> = self.allocs.iter().map(|a| a.ours_allocs as f64).collect();
-        let mut total_allocs: Vec<f64> =
-            self.allocs.iter().map(|a| a.total_allocs as f64).collect();
-        let mut ours_bytes: Vec<f64> = self.allocs.iter().map(|a| a.ours_bytes as f64).collect();
-        let mut total_bytes: Vec<f64> = self.allocs.iter().map(|a| a.total_bytes as f64).collect();
-        let alloc_json = |samples: &mut Vec<f64>| {
-            Summary::from_samples(samples).map_or(Value::Null, |s| s.to_json())
-        };
-
-        let mut metrics = Map::new();
-        insert_summary(
-            &mut metrics,
-            "frame_ms",
-            work.as_ref().and_then(Summary::from_nanos),
-        );
-        insert_summary(&mut metrics, "draw_ms", Summary::from_nanos(&draw));
-        insert_summary(
-            &mut metrics,
-            "dirty_to_present_ms",
-            Summary::from_nanos(&dirty_to_present),
-        );
-        insert_summary(
-            &mut metrics,
-            "present_interval_ms",
-            Summary::from_nanos(&present_interval),
-        );
         // Our paint is timed only on frames that paint the scene. S6 cached replays the sheet
         // without painting it, so its paint samples are sparse by design.
         let paint_samples = self.paint_ms.len();
@@ -378,98 +500,21 @@ impl RunView {
             (_, Some(_)) => "every-frame",
             (_, None) => "none",
         };
-        metrics.insert("paint_samples".into(), json!(paint_samples));
-        metrics.insert("paint_sampling".into(), json!(paint_sampling));
-        insert_summary(
-            &mut metrics,
-            "paint_ms",
-            Summary::from_samples(&mut self.paint_ms),
-        );
-        metrics.insert(
-            "allocs_per_frame".into(),
-            json!({ "ours": alloc_json(&mut ours_allocs), "total": alloc_json(&mut total_allocs) }),
-        );
-        metrics.insert(
-            "alloc_bytes_per_frame".into(),
-            json!({ "ours": alloc_json(&mut ours_bytes), "total": alloc_json(&mut total_bytes) }),
-        );
-        metrics.insert("late_frames".into(), json!(late));
-        metrics.insert("missed_refreshes".into(), json!(over(1.5)));
-        metrics.insert(
-            "present_intervals_over_2_5_refreshes".into(),
-            json!(over(2.5)),
-        );
-        metrics.insert(
-            "max_present_interval_ms".into(),
-            json!(
-                (!present_interval.is_empty()).then(|| round(present_interval.max() as f64 / 1e6))
-            ),
-        );
-        metrics.insert("work_missed_refreshes".into(), json!(work_missed));
-        memory_metrics(&mut metrics);
-
-        #[cfg(feature = "scene-counts")]
-        metrics.insert("primitives".into(), primitive_counts(window));
-
-        let mut warnings = Vec::new();
-        // The baseline should hold exactly the warm-up draws.
-        if baseline_draws != u64::from(self.config.warmup) {
-            warnings.push(format!(
-                "baseline snapshot covers {baseline_draws} draws, expected {} warm-up frames",
-                self.config.warmup
-            ));
-        }
-        if drawn != u64::from(self.config.frames) {
-            warnings.push(format!(
-                "GPUI drew {drawn} frames, expected {}",
-                self.config.frames
-            ));
-        }
-        if self.allocs.len() != self.config.frames as usize {
-            warnings.push(format!("sampled {} frames", self.allocs.len()));
-        }
-        if paint_sampling == "every-frame" && paint_samples != self.config.frames as usize {
-            warnings.push(format!("sampled paint on {paint_samples} frames"));
-        }
-        if refresh_nanos.is_none() {
-            warnings.push("refresh interval unknown: missed refreshes not counted".into());
-        }
-        if !window.is_window_active() {
-            warnings.push("window was not active: present intervals are not recorded".into());
-        }
-
-        let diagnostic_trace = self.trace.as_mut().map(|trace| trace.collect());
-        let paint_probe = crate::paint_probe::collect();
-        let mut config = self.config.to_json();
-        if diagnostic_trace.is_some() {
-            // compare requires matching config: traced costs must not be compared to gates.
-            config["diagnostic_trace"] = json!(true);
-        }
-        if paint_probe.is_some() {
-            config["paint_probe"] = json!(true);
-        }
-        let mut report = json!({
-            "schema": SCHEMA,
-            "kind": "run",
-            "config": config,
-            "scene_details": self.scene.as_ref().map(|s|s.borrow().details()),
-            "spike": match self.config.sheet { Sheet::Spike(c) => Some(c.json()), _ => None },
-            "environment": environment(window, cx),
-            "frames": {
-                "drawn": drawn,
-                "on_time": on_time,
-                "late": late,
-                "unmeasured": unmeasured,
-                "wall_s": round(self.started.elapsed().as_secs_f64()),
-            },
-            "warnings": warnings,
-            "metrics": metrics,
-            "diagnostic_trace": diagnostic_trace,
-        });
-        if let Some(paint_probe) = paint_probe {
-            report["paint_probe"] = paint_probe;
-        }
-        Ok(report)
+        build_run_report(RunReportInput {
+            config: self.config,
+            scene_details: self.scene.as_ref().map(|s| s.borrow().details()),
+            window,
+            cx,
+            base: self.baseline.as_ref().ok_or("no baseline snapshot")?,
+            allocs: &self.allocs,
+            paint_ms: &mut self.paint_ms,
+            paint_sampling,
+            paint_samples,
+            started: self.started,
+            trace: self.trace.as_mut(),
+            extra_metrics: Map::new(),
+            extra_warnings: Vec::new(),
+        })
     }
 }
 
@@ -493,7 +538,7 @@ pub(crate) fn primitive_counts(window: &Window) -> Value {
 
 /// Registers the bundled Inter weights needed by `SheetView` text rendering (T3.1/T3.4) and
 /// the S5 text spike.
-fn register_sheet_fonts(sheet: Sheet, cx: &App) -> Result<(), String> {
+pub(crate) fn register_sheet_fonts(sheet: Sheet, cx: &App) -> Result<(), String> {
     if matches!(sheet, Sheet::Stress(_)) || matches!(sheet, Sheet::Spike(c) if c.scene == 5) {
         cx.text_system()
             .add_fonts(vec![
@@ -510,6 +555,9 @@ fn register_sheet_fonts(sheet: Sheet, cx: &App) -> Result<(), String> {
 }
 
 pub fn run(config: RunConfig) -> Result<Value, String> {
+    if config.script == Script::Hover {
+        return crate::hover::run_hover(config);
+    }
     let tracing = std::env::var_os("OMNIA_BENCH_TRACE").is_some();
     let enabled_trace = tracing && gpui::set_trace_enabled(true);
     // Generous: 600 frames take 10 s at 60 Hz.

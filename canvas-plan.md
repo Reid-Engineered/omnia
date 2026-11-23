@@ -701,10 +701,13 @@ pub struct SelectionState { /* selection, hovered, rubber_band, SelectMode (WQ3 
 pub struct NetHighlight { /* resolved NetIds and deduplicated WireIds */ }
 pub enum OverlayEvent { SelectionChanged }
 pub struct CachedSheet { /* SheetView wrapper with paint/render counters (D7, INV11) */ }
+pub trait OverlayPaintScope { fn omnia(&self, work: &mut dyn FnMut()); fn gpui(&self, work: &mut dyn FnMut()); }
 pub struct OverlayView { /* doc, CachedSheet (.cached()), camera, theme, SelectionState, NetHighlight */ }
 impl OverlayView {
     pub fn new(doc: Entity<Doc>, camera: Camera, theme: &'static Theme, cx: &mut Context<Self>) -> Self;
     pub fn with_prefs(doc: Entity<Doc>, camera: Camera, theme: &'static Theme, prefs: &WiringPrefs, cx: &mut Context<Self>) -> Self;
+    pub fn with_paint_scope(self, scope: Rc<dyn OverlayPaintScope>) -> Self;
+    pub fn set_paint_scope(&mut self, scope: Option<Rc<dyn OverlayPaintScope>>);
     pub fn doc(&self) -> &Entity<Doc>;
     pub fn camera(&self) -> &Camera;
     pub fn theme(&self) -> &'static Theme;

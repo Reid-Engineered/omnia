@@ -501,7 +501,7 @@ of the `canvas` lane.
 - Done when: tests show the animation ends exactly on the target, input mid-way stops it
   with no jump, and `bench idle` still reports 0 frames one second after it ends.
 
-### T4.6 Gate: milestone 4 · todo
+### T4.6 Gate: milestone 4 · needs-human
 - Lane: bench · Depends: T4.4, T4.5
 - Do: `bench hit --sheet 10k` (B7 < 0.2 ms); `bench run --sheet 10k --script hover`
   (p99 < 16 ms, sheet paint count 0); the INV10 and INV11 tests; the T2.7 table again.
@@ -2058,3 +2058,37 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        on Windows; standard checks pass locally (fmt, workspace clippy,
                        bench-features clippy, workspace tests, golden tests, cargo deny). No
                        budgets measured; no new dependencies.
+2026-11-23 T4.6 needs-human — Milestone 4 gate prepared; awaiting Orion reference campaign
+                       (`docs/measurements/T4.6/gate.py`). Implemented `bench run --script hover`
+                       in `crates/omnia-bench/src/hover.rs` (wired through `driver.rs`,
+                       `harness.rs`, `main.rs`, `lib.rs`, `scene.rs`, and `--headless` in
+                       `scripts.rs`) using public APIs only: mounts a focused `OverlayView`
+                       with `BenchOverlayScope` over the real `10k` sheet, warms up, and sweeps
+                       pointer `MouseMoveEvent`s across verified visible parts, net-backed wires
+                       (triggering `NetHighlight`), labels when present, and empty space while
+                       reporting `metrics.sheet_paints` (expected `0` per INV11) and `mismatches`
+                       alongside standard `bench run` metrics (`pan`/`zoom` and `bench-baseline/`
+                       unchanged). Deviations: `T4.6` has no explicit **Owns** line (touches
+                       `omnia-bench` files listed above); owner-approved (2026-11-23) B10
+                       allocation-accounting hook `OverlayPaintScope` added in
+                       `crates/omnia-canvas/src/{overlay.rs,overlay/net.rs,lib.rs}` and
+                       `canvas-plan.md` §9 (mirroring T2.6's `SheetPaintScope` in `sheet.rs`,
+                       verified by `overlay_paint_scope_attributes_mouse_move_and_paint`);
+                       `gate.py` is tighter than T4.6's minimum prose on `10k-hover` (adding
+                       `1.5R` attribution, `B5 <= 33.3 ms`, `B9 < 300 MB`, `B10 == 0`,
+                       `transitions == FRAMES`, and `mismatches == 0`) and runs CPU-only
+                       `hit-10k` during `s100`. Froze `docs/measurements/T4.6/gate.py` (150
+                       invocations across 100%/125%) and verified it with `test_gate.py` (7/7
+                       pass). Verified `INV10` (11/11 `omnia-doc` tests), `INV11` (2/2
+                       `omnia-canvas` tests), and `cargo test -p omnia-golden` (36/36 goldens:
+                       24 overlay + 12 sheet, 0 differing pixels). Non-reference Windows
+                       diagnostics (i7-14650HX, Intel UHD Graphics driver 32.0.101.7088 active,
+                       Windows 11 26200, 1536x864 logical / 1920x1080 device @ 1.25 scale, 165
+                       Hz, AC, Silent; certifies nothing; `docs/measurements/T4.6.md`): `hit-10k`
+                       p99 0.0003 ms, `start` delta +16.459 ms, `10k-hover` p99 0.868 ms
+                       (`sheet_paints = 0`, `overlay_paints = 600`, `transitions = 600`,
+                       `mismatches = 0`, `net_highlight_frames = 200`, `ours.max = 0`), `1k-pan`
+                       p99 0.963 ms, `1k-zoom` p99 1.244 ms, `10k-pan` p99 1.119 ms, `10k-zoom`
+                       p99 2.896 ms (`369.08 MB` private memory on Windows UHD driver, matching
+                       T3.4's Windows overhead; Orion decides B9; `ours.max = 0` on all 5 motion
+                       runs). Standard checks pass locally; no new dependencies.
