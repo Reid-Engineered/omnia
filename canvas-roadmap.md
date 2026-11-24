@@ -2138,5 +2138,5 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        (trace, paint probe, per-process CPU; evidence only) found all nine
                        draws over 10 ms preempted: normal paint CPU at 2.9-3.35 GHz plus
                        3.7-24.4 ms of run-queue wait, in the runs where `t3code` and
-                       `claude` were busiest. Next: an owner-run `gate.py run` with the
-                       agent harness closed. Evidence: `docs/measurements/T4.6-stall.md`.
+                       `claude` were busiest. Next: an owner-run `gate.py run` with
+                       T3 Code and its agents closed. Evidence: `docs/measurements/T4.6-stall.md`.
