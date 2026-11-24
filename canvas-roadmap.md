@@ -2150,9 +2150,10 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        sudo once. A root helper sets the `performance` governor and stops
                        `tailscaled`, reports ready before timing, and restores both when the
                        wrapper process ends (pidfd). Baloo is left running per plan §2.1
-                       (CPU-only `hit-10k`); the wrapper waits for it to be idle. The gate exit
+                       (CPU-only `hit-10k`); the wrapper waits for it to be idle, and live
+                       output goes to tmpfs outside the indexed folders. The gate exit
                        status is kept (`kde-inhibit` always exits 0). Hangups are ignored.
                        Per-process CPU time is recorded around the gate (evidence only).
-                       Codex review findings (four P1, one P2) addressed; tests on Orion,
+                       Codex review findings (round 1: four P1, one P2; round 2: one P2, three nits) addressed; tests on Orion,
                        including real sudo, are in `docs/measurements/T4.6.md`. Status stays
                        `needs-human`, waiting for the owner run.

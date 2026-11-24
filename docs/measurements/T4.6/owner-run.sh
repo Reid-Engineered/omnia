@@ -22,9 +22,11 @@
 #
 # Closing the terminal does not stop the campaign (hangups are ignored); Ctrl-C stops it, and
 # the gate then restores the panel scale itself. Output goes outside the checkout, because the
-# gate requires a clean tree: $HOME/omnia-t46-owner-<UTC time>/ holds gate/ (the gate's own
-# output), cpu-before.json, cpu-after.json, conditions.txt, helper.log, gate-exit.txt and
-# owner-run.log. Leave the laptop alone until it prints its verdict.
+# gate requires a clean tree. While timing, it goes to /tmp/omnia-t46-live.*/ (tmpfs, outside
+# Baloo's indexed folders); afterwards it is copied to $HOME/omnia-t46-owner-<UTC time>/, which
+# holds gate/ (the gate's own output), cpu-before.json, cpu-after.json, conditions.txt,
+# inhibit.txt, helper.log, gate-exit.txt and owner-run.log. Leave the laptop alone until it
+# prints its verdict.
 
 main() {
     set -euo pipefail
@@ -70,13 +72,17 @@ main() {
         return 0
     fi
 
-    local out
-    out="$HOME/omnia-t46-owner-$(date -u +%Y%m%dT%H%M%SZ)"
-    mkdir "$out"
+    # The gate writes hundreds of files while it runs. They go to a tmpfs directory outside
+    # Baloo's indexed folders, so they do not queue indexing during timing, and are copied to
+    # $final afterwards. Only helper.log (two lines: ready, restored) is written to $final.
+    local out final
+    final="$HOME/omnia-t46-owner-$(date -u +%Y%m%dT%H%M%SZ)"
+    out=$(mktemp -d /tmp/omnia-t46-live.XXXXXX)
+    mkdir "$final"
     # tee ignores Ctrl-C (-i) and hangups (inherited), and keeps writing the log file if the
     # terminal goes away.
     exec > >(exec tee -i --output-error=warn -a "$out/owner-run.log") 2>&1
-    echo "owner-run: output $out"
+    echo "owner-run: live output $out; copied to $final after the gate"
 
     git -C "$root" fetch --quiet origin main
     git -C "$root" checkout --quiet --detach origin/main
@@ -97,7 +103,7 @@ main() {
 
     echo "owner-run: sudo is needed once, now, for the governor and tailscaled"
     sudo -v
-    : > "$out/helper.log"
+    : > "$final/helper.log"
     # The helper restores the recorded state when this shell's process ends, for any reason.
     # A setup or verification failure restores at once and reports `failed`.
     sudo -n env GOVERNORS="$governors" TAILSCALE_WAS="$tailscale_was" WRAPPER="$$" bash -c '
@@ -113,8 +119,14 @@ main() {
             echo performance > "$path"
         done
         if [[ $TAILSCALE_WAS == active ]]; then systemctl stop tailscaled; fi
-        if grep -L -x performance /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor | grep -q . \
-            || [[ $TAILSCALE_WAS == active && $(systemctl is-active tailscaled) == active ]]; then
+        ok=1
+        for path in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do
+            [[ $(cat "$path" 2>/dev/null) == performance ]] || ok=0
+        done
+        if [[ $TAILSCALE_WAS == active && $(systemctl is-active tailscaled) == active ]]; then
+            ok=0
+        fi
+        if ((ok == 0)); then
             echo failed; restore; exit 1
         fi
         echo ready
@@ -126,15 +138,15 @@ except ProcessLookupError:
     pass
 " "$WRAPPER"
         restore
-    ' >> "$out/helper.log" 2>&1 &
+    ' >> "$final/helper.log" 2>&1 &
     local helper=$! waited=0
-    until grep -q -x -e ready -e failed "$out/helper.log"; do
+    until grep -q -x -e ready -e failed "$final/helper.log"; do
         if ! kill -0 "$helper" 2>/dev/null || ((waited >= 30)); then break; fi
         sleep 1
         waited=$((waited + 1))
     done
-    if ! grep -q -x ready "$out/helper.log"; then
-        echo "owner-run: the root helper did not get ready; see $out/helper.log" >&2
+    if ! grep -q -x ready "$final/helper.log"; then
+        echo "owner-run: the root helper did not get ready; see $final/helper.log" >&2
         return 2
     fi
 
@@ -152,7 +164,7 @@ except ProcessLookupError:
         sleep 10
         waited=$((waited + 10))
     done
-    if grep -L -x performance /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor | grep -q .; then
+    if ! all_performance; then
         echo "owner-run: the performance governor is not set on every CPU" >&2
         return 2
     fi
@@ -163,9 +175,11 @@ except ProcessLookupError:
     fi
 
     cpu_times > "$out/cpu-before.json"
-    # kde-inhibit always exits 0, so the gate's status is written from inside it. Whether the
-    # inhibitors registered is recorded; the gate itself checks DPMS before and after every run.
+    # kde-inhibit always exits 0, so the gate's status is written from inside it. The aggregate
+    # suspend-inhibition state is sampled after PowerDevil's activation delay (about 5 s) and
+    # recorded; the gate itself checks DPMS before and after every invocation.
     kde-inhibit --power --screenSaver bash -c '
+        sleep 6
         qdbus6 org.freedesktop.PowerManagement /org/freedesktop/PowerManagement/Inhibit \
             HasInhibit > "$1/inhibit.txt" 2>&1 || true
         python3 -B "$2" run "$1/gate"
@@ -176,23 +190,35 @@ except ProcessLookupError:
     status=$(cat "$out/gate-exit.txt" 2>/dev/null || echo 2)
     {
         echo "finished $(date -u +%FT%TZ), gate exit $status"
-        echo "power-management inhibit during the gate: $(cat "$out/inhibit.txt" 2>/dev/null)"
+        echo "aggregate suspend inhibition 6 s into the inhibitor: $(cat "$out/inhibit.txt" 2>/dev/null)"
         echo "baloo after:"
         balooctl6 status 2>&1 || true
     } >> "$out/conditions.txt"
 
     echo
     echo "owner-run: gate exit $status ($(cat "$out/gate/status.txt" 2>/dev/null || echo 'no status'))"
-    echo "owner-run: evidence in $out; the helper restores the governor and tailscaled on exit"
+    cp -a "$out/." "$final/"
+    echo "owner-run: evidence in $final (live copy in $out)"
+    echo "owner-run: the helper restores the governor and tailscaled on exit"
     return "$status"
 }
 
+all_performance() {
+    local path
+    for path in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do
+        [[ $(cat "$path" 2>/dev/null) == performance ]] || return 1
+    done
+}
+
+# Idle means an explicit answer: the indexer is disabled or not running, or it is running,
+# idle and has an explicit zero queue. A failed query counts as not idle.
 baloo_idle() {
     local status
-    status=$(balooctl6 status 2>&1) || return 0
-    [[ $status != *"is running"* ]] && return 0
-    grep -q -x 'Indexer state: Idle' <<< "$status" \
-        && ! grep -q -E '^Files waiting for content indexing: [1-9]' <<< "$status"
+    status=$(LC_ALL=C balooctl6 status 2>&1) || return 1
+    if grep -q -E 'is (currently )?disabled|is not running' <<< "$status"; then return 0; fi
+    grep -q -x 'Baloo File Indexer is running' <<< "$status" \
+        && grep -q -x 'Indexer state: Idle' <<< "$status" \
+        && grep -q -x 'Files waiting for content indexing: 0' <<< "$status"
 }
 
 # Exact process names, executable names and path components of argv entries, so that an
