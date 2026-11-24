@@ -2111,3 +2111,17 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        warm-up draws between snapshots. The gate still requires exactly
                        the configured warm-up and measured draws. Orion must verify the
                        fix, and the recorded zoom stalls still need investigation (B5).
+
+2026-11-23 T4.6 needs-human — completed the 150-invocation post-fix Orion schedule from
+                       clean main `b6c7981`. Frozen script returned fail (exit 1).
+                       All 20 hover reports passed sampling and INV11 but their
+                       attribution traces were unusable. B3/B4 attribution missed
+                       at both scales. B5 had zero failures. Owner-reported W2.2
+                       CPU work intersected 25 s100 invocations, with 46 exact
+                       snapshot matches. The full campaign is non-certifying
+                       under §2.1. See `docs/measurements/T4.6.md` for hardware,
+                       all raw reports, the literal summary, and the overlap.
+                       Follow-up for T1.6's attribute.py: align validation with
+                       the measured overlay-every-frame trace boundaries. Preserve
+                       the attribution rules. Investigate the pan/zoom stalls with
+                       focused traces before another certification campaign.
