@@ -2157,3 +2157,7 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        Codex review findings (round 1: four P1, one P2; round 2: one P2, three nits) addressed; tests on Orion,
                        including real sudo, are in `docs/measurements/T4.6.md`. Status stays
                        `needs-human`, waiting for the owner run.
+                       Owner approved a remote start (2026-11-24): `--remote` keeps
+                       `tailscaled` and the SSH link up, detaches the run with
+                       `systemd-run --user`, reads the sudo password from a user-only tmpfs
+                       file, and records the mode in `conditions.txt`.

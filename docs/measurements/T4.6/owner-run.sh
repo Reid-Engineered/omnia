@@ -7,6 +7,16 @@
 #     bash docs/measurements/T4.6/owner-run.sh --check   # preflight only; changes nothing
 #     bash docs/measurements/T4.6/owner-run.sh           # the campaign (about 45 minutes)
 #
+# Remote start (owner-approved 2026-11-24), with the owner having confirmed the lid is open, the
+# panel on and unlocked, AC connected and nobody using the laptop. The run is detached from the
+# SSH session into the user's service manager, which carries the desktop session's environment;
+# tailscaled stays up; the sudo password is read once from a user-only tmpfs file and deleted:
+#
+#     umask 077; cat > /run/user/$UID/t46-pw      # password on stdin
+#     systemd-run --user --collect --unit=omnia-t46-owner \
+#         -E OWNER_RUN_PASSFILE=/run/user/$UID/t46-pw \
+#         bash ~/omnia/docs/measurements/T4.6/owner-run.sh --remote
+#
 # It runs the frozen gate (docs/measurements/T4.6/gate.py) unchanged. Around it, it:
 #   1. refuses to start over SSH, or while T3 Code, a coding agent, cargo or rustc is running
 #      (docs/measurements/T4.6-stall.md: every slow draw was the bench preempted by them);
@@ -31,13 +41,22 @@
 main() {
     set -euo pipefail
     trap '' HUP
-    local root check=0
+    local root check=0 remote=0 arg
     root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
-    if [[ ${1:-} == --check ]]; then check=1; fi
+    for arg in "$@"; do
+        case $arg in
+            --check) check=1 ;;
+            --remote) remote=1 ;;
+            *) echo "usage: owner-run.sh [--check] [--remote]" >&2; return 2 ;;
+        esac
+    done
 
     local blockers=() supply mains=0 busy tool
-    if [[ -n ${SSH_CONNECTION:-}${SSH_TTY:-} ]]; then
-        blockers+=("started over SSH: run it at Orion's desk")
+    if ((remote == 0)) && [[ -n ${SSH_CONNECTION:-}${SSH_TTY:-} ]]; then
+        blockers+=("started over SSH: run it at Orion's desk, or see --remote")
+    fi
+    if ((remote && !check)) && [[ ! -r ${OWNER_RUN_PASSFILE:-} ]]; then
+        blockers+=("--remote needs OWNER_RUN_PASSFILE naming a readable sudo password file")
     fi
     if [[ ${XDG_SESSION_TYPE:-} != wayland ]]; then
         blockers+=("not in the local Wayland session")
@@ -63,6 +82,7 @@ main() {
     done
 
     if ((${#blockers[@]})); then
+        if ((remote)); then rm -f "${OWNER_RUN_PASSFILE:-}"; fi
         printf 'owner-run: not ready\n' >&2
         printf '  - %s\n' "${blockers[@]}" >&2
         return 2
@@ -89,10 +109,16 @@ main() {
     local commit
     commit=$(git -C "$root" rev-parse HEAD)
 
-    local governors tailscale_was
+    local governors tailscale_was mode=desk
     governors=$(grep -H . /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor)
     tailscale_was=$(systemctl is-active tailscaled 2>/dev/null || true)
+    if ((remote)); then
+        # The remote link stays up; the helper only stops tailscaled when this is `active`.
+        mode="remote (owner-approved 2026-11-24): tailscaled and the starting SSH link kept running"
+        tailscale_was="kept running ($tailscale_was)"
+    fi
     {
+        echo "mode: $mode"
         echo "commit $commit"
         echo "governors before: $(echo "$governors" | tr '\n' ' ')"
         echo "tailscaled before: $tailscale_was"
@@ -102,7 +128,15 @@ main() {
     } > "$out/conditions.txt"
 
     echo "owner-run: sudo is needed once, now, for the governor and tailscaled"
-    sudo -v
+    if ((remote)); then
+        # No terminal: sudo keys the cached login to this shell, the parent of both sudo calls.
+        local sudo_ok=0
+        sudo -S -p '' -v < "$OWNER_RUN_PASSFILE" && sudo_ok=1
+        rm -f "$OWNER_RUN_PASSFILE"
+        if ((sudo_ok == 0)); then echo "owner-run: sudo refused the password" >&2; return 2; fi
+    else
+        sudo -v
+    fi
     : > "$final/helper.log"
     # The helper restores the recorded state when this shell's process ends, for any reason.
     # A setup or verification failure restores at once and reports `failed`.
