@@ -506,7 +506,10 @@ of the `canvas` lane.
 - Do: `bench hit --sheet 10k` (B7 < 0.2 ms); `bench run --sheet 10k --script hover`
   (p99 < 16 ms, sheet paint count 0); the INV10 and INV11 tests; the T2.7 table again.
 - Done when: all pass on the reference machine; otherwise record and set `needs-human`.
-- Orion 2026-11-23 verdict: `incomplete` on hover warm-up sampling. [Evidence](docs/measurements/T4.6.md).
+- Orion 2026-11-23 verdicts: `incomplete` on hover warm-up sampling (`9abfe05`), then `fail`
+  and non-certifying (`b6c7981`, concurrent W2.2 work). 2026-11-24: hover attribution fixed
+  and the stalls diagnosed as preemption; a clean owner-run campaign is next.
+  [Evidence](docs/measurements/T4.6.md).
 
 ## Milestone 5: editing
 
@@ -2125,3 +2128,15 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        the measured overlay-every-frame trace boundaries. Preserve
                        the attribution rules. Investigate the pan/zoom stalls with
                        focused traces before another certification campaign.
+
+2026-11-24 T4.6 needs-human — prepared the next Orion campaign. T1.6's attribution rejected
+                       every hover trace because the hover driver (#120) draws three
+                       startup frames before its warm-up; `bench run` now reports
+                       `frames.startup_draws` and `attribute.py` skips exactly that many
+                       (missing, wrong or invalid counts fail closed; clauses (a)-(e)
+                       unchanged; four new tests). A 20-run diagnostic on Orion at `bdaa19e`
+                       (trace, paint probe, per-process CPU; evidence only) found all nine
+                       draws over 10 ms preempted: normal paint CPU at 2.9-3.35 GHz plus
+                       3.7-24.4 ms of run-queue wait, in the runs where `t3code` and
+                       `claude` were busiest. Next: an owner-run `gate.py run` with the
+                       agent harness closed. Evidence: `docs/measurements/T4.6-stall.md`.
