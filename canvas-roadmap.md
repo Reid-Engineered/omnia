@@ -2332,13 +2332,15 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        modality switches (UQ15). It then asserts zero further sheet paints on
                        the release, which keeps keyboard modality at the pinned GPUI. The
                        zero-paint `cancel()` test is unchanged. Also from the audit: a dropped
-                       overlay releases its capture through `on_release_in`. (6) T5.5's Owns
+                       overlay releases its capture through `on_release_in`, and a drag that
+                       still holds its capture commits once, to its own document, when released
+                       off the sheet. (6) T5.5's Owns
                        line now covers `Isometry`, its `apply`, and the follow-planner and
                        command handling of the composed variant. ui-plan.md's
                        `default_bindings()` sketch generates each `ACTIONS` binding once (R, X,
                        Y, W included) plus the `Nav*` and `FocusMenuBar` bindings UD3 keeps
                        beside them. The `doc` field is in the canvas-plan.md and ui-plan.md
-                       sketches. 112 canvas unit tests; the queued-event test was confirmed to
+                       sketches. 113 canvas unit tests; the queued-event test was confirmed to
                        fail with the delivery check removed. Checks run locally on Windows:
                        `cargo fmt --all --check`, both clippy commands, `cargo test
                        --workspace` and `cargo deny check`.

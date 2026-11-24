@@ -2378,4 +2378,29 @@ mod tests {
         cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
         assert_eq!(revision(&doc, cx), rev0);
     }
+
+    /// Audit: a drag that still owns its capture follows the pointer off the sheet and
+    /// commits there, once, to its own document.
+    #[gpui::test]
+    fn t5_2_a_captured_drag_commits_when_released_off_the_sheet(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let rev0 = revision(&doc, cx);
+        down(&overlay, cx, pt(-6, 0));
+        let bounds = cx.update(|_, cx| overlay.read(cx).viewport());
+        let outside = gpui::point(
+            bounds.origin.x + bounds.size.width + gpui::px(40.0),
+            bounds.origin.y + gpui::px(40.0),
+        );
+        cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+        assert_eq!(phase(&overlay, cx), ToolPhase::Dragging);
+        assert!(captured(cx));
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            revision(&doc, cx),
+            rev0 + 1,
+            "one commit, to its own document"
+        );
+        assert_ne!(part_at(&doc, cx, 0), pt(-6, 0));
+        assert!(!captured(cx));
+    }
 }
