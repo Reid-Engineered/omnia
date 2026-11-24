@@ -200,15 +200,14 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   command yet); `plan_follow` on a selection with no boundary points returns an empty plan
   and allocates nothing.
 
-### W2.2 Move and Reorient with follow · needs-human (WB3 awaiting Orion re-run after optimisation)
+### W2.2 Move and Reorient with follow · blocked (WB3 fails on Orion: median p99 3.813 ms vs 2 ms)
 - Lane: doc · Depends: W2.1 · Read: WD3, WINV1, WINV2, WINV4, INV4, INV10
 - Owns: `crates/schematic-doc/src/command.rs`, `undo.rs` (after T5.1)
 - Scope approved 2026-11-17: mechanical caller migrations in document tests and the
   command benchmark, plus the WB3 benchmark. Windows checks only; no Orion runs.
-- Implementation and Windows checks complete; WB3 remains uncertified. See
-  `docs/measurements/W2.2.md`. The 2026-11-23 Orion campaign measured WB3 at a median p99 of
-  51.2 ms (see the log). The follow-move path was then optimised (Windows diagnostic median
-  p99 1.49 ms, non-reference); WB3 waits for an Orion re-run.
+- Implementation and Windows checks complete. The 2026-11-23 Orion re-run after the
+  optimisation measured a median p99 of 3.813 ms, down from 51.151 ms. WB3 remains blocked
+  at the 2 ms budget. See `docs/measurements/W2.2.md`.
 - Do: `Move` and `Reorient` carry a `FollowPolicy`; `apply` calls `plan_follow`, applies the
   plan and the move as one change, splits wires under landed pins and ends (TC-move-14),
   normalises, and pushes one inverse that restores every removed wire under its old id. A
@@ -781,3 +780,9 @@ owner: `AddWires` still accepts off-lattice ends. Evidence: docs/measurements/W2
 2026-11-23 W2.2 Orion campaign - blocked (WB3 fails). Owner-approved section 2.1 run on Orion, done remotely by the coordinating agent: per-apply sampling added to the WB3 bench and the frozen `docs/measurements/W2.2/run.sh` committed (`6729f8e`) before the timed run; ten passes of 100 applies of a follow-enabled `Move` of 100 parts on seed-42 `Parts10k`. Median of pass p99s 51.151 ms (range 46.770-84.264) against WB3's < 2 ms; median p50 about 42 ms. AC and `performance` governor held in every snapshot; Baloo suspended. Threshold unchanged. Next: profile `Doc::apply(Move { follow })` on `Parts10k` in a doc-lane follow-up. Evidence: `docs/measurements/W2.2/orion-2026-11-23/`.
 2026-11-23 W3.4 done — completed the canvas/tool half of WD8/WQ3 rubber-band selection on top of T4.3. `crates/omnia-canvas/src/selection.rs` adds `SelectionState::from_prefs` and `SelectionState::apply_prefs` driven from `WiringPrefs::select_mode` (`SelectMode::Intersecting` WQ3/WK10 default, `SelectMode::Enclosed` option), with `SelectionState::default` delegating to `WiringPrefs::default()`, plus unit coverage for live `WiringPrefs` updates and excluding label text extents (WD8). `crates/omnia-canvas/src/overlay.rs` adds `OverlayView::with_prefs` and `OverlayView::apply_prefs` (`OverlayView::new` delegates to `WiringPrefs::default()`), plus nine GPUI simulated-input tests (`tc_band_01_nw_to_se_intersecting` through `tc_band_09_shift_adds_to_existing_selection`) covering all four drag directions × both modes over a half-covered part and Shift-add without clearing existing selection, asserting `OverlayEvent::SelectionChanged` and unchanged `SheetView` paint count (INV11). Updated `canvas-plan.md` section 9 under rule 12/16. Verified all five standard checks locally on Windows (`cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`, `cargo test --workspace` with `CARGO_INCREMENTAL=0 -j 1`, including `omnia-canvas` 58/58 unit tests, `omnia-doc` 163/163 unit tests incl. `query_within_and_touching_match_independent_brute_force` + 6/6 `index_alloc`, and `omnia-golden` sheet/overlay tests, and `cargo deny check` with existing dependency warnings); no checks weakened; no measurements run.
 2026-11-23 W2.2 WB3 optimisation - needs-human (WB3 awaiting Orion re-run). Root cause: `plan_follow` copied the whole sheet into a fresh document view on every call, and `route` scored every candidate before validating. The view is now layered over the document (moved selection, reservations and planned wires only; same ids as a full copy; stamp-free index reads), `route` scores lazily against an exact lower bound with validity from the same query (same answer as WD4's full sort), the point map uses `FxHashMap`, and `plan_add_wires` drops per-point index queries and per-line maps. Public signatures unchanged; wiring-plan.md wording updated. Equivalence: a temporary side-by-side harness found identical plans and errors on 50,000 random cases and on `Parts10k` after each router change; permanent view-vs-copy and stamp-free query properties added. Windows diagnostic (i7-14650HX, non-reference, interleaved before/after, 3x100 applies): p50 20.4 to 1.24 ms, median p99 22.9 to 1.49 ms. Scaling by Orion's old ratio (about 2.06x) suggests about 3.1 ms p99, so the re-run may still fail. Bench workload, threshold and tests unchanged. Evidence: docs/measurements/W2.2.md, `docs/measurements/W2.2/windows-2026-11-23-wb3-perf/`.
+
+2026-11-23 W2.2 WB3 Orion re-run - blocked (WB3 fails). Owner-authorized section 2.1
+campaign on `09ac197` completed all ten passes of 100 applies. Median of pass p99s
+3.813 ms (range 2.704-4.255 ms), against WB3's < 2 ms. Median of pass p50s 2.483 ms.
+AC and all four `performance` governors held in every snapshot. The desktop indexer
+was recorded during the run. Evidence: `docs/measurements/W2.2/orion-2026-11-23-wb3-perf/`.

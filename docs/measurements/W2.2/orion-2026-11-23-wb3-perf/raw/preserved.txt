@@ -1,0 +1,2 @@
+dd58bcfa46bd9d054d112e118cec8f534ece2ffc5b990740156eac65c11ab0a0  /home/marcus/omnia-w22/target/wb3/follow_command
+HEAD=09ac197effcab30c18442c685b1b006c0084dec8
