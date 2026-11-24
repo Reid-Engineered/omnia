@@ -1238,8 +1238,11 @@ mod tests {
     fn run_transcript(name: &str) -> Vec<String> {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/transcripts");
         let input = std::fs::read(format!("{dir}/{name}.in.jsonl")).expect("input fixture");
-        let expected =
-            std::fs::read_to_string(format!("{dir}/{name}.expected.jsonl")).expect("expected");
+        // CRLF-normalised, as AINV11 reads committed files: a Windows checkout may hold
+        // either line end, and the server reads both the same.
+        let expected = std::fs::read_to_string(format!("{dir}/{name}.expected.jsonl"))
+            .expect("expected")
+            .replace("\r\n", "\n");
         let mut service = AgentService::headless();
         let mut input_slice: &[u8] = &input;
         let (mut out, mut err) = (Vec::new(), Vec::new());
