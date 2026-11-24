@@ -501,15 +501,15 @@ of the `canvas` lane.
 - Done when: tests show the animation ends exactly on the target, input mid-way stops it
   with no jump, and `bench idle` still reports 0 frames one second after it ends.
 
-### T4.6 Gate: milestone 4 · needs-human
+### T4.6 Gate: milestone 4 · done
 - Lane: bench · Depends: T4.4, T4.5
 - Do: `bench hit --sheet 10k` (B7 < 0.2 ms); `bench run --sheet 10k --script hover`
   (p99 < 16 ms, sheet paint count 0); the INV10 and INV11 tests; the T2.7 table again.
 - Done when: all pass on the reference machine; otherwise record and set `needs-human`.
 - Orion 2026-11-23 verdicts: `incomplete` on hover warm-up sampling (`9abfe05`), then `fail`
   and non-certifying (`b6c7981`, concurrent W2.2 work). 2026-11-24: hover attribution fixed
-  and the stalls diagnosed as preemption; a clean owner-run campaign is next:
-  `bash docs/measurements/T4.6/owner-run.sh` at Orion's desk.
+  and the stalls diagnosed as preemption. 2026-11-24 campaign at `d39778b`: `pass` at both
+  scales, 100/100 motion runs with clean attribution, worst frame 8.5 ms.
   [Evidence](docs/measurements/T4.6.md).
 
 ## Milestone 5: editing
@@ -2161,3 +2161,19 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `tailscaled` and the SSH link up, detaches the run with
                        `systemd-run --user`, reads the sudo password from a user-only tmpfs
                        file, and records the mode in `conditions.txt`.
+
+2026-11-24 T4.6 done — Orion reference campaign `pass` (frozen `gate.py`, exit 0) at clean
+                       main `d39778b`, binary `4b2e3cf…` (unchanged before/after),
+                       06:17–06:54 UTC. The owner confirmed the physical conditions and
+                       approved a remote start (`owner-run.sh --remote`, `systemd-run
+                       --user`). T3 Code and agents were closed; `tailscaled` and the SSH
+                       link stayed up (2.0 s CPU over the campaign), disclosed. All 300
+                       records had DPMS on, AC and `performance`; Baloo idle, not stopped
+                       (§2.1). B2, B3, B4, B5, B7, B9, B10, INV11 and the T4.6 hover budget
+                       all passed at 100% and 125%. All 100 motion runs passed attribution
+                       with zero counted intervals; worst frame 8.5 ms (10k zoom, 125%).
+                       INV10 (11/11) and INV11 (2/2) tests passed on Orion at the same
+                       commit. The replay reproduced `summary.txt` exactly. Evidence:
+                       `docs/measurements/T4.6/orion-2026-11-24-remote/`. Follow-up for the
+                       file owner: a Linux-only unused-variable warning in
+                       `crates/omnia-bench/src/spike/shell_cache.rs:1657`.
