@@ -685,7 +685,7 @@ impl DragGesture {
 pub struct PlaceGesture { pub symbol: SymbolId, pub at: Option<Pt>, pub orient: Orient,
                           pub pressed: bool }    // only a press made in Place places
 pub struct WireGesture { pub start: Option<Pt>, pub cursor: Option<Pt> } // T6.2 extends
-pub enum ToolRequest { Click(ItemId), Place { symbol: SymbolId, at: Pt, orient: Orient },
+pub enum ToolRequest { Click { item: ItemId, base: DocStamp }, Place { symbol: SymbolId, at: Pt, orient: Orient },
                        ReorientSelection(Orient), DeleteSelection } // carried out by T5.3
 pub struct Commit { pub command: Command, pub base: DocStamp }
 pub struct ToolOutcome { pub handled: bool, pub preview_changed: bool, pub capture: bool,
@@ -715,7 +715,9 @@ pub struct CanvasHistory { pub doc: u64, pub can_undo: bool, pub can_redo: bool,
 pub struct CanvasEdit { pub doc: u64, pub dirty: Option<Rect> } // OverlayView -> SheetCanvas repaint (D7)
 // doc: the source document's doc_key. Events queued in one GPUI update arrive after any
 // document switch in it, so SheetCanvas delivers or re-emits one only if doc is the document
-// it shows at delivery, through the owner still attached and showing it.
+// it shows at delivery, through the owner still attached and showing it. SheetCanvas emits
+// history sealed, so the final subscriber boundary checks it too:
+pub struct CanvasHistoryEvent(/* private */);             // readable only via subscribe_history
 // T5.2 (keymap.rs): actions in namespace `canvas`, resolved in key context "Sheet" (UD3). The
 // shell reuses Rotate, MirrorHorizontal, MirrorVertical and PlaceWire in its ACTIONS table and
 // generates their R, X, Y and W bindings once from it; it registers nothing from keymap.rs.
@@ -854,6 +856,10 @@ impl SheetCanvas {
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.2: emits CanvasHistory
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.2: emits CanvasHistory
     pub fn focus_handle(&self) -> &FocusHandle;                       // T5.2 (UINV12)
+    pub fn subscribe_history<T: 'static>(canvas: &Entity<Self>, cx: &mut Context<T>,
+        on_history: impl FnMut(&mut T, &CanvasHistory, &mut Context<T>) + 'static)
+        -> Subscription;              // T5.2: drops an event for a document no longer shown
+    pub fn is_current_history(&self, history: &CanvasHistory) -> bool; // T5.2
     // T5.3: a shell-supplied placement provider (see parts-plan.md section 14) builds the
     // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation.
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);

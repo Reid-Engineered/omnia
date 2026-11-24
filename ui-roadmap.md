@@ -562,7 +562,9 @@ without being drawn.
 - Owns: `crates/omnia-app/src/workspace.rs` (edit handlers), `actions.rs`, `keymap.rs`
 - Do: route Undo, Redo, Delete and Select All to the canvas methods; drive `can_undo`,
   `can_redo` and the modified state from `CanvasHistory` (T5.2's event type, which the canvas
-  re-emits from its gesture owner after every effective edit, a drag's commit included); put
+  re-emits from its gesture owner after every effective edit, a drag's commit included),
+  subscribing only through `SheetCanvas::subscribe_history`, which drops at delivery an event
+  for a document the canvas no longer shows; put
   T5.2's action types `omnia_canvas::keymap::{Rotate, MirrorHorizontal, MirrorVertical,
   PlaceWire}` in `ACTIONS` in place of the placeholder types, so `default_bindings()` generates
   R, X, Y and W in `Sheet` exactly once, and register nothing from `omnia_canvas::keymap`

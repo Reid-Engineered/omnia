@@ -26,17 +26,17 @@ use crate::{
         zoom_to_selection_camera,
     },
     input::wheel_factor,
-    selection::{RubberBand, SelectionState, SelectionUpdate, hit_tolerance_nm},
+    selection::{RubberBand, SelectionState, SelectionUpdate, hit_tolerance_nm, item_exists},
     sheet::{SheetDocument, SheetView},
     snap_px::{centered_square, device_rect, round_device, stroke_device_px, to_device},
     tool::{self, ToolHost, ToolMachine, ToolRequest},
 };
 use gpui::{
-    App, AppContext, Bounds, ContentMask, Context, DispatchPhase, Edges, Element, ElementId,
-    Entity, EventEmitter, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, Hsla,
-    InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style, StyleRefinement,
-    Styled, Subscription, WeakEntity, Window, div, fill, point, px, relative,
+    AnyWindowHandle, App, AppContext, Bounds, ContentMask, Context, DispatchPhase, Edges, Element,
+    ElementId, Entity, EventEmitter, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior,
+    HitboxId, Hsla, InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style,
+    StyleRefinement, Styled, Subscription, WeakEntity, Window, div, fill, point, px, relative,
 };
 use omnia_doc::{
     Change, Doc, ItemId, NetId, Pt, Rect, Wire, WireId,
@@ -266,8 +266,13 @@ pub struct OverlayView {
     scope: Option<Rc<dyn OverlayPaintScope>>,
     /// T5.2: the hitbox this overlay captured for its current gesture (released on end).
     capture: Rc<Cell<Option<HitboxId>>>,
+    /// T5.2: counts the gestures that took a capture. GPUI reuses a hitbox id within a frame,
+    /// so a deferred release compares this, not the id, to know no newer gesture captured.
+    capture_gen: Rc<Cell<u64>>,
     /// T5.2: ends a pointer-held gesture when the window deactivates (set at first render).
     activation: Option<Subscription>,
+    /// T5.2: the window this overlay renders in, to release a capture without painting.
+    window_handle: Option<AnyWindowHandle>,
 }
 
 impl EventEmitter<OverlayEvent> for OverlayView {}
@@ -307,7 +312,9 @@ impl OverlayView {
             paints: Rc::new(Cell::new(0)),
             scope: None,
             capture: Rc::new(Cell::new(None)),
+            capture_gen: Rc::new(Cell::new(0)),
             activation: None,
+            window_handle: None,
         }
     }
 
@@ -629,6 +636,12 @@ impl OverlayView {
     ) -> bool {
         self.viewport = bounds;
         self.camera.set_viewport(bounds);
+        // T5.2: a band still live at a press lost its release. End it, with no selection
+        // change, before the press goes anywhere; the next paint releases its capture unless
+        // the new press takes one.
+        if self.state.is_rubber_banding() {
+            self.cancel_rubber_band(cx);
+        }
         // T5.2: the tool sees the press first; a press it leaves goes to selection.
         let world = self.camera.screen_to_world(to_f64(event.position));
         let outcome = self.tools.pointer_down(
@@ -767,7 +780,12 @@ impl ToolHost for OverlayView {
     }
 
     fn request(&mut self, request: ToolRequest, cx: &mut Context<Self>) {
-        if let ToolRequest::Click(item) = request {
+        // T5.2: a click selects its item only on the document it was made on, and only if
+        // the item still exists there (another command may have deleted it mid-press).
+        if let ToolRequest::Click { item, base } = request
+            && tool::doc_key(&self.doc) == base.key
+            && item_exists(self.doc.read(cx), item)
+        {
             self.set_selection([item], cx);
         }
     }
@@ -785,6 +803,33 @@ impl ToolHost for OverlayView {
     fn forget_capture(&mut self) {
         self.capture.set(None);
     }
+
+    /// Releases `owned` through a deferred window update, which needs no paint (an overlay
+    /// detached and unmounted in one update never paints again). The ownership check keeps
+    /// a newer capture. The repaint stays as a second path.
+    fn release_later(&mut self, owned: HitboxId, cx: &mut Context<Self>) {
+        cx.notify();
+        let Some(handle) = self.window_handle else {
+            return;
+        };
+        let (capture, capture_gen) = (self.capture.clone(), self.capture_gen.clone());
+        let gen_at_release = capture_gen.get();
+        cx.defer(move |cx| {
+            if capture_gen.get() != gen_at_release {
+                return; // a newer gesture took the capture since; it is not ours to release
+            }
+            handle
+                .update(cx, |_, window, _| {
+                    if window.captured_hitbox() == Some(owned) {
+                        window.release_pointer();
+                    }
+                })
+                .ok();
+            if capture.get() == Some(owned) {
+                capture.set(None);
+            }
+        });
+    }
 }
 
 fn to_f64(p: gpui::Point<Pixels>) -> gpui::Point<f64> {
@@ -795,6 +840,7 @@ impl Render for OverlayView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
         if self.activation.is_none() {
+            self.window_handle = Some(window.window_handle());
             // T5.2: a deactivated window may never deliver the release; end the gesture.
             self.activation = Some(cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
@@ -852,6 +898,7 @@ impl Render for OverlayView {
                 paints: self.paints.clone(),
                 scope: self.scope.clone(),
                 capture: self.capture.clone(),
+                capture_gen: self.capture_gen.clone(),
             })
     }
 }
@@ -868,6 +915,7 @@ struct OverlayLayer {
     paints: Rc<Cell<u64>>,
     scope: Option<Rc<dyn OverlayPaintScope>>,
     capture: Rc<Cell<Option<HitboxId>>>,
+    capture_gen: Rc<Cell<u64>>,
 }
 
 impl Element for OverlayLayer {
@@ -968,7 +1016,7 @@ impl Element for OverlayLayer {
         }
 
         let (overlay, hit, focus) = (self.overlay.clone(), hitbox.clone(), self.focus.clone());
-        let capture = self.capture.clone();
+        let (capture, capture_gen) = (self.capture.clone(), self.capture_gen.clone());
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble
                 || !hit.is_hovered(window)
@@ -986,6 +1034,7 @@ impl Element for OverlayLayer {
             if started {
                 window.capture_pointer(hit.id);
                 capture.set(Some(hit.id));
+                capture_gen.set(capture_gen.get() + 1);
                 cx.stop_propagation();
             }
         });

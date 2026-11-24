@@ -171,8 +171,9 @@ impl ToolState {
 /// Work the machine cannot finish alone; the host carries it out (seams for T5.3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolRequest {
-    /// A press on an item that did not become a drag: make it the only selection.
-    Click(ItemId),
+    /// A press on an item that did not become a drag: make it the only selection, if it
+    /// still exists in the document the press was made on (`base`).
+    Click { item: ItemId, base: DocStamp },
     /// A press and release in `Tool::Place`: T5.3 asks the placement provider for the command.
     Place {
         symbol: SymbolId,
@@ -481,7 +482,10 @@ impl ToolMachine {
                         command,
                         base: drag.base,
                     });
-                let request = commit.is_none().then_some(ToolRequest::Click(drag.pressed));
+                let request = commit.is_none().then_some(ToolRequest::Click {
+                    item: drag.pressed,
+                    base: drag.base,
+                });
                 self.state = ToolState::Idle;
                 ToolOutcome {
                     handled: true,
@@ -596,7 +600,13 @@ pub struct CanvasEdit {
 
 impl gpui::EventEmitter<CanvasHistory> for OverlayView {}
 impl gpui::EventEmitter<CanvasEdit> for OverlayView {}
-impl gpui::EventEmitter<CanvasHistory> for SheetCanvas {}
+/// What [`SheetCanvas`] emits for history. Its payload is readable only through
+/// [`SheetCanvas::subscribe_history`], which drops an event whose document is no longer the
+/// canvas's at delivery, so no subscriber can forget that check.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanvasHistoryEvent(pub(crate) CanvasHistory);
+
+impl gpui::EventEmitter<CanvasHistoryEvent> for SheetCanvas {}
 
 /// The identity a [`DocStamp`] uses for a document entity.
 pub fn doc_key(doc: &Entity<Doc>) -> u64 {
@@ -624,6 +634,11 @@ pub(crate) trait ToolHost: Sized + 'static {
     fn owned_capture(&self) -> Option<HitboxId> {
         None
     }
+    /// Release `owned` without a window at hand, if the window still holds it. Default: the
+    /// host's next paint does it.
+    fn release_later(&mut self, _owned: HitboxId, cx: &mut Context<Self>) {
+        self.preview_changed(cx);
+    }
     fn forget_capture(&mut self) {}
 }
 
@@ -641,7 +656,7 @@ fn release_capture<H: ToolHost>(host: &mut H, window: Option<&mut Window>, cx: &
             }
             host.forget_capture();
         }
-        None => host.preview_changed(cx),
+        None => host.release_later(owned, cx),
     }
 }
 
@@ -931,8 +946,34 @@ impl SheetCanvas {
             return false;
         };
         self.repaint_if_visible(change.dirty, cx);
-        cx.emit(CanvasHistory::of(doc_key(&doc), doc.read(cx)));
+        cx.emit(CanvasHistoryEvent(CanvasHistory::of(
+            doc_key(&doc),
+            doc.read(cx),
+        )));
         true
+    }
+
+    /// Whether `history` concerns the document this canvas shows now.
+    pub fn is_current_history(&self, history: &CanvasHistory) -> bool {
+        self.doc().map(doc_key) == Some(history.doc)
+    }
+
+    /// Subscribes to this canvas's history (UD6). GPUI delivers events after the update that
+    /// emitted them unwinds, so the document may have changed since: an event for any
+    /// document but the one the canvas shows at delivery is dropped here, before `on_history`.
+    pub fn subscribe_history<T: 'static>(
+        canvas: &Entity<Self>,
+        cx: &mut Context<T>,
+        mut on_history: impl FnMut(&mut T, &CanvasHistory, &mut Context<T>) + 'static,
+    ) -> gpui::Subscription {
+        cx.subscribe(
+            canvas,
+            move |this, canvas, event: &CanvasHistoryEvent, cx| {
+                if canvas.read(cx).is_current_history(&event.0) {
+                    on_history(this, &event.0, cx);
+                }
+            },
+        )
     }
 
     /// The active tool of the gesture owner; `Tool::Select` without one.
@@ -1201,7 +1242,16 @@ mod tests {
         press(&mut m, &doc, pt(-6, 0), &[R1, C1]);
         let out = m.pointer_up(pt(-6, 0), false);
         assert_eq!(out.commit, None);
-        assert_eq!(out.request, Some(ToolRequest::Click(R1)));
+        assert_eq!(
+            out.request,
+            Some(ToolRequest::Click {
+                item: R1,
+                base: DocStamp {
+                    key: KEY,
+                    revision: doc.revision(),
+                },
+            })
+        );
         assert!(out.release);
     }
 
@@ -1953,13 +2003,23 @@ mod tests {
     ) -> Rc<RefCell<Vec<CanvasHistory>>> {
         let history = Rc::new(RefCell::new(Vec::new()));
         let sink = history.clone();
-        cx.update(|_, cx| {
-            cx.subscribe(canvas, move |_, event: &CanvasHistory, _| {
-                sink.borrow_mut().push(*event);
+        let canvas = canvas.clone();
+        // A subscriber as the shell would be: through the canvas's checked helper.
+        let recorder = cx.update(|_, cx| {
+            cx.new(|cx| Recorder {
+                _subscription: SheetCanvas::subscribe_history(&canvas, cx, move |_, event, _| {
+                    sink.borrow_mut().push(*event)
+                }),
             })
-            .detach();
         });
+        // The test keeps the recorder (and its subscription) for the window's lifetime.
+        std::mem::forget(recorder);
         history
+    }
+
+    /// The subscriber entity `record_history` keeps alive; it holds the subscription.
+    struct Recorder {
+        _subscription: gpui::Subscription,
     }
 
     /// Review finding 5: one gesture owner. `SheetCanvas` delegates to the attached overlay
@@ -2402,5 +2462,170 @@ mod tests {
         );
         assert_ne!(part_at(&doc, cx, 0), pt(-6, 0));
         assert!(!captured(cx));
+    }
+
+    /// Review 4, finding 1, without an overlay: undo on A and a switch to B in one update.
+    /// The subscriber hears nothing: at delivery the canvas shows B.
+    #[gpui::test]
+    fn t5_2_history_after_a_switch_in_the_same_update_is_dropped(cx: &mut TestAppContext) {
+        let (_overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
+        let canvas = canvas_for(cx, Some(doc_a.clone()), None);
+        let history = record_history(&canvas, cx);
+        let a0 = cx.update(|_, cx| snapshot(doc_a.read(cx)));
+        nudge(&doc_a, cx);
+        cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| {
+                c.undo(window, cx);
+                c.set_doc(Some(doc_b.clone()), cx);
+            })
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.update(|_, cx| doc_a.read(cx).content_eq(&a0)),
+            "the undo ran on A"
+        );
+        assert!(
+            history.borrow().is_empty(),
+            "A's history is dropped at delivery"
+        );
+        // The canvas's own document is still reported.
+        nudge(&doc_b, cx);
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.undo(window, cx)));
+        cx.run_until_parked();
+        assert_eq!(
+            history.borrow().iter().map(|h| h.doc).collect::<Vec<_>>(),
+            vec![doc_key(&doc_b)]
+        );
+    }
+
+    /// Review 4, finding 1, with an overlay: undo, then a switch queued with `defer`. The
+    /// forwarded event passed while A was current; the subscriber boundary still drops it.
+    #[gpui::test]
+    fn t5_2_history_before_a_deferred_switch_is_dropped(cx: &mut TestAppContext) {
+        let (overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
+        let canvas = canvas_for(cx, Some(doc_a.clone()), Some(overlay.clone()));
+        let history = record_history(&canvas, cx);
+        nudge(&doc_a, cx);
+        cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| {
+                c.undo(window, cx);
+                let canvas = cx.entity();
+                let doc_b = doc_b.clone();
+                cx.defer(move |cx| canvas.update(cx, |c, cx| c.set_doc(Some(doc_b), cx)));
+            })
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| canvas.read(cx).doc().cloned()),
+            Some(doc_b)
+        );
+        assert!(
+            history.borrow().is_empty(),
+            "A's history is dropped after the deferred switch"
+        );
+    }
+
+    /// Review 4, finding 2: an overlay detached and unmounted in one update, with a handle
+    /// still held, releases its capture without painting again.
+    #[gpui::test]
+    fn t5_2_a_detached_unmounted_overlay_releases_its_capture(cx: &mut TestAppContext) {
+        let doc = cx.new(|_| test_doc());
+        let doc_clone = doc.clone();
+        let (host, cx) = cx.add_window_view(move |window, cx| {
+            window.activate_window();
+            let overlay = cx.new(|cx| {
+                let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+                OverlayView::new(doc_clone, camera, &GRAPHITE, cx)
+            });
+            Host {
+                overlay: Some(overlay),
+            }
+        });
+        cx.run_until_parked();
+        let overlay = cx.update(|_, cx| host.read(cx).overlay.clone().unwrap());
+        let canvas = canvas_for(cx, Some(doc.clone()), Some(overlay.clone()));
+        let rev0 = revision(&doc, cx);
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-4, 2));
+        assert!(captured(cx));
+        let paints = cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
+        cx.update(|_, cx| {
+            canvas.update(cx, |c, cx| c.set_doc(None, cx));
+            host.update(cx, |h, cx| {
+                h.overlay = None;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).overlay_paint_count()),
+            paints,
+            "the unmounted overlay never paints again"
+        );
+        assert!(!captured(cx), "the capture is released without a paint");
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        let at = gpui::point(gpui::px(100.0), gpui::px(100.0));
+        cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+        assert_eq!(revision(&doc, cx), rev0);
+    }
+
+    /// Review 5, finding A: a band whose release was lost ends, with no selection change,
+    /// when a fresh press on an item starts a tool drag; a later release resolves nothing.
+    #[gpui::test]
+    fn t5_2_a_fresh_press_on_an_item_ends_a_stale_band(cx: &mut TestAppContext) {
+        let (overlay, _doc, cx) = open_overlay(cx);
+        down(&overlay, cx, pt(0, -8));
+        drag_to(&overlay, cx, pt(9, 8));
+        assert!(cx.update(|_, cx| overlay.read(cx).rubber_band().is_some()));
+        // The band's release is lost; the next event is a press on R1.
+        down(&overlay, cx, pt(-6, 0));
+        assert_eq!(phase(&overlay, cx), ToolPhase::Dragging);
+        assert!(
+            cx.update(|_, cx| overlay.read(cx).rubber_band().is_none()),
+            "the stale band ends at the fresh press"
+        );
+        up(&overlay, cx, pt(-6, 0));
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![R1]
+        );
+        // A later left release must not resolve the old band and replace the selection.
+        up(&overlay, cx, pt(9, 8));
+        assert!(cx.update(|_, cx| overlay.read(cx).rubber_band().is_none()));
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![R1]
+        );
+        assert!(!captured(cx));
+    }
+
+    /// Review 5, finding B: a click whose item another command deleted mid-press selects
+    /// nothing.
+    #[gpui::test]
+    fn t5_2_a_click_on_a_deleted_item_selects_nothing(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        down(&overlay, cx, pt(-6, 0));
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![R1]
+        );
+        cx.update(|_, cx| {
+            let change = doc.update(cx, |doc, _| {
+                doc.apply(Command::Delete {
+                    items: vec![R1],
+                    with_wires: false,
+                })
+                .unwrap()
+            });
+            overlay.update(cx, |o, cx| o.on_doc_change(&change, cx));
+        });
+        assert!(cx.update(|_, cx| overlay.read(cx).selection().is_empty()));
+        up(&overlay, cx, pt(-6, 0));
+        assert!(
+            cx.update(|_, cx| overlay.read(cx).selection().is_empty()),
+            "the deleted id is not selected again"
+        );
     }
 }

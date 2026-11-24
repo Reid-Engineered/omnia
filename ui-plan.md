@@ -870,8 +870,13 @@ pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged }
 // The gesture owner (OverlayView) emits it after every effective edit, a drag's commit included,
 // and SheetCanvas re-emits it:
 pub struct CanvasHistory { pub doc: u64, pub can_undo: bool, pub can_redo: bool, pub cursor: u64 } // new;
-// doc: the source document's key (omnia_canvas::tool::doc_key); check it on delivery
+// doc: the source document's key (omnia_canvas::tool::doc_key). SheetCanvas emits it sealed in
+// CanvasHistoryEvent; subscribe only through subscribe_history, which drops at delivery an event
+// whose document the canvas no longer shows (GPUI delivers events after the update unwinds).
 impl SheetCanvas {
+    pub fn subscribe_history<T: 'static>(canvas: &Entity<Self>, cx: &mut Context<T>,
+        on_history: impl FnMut(&mut T, &CanvasHistory, &mut Context<T>) + 'static) -> Subscription; // T5.2
+    pub fn is_current_history(&self, history: &CanvasHistory) -> bool;              // T5.2
     pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>); // T5.2: gesture owner
     pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;  // T5.2
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>);            // T5.2
@@ -967,7 +972,7 @@ wiring files stay authoritative for their ids.
 | canvas-roadmap.md T4.3 | Also provide `select_all` (Ctrl+A is bound by the shell, UD3). |
 | canvas-roadmap.md T4.5 | Also provide `zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation), used by View and the toolbar. |
 | canvas-roadmap.md T5.1 | Follow-up for doc lane task U2.1: `history_cursor`, `can_undo`, `can_redo`. |
-| canvas-roadmap.md T5.2 | Declare the R, X, Y and W actions, resolved in key context `Sheet`; the shell's `ACTIONS` table reuses those types and generates each binding once (UD3). Provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and the event type `CanvasHistory`, emitted after every effective edit, a drag's commit included, by the one gesture owner that `SheetCanvas` delegates to while both show one document. The keymap conflict test (UINV4) covers the combined shell keymap. |
+| canvas-roadmap.md T5.2 | Declare the R, X, Y and W actions, resolved in key context `Sheet`; the shell's `ACTIONS` table reuses those types and generates each binding once (UD3). Provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and the event type `CanvasHistory`, emitted after every effective edit, a drag's commit included, by the one gesture owner that `SheetCanvas` delegates to while both show one document; the shell subscribes only through `SheetCanvas::subscribe_history`, which drops an event for a document the canvas no longer shows at delivery. The keymap conflict test (UINV4) covers the combined shell keymap. |
 | canvas-roadmap.md T5.3 | Provide `delete_selection`. |
 | canvas-roadmap.md T7.1 | Ctrl+C, Ctrl+X, Ctrl+V are bound by the shell; T7.1 provides `cut`, `copy`, `paste`. |
 | canvas-roadmap.md T7.3 | The floating frame, drag, stacking and focus come from ui-roadmap.md U4.1. T7.3 supplies the animated stub content inside that frame, keeps `bench run --script pan --instrument` and its done-when; `instrument_host.rs` holds the content only. |

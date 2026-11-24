@@ -25,7 +25,7 @@ use crate::camera_anim::{
 };
 use crate::overlay::OverlayView;
 use crate::sheet::{SheetDocument, SheetView, grid_level};
-use crate::tool::{self, CanvasEdit, CanvasHistory};
+use crate::tool::{self, CanvasEdit, CanvasHistory, CanvasHistoryEvent};
 use gpui::{
     App, Bounds, Context, DispatchPhase, Element, ElementId, Entity, EventEmitter, FocusHandle,
     GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, KeyDownEvent,
@@ -324,7 +324,7 @@ impl SheetCanvas {
                 overlay,
                 |this, overlay, history: &CanvasHistory, cx| {
                     if this.accepts(history.doc, &overlay, cx) {
-                        cx.emit(*history);
+                        cx.emit(CanvasHistoryEvent(*history));
                     }
                 },
             ));
