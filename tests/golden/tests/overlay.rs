@@ -60,6 +60,13 @@ const CASES: &[OverlayCase] = &[
             SelectMode::Intersecting,
         )),
     },
+    // Net-highlight state (T4.4): hovering Wire(0) highlights the entire 6-wire IN net.
+    OverlayCase {
+        name: "overlay-net-highlight",
+        selection: &[],
+        hovered: Some(ItemId::Wire(WireId(0))),
+        rubber_band: None,
+    },
 ];
 
 struct Probe {
