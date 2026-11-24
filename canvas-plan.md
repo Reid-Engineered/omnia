@@ -711,8 +711,11 @@ impl ToolMachine {
 // T5.2: emitted by the gesture owner (OverlayView) after every effective edit (commit, undo,
 // redo; later placement and delete) and re-emitted by SheetCanvas while both show one document.
 // A separate event type rather than a `CanvasEvent` variant, so existing exhaustive matches build.
-pub struct CanvasHistory { pub can_undo: bool, pub can_redo: bool, pub cursor: u64 }
-pub struct CanvasEdit { pub dirty: Option<Rect> }        // OverlayView -> SheetCanvas repaint (D7)
+pub struct CanvasHistory { pub doc: u64, pub can_undo: bool, pub can_redo: bool, pub cursor: u64 }
+pub struct CanvasEdit { pub doc: u64, pub dirty: Option<Rect> } // OverlayView -> SheetCanvas repaint (D7)
+// doc: the source document's doc_key. Events queued in one GPUI update arrive after any
+// document switch in it, so SheetCanvas delivers or re-emits one only if doc is the document
+// it shows at delivery, through the owner still attached and showing it.
 // T5.2 (keymap.rs): actions in namespace `canvas`, resolved in key context "Sheet" (UD3). The
 // shell reuses Rotate, MirrorHorizontal, MirrorVertical and PlaceWire in its ACTIONS table and
 // generates their R, X, Y and W bindings once from it; it registers nothing from keymap.rs.
@@ -838,7 +841,8 @@ impl SheetCanvas {
     pub fn fit_doc(&mut self, doc: &Doc, cx: &mut Context<Self>);
     pub fn zoom_to_selection_in(&mut self, doc: &Doc, selection: &[ItemId], cx: &mut Context<Self>) -> bool;
     // T5.2 (tool.rs): tool calls delegate to the attached gesture owner only while it shows this
-    // canvas's document; set_doc and set_overlay keep the two aligned (set_doc(None) detaches).
+    // canvas's document; set_doc and set_overlay keep the two aligned (set_doc(None) detaches),
+    // and a detached or replaced owner drops its gestures and releases its capture.
     // Without an owner there are no tools, and undo/redo act on the canvas's own document.
     // Emits CanvasHistory.
     pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>);

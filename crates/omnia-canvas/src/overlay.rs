@@ -465,7 +465,10 @@ impl OverlayView {
 
     /// Cancels an active rubber-band drag (never notifies `SheetView`).
     pub fn cancel_rubber_band(&mut self, cx: &mut Context<Self>) {
-        if self.state.cancel_rubber_band() {
+        // T5.2: a pointer-held band holds the capture even before it is visible; repaint so the
+        // next paint releases it.
+        let held = self.state.is_rubber_banding();
+        if self.state.cancel_rubber_band() || held {
             cx.notify();
         }
     }
@@ -753,9 +756,12 @@ impl ToolHost for OverlayView {
 
     fn doc_changed(&mut self, change: &Change, cx: &mut Context<Self>) {
         self.on_doc_change(change, cx);
-        let history = tool::CanvasHistory::of(self.doc.read(cx));
+        // T5.2: each event names the document it came from, checked at delivery.
+        let key = tool::doc_key(&self.doc);
+        let history = tool::CanvasHistory::of(key, self.doc.read(cx));
         cx.emit(history);
         cx.emit(tool::CanvasEdit {
+            doc: key,
             dirty: change.dirty,
         });
     }
@@ -795,6 +801,15 @@ impl Render for OverlayView {
                     this.tools_pointer_lost(window, cx);
                 }
             }));
+            // T5.2: a dropped overlay releases the capture it still holds.
+            cx.on_release_in(window, |this, window, _| {
+                if let Some(owned) = this.capture.get()
+                    && window.captured_hitbox() == Some(owned)
+                {
+                    window.release_pointer();
+                }
+            })
+            .detach();
         }
         if let Some(anim) = &self.anim {
             let (next_cam, finished) = anim.step(self.viewport, cx);
@@ -981,8 +996,14 @@ impl Element for OverlayLayer {
             if phase != DispatchPhase::Bubble {
                 return;
             }
-            if hit.is_hovered(window) {
-                let owns = capture.get().is_some() && window.captured_hitbox() == capture.get();
+            let owns = capture.get().is_some() && window.captured_hitbox() == capture.get();
+            // T5.2: a drag that lost its capture ends wherever the pointer is, before hover
+            // routing could treat it as leaving the sheet.
+            let lost = !owns
+                && overlay
+                    .read_with(cx, |overlay, _| overlay.tools.is_dragging())
+                    .unwrap_or(false);
+            if hit.is_hovered(window) || lost {
                 let ended = overlay
                     .update(cx, |overlay, cx| {
                         overlay.on_mouse_move(event, bounds, owns, cx)

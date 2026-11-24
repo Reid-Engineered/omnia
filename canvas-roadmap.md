@@ -528,8 +528,8 @@ of the `canvas` lane.
 
 ### T5.5 Combined move and reorient command · todo
 - Lane: doc · Depends: T5.1 · Read: D2, INV4, INV10, wiring-plan.md WD3
-- Owns: `crates/omnia-doc/src/command.rs` (the combined-transform command only), `follow.rs`
-  (the composed `Isometry` variant only)
+- Owns: `crates/omnia-doc/src/command.rs` and `follow.rs` (`Isometry`, its `apply`, and the
+  follow-planner and command handling of the composed variant only)
 - Do: one command (an `Isometry` that composes a translation with a reorientation, for
   example `Transform { delta, pivot, by }`) planned once against the original sheet, with wire
   follow per `FollowPolicy` and normalisation run once, so a move plus R, X or Y commits as one
@@ -2313,3 +2313,32 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        public `omnia_canvas::tool` path. 107 canvas unit tests. Checks run
                        locally on Windows: `cargo fmt --all --check`, both clippy commands,
                        `cargo test --workspace` and `cargo deny check`.
+
+2026-11-24 T5.2 done — third review fixes (#125 at `75e5de8`), after auditing every path that
+                       can end, orphan or redirect a gesture or an edit event. Each path either
+                       commits to the gesture's own document while it holds capture, or ends
+                       with no edit and its capture released; each has a test. (1) Events queued
+                       within one GPUI update: `CanvasHistory` and `CanvasEdit` now carry the
+                       source `doc` key. `SheetCanvas` delivers one only if that key is the
+                       document it shows at delivery, through the owner still attached and
+                       showing it. Tested by undo on A and a switch to B in one update. (2) A
+                       detached owner (`set_doc(None)`) or a replaced one (`set_overlay(Some(..))`)
+                       drops every gesture, the band included, and schedules its capture
+                       release. (3) A drag whose capture GPUI cleared ends at the next move
+                       even off the sheet: lost capture is checked before hover routing. (4) The
+                       public `cancel_rubber_band` repaints for any pointer-held band, visible
+                       or not, so its capture is released. (5) Hard rule 2: the real-Esc test
+                       samples sheet paints right after Esc and bounds them by the observed
+                       modality switches (UQ15). It then asserts zero further sheet paints on
+                       the release, which keeps keyboard modality at the pinned GPUI. The
+                       zero-paint `cancel()` test is unchanged. Also from the audit: a dropped
+                       overlay releases its capture through `on_release_in`. (6) T5.5's Owns
+                       line now covers `Isometry`, its `apply`, and the follow-planner and
+                       command handling of the composed variant. ui-plan.md's
+                       `default_bindings()` sketch generates each `ACTIONS` binding once (R, X,
+                       Y, W included) plus the `Nav*` and `FocusMenuBar` bindings UD3 keeps
+                       beside them. The `doc` field is in the canvas-plan.md and ui-plan.md
+                       sketches. 112 canvas unit tests; the queued-event test was confirmed to
+                       fail with the delivery check removed. Checks run locally on Windows:
+                       `cargo fmt --all --check`, both clippy commands, `cargo test
+                       --workspace` and `cargo deny check`.

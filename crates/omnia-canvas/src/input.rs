@@ -307,6 +307,12 @@ impl SheetCanvas {
     /// included) is re-emitted here for the shell (UD6), only while both show one document.
     pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>) {
         self.overlay_subscriptions.clear();
+        // T5.2: an outgoing owner keeps no gesture that could still commit.
+        if let Some(old) = self.overlay.take()
+            && overlay.as_ref() != Some(&old)
+        {
+            old.update(cx, |o, cx| o.tools_detached(cx));
+        }
         if let Some(overlay) = &overlay {
             if self.doc.is_none() {
                 let doc = overlay.read(cx).doc().clone();
@@ -317,7 +323,7 @@ impl SheetCanvas {
             self.overlay_subscriptions.push(cx.subscribe(
                 overlay,
                 |this, overlay, history: &CanvasHistory, cx| {
-                    if this.shows_doc_of(&overlay, cx) {
+                    if this.accepts(history.doc, &overlay, cx) {
                         cx.emit(*history);
                     }
                 },
@@ -325,7 +331,7 @@ impl SheetCanvas {
             self.overlay_subscriptions.push(cx.subscribe(
                 overlay,
                 |this, overlay, edit: &CanvasEdit, cx| {
-                    if this.shows_doc_of(&overlay, cx) {
+                    if this.accepts(edit.doc, &overlay, cx) {
                         this.repaint_if_visible(edit.dirty, cx);
                     }
                 },
@@ -349,8 +355,17 @@ impl SheetCanvas {
             None => {
                 self.overlay_subscriptions.clear();
                 self.overlay = None;
+                overlay.update(cx, |o, cx| o.tools_detached(cx));
             }
         }
+    }
+
+    /// An event from the owner is delivered only if it came from the document this canvas
+    /// shows now, through an owner still attached and showing it.
+    fn accepts(&self, source_doc: u64, overlay: &Entity<OverlayView>, cx: &App) -> bool {
+        self.doc.as_ref().map(tool::doc_key) == Some(source_doc)
+            && self.overlay.as_ref() == Some(overlay)
+            && self.shows_doc_of(overlay, cx)
     }
 
     fn shows_doc_of(&self, overlay: &Entity<OverlayView>, cx: &App) -> bool {

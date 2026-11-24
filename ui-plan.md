@@ -285,8 +285,8 @@ when input switches between mouse and keyboard (UG17). The owner accepted that r
   - `Shell` and `Workspace` bind every modifier shortcut: Ctrl+N, O, S, Shift+S, W, Q, Z, Y,
     Shift+Z, X, C, V, A, comma, =, -, 0, 1, 2, 3, Tab, Shift+Tab, F1, F10, F11, and Delete.
   - `Sheet` binds the single-key canvas tools from T5.2 (R, X, Y, W, and Space as T1.5 and
-    T6.2 use it), each once, from `ACTIONS`, so typing in a text field can never rotate a part. Esc is not bound in `Sheet`
-    (UQ14): the shell's `NavCancel` handler calls `SheetCanvas::cancel` (T5.2) when the sheet is
+    T6.2 use it), each once, from `ACTIONS`, so typing in a text field can never rotate a
+    part. Esc is not bound in `Sheet` (UQ14): the shell's `NavCancel` handler calls `SheetCanvas::cancel` (T5.2) when the sheet is
     the key target.
   - The focused `TextField` handles its editing keystrokes before keymap dispatch (Ctrl+A,
     Ctrl+C, Ctrl+V, Ctrl+X, arrows, Backspace, Delete). It consumes document undo and redo
@@ -782,8 +782,10 @@ pub struct CanvasEdits { pub undo: bool, pub delete: bool, pub clipboard: bool, 
 pub enum SimState { Unavailable, Idle, Running, Paused, Failed }
 
 // ---- keymap.rs ----
-pub fn default_bindings() -> Vec<gpui::KeyBinding>;        // every binding once, from ACTIONS (canvas tool
-                                                           // actions included, UD3); nothing from omnia_canvas::keymap
+pub fn default_bindings() -> Vec<gpui::KeyBinding>;        // each ACTIONS binding once, the canvas tool
+                                                           // actions' R, X, Y, W included (UD3), plus the
+                                                           // Nav* and FocusMenuBar bindings UD3 keeps beside
+                                                           // them; nothing from omnia_canvas::keymap
 pub fn conflicts(bindings: &[gpui::KeyBinding]) -> Vec<(String, String, String)>; // UINV4
 
 // ---- document.rs ----
@@ -867,7 +869,8 @@ pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged }
 // T5.2 delivered history as its own event type, so existing exhaustive `CanvasEvent` matches build.
 // The gesture owner (OverlayView) emits it after every effective edit, a drag's commit included,
 // and SheetCanvas re-emits it:
-pub struct CanvasHistory { pub can_undo: bool, pub can_redo: bool, pub cursor: u64 } // new
+pub struct CanvasHistory { pub doc: u64, pub can_undo: bool, pub can_redo: bool, pub cursor: u64 } // new;
+// doc: the source document's key (omnia_canvas::tool::doc_key); check it on delivery
 impl SheetCanvas {
     pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>); // T5.2: gesture owner
     pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;  // T5.2

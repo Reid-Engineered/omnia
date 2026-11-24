@@ -566,6 +566,9 @@ impl ToolMachine {
 /// [`SheetCanvas`] (UD6: the shell drives `can_undo`, `can_redo` and the modified state).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CanvasHistory {
+    /// The document the edit was made on (`doc_key`); check it on delivery, because events
+    /// queued within one GPUI update arrive after any document switch in that update.
+    pub doc: u64,
     pub can_undo: bool,
     pub can_redo: bool,
     /// `Doc::history_cursor` after the edit.
@@ -573,8 +576,9 @@ pub struct CanvasHistory {
 }
 
 impl CanvasHistory {
-    pub fn of(doc: &Doc) -> Self {
+    pub fn of(key: u64, doc: &Doc) -> Self {
         Self {
+            doc: key,
             can_undo: doc.can_undo(),
             can_redo: doc.can_redo(),
             cursor: doc.history_cursor(),
@@ -585,6 +589,8 @@ impl CanvasHistory {
 /// An effective edit made through the gesture owner: where the sheet changed (D7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CanvasEdit {
+    /// The document the edit was made on (`doc_key`), checked on delivery.
+    pub doc: u64,
     pub dirty: Option<Rect>,
 }
 
@@ -849,6 +855,14 @@ impl OverlayView {
         finish(self, outcome, None, cx);
     }
 
+    /// Detached or replaced as a canvas's gesture owner: drop every gesture, the band
+    /// included, with no edit, and schedule the release of the capture it held.
+    pub(crate) fn tools_detached(&mut self, cx: &mut Context<Self>) {
+        let mut outcome = self.tools_mut().document_replaced();
+        outcome.release |= self.cancel_host_gesture(cx);
+        finish(self, outcome, None, cx);
+    }
+
     /// The window lost activation: end a pointer-held gesture with no edit.
     pub(crate) fn tools_pointer_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut outcome = self.tools_mut().pointer_lost();
@@ -917,7 +931,7 @@ impl SheetCanvas {
             return false;
         };
         self.repaint_if_visible(change.dirty, cx);
-        cx.emit(CanvasHistory::of(doc.read(cx)));
+        cx.emit(CanvasHistory::of(doc_key(&doc), doc.read(cx)));
         true
     }
 
@@ -1668,29 +1682,32 @@ mod tests {
         down(&overlay, cx, pt(-6, 0));
         drag_to(&overlay, cx, pt(-3, 0));
         let before = paints(cx);
-        let mut modality = keyboard(cx);
-        assert!(!modality, "the drag leaves the window in pointer modality");
-        let mut modality_switches = 0;
+        let pointer_modality = keyboard(cx);
+        assert!(
+            !pointer_modality,
+            "the drag leaves the window in pointer modality"
+        );
 
+        // The Esc: its paints are bounded by the modality switches it made (UQ15).
         cx.simulate_keystrokes("escape");
         assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
-        if keyboard(cx) != modality {
-            modality_switches += 1;
-            modality = !modality;
-        }
-        up(&overlay, cx, pt(-3, 0));
-        if keyboard(cx) != modality {
-            modality_switches += 1;
-        }
-
-        assert!(
-            modality_switches >= 1,
-            "the Esc must switch to keyboard input"
-        );
-        let modality_paints = paints(cx) - before;
+        let modality_switches = u64::from(keyboard(cx) != pointer_modality);
+        assert_eq!(modality_switches, 1, "the Esc switches to keyboard input");
+        let after_esc = paints(cx);
+        let modality_paints = after_esc - before;
         assert!(
             modality_paints <= modality_switches,
             "UQ15: {modality_paints} sheet paints for {modality_switches} modality switches"
+        );
+
+        // The release: a mouse-up keeps keyboard modality at the pinned GPUI, so it may not
+        // paint the sheet at all.
+        up(&overlay, cx, pt(-3, 0));
+        assert!(keyboard(cx), "a mouse-up does not switch modality");
+        assert_eq!(
+            paints(cx),
+            after_esc,
+            "the release paints the sheet 0 times"
         );
         assert_eq!(notifies.get(), 0, "no canvas-caused sheet paint");
         assert_eq!(revision(&doc, cx), rev0);
@@ -1971,6 +1988,7 @@ mod tests {
         assert_eq!(
             history.borrow().as_slice(),
             &[CanvasHistory {
+                doc: doc_key(&doc),
                 can_undo: true,
                 can_redo: false,
                 cursor: moved,
@@ -2052,6 +2070,7 @@ mod tests {
         assert_eq!(
             events[1],
             CanvasHistory {
+                doc: doc_key(&doc),
                 can_undo: true,
                 can_redo: false,
                 cursor: moved_cursor,
@@ -2200,5 +2219,163 @@ mod tests {
         up(&overlay, cx, pt(-4, 2));
         assert_eq!(part_at(&doc_c, cx, 0), pt(-4, 2));
         assert!(history.borrow().is_empty());
+    }
+
+    /// Review 3, finding 1: an undo on A and a switch to B in one GPUI update. The queued
+    /// events name A, so the canvas (now on B) drops them.
+    #[gpui::test]
+    fn t5_2_events_queued_before_a_switch_never_reach_the_new_document(cx: &mut TestAppContext) {
+        let (overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
+        let canvas = canvas_for(cx, Some(doc_a.clone()), Some(overlay.clone()));
+        let history = record_history(&canvas, cx);
+        let a0 = cx.update(|_, cx| snapshot(doc_a.read(cx)));
+        nudge(&doc_a, cx);
+        let b0 = cx.update(|_, cx| snapshot(doc_b.read(cx)));
+        cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| {
+                c.undo(window, cx);
+                c.set_doc(Some(doc_b.clone()), cx);
+            })
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.update(|_, cx| doc_a.read(cx).content_eq(&a0)),
+            "the undo ran on A"
+        );
+        assert!(cx.update(|_, cx| doc_b.read(cx).content_eq(&b0)));
+        assert!(
+            history.borrow().is_empty(),
+            "A's queued history must not be delivered as B's"
+        );
+        // B's own edits are reported, with B's identity.
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-4, 2));
+        up(&overlay, cx, pt(-4, 2));
+        assert_eq!(
+            history.borrow().iter().map(|h| h.doc).collect::<Vec<_>>(),
+            vec![doc_key(&doc_b)]
+        );
+    }
+
+    /// Review 3, finding 2: detaching the owner, or replacing it, ends its drag with no edit
+    /// and releases its capture, even while the old overlay stays mounted.
+    #[gpui::test]
+    fn t5_2_a_detached_or_replaced_owner_keeps_no_drag(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let canvas = canvas_for(cx, Some(doc.clone()), Some(overlay.clone()));
+        let rev0 = revision(&doc, cx);
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-4, 2));
+        cx.update(|_, cx| canvas.update(cx, |c, cx| c.set_doc(None, cx)));
+        cx.run_until_parked();
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        assert!(!captured(cx), "detaching releases the drag's capture");
+        up(&overlay, cx, pt(-4, 2));
+        assert_eq!(revision(&doc, cx), rev0);
+
+        let canvas = canvas_for(cx, Some(doc.clone()), Some(overlay.clone()));
+        let other = cx.update(|_, cx| {
+            let doc = doc.clone();
+            cx.new(|cx| {
+                OverlayView::new(
+                    doc,
+                    Camera::new(Pt::ZERO, 1.0, Bounds::default()),
+                    &GRAPHITE,
+                    cx,
+                )
+            })
+        });
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-4, 2));
+        cx.update(|_, cx| canvas.update(cx, |c, cx| c.set_overlay(Some(other.clone()), cx)));
+        cx.run_until_parked();
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        assert!(!captured(cx), "replacing releases the old owner's capture");
+        up(&overlay, cx, pt(-4, 2));
+        assert_eq!(revision(&doc, cx), rev0);
+        assert_eq!(part_at(&doc, cx, 0), pt(-6, 0));
+    }
+
+    /// Review 3, finding 3: after a second button clears the capture, a move outside the
+    /// sheet still ends the drag, and its release commits nothing.
+    #[gpui::test]
+    fn t5_2_a_lost_capture_drag_ends_on_a_move_off_the_sheet(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let rev0 = revision(&doc, cx);
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-3, 1));
+        let at = screen(&overlay, cx, pt(-3, 1));
+        cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+        let outside = gpui::point(gpui::px(-400.0), gpui::px(-400.0));
+        cx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        cx.simulate_mouse_up(outside, MouseButton::Left, Modifiers::none());
+        up(&overlay, cx, pt(-3, 1));
+        assert_eq!(revision(&doc, cx), rev0);
+    }
+
+    /// Review 3, finding 4: the public `cancel_rubber_band` releases an unmoved band's capture.
+    #[gpui::test]
+    fn t5_2_cancel_rubber_band_releases_an_unmoved_band(cx: &mut TestAppContext) {
+        let (overlay, _doc, cx) = open_overlay(cx);
+        down(&overlay, cx, pt(0, -8));
+        assert!(captured(cx));
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.cancel_rubber_band(cx)));
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| overlay.read(cx).rubber_band().is_none()));
+        assert!(!captured(cx));
+        up(&overlay, cx, pt(0, -8));
+    }
+
+    /// A host view that can drop its overlay while it is mounted.
+    struct Host {
+        overlay: Option<Entity<OverlayView>>,
+    }
+
+    impl gpui::Render for Host {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+            use gpui::{ParentElement, Styled};
+            gpui::div().size_full().children(self.overlay.clone())
+        }
+    }
+
+    /// Audit: an overlay dropped mid-drag releases its capture and edits nothing.
+    #[gpui::test]
+    fn t5_2_a_dropped_overlay_releases_its_capture(cx: &mut TestAppContext) {
+        let doc = cx.new(|_| test_doc());
+        let doc_clone = doc.clone();
+        let (host, cx) = cx.add_window_view(move |window, cx| {
+            window.activate_window();
+            let overlay = cx.new(|cx| {
+                let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+                OverlayView::new(doc_clone, camera, &GRAPHITE, cx)
+            });
+            Host {
+                overlay: Some(overlay),
+            }
+        });
+        cx.run_until_parked();
+        let overlay = cx.update(|_, cx| host.read(cx).overlay.clone().unwrap());
+        let rev0 = revision(&doc, cx);
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-4, 2));
+        assert_eq!(phase(&overlay, cx), ToolPhase::Dragging);
+        assert!(captured(cx));
+        let weak = overlay.downgrade();
+        drop(overlay);
+        cx.update(|_, cx| {
+            host.update(cx, |h, cx| {
+                h.overlay = None;
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        assert!(weak.upgrade().is_none(), "the overlay is gone");
+        assert!(!captured(cx), "its capture went with it");
+        let at = gpui::point(gpui::px(100.0), gpui::px(100.0));
+        cx.simulate_mouse_up(at, MouseButton::Left, Modifiers::none());
+        assert_eq!(revision(&doc, cx), rev0);
     }
 }
