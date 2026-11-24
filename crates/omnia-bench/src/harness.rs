@@ -305,6 +305,7 @@ pub(crate) struct RunReportInput<'a> {
     pub window: &'a Window,
     pub cx: &'a App,
     pub base: &'a FrameDurationSnapshot,
+    pub draws_before_warmup: u64,
     pub allocs: &'a [AllocCounts],
     pub paint_ms: &'a mut [f64],
     pub paint_sampling: &'static str,
@@ -322,6 +323,7 @@ pub(crate) fn build_run_report(input: RunReportInput<'_>) -> Result<Value, Strin
         window,
         cx,
         base,
+        draws_before_warmup,
         allocs,
         paint_ms,
         paint_sampling,
@@ -334,7 +336,11 @@ pub(crate) fn build_run_report(input: RunReportInput<'_>) -> Result<Value, Strin
     let end = window.frame_duration_snapshot();
     let delta = |later, earlier| stats::delta(later, earlier).ok_or("histogram subtraction failed");
 
-    let baseline_draws = base.draw_duration_histogram.len();
+    let warmup_draws = base
+        .draw_duration_histogram
+        .len()
+        .checked_sub(draws_before_warmup)
+        .ok_or("draw count regressed during warm-up")?;
     let draw = delta(&end.draw_duration_histogram, &base.draw_duration_histogram)?;
     let dirty_to_present = delta(
         &end.dirty_to_present_histogram,
@@ -429,10 +435,9 @@ pub(crate) fn build_run_report(input: RunReportInput<'_>) -> Result<Value, Strin
     metrics.insert("primitives".into(), primitive_counts(window));
 
     let mut warnings = Vec::new();
-    // The baseline should hold exactly the warm-up draws.
-    if baseline_draws != u64::from(config.warmup) {
+    if warmup_draws != u64::from(config.warmup) {
         warnings.push(format!(
-            "baseline snapshot covers {baseline_draws} draws, expected {} warm-up frames",
+            "baseline snapshot covers {warmup_draws} warm-up draws, expected {} warm-up frames",
             config.warmup
         ));
     }
@@ -506,6 +511,7 @@ impl RunView {
             window,
             cx,
             base: self.baseline.as_ref().ok_or("no baseline snapshot")?,
+            draws_before_warmup: 0,
             allocs: &self.allocs,
             paint_ms: &mut self.paint_ms,
             paint_sampling,
