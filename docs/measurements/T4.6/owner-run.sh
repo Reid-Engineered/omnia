@@ -50,13 +50,17 @@ main() {
             *) echo "usage: owner-run.sh [--check] [--remote]" >&2; return 2 ;;
         esac
     done
+    if ((remote)) && [[ -n ${OWNER_RUN_PASSFILE:-} ]]; then
+        # The password file is removed on every way out, and again right after `sudo -v`.
+        trap 'rm -f -- "$OWNER_RUN_PASSFILE"' EXIT
+    fi
 
     local blockers=() supply mains=0 busy tool
     if ((remote == 0)) && [[ -n ${SSH_CONNECTION:-}${SSH_TTY:-} ]]; then
         blockers+=("started over SSH: run it at Orion's desk, or see --remote")
     fi
     if ((remote && !check)) && [[ ! -r ${OWNER_RUN_PASSFILE:-} ]]; then
-        blockers+=("--remote needs OWNER_RUN_PASSFILE naming a readable sudo password file")
+        blockers+=("--remote needs OWNER_RUN_PASSFILE naming a readable sudo password file (--remote --check does not)")
     fi
     if [[ ${XDG_SESSION_TYPE:-} != wayland ]]; then
         blockers+=("not in the local Wayland session")
@@ -82,7 +86,6 @@ main() {
     done
 
     if ((${#blockers[@]})); then
-        if ((remote)); then rm -f "${OWNER_RUN_PASSFILE:-}"; fi
         printf 'owner-run: not ready\n' >&2
         printf '  - %s\n' "${blockers[@]}" >&2
         return 2
@@ -101,7 +104,9 @@ main() {
     mkdir "$final"
     # tee ignores Ctrl-C (-i) and hangups (inherited), and keeps writing the log file if the
     # terminal goes away.
+    exec 3>&1 4>&2
     exec > >(exec tee -i --output-error=warn -a "$out/owner-run.log") 2>&1
+    local tee_pid=$!
     echo "owner-run: live output $out; copied to $final after the gate"
 
     git -C "$root" fetch --quiet origin main
@@ -231,6 +236,9 @@ except ProcessLookupError:
 
     echo
     echo "owner-run: gate exit $status ($(cat "$out/gate/status.txt" 2>/dev/null || echo 'no status'))"
+    # Close the log pipe and let tee drain before copying, so the log is complete.
+    exec 1>&3 2>&4 3>&- 4>&-
+    wait "$tee_pid" || true
     cp -a "$out/." "$final/"
     echo "owner-run: evidence in $final (live copy in $out)"
     echo "owner-run: the helper restores the governor and tailscaled on exit"
