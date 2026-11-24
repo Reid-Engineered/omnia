@@ -28,6 +28,10 @@ ids (`CB`, `CK`, `CD`, `CINV`, `CTC`, `CQ`, checkpoints `HC`, tasks `C0.1`…) l
 circuit-context files (`context-plan.md`, `context-roadmap.md`). Cite ids in commits, pull
 requests and log entries.
 
+The GitHub wiki is generated from these files by `.github/workflows/wiki.yml` on every push
+to `main`. It is a read-only view: never edit it, and never cite it as a source. Change the
+plan or roadmap instead, and the wiki follows when the pull request merges.
+
 The wiring files name crates `schematic-doc`, `schematic-canvas` and `schematic-bench`.
 Those are this repository's `omnia-doc`, `omnia-canvas` and `omnia-bench`.
 
