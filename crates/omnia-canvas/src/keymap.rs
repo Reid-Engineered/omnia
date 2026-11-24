@@ -1,22 +1,23 @@
-//! T5.2: canvas actions and their default key bindings (UD3, UQ14, canvas-plan section 5).
+//! T5.2: canvas actions and their standalone key bindings (UD3, UQ14, canvas-plan section 5).
 //!
-//! Every canvas command is a GPUI action declared here once; the shell re-uses these types
-//! and never redeclares them (UD3). Actions resolve in the key context [`SHEET_CONTEXT`],
-//! which the canvas views set on the element that tracks their focus, so a key reaches them
-//! only while the sheet holds GPUI focus. Their handlers are registered by
+//! Every canvas command is a GPUI action declared here once. The shell re-uses these types in
+//! its own action table and never redeclares them (UD3). Actions resolve in the key context
+//! [`SHEET_CONTEXT`], which the canvas views set on the element that tracks their focus, so a
+//! key reaches them only while the sheet holds GPUI focus. Their handlers are registered by
 //! `tool::sheet_key_context`.
 //!
-//! Two binding sets:
+//! The shell's keymap: the shell puts [`Rotate`], [`MirrorHorizontal`], [`MirrorVertical`] and
+//! [`PlaceWire`] in its `ACTIONS` table with their R, X, Y and W bindings in `Sheet`, and
+//! generates each binding exactly once from that table (U5.1). It registers nothing from this
+//! module. It binds Del, Ctrl+Z and Ctrl+Y in `Workspace` to its own actions and Esc in
+//! `Shell` (`NavCancel`), and its handlers call `SheetCanvas::undo`, `redo`, `cancel` and
+//! (T5.3) `delete_selection` (UD3, UQ14). [`Cancel`], [`Delete`], [`Undo`] and [`Redo`] exist
+//! for a canvas without the shell.
 //!
-//! - [`sheet_bindings`]: the single-key tools R, X, Y and W, bound in `Sheet` only, so typing
-//!   in a text field never rotates a part (UD3, UINV4). The shell appends these to its own
-//!   keymap (U5.1).
-//! - [`standalone_bindings`]: the same four plus Esc, Del, Ctrl+Z and Ctrl+Y, also in `Sheet`,
-//!   for a canvas hosted without the shell (tests, bench and canvas harnesses). The shell
-//!   never registers these four: it binds Del, Ctrl+Z and Ctrl+Y in `Workspace` to its own
-//!   actions and Esc in `Shell` (`NavCancel`), and its handlers call `SheetCanvas::undo`,
-//!   `redo`, `cancel` and (T5.3) `delete_selection` (UD3, UQ14). Registering both sets in
-//!   one window would give Del, Ctrl+Z and Ctrl+Y two bindings on one context stack.
+//! [`standalone_bindings`] is that canvas's keymap (tests, bench and canvas harnesses): R, X,
+//! Y, W, Esc, Del, Ctrl+Z and Ctrl+Y, all in `Sheet`. Never register it beside the shell's
+//! keymap: R, X, Y and W would be bound twice, and Del, Ctrl+Z and Ctrl+Y twice on one context
+//! stack (UINV4).
 
 use gpui::KeyBinding;
 
@@ -45,29 +46,20 @@ gpui::actions!(
     ]
 );
 
-/// Unmodified single-key tools, bound in `Sheet` (UD3). The shell registers these.
-pub fn sheet_bindings() -> Vec<KeyBinding> {
+/// The keymap of a canvas without the shell: R, X, Y, W, Esc, Del, Ctrl+Z and Ctrl+Y, all in
+/// `Sheet`. The shell never registers it (see the module docs).
+pub fn standalone_bindings() -> Vec<KeyBinding> {
     let cx = Some(SHEET_CONTEXT);
     vec![
         KeyBinding::new("r", Rotate, cx),
         KeyBinding::new("x", MirrorHorizontal, cx),
         KeyBinding::new("y", MirrorVertical, cx),
         KeyBinding::new("w", PlaceWire, cx),
-    ]
-}
-
-/// [`sheet_bindings`] plus Esc, Del, Ctrl+Z and Ctrl+Y in `Sheet`, for a canvas without the
-/// shell. Never registered together with the shell's keymap (see the module docs).
-pub fn standalone_bindings() -> Vec<KeyBinding> {
-    let cx = Some(SHEET_CONTEXT);
-    let mut bindings = sheet_bindings();
-    bindings.extend([
         KeyBinding::new("escape", Cancel, cx),
         KeyBinding::new("delete", Delete, cx),
         KeyBinding::new("ctrl-z", Undo, cx),
         KeyBinding::new("ctrl-y", Redo, cx),
-    ]);
-    bindings
+    ]
 }
 
 #[cfg(test)]
@@ -99,20 +91,7 @@ mod tests {
     }
 
     #[test]
-    fn t5_2_sheet_bindings_are_r_x_y_w() {
-        assert_eq!(
-            table(&sheet_bindings()),
-            vec![
-                ("r".to_string(), Rotate.name()),
-                ("x".to_string(), MirrorHorizontal.name()),
-                ("y".to_string(), MirrorVertical.name()),
-                ("w".to_string(), PlaceWire.name()),
-            ]
-        );
-    }
-
-    #[test]
-    fn t5_2_standalone_bindings_add_esc_del_undo_redo() {
+    fn t5_2_standalone_bindings_are_the_eight_canvas_keys() {
         assert_eq!(
             table(&standalone_bindings()),
             vec![

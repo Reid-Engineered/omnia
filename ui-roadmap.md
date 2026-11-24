@@ -112,7 +112,7 @@ without being drawn.
 | U3.1 to U3.8 | nothing | **now** (after their U dependencies) |
 | U4.1, U4.3 to U4.7 | nothing | **now** (after U1.7) |
 | U4.2 | T2.3 (done) for the symbol list | **now**; placing waits for U5.2 |
-| U5.1 | T4.3 (`select_all`), T5.2 (`undo`, `redo`, `CanvasEvent::History`), T5.3 (`delete_selection`) | after T5.3 |
+| U5.1 | T4.3 (`select_all`), T5.2 (`undo`, `redo`, `CanvasHistory`, `set_overlay`), T5.3 (`delete_selection`) | after T5.3 |
 | U5.2 | T5.3 (place tool), parts P2.4 (`Catalog::place_symbol`) | after T5.3 and P2.4 |
 | U5.3 | T7.1 (`cut`, `copy`, `paste`) | after T7.1 |
 | U5.4 | W2.3 (`set_wiring_prefs`, first consumer of the preferences) | after W2.3 |
@@ -561,10 +561,16 @@ without being drawn.
 - Lane: shell · Depends: T4.3, T5.2, T5.3, U2.5 · Read: UD3, UINV14, T5.2's log entry
 - Owns: `crates/omnia-app/src/workspace.rs` (edit handlers), `actions.rs`, `keymap.rs`
 - Do: route Undo, Redo, Delete and Select All to the canvas methods; drive `can_undo`,
-  `can_redo` and the modified state from `CanvasEvent::History`; add T5.2's tool actions to the
-  registry and menus (Rotate, Mirror, Wire); turn on the matching `CanvasEdits` flags.
+  `can_redo` and the modified state from `CanvasHistory` (T5.2's event type, which the canvas
+  re-emits from its gesture owner after every effective edit, a drag's commit included); put
+  T5.2's action types `omnia_canvas::keymap::{Rotate, MirrorHorizontal, MirrorVertical,
+  PlaceWire}` in `ACTIONS` in place of the placeholder types, so `default_bindings()` generates
+  R, X, Y and W in `Sheet` exactly once, and register nothing from `omnia_canvas::keymap`
+  (`standalone_bindings()` is for a canvas without the shell); add them to the menus (Rotate,
+  Mirror, Wire); turn on the matching `CanvasEdits` flags.
 - Done when: a simulated drag, then Ctrl+Z from the menu with focus in a dock, undoes it once
-  (INV5 unchanged); UINV4 still passes with T5.2's bindings.
+  (INV5 unchanged); the UINV4 check runs over the combined shell keymap, every binding the
+  window registers, with T5.2's action types in it.
 
 ### U5.2 Placement · todo
 - Lane: shell · Depends: T5.3, U4.2, parts P2.4 · Read: T5.3; parts-plan.md PD11, §14 (`XD3`,

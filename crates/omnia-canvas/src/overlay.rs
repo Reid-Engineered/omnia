@@ -33,10 +33,10 @@ use crate::{
 };
 use gpui::{
     App, AppContext, Bounds, ContentMask, Context, DispatchPhase, Edges, Element, ElementId,
-    Entity, EventEmitter, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
+    Entity, EventEmitter, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, HitboxId, Hsla,
     InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style, StyleRefinement,
-    Styled, WeakEntity, Window, div, fill, point, px, relative,
+    Styled, Subscription, WeakEntity, Window, div, fill, point, px, relative,
 };
 use omnia_doc::{
     Change, Doc, ItemId, NetId, Pt, Rect, Wire, WireId,
@@ -264,6 +264,10 @@ pub struct OverlayView {
     renders: u64,
     paints: Rc<Cell<u64>>,
     scope: Option<Rc<dyn OverlayPaintScope>>,
+    /// T5.2: the hitbox this overlay captured for its current gesture (released on end).
+    capture: Rc<Cell<Option<HitboxId>>>,
+    /// T5.2: ends a pointer-held gesture when the window deactivates (set at first render).
+    activation: Option<Subscription>,
 }
 
 impl EventEmitter<OverlayEvent> for OverlayView {}
@@ -302,6 +306,8 @@ impl OverlayView {
             renders: 0,
             paints: Rc::new(Cell::new(0)),
             scope: None,
+            capture: Rc::new(Cell::new(None)),
+            activation: None,
         }
     }
 
@@ -564,6 +570,8 @@ impl OverlayView {
     /// Replaces the displayed document, clearing transient state and invalidating both views.
     pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>) {
         self.anim = None;
+        // T5.2: no gesture survives a document swap; its capture goes at the next paint.
+        self.tools_document_replaced(cx);
         let document = SheetDocument::new(doc.clone());
         self.doc = doc;
         let had_selection = !self.state.selection().is_empty();
@@ -622,6 +630,7 @@ impl OverlayView {
         let world = self.camera.screen_to_world(to_f64(event.position));
         let outcome = self.tools.pointer_down(
             self.doc.read(cx),
+            tool::doc_key(&self.doc),
             world,
             hit_tolerance_nm(&self.camera),
             self.state.selection(),
@@ -723,8 +732,8 @@ impl ToolHost for OverlayView {
         &mut self.tools
     }
 
-    fn tool_doc(&self) -> Option<Entity<Doc>> {
-        Some(self.doc.clone())
+    fn tool_doc(&self) -> Entity<Doc> {
+        self.doc.clone()
     }
 
     fn preview_changed(&mut self, cx: &mut Context<Self>) {
@@ -733,6 +742,11 @@ impl ToolHost for OverlayView {
 
     fn doc_changed(&mut self, change: &Change, cx: &mut Context<Self>) {
         self.on_doc_change(change, cx);
+        let history = tool::CanvasHistory::of(self.doc.read(cx));
+        cx.emit(history);
+        cx.emit(tool::CanvasEdit {
+            dirty: change.dirty,
+        });
     }
 
     fn request(&mut self, request: ToolRequest, cx: &mut Context<Self>) {
@@ -746,6 +760,14 @@ impl ToolHost for OverlayView {
         self.cancel_rubber_band(cx);
         cancelled
     }
+
+    fn owned_capture(&self) -> Option<HitboxId> {
+        self.capture.get()
+    }
+
+    fn forget_capture(&mut self) {
+        self.capture.set(None);
+    }
 }
 
 fn to_f64(p: gpui::Point<Pixels>) -> gpui::Point<f64> {
@@ -755,6 +777,14 @@ fn to_f64(p: gpui::Point<Pixels>) -> gpui::Point<f64> {
 impl Render for OverlayView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        if self.activation.is_none() {
+            // T5.2: a deactivated window may never deliver the release; end the gesture.
+            self.activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.tools_pointer_lost(window, cx);
+                }
+            }));
+        }
         if let Some(anim) = &self.anim {
             let (next_cam, finished) = anim.step(self.viewport, cx);
             self.camera = next_cam.clone();
@@ -795,6 +825,7 @@ impl Render for OverlayView {
                 dragging: self.state.is_rubber_banding() || self.tools.is_dragging(),
                 paints: self.paints.clone(),
                 scope: self.scope.clone(),
+                capture: self.capture.clone(),
             })
     }
 }
@@ -810,6 +841,7 @@ struct OverlayLayer {
     dragging: bool,
     paints: Rc<Cell<u64>>,
     scope: Option<Rc<dyn OverlayPaintScope>>,
+    capture: Rc<Cell<Option<HitboxId>>>,
 }
 
 impl Element for OverlayLayer {
@@ -894,9 +926,17 @@ impl Element for OverlayLayer {
 
         if self.dragging {
             window.capture_pointer(hitbox.id);
+            self.capture.set(Some(hitbox.id));
+        } else if let Some(owned) = self.capture.take() {
+            // T5.2: a gesture ended without a release that GPUI saw (Esc, tool change, document
+            // swap, deactivation). Release only the capture this overlay holds.
+            if window.captured_hitbox() == Some(owned) {
+                window.release_pointer();
+            }
         }
 
         let (overlay, hit, focus) = (self.overlay.clone(), hitbox.clone(), self.focus.clone());
+        let capture = self.capture.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble
                 || !hit.is_hovered(window)
@@ -913,6 +953,7 @@ impl Element for OverlayLayer {
                 .unwrap_or(false);
             if started {
                 window.capture_pointer(hit.id);
+                capture.set(Some(hit.id));
                 cx.stop_propagation();
             }
         });

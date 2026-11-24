@@ -528,7 +528,9 @@ of the `canvas` lane.
 
 ### T5.2 Tools and keys · done
 - Lane: canvas · Depends: T4.6, T5.1 · Read: plan section 5, INV5
-- Owns: `crates/omnia-canvas/src/tool.rs`, `keymap.rs`
+- Owns: `crates/omnia-canvas/src/tool.rs`, `keymap.rs`; `crates/omnia-canvas/src/overlay.rs`
+  and `input.rs` (tool routing, key context, gesture-owner and history hooks only; widened by
+  the coordinator 2026-11-24, review finding 7)
 - Do: the tool state machine with states idle, hovering, dragging, placing, wiring; GPUI
   actions and key bindings for R, X, Y, W, Esc, Del, Ctrl+Z, Ctrl+Y. Check how actions and
   key contexts work in `crates/gpui/docs/key_dispatch.md` at the pinned revision.
@@ -2226,3 +2228,46 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        shell's `NavCancel` path. Checks run locally on Windows: `cargo fmt
                        --all --check`, both clippy commands, `cargo test --workspace` and
                        `cargo deny check`, all green.
+
+2026-11-24 T5.2 done — review fixes (independent review of #125 at `83fe202`). The coordinator
+                       widened the Owns line on 2026-11-24 because of review finding 7:
+                       `overlay.rs` and `input.rs` for the tool routing, key context,
+                       gesture-owner and history hooks only. (1) A drag carries a `DocStamp`
+                       (document entity key and revision at the press). The owner applies the
+                       commit only to that document at that revision. `set_document` drops
+                       every gesture, and the next paint releases its capture. Tested by a
+                       swap mid-drag (neither document changes) and an edit elsewhere
+                       mid-drag (the stale drag commits nothing). (2) A fresh left press ends a
+                       stale drag with no edit, then is hit-tested as a new press. Window
+                       deactivation (`observe_window_activation`) ends a drag or a pending
+                       placement press. The pinned GPUI has no capture-loss notification;
+                       the next move, press or deactivation ends the gesture. Tested with
+                       simulated GPUI input. (3) Blocked on the doc lane, reported to the
+                       coordinator: omnia-doc has no command for a combined move and
+                       reorient (`Isometry` is `Translate` or `Reorient`). A `Move` then
+                       `Reorient` `Batch` normalises in between and can refuse a valid
+                       result. No `Reorient` pivot expresses a general move-and-turn (mirrors
+                       leave `I - by` singular). Until omnia-doc adds one, R, X and Y during
+                       a drag are ignored and the drag commits one plain `Move`. The review's
+                       case now commits its move, and one undo restores it exactly. (4) A
+                       tool switch cancels the rubber band and the tool's gesture. The overlay
+                       records the hitbox it captured and releases only that one, at once
+                       with a window or at its next paint without. Place needs a press and a
+                       release in the Place tool. (5) One gesture owner: `OverlayView` holds
+                       the only `ToolMachine` and emits `CanvasHistory` and `CanvasEdit` after
+                       every effective edit, commits included. `SheetCanvas` has no machine
+                       of its own. `set_overlay` attaches the owner; tool, cancel, undo and
+                       redo delegate to it, and `CanvasHistory` is re-emitted. Without an
+                       overlay there are no tools, and undo and redo act on the canvas's own
+                       document. `SheetCanvas::tool` and `tool_state` now take `&App`. T5.3's
+                       placement provider reaches overlay requests through the owner's
+                       `ToolHost::request`. (6) `sheet_bindings()` is removed. The shell
+                       reuses the `canvas::` action types in `ACTIONS` and generates R, X, Y
+                       and W once; `standalone_bindings()` is for a canvas without the shell.
+                       ui-plan.md UD3, sections 10 and 14, and ui-roadmap.md U5.1 (UINV4 over
+                       the combined shell keymap) are updated; omnia-app code is unchanged.
+                       (8) G17 is now a cross-reference to ui-plan.md UG17 and UQ15. The
+                       INV11 drag test presses Esc again and bounds modality paints at one
+                       per switch. 101 canvas unit tests. Checks run locally on Windows:
+                       `cargo fmt --all --check`, both clippy commands, `cargo test
+                       --workspace` and `cargo deny check`.
