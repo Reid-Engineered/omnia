@@ -1,0 +1,30 @@
+1k-pan-1: p99 2.538 ms, max 5.480 ms; over 1.5 R: 1, counted 1; over 1.5 R: 1; other CPU 4.51 s (t3code 2.13, kwin_wayland 1.22, claude 0.51, plasmashell 0.25)
+10k-pan-1: p99 2.472 ms, max 4.485 ms; over 2.5 R: 0, counted 0; over 1.5 R: 0; other CPU 2.23 s (kwin_wayland 1.02, t3code 0.38, plasmashell 0.20, kcompactd0 0.14)
+1k-zoom-1: p99 2.818 ms, max 3.322 ms; over 1.5 R: 0, counted 0; over 1.5 R: 0; other CPU 2.23 s (kwin_wayland 0.97, t3code 0.67, plasmashell 0.21, kworker/u17:0-i915_flip 0.07)
+10k-zoom-1: p99 5.243 ms, max 5.824 ms; over 2.5 R: 0, counted 0; over 1.5 R: 0; other CPU 2.10 s (kwin_wayland 1.04, t3code 0.30, plasmashell 0.21, kcompactd0 0.12)
+10k-pan-2: p99 3.060 ms, max 3.867 ms; over 2.5 R: 0, counted 0; over 1.5 R: 0; other CPU 3.48 s (t3code 1.73, kwin_wayland 1.02, plasmashell 0.19, claude 0.12)
+1k-zoom-2: p99 2.845 ms, max 22.577 ms; over 1.5 R: 1, counted 1; over 1.5 R: 1; other CPU 2.26 s (kwin_wayland 1.00, t3code 0.51, claude 0.24, plasmashell 0.18)
+  frame 550: draw 22.55 ms; paint wall 22.22, CPU 2.56, run-queue wait 19.64 ms; 2 involuntary switches; clock 3.35 GHz; CPU 0->0; preempted
+10k-zoom-2: p99 5.161 ms, max 6.148 ms; over 2.5 R: 0, counted 0; over 1.5 R: 0; other CPU 2.19 s (kwin_wayland 1.01, t3code 0.43, plasmashell 0.22, kcompactd0 0.10)
+1k-pan-2: p99 2.284 ms, max 11.174 ms; over 1.5 R: 1, counted 1; over 1.5 R: 1; other CPU 2.36 s (kwin_wayland 1.02, t3code 0.74, plasmashell 0.18, claude 0.09)
+  frame 591: draw 11.16 ms; paint wall 5.67, CPU 1.98, run-queue wait 3.68 ms; 1 involuntary switches; clock 3.35 GHz; CPU 2->2; preempted
+1k-zoom-3: p99 2.746 ms, max 2.880 ms; over 1.5 R: 0, counted 0; over 1.5 R: 0; other CPU 1.80 s (kwin_wayland 0.99, t3code 0.24, plasmashell 0.20, claude 0.09)
+10k-zoom-3: p99 5.710 ms, max 31.392 ms; over 2.5 R: 1, counted 1; over 1.5 R: 1; other CPU 2.56 s (kwin_wayland 1.04, t3code 0.85, plasmashell 0.20, claude 0.08)
+  frame 468: draw 31.37 ms; paint wall 31.05, CPU 6.53, run-queue wait 24.44 ms; 7 involuntary switches; clock 3.30 GHz; CPU 1->1; preempted
+1k-pan-3: p99 2.372 ms, max 2.824 ms; over 1.5 R: 0, counted 0; over 1.5 R: 0; other CPU 1.86 s (kwin_wayland 1.02, t3code 0.25, plasmashell 0.19, claude 0.08)
+10k-pan-3: p99 2.413 ms, max 3.150 ms; over 2.5 R: 0, counted 0; over 1.5 R: 0; other CPU 1.90 s (kwin_wayland 1.01, t3code 0.24, plasmashell 0.18, claude 0.09)
+10k-zoom-4: p99 5.222 ms, max 5.603 ms; over 2.5 R: 0, counted 0; over 1.5 R: 0; other CPU 2.16 s (kwin_wayland 1.03, t3code 0.28, plasmashell 0.26, claude 0.13)
+1k-pan-4: p99 1.812 ms, max 2.267 ms; over 1.5 R: 0, counted 0; over 1.5 R: 0; other CPU 1.79 s (kwin_wayland 0.99, t3code 0.25, plasmashell 0.19, claude 0.09)
+10k-pan-4: p99 2.484 ms, max 2.937 ms; over 2.5 R: 0, counted 0; over 1.5 R: 0; other CPU 2.01 s (kwin_wayland 1.01, t3code 0.23, plasmashell 0.21, claude 0.09)
+1k-zoom-4: p99 2.785 ms, max 2.990 ms; over 1.5 R: 0, counted 0; over 1.5 R: 0; other CPU 1.73 s (kwin_wayland 0.97, t3code 0.20, plasmashell 0.19, kworker/u17:0-i915_flip 0.06)
+1k-pan-5: p99 1.962 ms, max 2.621 ms; over 1.5 R: 0, counted 0; over 1.5 R: 0; other CPU 1.85 s (kwin_wayland 1.01, t3code 0.24, plasmashell 0.19, claude 0.08)
+10k-pan-5: p99 2.527 ms, max 4.473 ms; over 2.5 R: 0, counted 0; over 1.5 R: 0; other CPU 1.91 s (kwin_wayland 1.00, t3code 0.25, plasmashell 0.19, claude 0.10)
+1k-zoom-5: p99 2.761 ms, max 2.986 ms; over 1.5 R: 0, counted 0; over 1.5 R: 0; other CPU 1.81 s (kwin_wayland 1.00, t3code 0.25, plasmashell 0.18, claude 0.08)
+10k-zoom-5: p99 9.781 ms, max 21.905 ms; over 2.5 R: 0, counted 0; over 1.5 R: 6; other CPU 5.05 s (t3code 1.67, claude 1.52, kwin_wayland 1.07, plasmashell 0.22)
+  frame 566: draw 14.11 ms; paint wall 13.42, CPU 5.04, run-queue wait 8.35 ms; 5 involuntary switches; clock 2.98 GHz; CPU 2->2; preempted
+  frame 567: draw 21.04 ms; paint wall 20.42, CPU 5.02, run-queue wait 15.35 ms; 5 involuntary switches; clock 2.92 GHz; CPU 0->0; preempted
+  frame 568: draw 21.89 ms; paint wall 19.28, CPU 4.80, run-queue wait 14.45 ms; 8 involuntary switches; clock 2.96 GHz; CPU 0->0; preempted
+  frame 569: draw 10.37 ms; paint wall 9.72, CPU 4.78, run-queue wait 4.88 ms; 2 involuntary switches; clock 2.89 GHz; CPU 0->2; preempted
+  frame 571: draw 15.50 ms; paint wall 11.82, CPU 5.09, run-queue wait 6.70 ms; 3 involuntary switches; clock 2.99 GHz; CPU 0->0; preempted
+  frame 594: draw 16.03 ms; paint wall 11.10, CPU 3.90, run-queue wait 7.16 ms; 2 involuntary switches; clock 3.01 GHz; CPU 2->2; preempted
+draws over 10 ms: 9 (9 preempted, 0 other)

@@ -44,7 +44,8 @@ def timeline(report):
 
     Returns one row per measured frame: (index, draw, present, previous present, draws since
     the previous present). Draws that a later draw replaced before any present still count
-    towards the next present's `draws`.
+    towards the next present's `draws`. The trace must hold exactly the report's
+    `frames.startup_draws` (0 when absent), then the warm-up, then the measured frames.
     """
     trace = report.get('diagnostic_trace')
     if not trace or not isinstance(trace.get('events'), list):
@@ -52,6 +53,11 @@ def timeline(report):
     if trace.get('units') != 'nanoseconds since trace creation':
         raise Unusable(f"trace units {trace.get('units')!r}")
     warmup, frames = report['config']['warmup'], report['config']['frames']
+    # Draws the bench made before its warm-up began (hover's startup frames, T4.6). The
+    # trace records them too; a report that predates the field had none to skip.
+    startup = report.get('frames', {}).get('startup_draws', 0)
+    if not isinstance(startup, int) or startup < 0:
+        raise Unusable(f'startup_draws {startup!r}')
     pending, since, previous = {}, {}, {}
     ordinal, rows = -1, []
     for event in trace['events']:
@@ -64,12 +70,13 @@ def timeline(report):
             if window not in pending:
                 raise Unusable('present without a pending draw')
             index, draw = pending.pop(window)
-            rows.append((index - warmup, draw, event, previous.get(window), since.pop(window)))
+            rows.append((index - startup - warmup, draw, event, previous.get(window),
+                         since.pop(window)))
             previous[window] = event
         else:
             raise Unusable(f"unknown trace event {event['event']!r}")
     measured = [row for row in rows if 0 <= row[0] < frames]
-    if ordinal + 1 != warmup + frames or len(measured) != frames:
+    if ordinal + 1 != startup + warmup + frames or len(measured) != frames:
         raise Unusable('trace truncated or unexpected draw/present count')
     if not isinstance(trace.get('foreground'), list) or trace.get('journal_lost') != 0:
         raise Unusable('foreground journal missing or incomplete '

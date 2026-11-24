@@ -40,17 +40,18 @@ def with_journal(report):
     return report
 
 
-def synthetic(late=None, frames=10, warmup=2, source='native', work=()):
+def synthetic(late=None, frames=10, warmup=2, source='native', work=(), startup=0):
     """A steady 20 ms run; `late=(index, gap_ns, work_ns)` delays one measured frame.
 
     `gap_ns` is previous present end to the late frame's signal; `work_ns` is that signal
     to its present end. `source` is the late frame's signal source. `work` adds journal
     task polls `(start_ns, end_ns)` relative to the late frame's previous present end. The
-    bench count is the true count of intervals over 1.5 refreshes.
+    bench count is the true count of intervals over 1.5 refreshes. `startup` draws precede the
+    warm-up, as the hover driver's do; the report records them in `frames.startup_draws`.
     """
     events, foreground, end, missed = [], [], 0, 0
-    for ordinal in range(warmup + frames):
-        index = ordinal - warmup
+    for ordinal in range(startup + warmup + frames):
+        index = ordinal - startup - warmup
         is_late = bool(late) and index == late[0]
         gap, busy = (late[1], late[2]) if is_late else (R - 2 * MS, 2 * MS)
         if is_late:
@@ -69,13 +70,16 @@ def synthetic(late=None, frames=10, warmup=2, source='native', work=()):
         if index >= 0 and present_end - end > 1.5 * R:
             missed += 1
         end = present_end
-    return {
+    report = {
         'kind': 'run', 'config': dict(warmup=warmup, frames=frames, diagnostic_trace=True),
         'environment': dict(refresh_hz=HZ),
         'metrics': dict(missed_refreshes=missed, present_intervals_over_2_5_refreshes=0),
         'diagnostic_trace': dict(units='nanoseconds since trace creation', events=events,
                                  foreground=foreground, journal_lost=0),
     }
+    if startup:
+        report['frames'] = dict(drawn=frames, startup_draws=startup)
+    return report
 
 
 def verdict(report, limit=1.5):
@@ -137,6 +141,35 @@ class AttributeTests(unittest.TestCase):
         clean = synthetic()
         clean['diagnostic_trace'] = None
         self.assertFalse(attribute.attribute(clean)['passed'])
+
+    def test_startup_draws_are_skipped_before_the_warmup(self):
+        # T4.6: the hover driver draws before its warm-up; the bench reports how many.
+        report = synthetic(late=(4, 2 * R, R // 2), startup=3)
+        result = attribute.attribute(report)
+        self.assertTrue(result['usable'], result['error'])
+        [miss] = result['misses']
+        self.assertEqual(miss['index'], 4)
+        self.assertEqual(miss['verdict'], attribute.COMPOSITOR)
+
+    def test_startup_draws_not_reported_fail_closed(self):
+        report = synthetic(startup=3)
+        del report['frames']
+        result = attribute.attribute(report)
+        self.assertFalse(result['usable'])
+        self.assertIn('unexpected draw/present count', result['error'])
+
+    def test_startup_draws_miscounted_fail_closed(self):
+        for wrong in (2, 4):
+            report = synthetic(startup=3)
+            report['frames']['startup_draws'] = wrong
+            self.assertFalse(attribute.attribute(report)['usable'], wrong)
+
+    def test_invalid_startup_draws_fail_closed(self):
+        for bad in (-1, 1.5, '3', None):
+            report = synthetic(startup=3)
+            report['frames']['startup_draws'] = bad
+            result = attribute.attribute(report)
+            self.assertFalse(result['usable'], bad)
 
     def test_truncated_trace_fails_closed(self):
         report = with_journal(real_report('./s125/zoom-6.json'))
