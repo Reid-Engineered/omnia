@@ -483,6 +483,9 @@ pub(crate) fn build_run_report(input: RunReportInput<'_>) -> Result<Value, Strin
             "on_time": on_time,
             "late": late,
             "unmeasured": unmeasured,
+            // Draws before the warm-up began (the hover driver's startup frames); the
+            // diagnostic trace counts them, so attribution must skip them too.
+            "startup_draws": draws_before_warmup,
             "wall_s": round(started.elapsed().as_secs_f64()),
         },
         "warnings": warnings,
