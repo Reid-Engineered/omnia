@@ -269,7 +269,7 @@ pub struct SelectionState {
 
 impl Default for SelectionState {
     fn default() -> Self {
-        Self::new(WiringPrefs::default().select_mode)
+        Self::from_prefs(&WiringPrefs::default())
     }
 }
 
@@ -282,6 +282,11 @@ impl SelectionState {
             mode,
             scratch: Vec::new(),
         }
+    }
+
+    /// Creates a [`SelectionState`] driven by `prefs.select_mode` (WD8, WD12).
+    pub fn from_prefs(prefs: &WiringPrefs) -> Self {
+        Self::new(prefs.select_mode)
     }
 
     pub fn selection(&self) -> &[ItemId] {
@@ -307,6 +312,12 @@ impl SelectionState {
 
     pub fn select_mode(&self) -> SelectMode {
         self.mode
+    }
+
+    /// Updates the WD8 rubber-band mode from `prefs`. If a rubber band is already active,
+    /// it updates live.
+    pub fn apply_prefs(&mut self, prefs: &WiringPrefs) -> bool {
+        self.set_select_mode(prefs.select_mode)
     }
 
     /// Updates the WD8 rubber-band mode. If a rubber band is already active, it updates live.
@@ -974,6 +985,56 @@ mod tests {
         assert!(band.is_visible());
         assert!(!band.is_pointer_drag());
         assert!(!state.set_rubber_band_preview(a, b, SelectMode::Enclosed));
+    }
+
+    #[test]
+    fn wd8_wiring_prefs_drives_mode_and_excludes_label_text_extents() {
+        let doc = sample_doc();
+        let cam = camera();
+        let g = GRID_NM;
+
+        // Default WiringPrefs picks Intersecting (WQ3).
+        let default_prefs = WiringPrefs::default();
+        assert_eq!(default_prefs.select_mode, SelectMode::Intersecting);
+        let mut state = SelectionState::from_prefs(&default_prefs);
+        assert_eq!(state.select_mode(), SelectMode::Intersecting);
+
+        // Switching WiringPrefs to Enclosed updates state and any active pointer rubber band live.
+        let enclosed_prefs = WiringPrefs::new(true, 10, SelectMode::Enclosed, false).unwrap();
+        let s0 = screen_of(&cam, Pt { x: 0, y: -2 * g });
+        let s1 = screen_of(&cam, Pt { x: 4 * g, y: 2 * g });
+        state.mouse_down(&doc, &cam, &down(s0, false));
+        state.mouse_move(&doc, &cam, &moved(s1, Some(MouseButton::Left), false));
+        assert!(state.apply_prefs(&enclosed_prefs));
+        assert_eq!(state.select_mode(), SelectMode::Enclosed);
+        assert_eq!(state.rubber_band().unwrap().mode, SelectMode::Enclosed);
+        state.mouse_up(&doc, &cam, &up(s1, false));
+        assert!(
+            state.selection().is_empty(),
+            "Enclosed mode must not select half-covered Part(0)"
+        );
+
+        // WD8: label counts by its anchor point (-6g, 5g) only; a box covering adjacent text
+        // extents (-5g..-g, 4g..6g) without the anchor point selects nothing in either mode.
+        let text_a = screen_of(
+            &cam,
+            Pt {
+                x: -5 * g,
+                y: 4 * g,
+            },
+        );
+        let text_b = screen_of(&cam, Pt { x: -g, y: 6 * g });
+        for prefs in [default_prefs, enclosed_prefs] {
+            state.apply_prefs(&prefs);
+            state.mouse_down(&doc, &cam, &down(text_a, false));
+            state.mouse_move(&doc, &cam, &moved(text_b, Some(MouseButton::Left), false));
+            state.mouse_up(&doc, &cam, &up(text_b, false));
+            assert!(
+                state.selection().is_empty(),
+                "label text extents must not trigger selection in {:?}",
+                prefs.select_mode
+            );
+        }
     }
 
     proptest! {

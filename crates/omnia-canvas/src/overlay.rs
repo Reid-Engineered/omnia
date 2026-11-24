@@ -1,22 +1,31 @@
-//! T4.3: `OverlayView` — hover outline, selection halos, and WD8 rubber band over a cached
-//! [`SheetView`] (D7, G6, INV6, INV11).
+//! T4.3 / T4.4: `OverlayView` — hover outline, selection halos, WD8 rubber band, and net
+//! highlight over a cached [`SheetView`] (D7, G6, INV6, INV11).
 //!
 //! Architecture (D7, G6):
 //! - [`CachedSheet`] is a dedicated entity wrapping [`SheetView`], embedded inside
 //!   [`OverlayView`] with `.cached(StyleRefinement::default().size_full())`.
 //! - [`OverlayView`] itself is NOT embedded with `.cached()` inside a parent that notifies on
-//!   hover: when hover, selection, or a rubber-band drag updates, only [`OverlayView`] is
-//!   notified, so GPUI replays [`CachedSheet`]'s cached prepaint and paint without calling
-//!   [`SheetView`]'s paint code (INV11).
+//!   hover: when hover, selection, net highlight, or a rubber-band drag updates, only
+//!   [`OverlayView`] is notified, so GPUI replays [`CachedSheet`]'s cached prepaint and paint
+//!   without calling [`SheetView`]'s paint code (INV11).
 //! - [`CachedSheet`] is notified only by a camera change, a theme change, a document swap, or a
 //!   [`Change`] whose dirty rectangle meets the viewport (D7).
 //! - All overlay colours come exclusively from `omnia-theme` tokens (`stage/select`,
-//!   `stage/select-halo`, `stage/hover`, INV6).
+//!   `stage/select-halo`, `stage/hover`, `stage/net-highlight`, INV6).
+
+mod net;
+
+pub use net::NetHighlight;
 
 use std::{cell::Cell, rc::Rc};
 
 use crate::{
     camera::Camera,
+    camera_anim::{
+        CameraAnimation, ViewAnimation, fit_rect_camera, fit_sheet_camera, viewport_center,
+        zoom_to_selection_camera,
+    },
+    input::wheel_factor,
     selection::{RubberBand, SelectionState, SelectionUpdate},
     sheet::{SheetDocument, SheetView},
     snap_px::{centered_square, device_rect, round_device, stroke_device_px, to_device},
@@ -28,7 +37,10 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style, StyleRefinement,
     Styled, WeakEntity, Window, div, fill, point, px, relative,
 };
-use omnia_doc::{Change, Doc, ItemId, Pt, Rect, Wire, prefs::SelectMode};
+use omnia_doc::{
+    Change, Doc, ItemId, NetId, Pt, Rect, Wire, WireId,
+    prefs::{SelectMode, WiringPrefs},
+};
 use omnia_theme::Theme;
 
 /// K5 wire stroke width in world nanometres, matching `sheet/wires.rs`.
@@ -181,19 +193,74 @@ impl Element for CountedSheet {
     }
 }
 
+/// Lets a caller attribute overlay hover/paint work separately from GPUI calls (B10, Q5).
+pub trait OverlayPaintScope {
+    fn omnia(&self, work: &mut dyn FnMut()) {
+        work();
+    }
+
+    fn gpui(&self, work: &mut dyn FnMut()) {
+        work();
+    }
+}
+
+fn run_omnia<R>(scope: Option<&dyn OverlayPaintScope>, f: impl FnOnce() -> R) -> R {
+    match scope {
+        Some(s) => {
+            let mut out = None;
+            let mut f = Some(f);
+            s.omnia(&mut || {
+                if let Some(f) = f.take() {
+                    out = Some(f());
+                }
+            });
+            out.expect("OverlayPaintScope::omnia must execute its closure")
+        }
+        None => f(),
+    }
+}
+
+fn run_gpui<R>(scope: Option<&dyn OverlayPaintScope>, f: impl FnOnce() -> R) -> R {
+    match scope {
+        Some(s) => {
+            let mut out = None;
+            let mut f = Some(f);
+            s.gpui(&mut || {
+                if let Some(f) = f.take() {
+                    out = Some(f());
+                }
+            });
+            out.expect("OverlayPaintScope::gpui must execute its closure")
+        }
+        None => f(),
+    }
+}
+
+pub(super) fn paint_quad_scoped(
+    window: &mut Window,
+    quad: gpui::PaintQuad,
+    scope: Option<&dyn OverlayPaintScope>,
+) {
+    run_gpui(scope, || window.paint_quad(quad));
+}
+
 /// Transient interactive overlay above a `.cached()` [`SheetView`] (D7, INV11).
 ///
-/// Owns hover, selection, and rubber-band state, registers one sheet-wide hitbox for pointer
-/// picking and rubber-band drags, and repaints only itself on transient updates.
+/// Owns hover, selection, net-highlight, and rubber-band state, registers one sheet-wide hitbox
+/// for pointer picking and rubber-band drags, and repaints only itself on transient updates.
 pub struct OverlayView {
     doc: Entity<Doc>,
     sheet: Entity<CachedSheet>,
     camera: Camera,
     theme: &'static Theme,
     state: SelectionState,
+    net_highlight: NetHighlight,
     focus: FocusHandle,
+    viewport: Bounds<Pixels>,
+    anim: Option<ViewAnimation>,
     renders: u64,
     paints: Rc<Cell<u64>>,
+    scope: Option<Rc<dyn OverlayPaintScope>>,
 }
 
 impl EventEmitter<OverlayEvent> for OverlayView {}
@@ -205,6 +272,17 @@ impl OverlayView {
         theme: &'static Theme,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::with_prefs(doc, camera, theme, &WiringPrefs::default(), cx)
+    }
+
+    /// Creates an [`OverlayView`] whose initial rubber-band mode comes from `prefs` (WD8, WD12).
+    pub fn with_prefs(
+        doc: Entity<Doc>,
+        camera: Camera,
+        theme: &'static Theme,
+        prefs: &WiringPrefs,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let document = SheetDocument::new(doc.clone());
         let sheet = cx.new(|_| CachedSheet::new(camera.clone(), theme, Some(document)));
         Self {
@@ -212,11 +290,26 @@ impl OverlayView {
             sheet,
             camera,
             theme,
-            state: SelectionState::default(),
+            state: SelectionState::from_prefs(prefs),
+            net_highlight: NetHighlight::new(),
             focus: cx.focus_handle(),
+            viewport: Bounds::default(),
+            anim: None,
             renders: 0,
             paints: Rc::new(Cell::new(0)),
+            scope: None,
         }
+    }
+
+    /// Installs an [`OverlayPaintScope`] to separate Omnia hover/paint allocations from GPUI (B10, Q5).
+    pub fn with_paint_scope(mut self, scope: Rc<dyn OverlayPaintScope>) -> Self {
+        self.scope = Some(scope);
+        self
+    }
+
+    /// Replaces or clears the [`OverlayPaintScope`] used for B10 allocation accounting.
+    pub fn set_paint_scope(&mut self, scope: Option<Rc<dyn OverlayPaintScope>>) {
+        self.scope = scope;
     }
 
     pub fn doc(&self) -> &Entity<Doc> {
@@ -225,6 +318,19 @@ impl OverlayView {
 
     pub fn camera(&self) -> &Camera {
         &self.camera
+    }
+
+    pub fn viewport(&self) -> Bounds<Pixels> {
+        self.viewport
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.anim.is_some()
+    }
+
+    /// Cancels any active view animation immediately from the current camera position (K13).
+    pub fn cancel_animation(&mut self) -> bool {
+        self.anim.take().is_some()
     }
 
     pub fn theme(&self) -> &'static Theme {
@@ -241,6 +347,14 @@ impl OverlayView {
 
     pub fn hovered(&self) -> Option<ItemId> {
         self.state.hovered()
+    }
+
+    pub fn highlighted_nets(&self) -> &[NetId] {
+        self.net_highlight.nets()
+    }
+
+    pub fn highlighted_wires(&self) -> &[WireId] {
+        self.net_highlight.wires()
     }
 
     pub fn rubber_band(&self) -> Option<RubberBand> {
@@ -283,9 +397,25 @@ impl OverlayView {
         }
     }
 
+    /// Applies wiring preferences (`select_mode`) to the overlay (WD8, WD12; never notifies `SheetView`).
+    pub fn apply_prefs(&mut self, prefs: &WiringPrefs, cx: &mut Context<Self>) {
+        if self.state.apply_prefs(prefs) {
+            cx.notify();
+        }
+    }
+
+    fn sync_net_highlight(&mut self, cx: &App) -> bool {
+        self.net_highlight.sync(
+            self.doc.read(cx),
+            self.state.hovered(),
+            self.state.selection(),
+        )
+    }
+
     /// Sets the hovered item directly (never notifies `SheetView`).
     pub fn set_hovered(&mut self, item: Option<ItemId>, cx: &mut Context<Self>) {
         if self.state.set_hovered(item) {
+            self.sync_net_highlight(cx);
             cx.notify();
         }
     }
@@ -297,6 +427,7 @@ impl OverlayView {
         cx: &mut Context<Self>,
     ) {
         if self.state.set_selection(items) {
+            self.sync_net_highlight(cx);
             cx.emit(OverlayEvent::SelectionChanged);
             cx.notify();
         }
@@ -305,6 +436,7 @@ impl OverlayView {
     /// Clears the selection (never notifies `SheetView`).
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
         if self.state.clear_selection() {
+            self.sync_net_highlight(cx);
             cx.emit(OverlayEvent::SelectionChanged);
             cx.notify();
         }
@@ -314,6 +446,7 @@ impl OverlayView {
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
         let changed = self.state.select_all(self.doc.read(cx));
         if changed {
+            self.sync_net_highlight(cx);
             cx.emit(OverlayEvent::SelectionChanged);
             cx.notify();
         }
@@ -341,8 +474,61 @@ impl OverlayView {
         }
     }
 
+    /// Starts a 150 ms ease-out view animation (K13) from the current camera to `target`.
+    pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>) {
+        let anim = CameraAnimation::new(self.camera.clone(), target, self.viewport);
+        if anim.is_noop() {
+            self.anim = None;
+            return;
+        }
+        self.anim = Some(ViewAnimation::start(anim, cx));
+        self.sheet.update(cx, |_, cx| cx.notify());
+        cx.notify();
+    }
+
+    /// Animates the camera to fit `rect` in the current viewport with default margins.
+    pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>) {
+        self.animate_to(fit_rect_camera(rect, self.viewport), cx);
+    }
+
+    /// Animates the camera to fit all items in the sheet (or origin at 100% if empty).
+    pub fn fit_sheet(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let target = fit_sheet_camera(Some(self.doc.read(cx)), self.viewport);
+        self.animate_to(target, cx);
+    }
+
+    /// Animates the camera to fit the current selection. Returns `false` if nothing live is
+    /// selected.
+    pub fn zoom_to_selection(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(target) =
+            zoom_to_selection_camera(self.doc.read(cx), self.state.selection(), self.viewport)
+        else {
+            return false;
+        };
+        self.animate_to(target, cx);
+        true
+    }
+
+    /// Animates a K4 zoom of `steps` notches about the viewport centre (`ui-plan.md` section 14).
+    pub fn zoom_step(&mut self, steps: i32, _window: &mut Window, cx: &mut Context<Self>) {
+        if steps == 0 {
+            return;
+        }
+        let mut target = self
+            .anim
+            .as_ref()
+            .map_or_else(|| self.camera.clone(), |a| a.target().clone());
+        target.set_viewport(self.viewport);
+        target.zoom_about(
+            viewport_center(self.viewport),
+            wheel_factor(f64::from(steps)),
+        );
+        self.animate_to(target, cx);
+    }
+
     /// Updates the camera and invalidates both the cached sheet and the overlay when changed (D7).
     pub fn set_camera(&mut self, camera: Camera, cx: &mut Context<Self>) {
+        self.anim = None;
         if self.camera.zoom() == camera.zoom()
             && self.camera.world_to_screen(Pt::ZERO) == camera.world_to_screen(Pt::ZERO)
             && self.camera.visible() == camera.visible()
@@ -372,10 +558,12 @@ impl OverlayView {
 
     /// Replaces the displayed document, clearing transient state and invalidating both views.
     pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>) {
+        self.anim = None;
         let document = SheetDocument::new(doc.clone());
         self.doc = doc;
         let had_selection = !self.state.selection().is_empty();
         self.state = SelectionState::new(self.state.select_mode());
+        self.net_highlight.clear();
         self.sheet.update(cx, |sheet, cx| {
             sheet.document = Some(document);
             cx.notify();
@@ -387,18 +575,28 @@ impl OverlayView {
     }
 
     /// Applies D7's dirty-rectangle invalidation after a document command:
-    /// notifies `SheetView` only when `change.dirty` intersects the visible viewport, and prunes
-    /// any removed items from hover/selection.
+    /// notifies `SheetView` only when `change.dirty` intersects the visible viewport, prunes
+    /// any removed items from hover/selection, and re-resolves net highlights (T4.4).
     pub fn on_doc_change(&mut self, change: &Change, cx: &mut Context<Self>) {
         let visible = self.camera.visible();
         if change.dirty.is_some_and(|dirty| dirty.intersects(visible)) {
             self.sheet.update(cx, |_, cx| cx.notify());
         }
-        let update = self.state.prune(self.doc.read(cx));
-        self.apply_update(update, cx);
+        let mut update = self.state.prune(self.doc.read(cx));
+        if self.sync_net_highlight(cx) {
+            update.visual_changed = true;
+        }
+        self.emit_and_notify(update, cx);
     }
 
-    fn apply_update(&self, update: SelectionUpdate, cx: &mut Context<Self>) {
+    fn apply_update(&mut self, update: SelectionUpdate, cx: &mut Context<Self>) {
+        if update.visual_changed || update.selection_changed {
+            self.sync_net_highlight(cx);
+        }
+        self.emit_and_notify(update, cx);
+    }
+
+    fn emit_and_notify(&mut self, update: SelectionUpdate, cx: &mut Context<Self>) {
         if update.selection_changed {
             cx.emit(OverlayEvent::SelectionChanged);
         }
@@ -413,6 +611,7 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.viewport = bounds;
         self.camera.set_viewport(bounds);
         let update = self
             .state
@@ -427,11 +626,19 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.camera.set_viewport(bounds);
-        let update = self
-            .state
-            .mouse_move(self.doc.read(cx), &self.camera, event);
-        self.apply_update(update, cx);
+        let scope = self.scope.clone();
+        let update = run_omnia(scope.as_deref(), || {
+            self.viewport = bounds;
+            self.camera.set_viewport(bounds);
+            let doc = self.doc.read(cx);
+            let update = self.state.mouse_move(doc, &self.camera, event);
+            if update.visual_changed || update.selection_changed {
+                self.net_highlight
+                    .sync(doc, self.state.hovered(), self.state.selection());
+            }
+            update
+        });
+        run_gpui(scope.as_deref(), || self.emit_and_notify(update, cx));
         update.ended_drag
     }
 
@@ -446,6 +653,7 @@ impl OverlayView {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.viewport = bounds;
         self.camera.set_viewport(bounds);
         let update = self.state.mouse_up(self.doc.read(cx), &self.camera, event);
         self.apply_update(update, cx);
@@ -454,8 +662,30 @@ impl OverlayView {
 }
 
 impl Render for OverlayView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        if let Some(anim) = &self.anim {
+            let (next_cam, finished) = anim.step(self.viewport, cx);
+            self.camera = next_cam.clone();
+            self.sheet.update(cx, |sheet, _| {
+                sheet.camera = next_cam;
+            });
+            if finished {
+                self.anim = None;
+            } else {
+                window.request_animation_frame();
+                let overlay = cx.entity().downgrade();
+                let sheet = self.sheet.clone();
+                window.on_next_frame(move |_, cx| {
+                    if overlay
+                        .read_with(cx, |o, _| o.is_animating())
+                        .unwrap_or(false)
+                    {
+                        sheet.update(cx, |_, cx| cx.notify());
+                    }
+                });
+            }
+        }
         div()
             .relative()
             .size_full()
@@ -473,6 +703,7 @@ impl Render for OverlayView {
                 focus: self.focus.clone(),
                 dragging: self.state.is_rubber_banding(),
                 paints: self.paints.clone(),
+                scope: self.scope.clone(),
             })
     }
 }
@@ -487,6 +718,7 @@ struct OverlayLayer {
     focus: FocusHandle,
     dragging: bool,
     paints: Rc<Cell<u64>>,
+    scope: Option<Rc<dyn OverlayPaintScope>>,
 }
 
 impl Element for OverlayLayer {
@@ -529,7 +761,10 @@ impl Element for OverlayLayer {
     ) -> Self::PrepaintState {
         // Keep the overlay's camera viewport aligned with layout bounds without notifying.
         self.overlay
-            .update(cx, |overlay, _| overlay.camera.set_viewport(bounds))
+            .update(cx, |overlay, _| {
+                overlay.viewport = bounds;
+                overlay.camera.set_viewport(bounds);
+            })
             .ok();
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
@@ -547,12 +782,23 @@ impl Element for OverlayLayer {
         self.paints.set(self.paints.get() + 1);
 
         if let Some(overlay) = self.overlay.upgrade() {
-            let mut camera = self.camera.clone();
-            camera.set_viewport(bounds);
-            let sf = window.scale_factor();
-            let state = &overlay.read(cx).state;
-            let doc = self.doc.read(cx);
-            paint_overlay(doc, state, &camera, bounds, sf, self.theme, window);
+            let scope = self.scope.as_deref();
+            run_omnia(scope, || {
+                let mut camera = self.camera.clone();
+                camera.set_viewport(bounds);
+                let sf = window.scale_factor();
+                let view = overlay.read(cx);
+                let doc = self.doc.read(cx);
+                let ctx = OverlayPaintContext {
+                    doc,
+                    camera: &camera,
+                    bounds,
+                    sf,
+                    theme: self.theme,
+                    scope,
+                };
+                paint_overlay(&view.state, &view.net_highlight, &ctx, window);
+            });
         }
 
         if self.dragging {
@@ -744,45 +990,72 @@ fn wire_rect_dev(
 }
 
 /// Paints a solid four-edge rectangle outline inside `rect` in whole device pixels.
-fn paint_solid_outline(rect: DevRect, thickness: u32, color: Hsla, sf: f32, window: &mut Window) {
+fn paint_solid_outline(
+    rect: DevRect,
+    thickness: u32,
+    color: Hsla,
+    sf: f32,
+    scope: Option<&dyn OverlayPaintScope>,
+    window: &mut Window,
+) {
     let t = thickness.max(1);
     let w = rect.width;
     let h = rect.height;
     let th = t.min(h);
     let tw = t.min(w);
     // Top and bottom bars.
-    window.paint_quad(fill(device_rect(rect.left, rect.top, w, th, sf), color));
+    paint_quad_scoped(
+        window,
+        fill(device_rect(rect.left, rect.top, w, th, sf), color),
+        scope,
+    );
     if h > th {
-        window.paint_quad(fill(
-            device_rect(rect.left, rect.top + f64::from(h - th), w, th, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(rect.left, rect.top + f64::from(h - th), w, th, sf),
+                color,
+            ),
+            scope,
+        );
     }
     // Left and right inner bars.
     if h > th.saturating_mul(2) {
         let inner_h = h - th * 2;
         let inner_top = rect.top + f64::from(th);
-        window.paint_quad(fill(
-            device_rect(rect.left, inner_top, tw, inner_h, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(device_rect(rect.left, inner_top, tw, inner_h, sf), color),
+            scope,
+        );
         if w > tw {
-            window.paint_quad(fill(
-                device_rect(rect.left + f64::from(w - tw), inner_top, tw, inner_h, sf),
-                color,
-            ));
+            paint_quad_scoped(
+                window,
+                fill(
+                    device_rect(rect.left + f64::from(w - tw), inner_top, tw, inner_h, sf),
+                    color,
+                ),
+                scope,
+            );
         }
     }
 }
 
 /// Paints a dashed four-edge rectangle outline (used for Intersecting rubber-band mode).
-fn paint_dashed_outline(rect: DevRect, thickness: u32, color: Hsla, sf: f32, window: &mut Window) {
+fn paint_dashed_outline(
+    rect: DevRect,
+    thickness: u32,
+    color: Hsla,
+    sf: f32,
+    scope: Option<&dyn OverlayPaintScope>,
+    window: &mut Window,
+) {
     let dash = stroke_device_px(BAND_DASH_PX, sf);
     let gap = stroke_device_px(BAND_GAP_PX, sf);
     let step = dash.saturating_add(gap).max(1);
     let t = thickness.max(1);
     if rect.width <= dash || rect.height <= dash {
-        paint_solid_outline(rect, t, color, sf, window);
+        paint_solid_outline(rect, t, color, sf, scope, window);
         return;
     }
     let bottom_y = rect.top + f64::from(rect.height.saturating_sub(t));
@@ -791,34 +1064,57 @@ fn paint_dashed_outline(rect: DevRect, thickness: u32, color: Hsla, sf: f32, win
     let mut x = 0u32;
     while x < rect.width {
         let seg = dash.min(rect.width - x);
-        window.paint_quad(fill(
-            device_rect(rect.left + f64::from(x), rect.top, seg, t, sf),
-            color,
-        ));
-        window.paint_quad(fill(
-            device_rect(rect.left + f64::from(x), bottom_y, seg, t, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(rect.left + f64::from(x), rect.top, seg, t, sf),
+                color,
+            ),
+            scope,
+        );
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(rect.left + f64::from(x), bottom_y, seg, t, sf),
+                color,
+            ),
+            scope,
+        );
         x = x.saturating_add(step);
     }
     // Vertical edges (left & right).
     let mut y = 0u32;
     while y < rect.height {
         let seg = dash.min(rect.height - y);
-        window.paint_quad(fill(
-            device_rect(rect.left, rect.top + f64::from(y), t, seg, sf),
-            color,
-        ));
-        window.paint_quad(fill(
-            device_rect(right_x, rect.top + f64::from(y), t, seg, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(rect.left, rect.top + f64::from(y), t, seg, sf),
+                color,
+            ),
+            scope,
+        );
+        paint_quad_scoped(
+            window,
+            fill(
+                device_rect(right_x, rect.top + f64::from(y), t, seg, sf),
+                color,
+            ),
+            scope,
+        );
         y = y.saturating_add(step);
     }
 }
 
 /// Paints four crisp corner handle squares on a selected part frame.
-fn paint_corner_handles(rect: DevRect, side: u32, color: Hsla, sf: f32, window: &mut Window) {
+fn paint_corner_handles(
+    rect: DevRect,
+    side: u32,
+    color: Hsla,
+    sf: f32,
+    scope: Option<&dyn OverlayPaintScope>,
+    window: &mut Window,
+) {
     let right = rect.left + f64::from(rect.width);
     let bottom = rect.top + f64::from(rect.height);
     let scale = f64::from(sf);
@@ -828,10 +1124,14 @@ fn paint_corner_handles(rect: DevRect, side: u32, color: Hsla, sf: f32, window: 
         (rect.left, bottom),
         (right, bottom),
     ] {
-        window.paint_quad(fill(
-            centered_square(point(x / scale, y / scale), side, sf),
-            color,
-        ));
+        paint_quad_scoped(
+            window,
+            fill(
+                centered_square(point(x / scale, y / scale), side, sf),
+                color,
+            ),
+            scope,
+        );
     }
 }
 
@@ -858,19 +1158,33 @@ fn item_world_bounds(doc: &Doc, item: ItemId) -> Option<Rect> {
     }
 }
 
-fn paint_overlay(
-    doc: &Doc,
-    state: &SelectionState,
-    camera: &Camera,
+struct OverlayPaintContext<'a> {
+    doc: &'a Doc,
+    camera: &'a Camera,
     bounds: Bounds<Pixels>,
     sf: f32,
     theme: &'static Theme,
+    scope: Option<&'a dyn OverlayPaintScope>,
+}
+
+fn paint_overlay(
+    state: &SelectionState,
+    net_highlight: &NetHighlight,
+    ctx: &OverlayPaintContext<'_>,
     window: &mut Window,
 ) {
+    let OverlayPaintContext {
+        doc,
+        camera,
+        bounds,
+        sf,
+        theme,
+        scope,
+    } = *ctx;
     let hovered = state.hovered();
     let selection = state.selection();
     let band = state.rubber_band().filter(|b| b.is_visible());
-    if hovered.is_none() && selection.is_empty() && band.is_none() {
+    if hovered.is_none() && selection.is_empty() && band.is_none() && net_highlight.is_empty() {
         return;
     }
 
@@ -903,181 +1217,286 @@ fn paint_overlay(
         },
     };
 
-    window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        // Layer 1: translucent fills and halos (always underneath crisp outlines).
-        window.paint_layer(|window| {
-            // Hovered item halo (skip when already selected so selection remains visually dominant).
-            if let Some(item) = hovered
-                && !state.is_selected(item)
-                && item_world_bounds(doc, item).is_some_and(|r| r.intersects(visible_padded))
-            {
-                match item {
-                    ItemId::Part(id) => {
-                        if let Some(body) = doc.part_body(id)
-                            && let Some(rect) =
-                                padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), hover_color.opacity(0.18)));
-                        }
-                    }
-                    ItemId::Wire(id) => {
-                        if let Some(&wire) = doc.wire(id)
-                            && let Some(rect) = wire_rect_dev(wire, camera, sf, wire_halo_dev, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), hover_color.opacity(0.55)));
-                        }
-                    }
-                    ItemId::Label(id) => {
-                        if let Some(label) = doc.label(id)
-                            && let Some(rect) =
-                                label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), hover_color.opacity(0.25)));
-                        }
-                    }
-                }
-            }
-
-            // Selected item fills / halos.
-            for &item in selection {
-                if !item_world_bounds(doc, item).is_some_and(|r| r.intersects(visible_padded)) {
-                    continue;
-                }
-                match item {
-                    ItemId::Part(id) => {
-                        if let Some(body) = doc.part_body(id)
-                            && let Some(rect) =
-                                padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), halo_color.opacity(0.22)));
-                        }
-                    }
-                    ItemId::Wire(id) => {
-                        if let Some(&wire) = doc.wire(id)
-                            && let Some(rect) = wire_rect_dev(wire, camera, sf, wire_halo_dev, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), halo_color.opacity(0.50)));
-                        }
-                    }
-                    ItemId::Label(id) => {
-                        if let Some(label) = doc.label(id)
-                            && let Some(rect) =
-                                label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), halo_color.opacity(0.32)));
-                        }
-                    }
-                }
-            }
-
-            // Rubber-band translucent fill.
-            if let Some(band) = band
-                && let Some(rect) = padded_rect_dev(band.world_rect(), 0.0, camera, sf, clip)
-            {
-                window.paint_quad(fill(rect.bounds(sf), halo_color.opacity(0.22)));
-            }
-        });
-
-        // Layer 2: crisp outlines, wire highlights, corner handles, and rubber-band border.
-        window.paint_layer(|window| {
-            // Hovered item outline.
-            if let Some(item) = hovered
-                && !state.is_selected(item)
-                && item_world_bounds(doc, item).is_some_and(|r| r.intersects(visible_padded))
-            {
-                match item {
-                    ItemId::Part(id) => {
-                        if let Some(body) = doc.part_body(id)
-                            && let Some(rect) =
-                                padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
-                        {
-                            paint_solid_outline(rect, hover_outline_dev, hover_color, sf, window);
-                        }
-                    }
-                    ItemId::Wire(id) => {
-                        if let Some(&wire) = doc.wire(id)
-                            && let Some(rect) =
-                                wire_rect_dev(wire, camera, sf, wire_select_dev, clip)
-                        {
-                            window.paint_quad(fill(rect.bounds(sf), hover_color));
-                        }
-                    }
-                    ItemId::Label(id) => {
-                        if let Some(label) = doc.label(id)
-                            && let Some(rect) =
-                                label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
-                        {
-                            paint_solid_outline(rect, hover_outline_dev, hover_color, sf, window);
-                        }
-                    }
-                }
-            }
-
-            // Selected item outlines, wire strokes, and handles.
-            for &item in selection {
-                if !item_world_bounds(doc, item).is_some_and(|r| r.intersects(visible_padded)) {
-                    continue;
-                }
-                match item {
-                    ItemId::Part(id) => {
-                        if let Some(body) = doc.part_body(id)
-                            && let Some(rect) =
-                                padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
-                        {
-                            paint_solid_outline(rect, select_outline_dev, select_color, sf, window);
-                            paint_corner_handles(rect, handle_dev, select_color, sf, window);
-                        }
-                    }
-                    ItemId::Wire(id) => {
-                        if let Some(&wire) = doc.wire(id) {
-                            if let Some(rect) =
-                                wire_rect_dev(wire, camera, sf, wire_select_dev, clip)
-                            {
-                                window.paint_quad(fill(rect.bounds(sf), select_color));
+    run_gpui(scope, || {
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            // Layer 1: translucent fills and halos (always underneath crisp outlines).
+            window.paint_layer(|window| {
+                run_omnia(scope, || {
+                    // Hovered item halo (skip when already selected so selection remains visually dominant).
+                    if let Some(item) = hovered
+                        && !state.is_selected(item)
+                        && item_world_bounds(doc, item)
+                            .is_some_and(|r| r.intersects(visible_padded))
+                    {
+                        match item {
+                            ItemId::Part(id) => {
+                                if let Some(body) = doc.part_body(id)
+                                    && let Some(rect) =
+                                        padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), hover_color.opacity(0.18)),
+                                        scope,
+                                    );
+                                }
                             }
-                            for end in [wire.a, wire.b] {
-                                let screen = camera.world_to_screen(end);
-                                window.paint_quad(fill(
-                                    centered_square(screen, handle_dev, sf),
-                                    select_color,
-                                ));
+                            ItemId::Wire(id) => {
+                                if let Some(&wire) = doc.wire(id)
+                                    && let Some(rect) =
+                                        wire_rect_dev(wire, camera, sf, wire_halo_dev, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), hover_color.opacity(0.55)),
+                                        scope,
+                                    );
+                                }
+                            }
+                            ItemId::Label(id) => {
+                                if let Some(label) = doc.label(id)
+                                    && let Some(rect) =
+                                        label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), hover_color.opacity(0.25)),
+                                        scope,
+                                    );
+                                }
                             }
                         }
                     }
-                    ItemId::Label(id) => {
-                        if let Some(label) = doc.label(id) {
-                            if let Some(rect) =
-                                label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
-                            {
-                                paint_solid_outline(
+
+                    // Selected item fills / halos.
+                    for &item in selection {
+                        if !item_world_bounds(doc, item)
+                            .is_some_and(|r| r.intersects(visible_padded))
+                        {
+                            continue;
+                        }
+                        match item {
+                            ItemId::Part(id) => {
+                                if let Some(body) = doc.part_body(id)
+                                    && let Some(rect) =
+                                        padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), halo_color.opacity(0.22)),
+                                        scope,
+                                    );
+                                }
+                            }
+                            ItemId::Wire(id) => {
+                                if let Some(&wire) = doc.wire(id)
+                                    && let Some(rect) =
+                                        wire_rect_dev(wire, camera, sf, wire_halo_dev, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), halo_color.opacity(0.50)),
+                                        scope,
+                                    );
+                                }
+                            }
+                            ItemId::Label(id) => {
+                                if let Some(label) = doc.label(id)
+                                    && let Some(rect) =
+                                        label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
+                                {
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(rect.bounds(sf), halo_color.opacity(0.32)),
+                                        scope,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Rubber-band translucent fill.
+                    if let Some(band) = band
+                        && let Some(rect) =
+                            padded_rect_dev(band.world_rect(), 0.0, camera, sf, clip)
+                    {
+                        paint_quad_scoped(
+                            window,
+                            fill(rect.bounds(sf), halo_color.opacity(0.22)),
+                            scope,
+                        );
+                    }
+                });
+            });
+
+            // Layer 2: crisp net highlights, outlines, wire highlights, corner handles, and rubber-band border.
+            window.paint_layer(|window| {
+                run_omnia(scope, || {
+                    // T4.4: whole-net wire highlight in `stage/net-highlight` (underneath selection handles).
+                    let wire_paint = net::WirePaintParams {
+                        camera,
+                        visible_padded,
+                        sf,
+                        width_dev: wire_select_dev,
+                        clip,
+                        theme,
+                        scope,
+                    };
+                    net::paint_wires(doc, net_highlight.wires(), &wire_paint, window);
+
+                    // Hovered item outline (hovered wires are painted by `net::paint_wires` above, with
+                    // their Layer 1 hover halo indicating the hovered segment).
+                    if let Some(item) = hovered
+                        && !state.is_selected(item)
+                        && item_world_bounds(doc, item)
+                            .is_some_and(|r| r.intersects(visible_padded))
+                    {
+                        match item {
+                            ItemId::Part(id) => {
+                                if let Some(body) = doc.part_body(id)
+                                    && let Some(rect) =
+                                        padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
+                                {
+                                    paint_solid_outline(
+                                        rect,
+                                        hover_outline_dev,
+                                        hover_color,
+                                        sf,
+                                        scope,
+                                        window,
+                                    );
+                                }
+                            }
+                            ItemId::Wire(_) => {}
+                            ItemId::Label(id) => {
+                                if let Some(label) = doc.label(id)
+                                    && let Some(rect) =
+                                        label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
+                                {
+                                    paint_solid_outline(
+                                        rect,
+                                        hover_outline_dev,
+                                        hover_color,
+                                        sf,
+                                        scope,
+                                        window,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Selected item outlines, wire strokes, and handles.
+                    for &item in selection {
+                        if !item_world_bounds(doc, item)
+                            .is_some_and(|r| r.intersects(visible_padded))
+                        {
+                            continue;
+                        }
+                        match item {
+                            ItemId::Part(id) => {
+                                if let Some(body) = doc.part_body(id)
+                                    && let Some(rect) =
+                                        padded_rect_dev(body, PART_FRAME_PAD_PX, camera, sf, clip)
+                                {
+                                    paint_solid_outline(
+                                        rect,
+                                        select_outline_dev,
+                                        select_color,
+                                        sf,
+                                        scope,
+                                        window,
+                                    );
+                                    paint_corner_handles(
+                                        rect,
+                                        handle_dev,
+                                        select_color,
+                                        sf,
+                                        scope,
+                                        window,
+                                    );
+                                }
+                            }
+                            ItemId::Wire(id) => {
+                                if let Some(&wire) = doc.wire(id) {
+                                    if let Some(rect) =
+                                        wire_rect_dev(wire, camera, sf, wire_select_dev, clip)
+                                    {
+                                        paint_quad_scoped(
+                                            window,
+                                            fill(rect.bounds(sf), select_color),
+                                            scope,
+                                        );
+                                    }
+                                    for end in [wire.a, wire.b] {
+                                        let screen = camera.world_to_screen(end);
+                                        paint_quad_scoped(
+                                            window,
+                                            fill(
+                                                centered_square(screen, handle_dev, sf),
+                                                select_color,
+                                            ),
+                                            scope,
+                                        );
+                                    }
+                                }
+                            }
+                            ItemId::Label(id) => {
+                                if let Some(label) = doc.label(id) {
+                                    if let Some(rect) =
+                                        label_rect_dev(label.at, LABEL_HALF_PX, camera, sf, clip)
+                                    {
+                                        paint_solid_outline(
+                                            rect,
+                                            select_outline_dev,
+                                            select_color,
+                                            sf,
+                                            scope,
+                                            window,
+                                        );
+                                    }
+                                    let screen = camera.world_to_screen(label.at);
+                                    let dot = stroke_device_px(3.0, sf);
+                                    paint_quad_scoped(
+                                        window,
+                                        fill(centered_square(screen, dot, sf), select_color),
+                                        scope,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Rubber-band border: dashed for Intersecting (WD8/WQ3 default), solid for Enclosed.
+                    if let Some(band) = band
+                        && let Some(rect) =
+                            padded_rect_dev(band.world_rect(), 0.0, camera, sf, clip)
+                    {
+                        match band.mode {
+                            SelectMode::Intersecting => {
+                                paint_dashed_outline(
                                     rect,
-                                    select_outline_dev,
+                                    band_border_dev,
                                     select_color,
                                     sf,
+                                    scope,
                                     window,
                                 );
                             }
-                            let screen = camera.world_to_screen(label.at);
-                            let dot = stroke_device_px(3.0, sf);
-                            window.paint_quad(fill(centered_square(screen, dot, sf), select_color));
+                            SelectMode::Enclosed => {
+                                paint_solid_outline(
+                                    rect,
+                                    band_border_dev,
+                                    select_color,
+                                    sf,
+                                    scope,
+                                    window,
+                                );
+                            }
                         }
                     }
-                }
-            }
-
-            // Rubber-band border: dashed for Intersecting (WD8/WQ3 default), solid for Enclosed.
-            if let Some(band) = band
-                && let Some(rect) = padded_rect_dev(band.world_rect(), 0.0, camera, sf, clip)
-            {
-                match band.mode {
-                    SelectMode::Intersecting => {
-                        paint_dashed_outline(rect, band_border_dev, select_color, sf, window);
-                    }
-                    SelectMode::Enclosed => {
-                        paint_solid_outline(rect, band_border_dev, select_color, sf, window);
-                    }
-                }
-            }
+                });
+            });
         });
     });
 }
@@ -1141,11 +1560,18 @@ mod tests {
     }
 
     fn open_overlay(cx: &mut TestAppContext) -> (OverlayFixture, &mut VisualTestContext) {
+        open_overlay_with_prefs(cx, WiringPrefs::default())
+    }
+
+    fn open_overlay_with_prefs(
+        cx: &mut TestAppContext,
+        prefs: WiringPrefs,
+    ) -> (OverlayFixture, &mut VisualTestContext) {
         let doc = cx.new(|_| test_doc());
         let doc_clone = doc.clone();
         let (overlay, cx) = cx.add_window_view(move |window, cx| {
             let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
-            let view = OverlayView::new(doc_clone, camera, &GRAPHITE, cx);
+            let view = OverlayView::with_prefs(doc_clone, camera, &GRAPHITE, &prefs, cx);
             // Focus the sheet once at open so clicks on the active sheet do not trigger GPUI's
             // focus-change `window.refresh()` (which bypasses `.cached()` for that frame).
             window.focus(view.focus_handle(), cx);
@@ -1477,6 +1903,584 @@ mod tests {
             cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
             paints_1,
             "INV11: clicks once focused must not repaint SheetView"
+        );
+    }
+
+    fn drag_rubber_band(
+        overlay: &Entity<OverlayView>,
+        cx: &mut VisualTestContext,
+        start: Pt,
+        end: Pt,
+        shift: bool,
+    ) {
+        let mods = if shift {
+            Modifiers::shift()
+        } else {
+            Modifiers::none()
+        };
+        let s0 = screen_of(overlay, cx, start);
+        let s1 = screen_of(overlay, cx, end);
+        let mid = point((s0.x + s1.x) * 0.5, (s0.y + s1.y) * 0.5);
+        cx.simulate_mouse_down(s0, MouseButton::Left, mods);
+        cx.simulate_mouse_move(mid, MouseButton::Left, mods);
+        cx.simulate_mouse_move(s1, MouseButton::Left, mods);
+        assert!(
+            cx.update(|_, cx| overlay.read(cx).rubber_band().unwrap().is_visible()),
+            "rubber band must become visible after drag move"
+        );
+        cx.simulate_mouse_up(s1, MouseButton::Left, mods);
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).rubber_band()), None);
+    }
+
+    fn run_tc_band_half_part(
+        cx: &mut TestAppContext,
+        mode: SelectMode,
+        start_world: Pt,
+        end_world: Pt,
+    ) {
+        let prefs = WiringPrefs::new(true, 10, mode, false).unwrap();
+        let (
+            OverlayFixture {
+                overlay,
+                sheet_notifies,
+                selection_events,
+                ..
+            },
+            cx,
+        ) = open_overlay_with_prefs(cx, prefs);
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).select_mode()), mode);
+        let initial_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+
+        drag_rubber_band(&overlay, cx, start_world, end_world, false);
+
+        match mode {
+            SelectMode::Intersecting => {
+                assert_eq!(
+                    cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+                    vec![ItemId::Part(PartId(0))]
+                );
+                assert_eq!(selection_events.get(), 1);
+            }
+            SelectMode::Enclosed => {
+                assert!(cx.update(|_, cx| overlay.read(cx).selection().is_empty()));
+                assert_eq!(selection_events.get(), 0);
+            }
+        }
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            initial_paints
+        );
+        assert_eq!(sheet_notifies.get(), 0);
+    }
+
+    // Half-covering box over R1 (body x in [-8g, -4g], y in [-2g, 2g]): x in [-10g, -6g], y in [-4g, 4g].
+    #[gpui::test]
+    fn tc_band_01_nw_to_se_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_02_se_to_nw_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_03_ne_to_sw_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_04_sw_to_ne_intersecting(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Intersecting,
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_05_nw_to_se_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_06_se_to_nw_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_07_ne_to_sw_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_08_sw_to_ne_enclosed(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        run_tc_band_half_part(
+            cx,
+            SelectMode::Enclosed,
+            Pt {
+                x: -10 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: -4 * g,
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn tc_band_09_shift_adds_to_existing_selection(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        let (
+            OverlayFixture {
+                overlay,
+                sheet_notifies,
+                selection_events,
+                ..
+            },
+            cx,
+        ) = open_overlay(cx);
+        let initial_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).select_mode()),
+            SelectMode::Intersecting
+        );
+
+        // Existing selection: Label(0) at (0, 4g).
+        let label_pos = screen_of(&overlay, cx, Pt { x: 0, y: 4 * g });
+        cx.simulate_mouse_down(label_pos, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(label_pos, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Label(LabelId(0))]
+        );
+
+        // Shift-drag half-box over R1 in default Intersecting mode -> adds Part(0).
+        drag_rubber_band(
+            &overlay,
+            cx,
+            Pt {
+                x: -10 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: -6 * g,
+                y: 4 * g,
+            },
+            true,
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Part(PartId(0)), ItemId::Label(LabelId(0))]
+        );
+
+        // Switch preference to Enclosed via apply_prefs; Shift-drag half-box over C1 -> keeps existing selection.
+        let enclosed_prefs = WiringPrefs::new(true, 10, SelectMode::Enclosed, false).unwrap();
+        cx.update(|_, cx| {
+            overlay.update(cx, |v, cx| v.apply_prefs(&enclosed_prefs, cx));
+        });
+        drag_rubber_band(
+            &overlay,
+            cx,
+            Pt {
+                x: 6 * g,
+                y: -4 * g,
+            },
+            Pt {
+                x: 10 * g,
+                y: 4 * g,
+            },
+            true,
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Part(PartId(0)), ItemId::Label(LabelId(0))]
+        );
+
+        // Shift-drag full box enclosing C1 ([3g..10g] x [-4g..4g], avoiding Wire(0) wholly) -> adds Part(1).
+        drag_rubber_band(
+            &overlay,
+            cx,
+            Pt {
+                x: 10 * g,
+                y: 4 * g,
+            },
+            Pt {
+                x: 3 * g,
+                y: -4 * g,
+            },
+            true,
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![
+                ItemId::Part(PartId(0)),
+                ItemId::Part(PartId(1)),
+                ItemId::Label(LabelId(0)),
+            ]
+        );
+        assert_eq!(selection_events.get(), 3);
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            initial_paints
+        );
+        assert_eq!(sheet_notifies.get(), 0);
+    }
+
+    #[gpui::test]
+    fn inv11_net_highlight_never_repaints_sheet(cx: &mut TestAppContext) {
+        let g = GRID_NM;
+        // Net A: Wire(0) (-8g,0)->(-2g,0) + Wire(1) (-2g,0)->(-2g,4g), plus label-bridged Wire(2) (4g,0)->(8g,0).
+        // Net B: Wire(3) (-8g,8g)->(0,8g).
+        let net_doc = Doc::from_items(
+            [],
+            [
+                Wire {
+                    a: Pt { x: -8 * g, y: 0 },
+                    b: Pt { x: -2 * g, y: 0 },
+                },
+                Wire {
+                    a: Pt { x: -2 * g, y: 0 },
+                    b: Pt {
+                        x: -2 * g,
+                        y: 4 * g,
+                    },
+                },
+                Wire {
+                    a: Pt { x: 4 * g, y: 0 },
+                    b: Pt { x: 8 * g, y: 0 },
+                },
+                Wire {
+                    a: Pt {
+                        x: -8 * g,
+                        y: 8 * g,
+                    },
+                    b: Pt { x: 0, y: 8 * g },
+                },
+            ],
+            [
+                Label {
+                    at: Pt { x: -8 * g, y: 0 },
+                    text: "NET_A".into(),
+                },
+                Label {
+                    at: Pt { x: 4 * g, y: 0 },
+                    text: "NET_A".into(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let doc = cx.new(|_| net_doc);
+        let doc_clone = doc.clone();
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = OverlayView::new(doc_clone, camera, &GRAPHITE, cx);
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+        let sheet_notifies = Rc::new(Cell::new(0u32));
+        let sn = sheet_notifies.clone();
+        cx.update(|_, cx| {
+            let sheet = overlay.read(cx).sheet_entity().clone();
+            cx.observe(&sheet, move |_, _| sn.set(sn.get() + 1))
+                .detach();
+        });
+
+        let initial_sheet_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let mut prev_overlay_paints = cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
+        assert_eq!(initial_sheet_paints, 1);
+
+        let assert_overlay_painted =
+            |cx: &mut gpui::VisualTestContext, prev: &mut u64, step: &str| {
+                let now = cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
+                assert!(
+                    now > *prev,
+                    "T4.4: expected overlay frame to paint after {step} (prev={}, now={now})",
+                    *prev
+                );
+                *prev = now;
+            };
+
+        // Hover Wire(0): whole Net A ([0, 1, 2]) highlights in overlay; SheetView does not repaint.
+        let w0_pos = screen_of(&overlay, cx, Pt { x: -5 * g, y: 0 });
+        let empty_pos = screen_of(
+            &overlay,
+            cx,
+            Pt {
+                x: -10 * g,
+                y: -8 * g,
+            },
+        );
+        cx.simulate_mouse_move(w0_pos, None, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2)]
+        );
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "hover Wire(0)");
+
+        // Hover empty space: highlight clears.
+        cx.simulate_mouse_move(empty_pos, None, Modifiers::none());
+        assert!(cx.update(|_, cx| overlay.read(cx).highlighted_wires().is_empty()));
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "unhover to empty space");
+
+        // Click Wire(1) to select it: Net A highlights.
+        let w1_pos = screen_of(
+            &overlay,
+            cx,
+            Pt {
+                x: -2 * g,
+                y: 2 * g,
+            },
+        );
+        cx.simulate_mouse_down(w1_pos, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(w1_pos, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2)]
+        );
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "select Wire(1)");
+
+        // Hover Wire(3) while Wire(1) is selected: both Net A and Net B highlight.
+        let w3_pos = screen_of(
+            &overlay,
+            cx,
+            Pt {
+                x: -4 * g,
+                y: 8 * g,
+            },
+        );
+        cx.simulate_mouse_move(w3_pos, None, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2), WireId(3)]
+        );
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "hover Wire(3)");
+
+        // Off-screen label edit merges `off_wid` into Net A: OverlayView re-resolves without
+        // repainting SheetView (D7).
+        let off_wire = cx.update(|_, cx| {
+            doc.update(cx, |doc, _| {
+                doc.apply(Command::AddWires(vec![Wire {
+                    a: Pt {
+                        x: 200 * g,
+                        y: 200 * g,
+                    },
+                    b: Pt {
+                        x: 204 * g,
+                        y: 200 * g,
+                    },
+                }]))
+                .unwrap()
+            })
+        });
+        let off_wid = off_wire
+            .added
+            .iter()
+            .find_map(|item| match *item {
+                ItemId::Wire(id) => Some(id),
+                _ => None,
+            })
+            .unwrap();
+        cx.update(|_, cx| {
+            overlay.update(cx, |v, cx| v.on_doc_change(&off_wire, cx));
+        });
+        let off_label = cx.update(|_, cx| {
+            doc.update(cx, |doc, _| {
+                doc.apply(Command::AddLabel(Label {
+                    at: Pt {
+                        x: 200 * g,
+                        y: 200 * g,
+                    },
+                    text: "NET_A".into(),
+                }))
+                .unwrap()
+            })
+        });
+        let off_lid = off_label
+            .added
+            .iter()
+            .find_map(|item| match *item {
+                ItemId::Label(id) => Some(id),
+                _ => None,
+            })
+            .unwrap();
+        cx.update(|_, cx| {
+            overlay.update(cx, |v, cx| v.on_doc_change(&off_label, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2), WireId(3), off_wid]
+        );
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "off-screen net merge");
+
+        // Deleting the off-screen bridging label splits `off_wid` back out of Net A via
+        // `on_doc_change`, updating the overlay without repainting SheetView.
+        let split_change = cx.update(|_, cx| {
+            doc.update(cx, |doc, _| {
+                doc.apply(Command::Delete {
+                    items: vec![ItemId::Label(off_lid)],
+                    with_wires: false,
+                })
+                .unwrap()
+            })
+        });
+        cx.update(|_, cx| {
+            overlay.update(cx, |v, cx| v.on_doc_change(&split_change, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).highlighted_wires().to_vec()),
+            vec![WireId(0), WireId(1), WireId(2), WireId(3)]
+        );
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "off-screen net split");
+
+        // Clear selection and move hover away: net highlight clears.
+        cx.simulate_mouse_move(empty_pos, None, Modifiers::none());
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "hover away before clear");
+        cx.update(|_, cx| overlay.update(cx, |v, cx| v.clear_selection(cx)));
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| overlay.read(cx).highlighted_wires().is_empty()));
+        assert_overlay_painted(cx, &mut prev_overlay_paints, "clear selection");
+
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            initial_sheet_paints,
+            "INV11/T4.4: net highlight changes must never repaint SheetView"
+        );
+        assert_eq!(
+            sheet_notifies.get(),
+            0,
+            "INV11/T4.4: net highlight changes must never notify SheetView"
+        );
+    }
+
+    #[gpui::test]
+    fn overlay_paint_scope_attributes_mouse_move_and_paint(cx: &mut TestAppContext) {
+        struct CountingScope {
+            omnia: Rc<Cell<u64>>,
+            gpui: Rc<Cell<u64>>,
+        }
+        impl OverlayPaintScope for CountingScope {
+            fn omnia(&self, work: &mut dyn FnMut()) {
+                self.omnia.set(self.omnia.get() + 1);
+                work();
+            }
+            fn gpui(&self, work: &mut dyn FnMut()) {
+                self.gpui.set(self.gpui.get() + 1);
+                work();
+            }
+        }
+
+        let omnia_calls = Rc::new(Cell::new(0u64));
+        let gpui_calls = Rc::new(Cell::new(0u64));
+        let scope: Rc<dyn OverlayPaintScope> = Rc::new(CountingScope {
+            omnia: omnia_calls.clone(),
+            gpui: gpui_calls.clone(),
+        });
+
+        let doc = cx.new(|_| test_doc());
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = OverlayView::new(doc, camera, &GRAPHITE, cx).with_paint_scope(scope);
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+
+        let omnia_before = omnia_calls.get();
+        let gpui_before = gpui_calls.get();
+        let wire_pos = screen_of(&overlay, cx, Pt { x: 0, y: 0 });
+        cx.simulate_mouse_move(wire_pos, None, Modifiers::none());
+        assert!(
+            omnia_calls.get() > omnia_before,
+            "B10/T4.6: OverlayPaintScope::omnia must wrap hover and paint work"
+        );
+        assert!(
+            gpui_calls.get() > gpui_before,
+            "B10/T4.6: OverlayPaintScope::gpui must wrap GPUI notify/paint calls"
         );
     }
 }

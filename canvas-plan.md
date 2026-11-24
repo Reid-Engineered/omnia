@@ -693,20 +693,29 @@ pub struct Navigator { /* private */ }                    // T1.5 pan/zoom state
 pub struct SheetCanvas { /* private */ }                  // T1.5: camera, Navigator, SheetView
 // T4.3 (selection.rs, overlay.rs): pure selection/hover/WD8 rubber-band state machine and
 // OverlayView embedding CachedSheet via `.cached()` so transient updates never repaint SheetView.
+// T4.4 (overlay/net.rs): NetHighlight derived from hovered/selected wires (`stage/net-highlight`).
 pub struct Selection { /* canonical sorted, deduplicated ItemIds */ }
 pub struct RubberBand { pub anchor: Pt, pub current: Pt, pub mode: SelectMode, pub additive: bool }
 pub struct SelectionState { /* selection, hovered, rubber_band, SelectMode (WQ3 default Intersecting) */ }
+// SelectionState::from_prefs(&WiringPrefs), SelectionState::apply_prefs(&WiringPrefs)
+pub struct NetHighlight { /* resolved NetIds and deduplicated WireIds */ }
 pub enum OverlayEvent { SelectionChanged }
 pub struct CachedSheet { /* SheetView wrapper with paint/render counters (D7, INV11) */ }
-pub struct OverlayView { /* doc, CachedSheet (.cached()), camera, theme, SelectionState */ }
+pub trait OverlayPaintScope { fn omnia(&self, work: &mut dyn FnMut()); fn gpui(&self, work: &mut dyn FnMut()); }
+pub struct OverlayView { /* doc, CachedSheet (.cached()), camera, theme, SelectionState, NetHighlight */ }
 impl OverlayView {
     pub fn new(doc: Entity<Doc>, camera: Camera, theme: &'static Theme, cx: &mut Context<Self>) -> Self;
+    pub fn with_prefs(doc: Entity<Doc>, camera: Camera, theme: &'static Theme, prefs: &WiringPrefs, cx: &mut Context<Self>) -> Self;
+    pub fn with_paint_scope(self, scope: Rc<dyn OverlayPaintScope>) -> Self;
+    pub fn set_paint_scope(&mut self, scope: Option<Rc<dyn OverlayPaintScope>>);
     pub fn doc(&self) -> &Entity<Doc>;
     pub fn camera(&self) -> &Camera;
     pub fn theme(&self) -> &'static Theme;
     pub fn focus_handle(&self) -> &FocusHandle;
     pub fn selection(&self) -> &[ItemId];
     pub fn hovered(&self) -> Option<ItemId>;
+    pub fn highlighted_nets(&self) -> &[NetId];
+    pub fn highlighted_wires(&self) -> &[WireId];
     pub fn rubber_band(&self) -> Option<RubberBand>;
     pub fn select_mode(&self) -> SelectMode;
     pub fn sheet_entity(&self) -> &Entity<CachedSheet>;
@@ -715,6 +724,7 @@ impl OverlayView {
     pub fn overlay_paint_count(&self) -> u64;
     pub fn overlay_render_count(&self) -> u64;
     pub fn set_select_mode(&mut self, mode: SelectMode, cx: &mut Context<Self>);
+    pub fn apply_prefs(&mut self, prefs: &WiringPrefs, cx: &mut Context<Self>);
     pub fn set_hovered(&mut self, item: Option<ItemId>, cx: &mut Context<Self>);
     pub fn set_selection(&mut self, items: impl IntoIterator<Item = ItemId>, cx: &mut Context<Self>);
     pub fn clear_selection(&mut self, cx: &mut Context<Self>);
@@ -725,20 +735,51 @@ impl OverlayView {
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>);
     pub fn on_doc_change(&mut self, change: &Change, cx: &mut Context<Self>);
+    pub fn viewport(&self) -> Bounds<Pixels>;
+    pub fn is_animating(&self) -> bool;
+    pub fn cancel_animation(&mut self) -> bool;
+    pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>);
+    pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>);
+    pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
+    pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
+    pub fn zoom_step(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>);
 }
+// T4.5 (camera_anim.rs): 150 ms ease-out view animations driven by `request_animation_frame` (K13, G16).
+pub const VIEW_ANIM_DURATION: Duration;                    // 150 ms (K13)
+pub const FIT_FILL_FRACTION: f64;                          // 0.9 (5% margin per side)
+pub fn ease_out(t: f64) -> f64;
+pub fn doc_bounds(doc: &Doc) -> Option<Rect>;
+pub fn selection_bounds(doc: &Doc, selection: &[ItemId]) -> Option<Rect>;
+pub fn fit_rect_camera(rect: Rect, viewport: Bounds<Pixels>) -> Camera;
+pub fn fit_area_camera(rect: Rect, viewport: Bounds<Pixels>) -> Camera;
+pub fn fit_sheet_camera(doc: Option<&Doc>, viewport: Bounds<Pixels>) -> Camera;
+pub fn zoom_to_selection_camera(doc: &Doc, selection: &[ItemId], viewport: Bounds<Pixels>) -> Option<Camera>;
+pub struct CameraAnimation { /* pure K13 ease-out transition, exact target completion */ }
+pub struct ViewAnimation { /* GPUI clock-bound wrapper over CameraAnimation */ }
 impl SheetCanvas {
     pub fn new(doc: Entity<Doc>, theme: &'static Theme,
                window: &mut Window, cx: &mut Context<Self>) -> Self;
     // The shell document integration (U2.2) supplies the live entity to the T2.5 renderer.
-    // Until then the navigation shell uses `new(camera: Camera, theme, cx)`.
+    // Until then the navigation shell uses `new(camera: Camera, theme, cx)` with optional `with_doc`/`set_doc`.
+    pub fn with_doc(self, doc: Entity<Doc>) -> Self;
+    pub fn set_doc(&mut self, doc: Option<Entity<Doc>>, cx: &mut Context<Self>);
+    pub fn doc(&self) -> Option<&Entity<Doc>>;
     pub fn camera(&self) -> &Camera;
+    pub fn viewport(&self) -> Bounds<Pixels>;
     pub fn status(&self) -> CanvasStatus;
+    pub fn is_animating(&self) -> bool;
+    pub fn cancel_animation(&mut self) -> bool;
+    pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>);
+    pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>);
+    pub fn fit_doc(&mut self, doc: &Doc, cx: &mut Context<Self>);
+    pub fn zoom_to_selection_in(&mut self, doc: &Doc, selection: &[ItemId], cx: &mut Context<Self>) -> bool;
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
     // T5.3: a shell-supplied placement provider (see parts-plan.md section 14) builds the
     // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation.
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);
+    pub fn zoom_step(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>);
     pub fn selection(&self) -> &[ItemId];
 }
 impl Render for SheetCanvas { /* ... */ }

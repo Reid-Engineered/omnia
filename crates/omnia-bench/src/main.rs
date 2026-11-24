@@ -17,7 +17,7 @@ static GLOBAL: CountingAlloc = CountingAlloc;
 const USAGE: &str = "\
 usage: bench <command> [options]
 
-  run     [--sheet S] [--script pan|zoom] [--frames 600] [--warmup 60]
+  run     [--sheet S] [--script pan|zoom|hover] [--frames 600] [--warmup 60]
           [--size 1280x800] [--headless] [--json FILE]
   spike   s1..s6|s8 [--count N] [--mode fixed|sweep|square|rounded|sprite|direct|direct-sweep|cached|repaint|quality|monitors|displays]\n          [--frames 600] [--warmup 60] [--size 3072x1728] [--json FILE]\n  start   [--sheet empty|t01|placeholder] [--runs 10] [--size 960x640] [--json FILE]
   idle    [--sheet empty|t01|placeholder] [--seconds 10] [--settle-ms 1000] [--size 960x640] [--json FILE]
@@ -176,6 +176,11 @@ fn cmd_run(args: impl Iterator<Item = String>) -> Result<(), Failure> {
     if config.script == Script::Zoom && !config.sheet.supports_zoom() {
         return Err(Failure::Usage(
             "--script zoom needs the empty sheet or a generated document".into(),
+        ));
+    }
+    if config.script == Script::Hover && !matches!(config.sheet, Sheet::Stress(_)) {
+        return Err(Failure::Usage(
+            "--script hover needs a generated document (100, 1k, 10k, dense, or text)".into(),
         ));
     }
     if args.flag("headless") {

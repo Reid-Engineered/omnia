@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "kind": "hit",
+  "config": {
+    "sheet": "10k",
+    "seed": 42,
+    "samples": 20000,
+    "tolerance_nm": 508000,
+    "grid_nm": 2540000
+  },
+  "environment": {
+    "os": "windows",
+    "arch": "x86_64",
+    "window": null
+  },
+  "hits": 18610,
+  "parts": 10000,
+  "wires": 20000,
+  "metrics": {
+    "hit_ms": {
+      "mean": 0.0002,
+      "p50": 0.0002,
+      "p95": 0.0002,
+      "p99": 0.0003,
+      "max": 0.04
+    }
+  },
+  "reference_machine": false,
+  "note": "B7 requires the Q4 reference machine; this report does not certify the gate"
+}
