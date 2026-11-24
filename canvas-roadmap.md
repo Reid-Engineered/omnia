@@ -508,7 +508,8 @@ of the `canvas` lane.
 - Done when: all pass on the reference machine; otherwise record and set `needs-human`.
 - Orion 2026-11-23 verdicts: `incomplete` on hover warm-up sampling (`9abfe05`), then `fail`
   and non-certifying (`b6c7981`, concurrent W2.2 work). 2026-11-24: hover attribution fixed
-  and the stalls diagnosed as preemption; a clean owner-run campaign is next.
+  and the stalls diagnosed as preemption; a clean owner-run campaign is next:
+  `bash docs/measurements/T4.6/owner-run.sh` at Orion's desk.
   [Evidence](docs/measurements/T4.6.md).
 
 ## Milestone 5: editing
@@ -2140,3 +2141,15 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        3.7-24.4 ms of run-queue wait, in the runs where `t3code` and
                        `claude` were busiest. Next: an owner-run `gate.py run` with
                        T3 Code and its agents closed. Evidence: `docs/measurements/T4.6-stall.md`.
+
+2026-11-24 T4.6 needs-human — made the owner-run campaign one command:
+                       `docs/measurements/T4.6/owner-run.sh` (`--check` for preflight only).
+                       It wraps the frozen `gate.py` unchanged. It refuses to start over SSH
+                       or while T3 Code, a coding agent, `cargo` or `rustc` runs, builds
+                       current `origin/main`, and asks for sudo once. A root helper sets the
+                       `performance` governor, stops `tailscaled` and suspends Baloo, and
+                       restores all three on any exit. The wrapper records per-process CPU time
+                       around the gate (evidence only). On Orion, a non-root stand-in for the
+                       helper restored state on a normal exit, an error, HUP, INT and TERM. The
+                       sudo path is untested until the owner's run. Status stays
+                       `needs-human`, waiting for that run.
