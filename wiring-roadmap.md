@@ -200,14 +200,15 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   command yet); `plan_follow` on a selection with no boundary points returns an empty plan
   and allocates nothing.
 
-### W2.2 Move and Reorient with follow · blocked (WB3 fails on Orion: median p99 3.813 ms vs 2 ms)
+### W2.2 Move and Reorient with follow · done
 - Lane: doc · Depends: W2.1 · Read: WD3, WINV1, WINV2, WINV4, INV4, INV10
 - Owns: `crates/schematic-doc/src/command.rs`, `undo.rs` (after T5.1)
 - Scope approved 2026-11-17: mechanical caller migrations in document tests and the
-  command benchmark, plus the WB3 benchmark. Windows checks only; no Orion runs.
-- Implementation and Windows checks complete. The 2026-11-23 Orion re-run after the
-  optimisation measured a median p99 of 3.813 ms, down from 51.151 ms. WB3 remains blocked
-  at the 2 ms budget. See `docs/measurements/W2.2.md`.
+  command benchmark, plus the WB3 benchmark.
+- Implementation, property/allocation checks, and Orion WB3 reference campaign complete.
+  The 2026-11-23 round 2 Orion campaign (`29d25b2`) measured a median pass p99 of
+  1.815 ms (range 1.658–2.475 ms, median p50 1.531 ms), passing WB3's < 2 ms budget
+  (down from 51.151 ms baseline and 3.813 ms round 1). See `docs/measurements/W2.2.md`.
 - Do: `Move` and `Reorient` carry a `FollowPolicy`; `apply` calls `plan_follow`, applies the
   plan and the move as one change, splits wires under landed pins and ends (TC-move-14),
   normalises, and pushes one inverse that restores every removed wire under its old id. A
@@ -786,3 +787,21 @@ campaign on `09ac197` completed all ten passes of 100 applies. Median of pass p9
 3.813 ms (range 2.704-4.255 ms), against WB3's < 2 ms. Median of pass p50s 2.483 ms.
 AC and all four `performance` governors held in every snapshot. The desktop indexer
 was recorded during the run. Evidence: `docs/measurements/W2.2/orion-2026-11-23-wb3-perf/`.
+
+2026-11-23 W2.2 WB3 round 2 optimisation & Orion campaign - done (WB3 passes). Commit
+`29d25b2` (touching only `command.rs`, `follow.rs`, `index.rs`, `points.rs`, `route.rs`,
+and `run.rs`; zero CQ10 files touched, zero `#[allow]`) inlined spatial cell bounds with
+stamp-free visitors, replaced `View` hash sets/maps with bitsets, flat cell overlays, and
+separate reservation lists, added per-run `LocalObstacles` snapshots for Stage 2 doglegs,
+packed point-map ends inline (`PackedEnd`/`PointEnds`), and specialised follow wire
+addition (`plan_follow_add_wires`). Verified with `cargo fmt --all --check`,
+`cargo clippy -p omnia-doc --all-targets -- -D warnings`, `cargo test -p omnia-doc`
+(168/168 unit & proptests, `change_contract` 2/2, `follow_alloc` 1/1, `index_alloc` 6/6,
+`route_alloc` 1/1), and `follow_command --test`. Frozen section 2.1 Orion campaign
+(`docs/measurements/W2.2/run.sh`, 10 passes x 100 applies on seed-42 `Parts10k`, AC power
+and `performance` governor on all 4 CPUs across all 20 snapshots, desktop indexer
+suspended during run): median of pass p99s **1.815 ms** (range 1.658-2.475 ms), median of
+pass p50s 1.531 ms — **WB3 (< 2.0 ms) passes** (down from 51.151 ms baseline and 3.813 ms
+round 1). Evidence: `docs/measurements/W2.2/orion-2026-11-23-wb3-perf-pass/` and
+`docs/measurements/W2.2.md`.
+
