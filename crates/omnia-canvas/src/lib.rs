@@ -19,7 +19,3 @@ pub use input::{CanvasEvent, CanvasStatus, Navigator, SheetCanvas};
 pub use overlay::{CachedSheet, NetHighlight, OverlayEvent, OverlayPaintScope, OverlayView};
 pub use selection::{RubberBand, Selection, SelectionState};
 pub use sheet::SheetView;
-pub use tool::{
-    CanvasHistory, DragGesture, PlaceGesture, Tool, ToolMachine, ToolOutcome, ToolPhase,
-    ToolRequest, ToolState, WireGesture,
-};

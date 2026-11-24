@@ -505,6 +505,8 @@ pub enum Command {
     AddLabel(Label),
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
     Reorient { items: Vec<ItemId>, pivot: Pt, by: Orient, follow: FollowPolicy }, // follow added in W2.2 (WD3)
+    // T5.5 adds a combined move-and-reorient command (a composed `Isometry`, wiring-plan.md),
+    // planned once, so a drag with R, X or Y commits as one edit.
     DragSegment { wire: WireId, offset: i32 }, // wiring-plan.md WD7 (W3.2); nm, signed
     Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false)
     SetText { item: ItemId, field: TextField, text: Arc<str> },
@@ -678,8 +680,8 @@ impl DragGesture {
     pub fn delta(&self) -> Pt;                           // snapped to GRID_NM (T5.3: anchor pin)
     pub fn command(&self, follow: FollowPolicy) -> Option<Command>; // one Move, or None
 }
-// R, X and Y during a drag are ignored until omnia-doc has one command for a combined move and
-// reorient: Move then Reorient in a Batch normalises in between and can refuse a valid result.
+// R, X and Y during a drag are ignored until T5.5's combined move-and-reorient command: Move
+// then Reorient in a Batch normalises in between and can refuse a valid result.
 pub struct PlaceGesture { pub symbol: SymbolId, pub at: Option<Pt>, pub orient: Orient,
                           pub pressed: bool }    // only a press made in Place places
 pub struct WireGesture { pub start: Option<Pt>, pub cursor: Option<Pt> } // T6.2 extends
@@ -707,8 +709,8 @@ impl ToolMachine {
     pub fn delete(&mut self) -> ToolOutcome;              // Del
 }
 // T5.2: emitted by the gesture owner (OverlayView) after every effective edit (commit, undo,
-// redo; later placement and delete) and re-emitted by SheetCanvas. A separate event type rather
-// than ui-plan.md's `CanvasEvent::History`, so existing exhaustive `CanvasEvent` matches build.
+// redo; later placement and delete) and re-emitted by SheetCanvas while both show one document.
+// A separate event type rather than a `CanvasEvent` variant, so existing exhaustive matches build.
 pub struct CanvasHistory { pub can_undo: bool, pub can_redo: bool, pub cursor: u64 }
 pub struct CanvasEdit { pub dirty: Option<Rect> }        // OverlayView -> SheetCanvas repaint (D7)
 // T5.2 (keymap.rs): actions in namespace `canvas`, resolved in key context "Sheet" (UD3). The
@@ -835,8 +837,10 @@ impl SheetCanvas {
     pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>);
     pub fn fit_doc(&mut self, doc: &Doc, cx: &mut Context<Self>);
     pub fn zoom_to_selection_in(&mut self, doc: &Doc, selection: &[ItemId], cx: &mut Context<Self>) -> bool;
-    // T5.2 (tool.rs): tool calls delegate to the attached gesture owner; without one there are
-    // no tools, and undo/redo act on the canvas's own document. Emits CanvasHistory.
+    // T5.2 (tool.rs): tool calls delegate to the attached gesture owner only while it shows this
+    // canvas's document; set_doc and set_overlay keep the two aligned (set_doc(None) detaches).
+    // Without an owner there are no tools, and undo/redo act on the canvas's own document.
+    // Emits CanvasHistory.
     pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>);
     pub fn overlay(&self) -> Option<Entity<OverlayView>>;
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);   // T5.2

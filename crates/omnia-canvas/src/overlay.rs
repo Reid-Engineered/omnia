@@ -663,6 +663,7 @@ impl OverlayView {
         &mut self,
         event: &MouseMoveEvent,
         bounds: Bounds<Pixels>,
+        owns_capture: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         let scope = self.scope.clone();
@@ -671,9 +672,13 @@ impl OverlayView {
             self.viewport = bounds;
             self.camera.set_viewport(bounds);
             let world = self.camera.screen_to_world(to_f64(event.position));
-            let outcome = self
-                .tools
-                .pointer_move(world, event.pressed_button == Some(MouseButton::Left));
+            let outcome = if self.tools.is_dragging() && !owns_capture {
+                // GPUI dropped the drag's capture (any mouse-up clears it): end it, no edit.
+                self.tools.pointer_lost()
+            } else {
+                self.tools
+                    .pointer_move(world, event.pressed_button == Some(MouseButton::Left))
+            };
             return run_gpui(scope.as_deref(), || tool::finish(self, outcome, None, cx)).release;
         }
         let update = run_omnia(scope.as_deref(), || {
@@ -706,14 +711,20 @@ impl OverlayView {
         &mut self,
         event: &MouseUpEvent,
         bounds: Bounds<Pixels>,
+        owns_capture: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         self.viewport = bounds;
         self.camera.set_viewport(bounds);
         if self.tools.routes_pointer() {
-            // T5.2: a drag commits here as one `Doc::apply` (INV5).
+            // T5.2: a drag commits here as one `Doc::apply` (INV5), but only while it still
+            // holds its capture; a drag that lost it ends with no edit.
             let world = self.camera.screen_to_world(to_f64(event.position));
-            let outcome = self.tools.pointer_up(world, event.modifiers.alt);
+            let outcome = if self.tools.is_dragging() && !owns_capture {
+                self.tools.pointer_lost()
+            } else {
+                self.tools.pointer_up(world, event.modifiers.alt)
+            };
             return tool::finish(self, outcome, None, cx).release;
         }
         let update = self.state.mouse_up(self.doc.read(cx), &self.camera, event);
@@ -925,8 +936,14 @@ impl Element for OverlayLayer {
         }
 
         if self.dragging {
-            window.capture_pointer(hitbox.id);
-            self.capture.set(Some(hitbox.id));
+            // T5.2: move a capture this overlay still holds to the new hitbox. A capture GPUI
+            // dropped (any mouse-up clears it) is not reclaimed; the next event ends the gesture.
+            if let Some(owned) = self.capture.get()
+                && window.captured_hitbox() == Some(owned)
+            {
+                window.capture_pointer(hitbox.id);
+                self.capture.set(Some(hitbox.id));
+            }
         } else if let Some(owned) = self.capture.take() {
             // T5.2: a gesture ended without a release that GPUI saw (Esc, tool change, document
             // swap, deactivation). Release only the capture this overlay holds.
@@ -959,13 +976,17 @@ impl Element for OverlayLayer {
         });
 
         let (overlay, hit) = (self.overlay.clone(), hitbox.clone());
+        let capture = self.capture.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble {
                 return;
             }
             if hit.is_hovered(window) {
+                let owns = capture.get().is_some() && window.captured_hitbox() == capture.get();
                 let ended = overlay
-                    .update(cx, |overlay, cx| overlay.on_mouse_move(event, bounds, cx))
+                    .update(cx, |overlay, cx| {
+                        overlay.on_mouse_move(event, bounds, owns, cx)
+                    })
                     .unwrap_or(false);
                 if ended && window.captured_hitbox() == Some(hit.id) {
                     window.release_pointer();
@@ -978,12 +999,17 @@ impl Element for OverlayLayer {
         });
 
         let (overlay, hit) = (self.overlay.clone(), hitbox.clone());
+        let capture = self.capture.clone();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                 return;
             }
+            // GPUI clears the capture only after the listeners run, so ownership is current.
+            let owns = capture.get().is_some() && window.captured_hitbox() == capture.get();
             let ended = overlay
-                .update(cx, |overlay, cx| overlay.on_mouse_up(event, bounds, cx))
+                .update(cx, |overlay, cx| {
+                    overlay.on_mouse_up(event, bounds, owns, cx)
+                })
                 .unwrap_or(false);
             if ended && window.captured_hitbox() == Some(hit.id) {
                 window.release_pointer();

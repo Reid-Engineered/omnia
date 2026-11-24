@@ -526,6 +526,19 @@ of the `canvas` lane.
 - Note (W0.3): T5.1's code is merged without `follow: FollowPolicy`; [wiring-roadmap.md](wiring-roadmap.md)
   W2.2 adds `FollowPolicy` to `Move` and `Reorient` (WD3; until W2.2, every run detaches).
 
+### T5.5 Combined move and reorient command · todo
+- Lane: doc · Depends: T5.1 · Read: D2, INV4, INV10, wiring-plan.md WD3
+- Owns: `crates/omnia-doc/src/command.rs` (the combined-transform command only), `follow.rs`
+  (the composed `Isometry` variant only)
+- Do: one command (an `Isometry` that composes a translation with a reorientation, for
+  example `Transform { delta, pivot, by }`) planned once against the original sheet, with wire
+  follow per `FollowPolicy` and normalisation run once, so a move plus R, X or Y commits as one
+  well-formed edit.
+- Done when: property tests show the combined command equals the expected final geometry,
+  round-trips under undo with ids (INV4) and keeps INV10; the PR #125 review case (stationary
+  wire (0,0)–(2,0), selected wire (2,2)–(4,2) dragged down two grid steps and rotated) commits
+  and undoes exactly.
+
 ### T5.2 Tools and keys · done
 - Lane: canvas · Depends: T4.6, T5.1 · Read: plan section 5, INV5
 - Owns: `crates/omnia-canvas/src/tool.rs`, `keymap.rs`; `crates/omnia-canvas/src/overlay.rs`
@@ -538,7 +551,7 @@ of the `canvas` lane.
   mouse-up, one undo reverts the whole drag, and Esc mid-drag leaves the revision unchanged.
 
 ### T5.3 Place, move, rotate, mirror, delete · todo
-- Lane: canvas · Depends: T5.2 · Read: D7, K2; parts-plan.md §14 (placement provider)
+- Lane: canvas · Depends: T5.2, T5.5 · Read: D7, K2; parts-plan.md §14 (placement provider)
 - Owns: `crates/omnia-canvas/src/tool/place.rs`, `tool/move_.rs`, `overlay/ghosts.rs`; the
   placement-provider setter on `SheetCanvas` in `crates/omnia-canvas/src/input.rs`
 - Do: place a part from `Tool::Place`; drag-move a selection with ghosts in the overlay and
@@ -2271,3 +2284,32 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        per switch. 101 canvas unit tests. Checks run locally on Windows:
                        `cargo fmt --all --check`, both clippy commands, `cargo test
                        --workspace` and `cargo deny check`.
+
+2026-11-24 T5.2 done — second review fixes (#125 at `9b4a3eb`). (1) `SheetCanvas::set_doc` and
+                       `set_overlay` keep the owner on the canvas's document in the same call.
+                       The overlay switches to it (dropping every gesture), a canvas with no
+                       document adopts the overlay's, and `set_doc(None)` detaches the owner.
+                       Delegated tool calls and edits, and forwarded `CanvasHistory` and
+                       `CanvasEdit`, go only to or from an owner that shows the canvas's
+                       document. Tests cover both orders and an owner moved elsewhere. (2) A
+                       drag commits, and a repaint renews its capture, only while the overlay
+                       still owns the capture. GPUI clears capture on any mouse-up and gives no
+                       callback, so a second button ends the drag with no edit at the next move
+                       or release. Tested with simulated input. (3) A cancelled band, moved or
+                       not, goes through the same capture release as a drag: at once given the
+                       window, else by scheduling the next paint. Tested through `set_tool` and
+                       `cancel`. (4) Hard rule 2: the zero-paint `cancel()` INV11 test is
+                       restored exactly. A separate real-Esc test observes the switch
+                       (`Window::last_input_was_keyboard`), asserts UQ15's
+                       `modality_paints <= modality_switches` with at least one switch seen,
+                       and asserts no notification of the sheet entity. (5) The coordinator
+                       added T5.5, combined move and reorient (doc lane), on 2026-11-24
+                       (owner-delegated sign-off), before T5.2, with T5.3 now depending on it.
+                       T5.5's Owns line names `follow.rs` for the `Isometry` variant, since
+                       `Isometry` lives there. Notes added in canvas-plan.md section 9 and
+                       wiring-plan.md at `Isometry`. ui-plan.md's `default_bindings()` sketch
+                       now generates every binding once from `ACTIONS`, and section 14 names
+                       `CanvasHistory`. (6) The crate-root `pub use tool::…` is removed; use the
+                       public `omnia_canvas::tool` path. 107 canvas unit tests. Checks run
+                       locally on Windows: `cargo fmt --all --check`, both clippy commands,
+                       `cargo test --workspace` and `cargo deny check`.

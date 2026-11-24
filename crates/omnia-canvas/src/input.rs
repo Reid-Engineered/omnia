@@ -269,10 +269,13 @@ impl SheetCanvas {
     }
 
     /// Replaces or clears the attached document, cancelling any active view animation.
+    /// T5.2: the gesture owner follows in the same call (it switches to the new document,
+    /// dropping every gesture, or is detached when the document is cleared).
     pub fn set_doc(&mut self, doc: Option<Entity<Doc>>, cx: &mut Context<Self>) {
         self.anim = None;
         self.sheet_doc = doc.as_ref().map(|d| SheetDocument::new(d.clone()));
         self.doc = doc;
+        self.sync_overlay_doc(cx);
         cx.notify();
     }
 
@@ -297,24 +300,69 @@ impl SheetCanvas {
         &self.focus
     }
 
-    /// T5.2: attaches the gesture owner, the [`OverlayView`] showing the same document. Tool,
-    /// cancel, undo and redo go to it, and its [`CanvasHistory`] after every effective edit
-    /// (a gesture's commit included) is re-emitted here for the shell (UD6).
+    /// T5.2: attaches the gesture owner, an [`OverlayView`]. Attaching aligns the documents
+    /// in the same call: the overlay switches to this canvas's document (dropping its
+    /// gestures), or a canvas with none adopts the overlay's. Tool, cancel, undo and redo go to
+    /// the owner, and its [`CanvasHistory`] after every effective edit (a gesture's commit
+    /// included) is re-emitted here for the shell (UD6), only while both show one document.
     pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>) {
         self.overlay_subscriptions.clear();
         if let Some(overlay) = &overlay {
-            self.overlay_subscriptions.push(
-                cx.subscribe(overlay, |_, _, history: &CanvasHistory, cx| {
-                    cx.emit(*history)
-                }),
-            );
-            self.overlay_subscriptions.push(
-                cx.subscribe(overlay, |this, _, edit: &CanvasEdit, cx| {
-                    this.repaint_if_visible(edit.dirty, cx)
-                }),
-            );
+            if self.doc.is_none() {
+                let doc = overlay.read(cx).doc().clone();
+                self.sheet_doc = Some(SheetDocument::new(doc.clone()));
+                self.doc = Some(doc);
+                cx.notify();
+            }
+            self.overlay_subscriptions.push(cx.subscribe(
+                overlay,
+                |this, overlay, history: &CanvasHistory, cx| {
+                    if this.shows_doc_of(&overlay, cx) {
+                        cx.emit(*history);
+                    }
+                },
+            ));
+            self.overlay_subscriptions.push(cx.subscribe(
+                overlay,
+                |this, overlay, edit: &CanvasEdit, cx| {
+                    if this.shows_doc_of(&overlay, cx) {
+                        this.repaint_if_visible(edit.dirty, cx);
+                    }
+                },
+            ));
         }
         self.overlay = overlay;
+        self.sync_overlay_doc(cx);
+    }
+
+    /// Keeps the attached overlay on this canvas's document (`set_doc`, `set_overlay`).
+    fn sync_overlay_doc(&mut self, cx: &mut Context<Self>) {
+        let Some(overlay) = self.overlay.clone() else {
+            return;
+        };
+        match self.doc.clone() {
+            Some(doc) => {
+                if overlay.read(cx).doc() != &doc {
+                    overlay.update(cx, |o, cx| o.set_document(doc, cx));
+                }
+            }
+            None => {
+                self.overlay_subscriptions.clear();
+                self.overlay = None;
+            }
+        }
+    }
+
+    fn shows_doc_of(&self, overlay: &Entity<OverlayView>, cx: &App) -> bool {
+        self.doc.as_ref() == Some(overlay.read(cx).doc())
+    }
+
+    /// The attached overlay, only while it shows this canvas's document: tool calls and
+    /// edits are never delegated to an owner of another document.
+    pub(crate) fn gesture_owner(&self, cx: &App) -> Option<Entity<OverlayView>> {
+        self.overlay
+            .clone()
+            .filter(|overlay| self.shows_doc_of(overlay, cx))
     }
 
     /// The attached gesture owner, if any.

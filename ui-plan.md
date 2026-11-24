@@ -782,7 +782,8 @@ pub struct CanvasEdits { pub undo: bool, pub delete: bool, pub clipboard: bool, 
 pub enum SimState { Unavailable, Idle, Running, Paused, Failed }
 
 // ---- keymap.rs ----
-pub fn default_bindings() -> Vec<gpui::KeyBinding>;        // shell + omnia_canvas::keymap::bindings()
+pub fn default_bindings() -> Vec<gpui::KeyBinding>;        // every binding once, from ACTIONS (canvas tool
+                                                           // actions included, UD3); nothing from omnia_canvas::keymap
 pub fn conflicts(bindings: &[gpui::KeyBinding]) -> Vec<(String, String, String)>; // UINV4
 
 // ---- document.rs ----
@@ -954,7 +955,7 @@ wiring files stay authoritative for their ids.
 | canvas-plan.md section 1 | Out of scope "the libraries UI" stays; add "the application shell: see ui-plan.md". |
 | canvas-plan.md section 9, crate list | `omnia-app` line: "window shell; see ui-plan.md section 10". |
 | canvas-plan.md section 9, `Doc` | Add `history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count` (UD6, UD18). |
-| canvas-plan.md section 9, `SheetCanvas` | Add `undo`, `redo`, `delete_selection`, `select_all`, `cut`, `copy`, `paste`, `zoom_step`, `set_wiring_prefs`, `focus_handle`; `Tool::ZoomArea`; `CanvasEvent::History`. |
+| canvas-plan.md section 9, `SheetCanvas` | Add `undo`, `redo`, `delete_selection`, `select_all`, `cut`, `copy`, `paste`, `zoom_step`, `set_wiring_prefs`, `focus_handle`; `Tool::ZoomArea`; the event type `CanvasHistory`. |
 | canvas-plan.md INV6 | "and `omnia-app` (ui-plan.md UINV1)". |
 | canvas-plan.md INV11 | "A hover, selection or drag-move change, or any shell-only change (ui-plan.md UINV2), does not notify `SheetView`." |
 | canvas-plan.md Q2 | Note UQ6's shell overlay tokens in the same file. |
@@ -963,7 +964,7 @@ wiring files stay authoritative for their ids.
 | canvas-roadmap.md T4.3 | Also provide `select_all` (Ctrl+A is bound by the shell, UD3). |
 | canvas-roadmap.md T4.5 | Also provide `zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation), used by View and the toolbar. |
 | canvas-roadmap.md T5.1 | Follow-up for doc lane task U2.1: `history_cursor`, `can_undo`, `can_redo`. |
-| canvas-roadmap.md T5.2 | Declare the R, X, Y and W actions, resolved in key context `Sheet`; the shell's `ACTIONS` table reuses those types and generates each binding once (UD3). Provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and `CanvasEvent::History` (delivered as the event type `CanvasHistory`, emitted after every effective edit, a drag's commit included, by the one gesture owner that `SheetCanvas` delegates to). The keymap conflict test (UINV4) covers the combined shell keymap. |
+| canvas-roadmap.md T5.2 | Declare the R, X, Y and W actions, resolved in key context `Sheet`; the shell's `ACTIONS` table reuses those types and generates each binding once (UD3). Provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and the event type `CanvasHistory`, emitted after every effective edit, a drag's commit included, by the one gesture owner that `SheetCanvas` delegates to while both show one document. The keymap conflict test (UINV4) covers the combined shell keymap. |
 | canvas-roadmap.md T5.3 | Provide `delete_selection`. |
 | canvas-roadmap.md T7.1 | Ctrl+C, Ctrl+X, Ctrl+V are bound by the shell; T7.1 provides `cut`, `copy`, `paste`. |
 | canvas-roadmap.md T7.3 | The floating frame, drag, stacking and focus come from ui-roadmap.md U4.1. T7.3 supplies the animated stub content inside that frame, keeps `bench run --script pan --instrument` and its done-when; `instrument_host.rs` holds the content only. |

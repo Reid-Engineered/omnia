@@ -621,10 +621,27 @@ pub(crate) trait ToolHost: Sized + 'static {
     fn forget_capture(&mut self) {}
 }
 
+/// Releases the pointer capture a cancelled gesture held, the tool's or the host's band:
+/// at once given the window, only if this host still owns it (never another element's);
+/// without one, by scheduling the host's next paint, which releases it.
+fn release_capture<H: ToolHost>(host: &mut H, window: Option<&mut Window>, cx: &mut Context<H>) {
+    let Some(owned) = host.owned_capture() else {
+        return;
+    };
+    match window {
+        Some(window) => {
+            if window.captured_hitbox() == Some(owned) {
+                window.release_pointer();
+            }
+            host.forget_capture();
+        }
+        None => host.preview_changed(cx),
+    }
+}
+
 /// Carries out one [`ToolOutcome`]: applies its commit as one `Doc::apply` (INV5), repaints
-/// the preview, passes on its request and, given the window, releases the capture this host
-/// owns (never another element's). Without a window the host's next paint releases it.
-/// Returns the outcome's flags for the caller's pointer bookkeeping.
+/// the preview, passes on its request and releases the capture a finished gesture held
+/// (`release_capture`). Returns the outcome's flags for the caller's pointer bookkeeping.
 pub(crate) fn finish<H: ToolHost>(
     host: &mut H,
     mut outcome: ToolOutcome,
@@ -640,13 +657,8 @@ pub(crate) fn finish<H: ToolHost>(
     if let Some(request) = outcome.request.take() {
         host.request(request, cx);
     }
-    if outcome.release
-        && let Some(window) = window
-        && let Some(owned) = host.owned_capture()
-        && window.captured_hitbox() == Some(owned)
-    {
-        window.release_pointer();
-        host.forget_capture();
+    if outcome.release {
+        release_capture(host, window, cx);
     }
     outcome
 }
@@ -700,9 +712,13 @@ fn history_step<H: ToolHost>(
 
 /// Esc: cancels the tool's gesture or, failing that, the host's. Never edits the document.
 fn cancel<H: ToolHost>(host: &mut H, window: Option<&mut Window>, cx: &mut Context<H>) -> bool {
-    let outcome = host.tools_mut().cancel();
-    let handled = finish(host, outcome, window, cx).handled;
-    handled || host.cancel_host_gesture(cx)
+    let mut outcome = host.tools_mut().cancel();
+    if !outcome.handled && host.cancel_host_gesture(cx) {
+        // The band's capture goes through the same release as a drag's.
+        outcome.handled = true;
+        outcome.release = true;
+    }
+    finish(host, outcome, window, cx).handled
 }
 
 /// Switches tools: cancels the tool's gesture and the host's (a band whose release the new
@@ -713,8 +729,9 @@ fn set_tool<H: ToolHost>(
     window: Option<&mut Window>,
     cx: &mut Context<H>,
 ) {
-    host.cancel_host_gesture(cx);
-    let outcome = host.tools_mut().set_tool(tool);
+    let band = host.cancel_host_gesture(cx);
+    let mut outcome = host.tools_mut().set_tool(tool);
+    outcome.release |= band;
     finish(host, outcome, window, cx);
 }
 
@@ -834,34 +851,35 @@ impl OverlayView {
 
     /// The window lost activation: end a pointer-held gesture with no edit.
     pub(crate) fn tools_pointer_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let outcome = self.tools_mut().pointer_lost();
+        let mut outcome = self.tools_mut().pointer_lost();
+        outcome.release |= self.cancel_host_gesture(cx);
         finish(self, outcome, Some(window), cx);
-        self.cancel_host_gesture(cx);
     }
 }
 
-/// `SheetCanvas` delegates every tool call to the attached gesture owner. Without one there
+/// `SheetCanvas` delegates every tool call to the attached gesture owner, and only while the
+/// owner shows the canvas's document (`SheetCanvas::gesture_owner`). Without an owner there
 /// are no tools: undo and redo act on the canvas's own document and emit [`CanvasHistory`].
 impl SheetActions for SheetCanvas {
     fn action_reorient(&mut self, by: Orient, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(overlay) = self.overlay() {
+        if let Some(overlay) = self.gesture_owner(cx) {
             overlay.update(cx, |o, cx| o.action_reorient(by, window, cx));
         }
     }
 
     fn action_place_wire(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(overlay) = self.overlay() {
+        if let Some(overlay) = self.gesture_owner(cx) {
             overlay.update(cx, |o, cx| o.action_place_wire(window, cx));
         }
     }
 
     fn action_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.overlay()
+        self.gesture_owner(cx)
             .is_some_and(|overlay| overlay.update(cx, |o, cx| o.cancel(window, cx)))
     }
 
     fn action_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(overlay) = self.overlay() {
+        if let Some(overlay) = self.gesture_owner(cx) {
             overlay.update(cx, |o, cx| o.action_delete(window, cx));
         }
     }
@@ -877,8 +895,12 @@ impl SheetActions for SheetCanvas {
 
 impl SheetCanvas {
     fn history_step(&mut self, redo: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if let Some(overlay) = self.overlay() {
-            // The overlay emits `CanvasHistory`; `set_overlay`'s subscription re-emits it.
+        if self.overlay().is_some() {
+            // Delegated edits go only to an owner showing this canvas's document; its
+            // `CanvasHistory` is re-emitted by `set_overlay`'s subscription.
+            let Some(overlay) = self.gesture_owner(cx) else {
+                return false;
+            };
             return overlay.update(cx, |o, cx| {
                 if redo {
                     o.redo(window, cx)
@@ -899,20 +921,21 @@ impl SheetCanvas {
         true
     }
 
-    /// The active tool of the attached gesture owner; `Tool::Select` without one.
+    /// The active tool of the gesture owner; `Tool::Select` without one.
     pub fn tool(&self, cx: &App) -> Tool {
-        self.overlay().map_or(Tool::Select, |o| o.read(cx).tool())
+        self.gesture_owner(cx)
+            .map_or(Tool::Select, |o| o.read(cx).tool())
     }
 
     /// The gesture owner's state; `ToolState::Idle` without one.
     pub fn tool_state(&self, cx: &App) -> ToolState {
-        self.overlay()
+        self.gesture_owner(cx)
             .map_or(ToolState::Idle, |o| o.read(cx).tool_state().clone())
     }
 
-    /// Switches the gesture owner's tool. Without an attached overlay there are no tools.
+    /// Switches the gesture owner's tool. Without an owner there are no tools.
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
-        if let Some(overlay) = self.overlay() {
+        if let Some(overlay) = self.gesture_owner(cx) {
             overlay.update(cx, |o, cx| o.set_tool(tool, cx));
         }
     }
@@ -934,6 +957,7 @@ impl SheetCanvas {
         self.action_redo(window, cx);
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1590,32 +1614,146 @@ mod tests {
         assert!(cx.update(|_, cx| doc.read(cx).content_eq(&moved)));
     }
 
-    /// INV11 with UQ15: the drag preview never repaints the sheet; an Esc key after pointer
-    /// input may add GPUI's one input-modality paint (UG17), never more.
     #[gpui::test]
     fn t5_2_a_drag_preview_does_not_repaint_the_sheet(cx: &mut TestAppContext) {
+        // INV11: only a commit's dirty rectangle repaints the sheet; the preview never does.
         let (overlay, _doc, cx) = open_overlay(cx);
+        let paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let press = screen(&overlay, cx, pt(-6, 0));
+        cx.simulate_mouse_down(press, MouseButton::Left, Modifiers::none());
+        for step in 1..=8 {
+            drag_to(
+                &overlay,
+                cx,
+                Pt {
+                    x: -6 * G + step * G / 2,
+                    y: 0,
+                },
+            );
+        }
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints
+        );
+        // Cancel through the shell's path (`NavCancel` calls `cancel`, UQ14). A keystroke here
+        // would also bring GPUI's input-modality refresh (UG17); that case is counted apart in
+        // `t5_2_esc_mid_drag_paints_only_for_the_modality_switch`.
+        assert!(cx.update(|window, cx| overlay.update(cx, |o, cx| o.cancel(window, cx))));
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        cx.simulate_mouse_up(press, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints
+        );
+    }
+
+    /// INV11 with UQ15 for a real Esc key: GPUI's own input-modality refresh (UG17) may paint
+    /// the sheet at most once per observed switch between pointer and keyboard input, and
+    /// nothing the canvas does invalidates the sheet (its entity is never notified).
+    #[gpui::test]
+    fn t5_2_esc_mid_drag_paints_only_for_the_modality_switch(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let notifies = Rc::new(std::cell::Cell::new(0u32));
+        let counter = notifies.clone();
+        cx.update(|_, cx| {
+            let sheet = overlay.read(cx).sheet_entity().clone();
+            cx.observe(&sheet, move |_, _| counter.set(counter.get() + 1))
+                .detach();
+        });
         let paints =
             |cx: &mut VisualTestContext| cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
-        let before = paints(cx);
+        let keyboard =
+            |cx: &mut VisualTestContext| cx.update(|window, _| window.last_input_was_keyboard());
+        let rev0 = revision(&doc, cx);
         down(&overlay, cx, pt(-6, 0));
-        for step in 1..=8 {
-            let at = Pt {
-                x: -6 * G + step * G / 2,
-                y: 0,
-            };
-            drag_to(&overlay, cx, at);
-        }
-        assert_eq!(paints(cx), before, "INV11: no sheet paint during the drag");
-        // One switch from pointer to keyboard input: at most one modality paint (UQ15).
+        drag_to(&overlay, cx, pt(-3, 0));
+        let before = paints(cx);
+        let mut modality = keyboard(cx);
+        assert!(!modality, "the drag leaves the window in pointer modality");
+        let mut modality_switches = 0;
+
         cx.simulate_keystrokes("escape");
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        if keyboard(cx) != modality {
+            modality_switches += 1;
+            modality = !modality;
+        }
+        up(&overlay, cx, pt(-3, 0));
+        if keyboard(cx) != modality {
+            modality_switches += 1;
+        }
+
+        assert!(
+            modality_switches >= 1,
+            "the Esc must switch to keyboard input"
+        );
         let modality_paints = paints(cx) - before;
         assert!(
-            modality_paints <= 1,
-            "modality paints {modality_paints} > 1 switch"
+            modality_paints <= modality_switches,
+            "UQ15: {modality_paints} sheet paints for {modality_switches} modality switches"
         );
-        up(&overlay, cx, pt(-2, 0));
-        assert_eq!(paints(cx), before + modality_paints);
+        assert_eq!(notifies.get(), 0, "no canvas-caused sheet paint");
+        assert_eq!(revision(&doc, cx), rev0);
+    }
+
+    /// Review 2, finding 2: GPUI clears the capture on any mouse-up, so a second button
+    /// ends the drag; its later left release commits nothing, and no repaint reclaims it.
+    #[gpui::test]
+    fn t5_2_a_drag_that_loses_its_capture_commits_nothing(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let rev0 = revision(&doc, cx);
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-3, 1));
+        assert!(captured(cx));
+        let at = screen(&overlay, cx, pt(-3, 1));
+        cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+        assert!(!captured(cx));
+        // A repaint before the next pointer event does not take the capture back.
+        cx.update(|_, cx| overlay.update(cx, |_, cx| cx.notify()));
+        cx.run_until_parked();
+        assert!(!captured(cx), "a lost capture is not reclaimed");
+        up(&overlay, cx, pt(-3, 1));
+        assert_eq!(revision(&doc, cx), rev0, "the stale drag commits nothing");
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+
+        // Same with a left move in between: the move ends the drag.
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-3, 1));
+        cx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+        drag_to(&overlay, cx, pt(-2, 2));
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        up(&overlay, cx, pt(-2, 2));
+        assert_eq!(revision(&doc, cx), rev0);
+        assert_eq!(part_at(&doc, cx, 0), pt(-6, 0));
+    }
+
+    /// Review 2, finding 3: a band that never moved still releases its capture when a tool
+    /// switch or Esc cancels it.
+    #[gpui::test]
+    fn t5_2_an_unmoved_band_releases_its_capture_when_cancelled(cx: &mut TestAppContext) {
+        let (overlay, _doc, cx) = open_overlay(cx);
+        down(&overlay, cx, pt(0, -8));
+        assert!(captured(cx));
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_tool(Tool::Select, cx)));
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| overlay.read(cx).rubber_band().is_none()));
+        assert!(
+            !captured(cx),
+            "set_tool releases the unmoved band's capture"
+        );
+        up(&overlay, cx, pt(0, -8));
+
+        // With the window at hand (Esc), the release is immediate.
+        down(&overlay, cx, pt(0, -8));
+        assert!(captured(cx));
+        let released = cx.update(|window, cx| {
+            let cancelled = overlay.update(cx, |o, cx| o.cancel(window, cx));
+            (cancelled, window.captured_hitbox().is_none())
+        });
+        assert_eq!(released, (true, true));
+        up(&overlay, cx, pt(0, -8));
     }
 
     /// Review finding 1: a drag never commits against a replacement document.
@@ -1923,5 +2061,144 @@ mod tests {
         cx.simulate_keystrokes("w");
         assert_eq!(cx.update(|_, cx| canvas.read(cx).tool(cx)), Tool::Select);
         assert!(!cx.update(|window, cx| canvas.update(cx, |c, cx| c.cancel(window, cx))));
+    }
+
+    fn canvas_for(
+        cx: &mut VisualTestContext,
+        doc: Option<Entity<Doc>>,
+        overlay: Option<Entity<OverlayView>>,
+    ) -> Entity<SheetCanvas> {
+        cx.update(|_, cx| {
+            cx.new(|cx| {
+                let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+                let mut canvas = SheetCanvas::new(camera, &GRAPHITE, cx);
+                if let Some(doc) = doc {
+                    canvas = canvas.with_doc(doc);
+                }
+                canvas.set_overlay(overlay, cx);
+                canvas
+            })
+        })
+    }
+
+    fn nudge(doc: &Entity<Doc>, cx: &mut VisualTestContext) {
+        cx.update(|_, cx| {
+            doc.update(cx, |doc, _| {
+                doc.apply(Command::Move {
+                    items: vec![C1],
+                    delta: pt(0, 1),
+                    follow: WiringPrefs::default().follow_policy(false),
+                })
+                .unwrap();
+            })
+        });
+    }
+
+    fn overlay_doc(overlay: &Entity<OverlayView>, cx: &mut VisualTestContext) -> Entity<Doc> {
+        cx.update(|_, cx| overlay.read(cx).doc().clone())
+    }
+
+    /// Review 2, finding 1, first order: attach, then switch the canvas's document. The owner
+    /// follows in the same call, a pending drag on the old document dies, and undo and
+    /// history then concern the new document only.
+    #[gpui::test]
+    fn t5_2_switching_the_canvas_document_switches_the_owner(cx: &mut TestAppContext) {
+        let (overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
+        let canvas = canvas_for(cx, Some(doc_a.clone()), Some(overlay.clone()));
+        let history = record_history(&canvas, cx);
+        let a0 = cx.update(|_, cx| snapshot(doc_a.read(cx)));
+        nudge(&doc_a, cx);
+        let a1 = cx.update(|_, cx| snapshot(doc_a.read(cx)));
+        let b0 = cx.update(|_, cx| snapshot(doc_b.read(cx)));
+
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-4, 2));
+        cx.update(|_, cx| canvas.update(cx, |c, cx| c.set_doc(Some(doc_b.clone()), cx)));
+        cx.run_until_parked();
+        assert_eq!(overlay_doc(&overlay, cx), doc_b);
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        assert!(!captured(cx));
+        up(&overlay, cx, pt(-4, 2));
+        assert!(cx.update(|_, cx| doc_a.read(cx).content_eq(&a1)));
+        assert!(cx.update(|_, cx| doc_b.read(cx).content_eq(&b0)));
+
+        // Undo has nothing to do on B and must not reach A.
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.undo(window, cx)));
+        assert!(cx.update(|_, cx| doc_a.read(cx).content_eq(&a1)));
+        assert!(!cx.update(|_, cx| doc_a.read(cx).content_eq(&a0)));
+        assert!(history.borrow().is_empty());
+
+        // A drag now edits B, and the shell hears B's history.
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-4, 2));
+        up(&overlay, cx, pt(-4, 2));
+        let b_cursor = cx.update(|_, cx| doc_b.read(cx).history_cursor());
+        assert_eq!(part_at(&doc_b, cx, 0), pt(-4, 2));
+        assert_eq!(history.borrow().last().map(|h| h.cursor), Some(b_cursor));
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.undo(window, cx)));
+        assert!(cx.update(|_, cx| doc_b.read(cx).content_eq(&b0)));
+        assert!(cx.update(|_, cx| doc_a.read(cx).content_eq(&a1)));
+
+        // Clearing the canvas's document detaches the owner.
+        cx.update(|_, cx| canvas.update(cx, |c, cx| c.set_doc(None, cx)));
+        assert!(cx.update(|_, cx| canvas.read(cx).overlay().is_none()));
+    }
+
+    /// Review 2, finding 1, second order: switch first, then attach. Attaching moves the
+    /// overlay onto the canvas's document, so undo acts there.
+    #[gpui::test]
+    fn t5_2_attaching_an_owner_aligns_its_document(cx: &mut TestAppContext) {
+        let (overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
+        nudge(&doc_a, cx);
+        let a1 = cx.update(|_, cx| snapshot(doc_a.read(cx)));
+        let b0 = cx.update(|_, cx| snapshot(doc_b.read(cx)));
+        nudge(&doc_b, cx);
+        let canvas = canvas_for(cx, Some(doc_a.clone()), None);
+        cx.update(|_, cx| canvas.update(cx, |c, cx| c.set_doc(Some(doc_b.clone()), cx)));
+        cx.update(|_, cx| canvas.update(cx, |c, cx| c.set_overlay(Some(overlay.clone()), cx)));
+        assert_eq!(overlay_doc(&overlay, cx), doc_b);
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.undo(window, cx)));
+        assert!(cx.update(|_, cx| doc_b.read(cx).content_eq(&b0)));
+        assert!(cx.update(|_, cx| doc_a.read(cx).content_eq(&a1)));
+
+        // A canvas without a document adopts the owner's.
+        let canvas = canvas_for(cx, None, Some(overlay.clone()));
+        assert_eq!(
+            cx.update(|_, cx| canvas.read(cx).doc().cloned()),
+            Some(doc_b)
+        );
+    }
+
+    /// Review 2, finding 1: if the owner is moved to another document behind the canvas's
+    /// back, delegated edits and forwarded history are refused.
+    #[gpui::test]
+    fn t5_2_a_mismatched_owner_gets_no_edits_and_sends_no_history(cx: &mut TestAppContext) {
+        let (overlay, doc_a, cx) = open_overlay(cx);
+        let doc_c = cx.update(|_, cx| cx.new(|_| test_doc()));
+        let canvas = canvas_for(cx, Some(doc_a.clone()), Some(overlay.clone()));
+        let history = record_history(&canvas, cx);
+        nudge(&doc_a, cx);
+        nudge(&doc_c, cx);
+        let (a1, c1) = cx.update(|_, cx| (snapshot(doc_a.read(cx)), snapshot(doc_c.read(cx))));
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_document(doc_c.clone(), cx)));
+
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.undo(window, cx)));
+        assert!(
+            cx.update(|_, cx| doc_c.read(cx).content_eq(&c1)),
+            "no delegated undo"
+        );
+        assert!(cx.update(|_, cx| doc_a.read(cx).content_eq(&a1)));
+        cx.update(|_, cx| canvas.update(cx, |c, cx| c.set_tool(Tool::Wire, cx)));
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).tool()), Tool::Select);
+        assert_eq!(cx.update(|_, cx| canvas.read(cx).tool(cx)), Tool::Select);
+
+        // The owner's own edit on C is not reported as the canvas's history.
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-4, 2));
+        up(&overlay, cx, pt(-4, 2));
+        assert_eq!(part_at(&doc_c, cx, 0), pt(-4, 2));
+        assert!(history.borrow().is_empty());
     }
 }
