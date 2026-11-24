@@ -2145,11 +2145,14 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
 2026-11-24 T4.6 needs-human — made the owner-run campaign one command:
                        `docs/measurements/T4.6/owner-run.sh` (`--check` for preflight only).
                        It wraps the frozen `gate.py` unchanged. It refuses to start over SSH
-                       or while T3 Code, a coding agent, `cargo` or `rustc` runs, builds
-                       current `origin/main`, and asks for sudo once. A root helper sets the
-                       `performance` governor, stops `tailscaled` and suspends Baloo, and
-                       restores all three on any exit. The wrapper records per-process CPU time
-                       around the gate (evidence only). On Orion, a non-root stand-in for the
-                       helper restored state on a normal exit, an error, HUP, INT and TERM. The
-                       sudo path is untested until the owner's run. Status stays
-                       `needs-human`, waiting for that run.
+                       or while T3 Code, a coding agent, `cargo` or `rustc` runs (exact names
+                       and argv path components). It builds current `origin/main` and asks for
+                       sudo once. A root helper sets the `performance` governor and stops
+                       `tailscaled`, reports ready before timing, and restores both when the
+                       wrapper process ends (pidfd). Baloo is left running per plan §2.1
+                       (CPU-only `hit-10k`); the wrapper waits for it to be idle. The gate exit
+                       status is kept (`kde-inhibit` always exits 0). Hangups are ignored.
+                       Per-process CPU time is recorded around the gate (evidence only).
+                       Codex review findings (four P1, one P2) addressed; tests on Orion,
+                       including real sudo, are in `docs/measurements/T4.6.md`. Status stays
+                       `needs-human`, waiting for the owner run.
