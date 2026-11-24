@@ -2169,9 +2169,10 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        --user`). T3 Code and agents were closed; `tailscaled` and the SSH
                        link stayed up (2.0 s CPU over the campaign), disclosed. All 300
                        records had DPMS on, AC and `performance`; Baloo idle, not stopped
-                       (§2.1). B2, B3, B4, B5, B7, B9, B10, INV11 and the T4.6 hover budget
-                       all passed at 100% and 125%. All 100 motion runs passed attribution
-                       with zero counted intervals; worst frame 8.5 ms (10k zoom, 125%).
+                       (§2.1). B2, B3, B4, B5, B9, B10, INV11 and the T4.6 hover budget
+                       passed at 100% and 125%; B7 passed in the CPU-only block. All 100
+                       motion runs passed attribution with zero counted intervals; worst
+                       frame 8.5 ms (10k zoom, 125%).
                        INV10 (11/11) and INV11 (2/2) tests passed on Orion at the same
                        commit. The replay reproduced `summary.txt` exactly. Evidence:
                        `docs/measurements/T4.6/orion-2026-11-24-remote/`. Follow-up for the
