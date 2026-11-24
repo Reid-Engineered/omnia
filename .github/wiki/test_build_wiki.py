@@ -96,6 +96,20 @@ def roadmap(text=ROADMAP, index=0):
     return wiki.parse_roadmap(index, "x-roadmap.md", "X-roadmap", "X", text)
 
 
+class PercentDone(unittest.TestCase):
+    def test_rounds_down_so_100_means_all_done(self):
+        c = {s: 0 for s in (*wiki.STATUSES, "other")}
+        c.update(done=199, todo=1, other=5)
+        self.assertEqual(wiki.percent_done(c), "99%")
+        c.update(todo=0)
+        self.assertEqual(wiki.percent_done(c), "100%")
+
+    def test_no_tasks(self):
+        c = {s: 0 for s in (*wiki.STATUSES, "other")}
+        c.update(other=2)
+        self.assertEqual(wiki.percent_done(c), "—")
+
+
 class ParseRoadmap(unittest.TestCase):
     def test_statuses_checkpoints_and_milestones(self):
         r = roadmap()
@@ -244,7 +258,14 @@ class Build(unittest.TestCase):
             "Plans.md", "Ready-to-start.md", "Wiring-roadmap.md", "_Footer.md", "_Sidebar.md",
         ])
         home = pages["Home.md"]
-        self.assertIn("| [Canvas](Canvas-roadmap) | 2 | 0 | 6 | 0 | 1 | Milestone X1: work |", home)
+        # X1.5 ("replaced by") is not counted: 2 done of 9 is 22%, rounded down.
+        self.assertIn("| [Canvas](Canvas-roadmap) | 22% | 2 | 0 | 6 | 0 | 1 | Milestone X1: work |", home)
+        self.assertIn("| [Wiring](Wiring-roadmap) | 0% | 0 | 1 | 0 | 0 | 0 | Milestone Y1: more |", home)
+        self.assertIn("| **All** | **20%** | 2 | 1 | 6 | 0 | 1 | |", home)
+        canvas = pages["Canvas-roadmap.md"]
+        self.assertIn("**22% done (2 of 9 tasks).** 2 done,", canvas)
+        self.assertIn("## Milestone X0: decisions\n\n100% done (2 of 2 tasks).\n", canvas)
+        self.assertIn("## Milestone X1: work\n\n0% done (0 of 7 tasks).\n", canvas)
         self.assertIn("## Ready to start (1)", home)  # X1.1 only
         self.assertIn("Do not edit this wiki", home)
 
