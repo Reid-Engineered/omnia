@@ -199,6 +199,10 @@ class Readiness(unittest.TestCase):
         self.assertEqual(self.depends("X0.1 and X1.2 OR X0.2"), "check")
         self.assertEqual(self.depends("X1.2 or owner sign-off"), "check")
 
+    def test_parenthesised_task_is_a_dependency_not_a_note(self):
+        self.assertEqual(self.depends("X1.1 or (X1.2)"), "waiting")
+        self.assertEqual(self.depends("X1.1 or (X0.1)"), "check")
+
     def test_or_that_cannot_hold_yet_is_waiting(self):
         self.assertEqual(self.depends("X0.1, and X1.1 or X1.2"), "waiting")
         self.assertEqual(self.depends("X1.1 (and X0.1 if built)"), "waiting")
@@ -281,6 +285,7 @@ class Build(unittest.TestCase):
         self.assertEqual(wiki.shorten("short", 12), "short")
         self.assertEqual(wiki.shorten('see [x](docs.md "A (long) title") and more', 26), "see …")
         self.assertEqual(wiki.shorten("See [plan [draft with notes]](canvas-plan.md) now", 24), "See …")
+        self.assertEqual(wiki.shorten(r"See [draft with \[notes](canvas-plan.md) now", 20), "See …")
 
     def test_relative_links_point_at_the_repository(self):
         links = wiki.Links("owner/name", "abc")
@@ -302,6 +307,11 @@ class Build(unittest.TestCase):
                          "[`T2.7`](https://github.com/owner/name/blob/abc/docs/m.md)")
         self.assertEqual(links.absolute("[a [b] c](x.md)"),
                          "[a [b] c](https://github.com/owner/name/blob/abc/x.md)")
+        self.assertEqual(links.absolute(r"[draft with \[notes](p.md)"),
+                         r"[draft with \[notes](https://github.com/owner/name/blob/abc/p.md)")
+        # A link inside a link label: the inner one is the link.
+        self.assertEqual(links.absolute("[quoted [plan](p.md)](x.md)"),
+                         "[quoted [plan](https://github.com/owner/name/blob/abc/p.md)](x.md)")
 
     def test_escaped_pipes_stay_single_escaped_in_tables(self):
         self.assertIn("| HX4 | Either \\| both | — | Has an escaped pipe. |", self.build()["Human-checkpoints.md"])

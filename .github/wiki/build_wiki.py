@@ -253,6 +253,8 @@ def readiness(task: Task, tasks: dict[str, Task]) -> str:
         return "check"  # no Depends field at all
     if deps.lower() in NO_DEPENDS:
         return "ready"
+    # "(U0.2)" is a dependency written in parentheses, not a note.
+    deps = re.sub(r"\(\s*((?:[A-Z]{1,2}\d+\.\d+[\s,]*)+)\)", r"\1", deps)
     notes = re.findall(r"\([^)]*\)?", deps)  # "(why)" notes, even unclosed ones
     without_notes = re.sub(r"\([^)]*\)?", "", deps)
     ids = TASK_ID.findall(without_notes)
@@ -274,10 +276,13 @@ def readiness(task: Task, tasks: dict[str, Task]) -> str:
     # none of whose alternatives can hold yet means waiting; otherwise a person decides.
     joined = re.sub(r"[,;]\s*(?=or\b)", " ", without_notes, flags=re.IGNORECASE)
     for clause in re.split(r"[,;]|\band\b", joined, flags=re.IGNORECASE):
-        options = [TASK_ID.findall(alt) for alt in re.split(r"\bor\b", clause, flags=re.IGNORECASE)]
-        if not all(options):
-            continue  # an alternative that is not a task ("owner sign-off") may already hold
-        if not any(all(done(i) for i in o) for o in options):
+        alternatives = re.split(r"\bor\b", clause, flags=re.IGNORECASE)
+        options = [TASK_ID.findall(alt) for alt in alternatives]
+        # An alternative in words ("owner sign-off") may already hold; an empty one is not one.
+        if any(not o and re.search(r"[A-Za-z]{2}", alt) for o, alt in zip(options, alternatives)):
+            continue
+        options = [o for o in options if o]
+        if options and not any(all(done(i) for i in o) for o in options):
             return "waiting"
     return "check"
 
@@ -307,9 +312,14 @@ def inline_links(text: str) -> list[InlineLink]:
     def in_code(i: int) -> bool:
         return any(s <= i < e for s, e in spans)
 
+    def escaped(i: int) -> bool:
+        """An odd run of backslashes before i escapes it."""
+        run = len(text[:i]) - len(text[:i].rstrip("\\"))
+        return run % 2 == 1
+
     links, i = [], 0
     while i < len(text):
-        if text[i] != "[" or in_code(i) or (i and text[i - 1] == "\\"):
+        if text[i] != "[" or in_code(i) or escaped(i):
             i += 1
             continue
         depth, j = 0, i
@@ -317,15 +327,14 @@ def inline_links(text: str) -> list[InlineLink]:
             if j in span_at:
                 j = span_at[j]
                 continue
-            if text[j] == "[":
-                depth += 1
-            elif text[j] == "]":
-                depth -= 1
+            if text[j] in "[]" and not escaped(j):
+                depth += 1 if text[j] == "[" else -1
                 if depth == 0:
                     break
             j += 1
         match = LINK_TAIL.match(text, j + 1) if j < len(text) else None
-        if not match:
+        # A link cannot contain another link: the inner one wins (CommonMark).
+        if not match or inline_links(text[i + 1 : j]):
             i += 1
             continue
         links.append(InlineLink(i, match.end(), text[i : j + 1], match.group("dest"),
@@ -513,14 +522,15 @@ def page_ready(roadmaps: list[Roadmap], links: Links, tasks: dict[str, tuple[Tas
     out = [
         "# Ready to start",
         "",
-        "`todo` tasks whose **Depends** line names only tasks that are `done` (a",
-        "`needs-human` dependency is not done). This reads the Depends line only: also check",
-        "the roadmap's rules, human checkpoints and owned files before starting, as",
-        "AGENTS.md says.",
+        "`todo` tasks sorted by their **Depends** line. This reads the Depends line only:",
+        "also check the roadmap's rules, human checkpoints and owned files before starting,",
+        "as AGENTS.md says.",
         "",
     ]
     for heading, kind, note in (
-        ("Ready", "ready", None),
+        ("Ready", "ready",
+         "The Depends line names only tasks that are `done` (a `needs-human` dependency is "
+         "not done), or says there are none."),
         ("Check by hand", "check",
          "The Depends line has wording a script should not judge (\"or\", a milestone, a "
          "condition), or names something that is not a task, and nothing in it is known to be unmet. "
