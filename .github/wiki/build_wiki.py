@@ -53,18 +53,25 @@ CHECKPOINT = re.compile(r"→\s*(?P<id>[A-Z]{1,2}\d+)")
 # Two entry styles: "2026-11-20 X1.1 done — text" and "- **2026-11-20 · X1.1 · done:** text".
 # The first word after the date must be a task or question id, or "plan", so a wrapped
 # line that happens to start with a date (a protocol version, say) stays in its entry.
-LOG_START = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2}) (?P<text>(?:[A-Z]{1,3}\d+(?:\.\d+)?|plan)\b.*)$")
+LOG_START = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})[ \t]+(?P<text>(?:[A-Z]{1,3}\d+(?:\.\d+)?|plan)\b.*)$")
 LOG_START_BULLET = re.compile(r"^- \*\*(?P<date>\d{4}-\d{2}-\d{2}) · (?P<head>.*?):?\*\*:? ?(?P<text>.*)$")
 TABLE_ROW = re.compile(r"^\|(.+)\|\s*$")
 UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
-CODE_SPAN = re.compile(r"(`+)(?:(?!\1).)+?\1")
-LINK = re.compile(r"\[[^\]]*\]\([^)]*\)")
+# A code span opens on a run of n backticks and closes on the next run of exactly n (GFM).
+CODE_SPAN = re.compile(r"(?<!`)(?P<run>`+)(?!`).+?(?<!`)(?P=run)(?!`)", re.DOTALL)
+# An inline link, with an optional "title", 'title' or (title) after the destination.
+LINK = re.compile(
+    r"(?P<label>\[[^\]]*\])\((?P<dest>[^)\s]+)"
+    r"(?P<title>\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
+)
 # Words allowed in a Depends line besides task ids before it needs a human to read it.
 DEPENDS_FILLER = re.compile(
     r"\b(?:and|parts|sim|context|ui|agent|canvas|wiring)\b|[,;.:\s]|`[^`]*`",
     re.IGNORECASE,
 )
-RELATIVE_LINK = re.compile(r"\]\((?!https?:|#|mailto:)(?P<path>[^)\s]+)(?P<title>\s+\"[^\"]*\")?\)")
+EXTERNAL = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|#)", re.IGNORECASE)
+# Words that make a Depends line or note conditional: only a person can judge those.
+CONDITIONAL = re.compile(r"\b(?:if|unless|when|whether|once|until|or|optional)\b", re.IGNORECASE)
 # An explicit "no dependencies"; a missing Depends field is not one.
 NO_DEPENDS = {"none", "nothing", "—", "-"}
 
@@ -250,15 +257,28 @@ def readiness(task: Task, tasks: dict[str, Task]) -> str:
     notes = re.findall(r"\([^)]*\)?", deps)  # "(why)" notes, even unclosed ones
     without_notes = re.sub(r"\([^)]*\)?", "", deps)
     ids = TASK_ID.findall(without_notes)
-    residue = DEPENDS_FILLER.sub("", TASK_ID.sub("", without_notes))
     if any(i not in tasks for i in ids):
         return "check"
-    if any(tasks[i].status != "done" for i in ids):
-        return "waiting"
-    # A task named inside a note ("and W4.4 if built") is a condition only a person can judge.
-    if residue or not ids or any(TASK_ID.search(note) for note in notes):
-        return "check"
-    return "ready"
+
+    def done(i: str) -> bool:
+        return tasks[i].status == "done"
+
+    residue = DEPENDS_FILLER.sub("", TASK_ID.sub("", without_notes))
+    # A task named in a note ("and W4.4 if built"), a conditional note ("if the owner
+    # says build"), or wording such as "A or B" is for a person to judge.
+    unclear = bool(residue) or not ids or any(
+        TASK_ID.search(note) or CONDITIONAL.search(note) for note in notes
+    )
+    if not unclear:
+        return "ready" if all(done(i) for i in ids) else "waiting"
+    # Unclear lines: read clauses (split on , ; and) as all-of and " or " as any-of. A clause
+    # none of whose alternatives can hold yet means waiting; otherwise a person decides.
+    for clause in re.split(r"[,;]|\band\b", without_notes):
+        options = [TASK_ID.findall(alt) for alt in re.split(r"\bor\b", clause)]
+        options = [o for o in options if o]
+        if options and not any(all(done(i) for i in o) for o in options):
+            return "waiting"
+    return "check"
 
 
 # --- Rendering -----------------------------------------------------------------------
@@ -278,9 +298,12 @@ class Links:
         Text inside code spans is left alone, so link syntax shown as an example survives.
         """
         def rewrite(part: str) -> str:
-            return RELATIVE_LINK.sub(
-                lambda m: f"]({self.file(m.group('path'))}{m.group('title') or ''})", part
-            )
+            def one(m: re.Match[str]) -> str:
+                if EXTERNAL.match(m.group("dest")):
+                    return m.group(0)
+                return f"{m.group('label')}({self.file(m.group('dest'))}{m.group('title') or ''})"
+
+            return LINK.sub(one, part)
 
         out, last = [], 0
         for span in CODE_SPAN.finditer(text):

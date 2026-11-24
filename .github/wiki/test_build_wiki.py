@@ -130,6 +130,10 @@ class ParseRoadmap(unittest.TestCase):
         # A wrapped line that starts with a date is not a new entry.
         self.assertEqual(log[2].text, "X1.2 needs-human — prepared the gate for protocol 2025-11-25 sessions.")
 
+    def test_extra_space_after_the_date_still_starts_an_entry(self):
+        text = "## Log\n\n2026-11-23 S0.1 done — one.\n2026-11-23  S0.2 re-review — two.\n"
+        self.assertEqual([e.text for e in roadmap(text).log], ["S0.1 done — one.", "S0.2 re-review — two."])
+
     def test_fenced_and_bullet_log_styles(self):
         text = (
             "## Log\n\n```\n2026-11-23 S0.1 done — wrote it;\n"
@@ -179,6 +183,20 @@ class Readiness(unittest.TestCase):
 
     def test_missing_depends_field_needs_a_person(self):
         self.assertEqual(wiki.readiness(self.tasks["X1.8"], self.tasks), "check")
+
+    def depends(self, text):
+        return wiki.readiness(wiki.Task("Z9.9", "z", "todo", "todo", None, "", "", "doc", text), self.tasks)
+
+    def test_conditional_note_without_a_task_id(self):
+        self.assertEqual(self.depends("X0.2 (if the owner says build)"), "check")
+
+    def test_or_that_can_already_hold_needs_a_person(self):
+        # The C5.1 case: "C1.8, and A3.1 or A4.1" with C1.8 and A3.1 done, A4.1 not.
+        self.assertEqual(self.depends("X0.1, and X0.2 or X1.2"), "check")
+
+    def test_or_that_cannot_hold_yet_is_waiting(self):
+        self.assertEqual(self.depends("X0.1, and X1.1 or X1.2"), "waiting")
+        self.assertEqual(self.depends("X1.1 (and X0.1 if built)"), "waiting")
 
     def test_no_dependencies(self):
         self.assertEqual(wiki.readiness(self.tasks["X0.1"], self.tasks), "ready")
@@ -256,6 +274,7 @@ class Build(unittest.TestCase):
         self.assertEqual(wiki.shorten("one ``a ` b c`` four", 12), "one …")
         self.assertEqual(wiki.shorten("see [the plan](x.md) now", 14), "see …")
         self.assertEqual(wiki.shorten("short", 12), "short")
+        self.assertEqual(wiki.shorten('see [x](docs.md "A (long) title") and more', 26), "see …")
 
     def test_relative_links_point_at_the_repository(self):
         links = wiki.Links("owner/name", "abc")
@@ -266,6 +285,12 @@ class Build(unittest.TestCase):
         self.assertEqual(links.absolute('[p](a.md "Title")'),
                          '[p](https://github.com/owner/name/blob/abc/a.md "Title")')
         self.assertEqual(links.absolute("write `[x](a.md)` like this"), "write `[x](a.md)` like this")
+        self.assertEqual(links.absolute("[p](a.md 'T')"), "[p](https://github.com/owner/name/blob/abc/a.md 'T')")
+        # A double-backtick span holding a triple run and a single backtick stays one span.
+        literal = "``a ``` b ` [x](a.md) c`` then [y](b.md)"
+        self.assertEqual(links.absolute(literal),
+                         "``a ``` b ` [x](a.md) c`` then [y](https://github.com/owner/name/blob/abc/b.md)")
+        self.assertEqual(links.absolute("[m](mailto:a@b.c) [s](ftp://x)"), "[m](mailto:a@b.c) [s](ftp://x)")
 
     def test_escaped_pipes_stay_single_escaped_in_tables(self):
         self.assertIn("| HX4 | Either \\| both | — | Has an escaped pipe. |", self.build()["Human-checkpoints.md"])
@@ -299,6 +324,7 @@ class RealRepository(unittest.TestCase):
         self.assertEqual([c.id for c in sim.checkpoints], ["HS1", "HS2", "HS3", "HS4"])
         mcp = wiki.parse_roadmap(2, "mcp-roadmap.md", "A", "A", (REPO_ROOT / "mcp-roadmap.md").read_text(encoding="utf-8"))
         self.assertTrue(any("2025-11-25 Tasks claim" in e.text for e in mcp.log))
+        self.assertTrue(any(e.text.startswith("S0.2") for e in sim.log), "S0.2 has its own entry")
 
     def test_builds(self):
         pages = wiki.build(REPO_ROOT, "owner/name", "0" * 40)

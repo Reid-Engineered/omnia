@@ -7,8 +7,9 @@
 #
 # Ordering: the publish job checks out the current main tip, not the commit that
 # triggered the run, and runs one at a time (a newer run cancels an older one).
-# A rerun or a late run therefore publishes main as it is now and can never roll
-# the wiki back to an older commit.
+# Just before pushing it checks that main has not moved since; if it has, it
+# skips, and the run for the newer commit publishes. A rerun or a late run
+# therefore never rolls the wiki back to an older commit.
 #
 # One-time setup: the wiki repository exists only after its first page is created
 # in the browser (Wiki tab > Create the first page). Until then the publish step
@@ -61,7 +62,7 @@ jobs:
 
   publish:
     name: Publish to the wiki
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -74,6 +75,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
+          persist-credentials: false
 
       - name: Test the generator
         run: python3 -m unittest discover -s .github/wiki -v
@@ -102,6 +104,11 @@ jobs:
           cp -R "$RUNNER_TEMP/wiki-out/." "$wiki/"
           cd "$wiki"
           git add --all
+          tip="$(git ls-remote "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" refs/heads/main | cut -f1)"
+          if [ "$tip" != "$sha" ]; then
+            echo "main moved to ${tip} after this run checked out ${sha}; skipping so the newer run publishes."
+            exit 0
+          fi
           if git diff --cached --quiet; then
             echo "Wiki already matches ${sha}."
             exit 0
