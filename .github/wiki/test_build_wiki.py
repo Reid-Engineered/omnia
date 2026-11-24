@@ -194,6 +194,11 @@ class Readiness(unittest.TestCase):
         # The C5.1 case: "C1.8, and A3.1 or A4.1" with C1.8 and A3.1 done, A4.1 not.
         self.assertEqual(self.depends("X0.1, and X0.2 or X1.2"), "check")
 
+    def test_or_spellings_that_can_already_hold(self):
+        self.assertEqual(self.depends("X0.1, and X0.2, or X1.2"), "check")
+        self.assertEqual(self.depends("X0.1 and X1.2 OR X0.2"), "check")
+        self.assertEqual(self.depends("X1.2 or owner sign-off"), "check")
+
     def test_or_that_cannot_hold_yet_is_waiting(self):
         self.assertEqual(self.depends("X0.1, and X1.1 or X1.2"), "waiting")
         self.assertEqual(self.depends("X1.1 (and X0.1 if built)"), "waiting")
@@ -275,6 +280,7 @@ class Build(unittest.TestCase):
         self.assertEqual(wiki.shorten("see [the plan](x.md) now", 14), "see …")
         self.assertEqual(wiki.shorten("short", 12), "short")
         self.assertEqual(wiki.shorten('see [x](docs.md "A (long) title") and more', 26), "see …")
+        self.assertEqual(wiki.shorten("See [plan [draft with notes]](canvas-plan.md) now", 24), "See …")
 
     def test_relative_links_point_at_the_repository(self):
         links = wiki.Links("owner/name", "abc")
@@ -291,6 +297,11 @@ class Build(unittest.TestCase):
         self.assertEqual(links.absolute(literal),
                          "``a ``` b ` [x](a.md) c`` then [y](https://github.com/owner/name/blob/abc/b.md)")
         self.assertEqual(links.absolute("[m](mailto:a@b.c) [s](ftp://x)"), "[m](mailto:a@b.c) [s](ftp://x)")
+        # Formatted and nested labels.
+        self.assertEqual(links.absolute("[`T2.7`](docs/m.md)"),
+                         "[`T2.7`](https://github.com/owner/name/blob/abc/docs/m.md)")
+        self.assertEqual(links.absolute("[a [b] c](x.md)"),
+                         "[a [b] c](https://github.com/owner/name/blob/abc/x.md)")
 
     def test_escaped_pipes_stay_single_escaped_in_tables(self):
         self.assertIn("| HX4 | Either \\| both | — | Has an escaped pipe. |", self.build()["Human-checkpoints.md"])
@@ -324,7 +335,8 @@ class RealRepository(unittest.TestCase):
         self.assertEqual([c.id for c in sim.checkpoints], ["HS1", "HS2", "HS3", "HS4"])
         mcp = wiki.parse_roadmap(2, "mcp-roadmap.md", "A", "A", (REPO_ROOT / "mcp-roadmap.md").read_text(encoding="utf-8"))
         self.assertTrue(any("2025-11-25 Tasks claim" in e.text for e in mcp.log))
-        self.assertTrue(any(e.text.startswith("S0.2") for e in sim.log), "S0.2 has its own entry")
+        self.assertTrue(any(re.match(r"S0\.2\s+Re-review of #104", e.text) for e in sim.log),
+                        "the double-spaced S0.2 re-review is its own entry")
 
     def test_builds(self):
         pages = wiki.build(REPO_ROOT, "owner/name", "0" * 40)

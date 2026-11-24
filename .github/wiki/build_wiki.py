@@ -59,15 +59,14 @@ TABLE_ROW = re.compile(r"^\|(.+)\|\s*$")
 UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
 # A code span opens on a run of n backticks and closes on the next run of exactly n (GFM).
 CODE_SPAN = re.compile(r"(?<!`)(?P<run>`+)(?!`).+?(?<!`)(?P=run)(?!`)", re.DOTALL)
-# An inline link, with an optional "title", 'title' or (title) after the destination.
-LINK = re.compile(
-    r"(?P<label>\[[^\]]*\])\((?P<dest>[^)\s]+)"
-    r"(?P<title>\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
-)
 # Words allowed in a Depends line besides task ids before it needs a human to read it.
 DEPENDS_FILLER = re.compile(
     r"\b(?:and|parts|sim|context|ui|agent|canvas|wiring)\b|[,;.:\s]|`[^`]*`",
     re.IGNORECASE,
+)
+# What follows a link's "]": "(destination", an optional title, then ")".
+LINK_TAIL = re.compile(
+    r"\((?P<dest>[^)\s]+)(?P<title>\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
 )
 EXTERNAL = re.compile(r"^(?:[a-z][a-z0-9+.-]*:|#)", re.IGNORECASE)
 # Words that make a Depends line or note conditional: only a person can judge those.
@@ -273,12 +272,66 @@ def readiness(task: Task, tasks: dict[str, Task]) -> str:
         return "ready" if all(done(i) for i in ids) else "waiting"
     # Unclear lines: read clauses (split on , ; and) as all-of and " or " as any-of. A clause
     # none of whose alternatives can hold yet means waiting; otherwise a person decides.
-    for clause in re.split(r"[,;]|\band\b", without_notes):
-        options = [TASK_ID.findall(alt) for alt in re.split(r"\bor\b", clause)]
-        options = [o for o in options if o]
-        if options and not any(all(done(i) for i in o) for o in options):
+    joined = re.sub(r"[,;]\s*(?=or\b)", " ", without_notes, flags=re.IGNORECASE)
+    for clause in re.split(r"[,;]|\band\b", joined, flags=re.IGNORECASE):
+        options = [TASK_ID.findall(alt) for alt in re.split(r"\bor\b", clause, flags=re.IGNORECASE)]
+        if not all(options):
+            continue  # an alternative that is not a task ("owner sign-off") may already hold
+        if not any(all(done(i) for i in o) for o in options):
             return "waiting"
     return "check"
+
+
+# --- Markdown scanning ---------------------------------------------------------------
+
+
+@dataclass
+class InlineLink:
+    start: int
+    end: int
+    label: str  # "[...]", brackets included
+    dest: str
+    title: str  # leading whitespace included, or ""
+
+
+def code_spans(text: str) -> list[tuple[int, int]]:
+    return [m.span() for m in CODE_SPAN.finditer(text)]
+
+
+def inline_links(text: str) -> list[InlineLink]:
+    """Inline links outside code spans. Labels may hold code spans and nested brackets;
+    titles may be "", '' or (). Link-like text wholly inside a code span is not a link."""
+    spans = code_spans(text)
+    span_at = {s: e for s, e in spans}
+
+    def in_code(i: int) -> bool:
+        return any(s <= i < e for s, e in spans)
+
+    links, i = [], 0
+    while i < len(text):
+        if text[i] != "[" or in_code(i) or (i and text[i - 1] == "\\"):
+            i += 1
+            continue
+        depth, j = 0, i
+        while j < len(text):
+            if j in span_at:
+                j = span_at[j]
+                continue
+            if text[j] == "[":
+                depth += 1
+            elif text[j] == "]":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        match = LINK_TAIL.match(text, j + 1) if j < len(text) else None
+        if not match:
+            i += 1
+            continue
+        links.append(InlineLink(i, match.end(), text[i : j + 1], match.group("dest"),
+                                match.group("title") or ""))
+        i = match.end()
+    return links
 
 
 # --- Rendering -----------------------------------------------------------------------
@@ -297,19 +350,13 @@ class Links:
 
         Text inside code spans is left alone, so link syntax shown as an example survives.
         """
-        def rewrite(part: str) -> str:
-            def one(m: re.Match[str]) -> str:
-                if EXTERNAL.match(m.group("dest")):
-                    return m.group(0)
-                return f"{m.group('label')}({self.file(m.group('dest'))}{m.group('title') or ''})"
-
-            return LINK.sub(one, part)
-
         out, last = [], 0
-        for span in CODE_SPAN.finditer(text):
-            out += [rewrite(text[last : span.start()]), span.group(0)]
-            last = span.end()
-        out.append(rewrite(text[last:]))
+        for link in inline_links(text):
+            if EXTERNAL.match(link.dest):
+                continue
+            out += [text[last : link.start], f"{link.label}({self.file(link.dest)}{link.title})"]
+            last = link.end
+        out.append(text[last:])
         return "".join(out)
 
 
@@ -352,10 +399,10 @@ def shorten(text: str, limit: int | None) -> str:
     if limit is None or len(text) <= limit:
         return text
     end = len(text[:limit].rsplit(" ", 1)[0])
-    for pattern in (CODE_SPAN, LINK):
-        for span in pattern.finditer(text):
-            if span.start() < end < span.end():
-                end = span.start()
+    spans = code_spans(text) + [(link.start, link.end) for link in inline_links(text)]
+    for start, stop in sorted(spans, reverse=True):
+        if start < end < stop:
+            end = start
     return text[:end].rstrip() + " …"
 
 
@@ -476,7 +523,8 @@ def page_ready(roadmaps: list[Roadmap], links: Links, tasks: dict[str, tuple[Tas
         ("Ready", "ready", None),
         ("Check by hand", "check",
          "The Depends line has wording a script should not judge (\"or\", a milestone, a "
-         "condition), or names something that is not a task. Every task it names is done."),
+         "condition), or names something that is not a task, and nothing in it is known to be unmet. "
+         "Read the Depends line before starting."),
     ):
         out += [f"## {heading}", ""]
         if note:
