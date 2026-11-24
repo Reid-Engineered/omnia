@@ -26,9 +26,10 @@ use crate::{
         zoom_to_selection_camera,
     },
     input::wheel_factor,
-    selection::{RubberBand, SelectionState, SelectionUpdate},
+    selection::{RubberBand, SelectionState, SelectionUpdate, hit_tolerance_nm},
     sheet::{SheetDocument, SheetView},
     snap_px::{centered_square, device_rect, round_device, stroke_device_px, to_device},
+    tool::{self, ToolHost, ToolMachine, ToolRequest},
 };
 use gpui::{
     App, AppContext, Bounds, ContentMask, Context, DispatchPhase, Edges, Element, ElementId,
@@ -254,6 +255,8 @@ pub struct OverlayView {
     camera: Camera,
     theme: &'static Theme,
     state: SelectionState,
+    /// T5.2: the tool state machine; it sees the pointer before selection does.
+    tools: ToolMachine,
     net_highlight: NetHighlight,
     focus: FocusHandle,
     viewport: Bounds<Pixels>,
@@ -291,6 +294,7 @@ impl OverlayView {
             camera,
             theme,
             state: SelectionState::from_prefs(prefs),
+            tools: ToolMachine::with_prefs(*prefs),
             net_highlight: NetHighlight::new(),
             focus: cx.focus_handle(),
             viewport: Bounds::default(),
@@ -399,6 +403,7 @@ impl OverlayView {
 
     /// Applies wiring preferences (`select_mode`) to the overlay (WD8, WD12; never notifies `SheetView`).
     pub fn apply_prefs(&mut self, prefs: &WiringPrefs, cx: &mut Context<Self>) {
+        self.tools.set_prefs(*prefs);
         if self.state.apply_prefs(prefs) {
             cx.notify();
         }
@@ -613,6 +618,31 @@ impl OverlayView {
     ) -> bool {
         self.viewport = bounds;
         self.camera.set_viewport(bounds);
+        // T5.2: the tool sees the press first; a press it leaves goes to selection.
+        let world = self.camera.screen_to_world(to_f64(event.position));
+        let outcome = self.tools.pointer_down(
+            self.doc.read(cx),
+            world,
+            hit_tolerance_nm(&self.camera),
+            self.state.selection(),
+            event.modifiers.shift,
+        );
+        if outcome.handled {
+            if let tool::ToolState::Dragging(drag) = self.tools.state() {
+                // A press on an unselected item selects it; the drag then moves it alone.
+                let pressed = drag.pressed;
+                let mut update = SelectionUpdate {
+                    visual_changed: self.state.set_hovered(Some(pressed)),
+                    ..SelectionUpdate::default()
+                };
+                if !self.state.is_selected(pressed) && self.state.set_selection([pressed]) {
+                    update.selection_changed = true;
+                    update.visual_changed = true;
+                }
+                self.apply_update(update, cx);
+            }
+            return tool::finish(self, outcome, None, cx).capture;
+        }
         let update = self
             .state
             .mouse_down(self.doc.read(cx), &self.camera, event);
@@ -627,6 +657,16 @@ impl OverlayView {
         cx: &mut Context<Self>,
     ) -> bool {
         let scope = self.scope.clone();
+        if self.tools.routes_pointer() {
+            // T5.2: a gesture holds the pointer; hover and selection wait for it to end.
+            self.viewport = bounds;
+            self.camera.set_viewport(bounds);
+            let world = self.camera.screen_to_world(to_f64(event.position));
+            let outcome = self
+                .tools
+                .pointer_move(world, event.pressed_button == Some(MouseButton::Left));
+            return run_gpui(scope.as_deref(), || tool::finish(self, outcome, None, cx)).release;
+        }
         let update = run_omnia(scope.as_deref(), || {
             self.viewport = bounds;
             self.camera.set_viewport(bounds);
@@ -636,6 +676,8 @@ impl OverlayView {
                 self.net_highlight
                     .sync(doc, self.state.hovered(), self.state.selection());
             }
+            // Allocation-free: the tool mirrors hover as Idle/Hovering (T5.2).
+            self.tools.hover(self.state.hovered());
             update
         });
         run_gpui(scope.as_deref(), || self.emit_and_notify(update, cx));
@@ -643,7 +685,11 @@ impl OverlayView {
     }
 
     fn on_mouse_leave(&mut self, cx: &mut Context<Self>) {
+        if self.tools.routes_pointer() {
+            return;
+        }
         let update = self.state.mouse_leave();
+        self.tools.hover(self.state.hovered());
         self.apply_update(update, cx);
     }
 
@@ -655,10 +701,55 @@ impl OverlayView {
     ) -> bool {
         self.viewport = bounds;
         self.camera.set_viewport(bounds);
+        if self.tools.routes_pointer() {
+            // T5.2: a drag commits here as one `Doc::apply` (INV5).
+            let world = self.camera.screen_to_world(to_f64(event.position));
+            let outcome = self.tools.pointer_up(world, event.modifiers.alt);
+            return tool::finish(self, outcome, None, cx).release;
+        }
         let update = self.state.mouse_up(self.doc.read(cx), &self.camera, event);
         self.apply_update(update, cx);
         update.ended_drag
     }
+}
+
+/// T5.2: the tool machine's view of the overlay (`tool::sheet_key_context`).
+impl ToolHost for OverlayView {
+    fn tools(&self) -> &ToolMachine {
+        &self.tools
+    }
+
+    fn tools_mut(&mut self) -> &mut ToolMachine {
+        &mut self.tools
+    }
+
+    fn tool_doc(&self) -> Option<Entity<Doc>> {
+        Some(self.doc.clone())
+    }
+
+    fn preview_changed(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+    }
+
+    fn doc_changed(&mut self, change: &Change, cx: &mut Context<Self>) {
+        self.on_doc_change(change, cx);
+    }
+
+    fn request(&mut self, request: ToolRequest, cx: &mut Context<Self>) {
+        if let ToolRequest::Click(item) = request {
+            self.set_selection([item], cx);
+        }
+    }
+
+    fn cancel_host_gesture(&mut self, cx: &mut Context<Self>) -> bool {
+        let cancelled = self.state.is_rubber_banding();
+        self.cancel_rubber_band(cx);
+        cancelled
+    }
+}
+
+fn to_f64(p: gpui::Point<Pixels>) -> gpui::Point<f64> {
+    point(f64::from(p.x), f64::from(p.y))
 }
 
 impl Render for OverlayView {
@@ -686,7 +777,7 @@ impl Render for OverlayView {
                 });
             }
         }
-        div()
+        tool::sheet_key_context(div(), cx)
             .relative()
             .size_full()
             .track_focus(&self.focus)
@@ -701,7 +792,7 @@ impl Render for OverlayView {
                 camera: self.camera.clone(),
                 theme: self.theme,
                 focus: self.focus.clone(),
-                dragging: self.state.is_rubber_banding(),
+                dragging: self.state.is_rubber_banding() || self.tools.is_dragging(),
                 paints: self.paints.clone(),
                 scope: self.scope.clone(),
             })

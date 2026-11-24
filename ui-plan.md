@@ -859,8 +859,9 @@ impl Doc {
     pub fn net_count(&self) -> usize;         // Connectivity::net_count
 }
 // omnia-canvas
-pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged,
-                       History { can_undo: bool, can_redo: bool, cursor: u64 } } // History: new
+pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged }
+// T5.2 delivered history as its own event type, so existing exhaustive `CanvasEvent` matches build:
+pub struct CanvasHistory { pub can_undo: bool, pub can_redo: bool, pub cursor: u64 } // new
 impl SheetCanvas {
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>);            // T5.2
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>);            // T5.2
@@ -955,7 +956,7 @@ wiring files stay authoritative for their ids.
 | canvas-roadmap.md T4.3 | Also provide `select_all` (Ctrl+A is bound by the shell, UD3). |
 | canvas-roadmap.md T4.5 | Also provide `zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation), used by View and the toolbar. |
 | canvas-roadmap.md T5.1 | Follow-up for doc lane task U2.1: `history_cursor`, `can_undo`, `can_redo`. |
-| canvas-roadmap.md T5.2 | Bind R, X, Y, W (and T1.5/T6.2's Space) in key context `Sheet`; provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and `CanvasEvent::History`. The keymap conflict test (UINV4) covers T5.2's bindings. |
+| canvas-roadmap.md T5.2 | Bind R, X, Y, W (and T1.5/T6.2's Space) in key context `Sheet`; provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and `CanvasEvent::History` (delivered as the event type `CanvasHistory`). The keymap conflict test (UINV4) covers T5.2's bindings. |
 | canvas-roadmap.md T5.3 | Provide `delete_selection`. |
 | canvas-roadmap.md T7.1 | Ctrl+C, Ctrl+X, Ctrl+V are bound by the shell; T7.1 provides `cut`, `copy`, `paste`. |
 | canvas-roadmap.md T7.3 | The floating frame, drag, stacking and focus come from ui-roadmap.md U4.1. T7.3 supplies the animated stub content inside that frame, keeps `bench run --script pan --instrument` and its done-when; `instrument_host.rs` holds the content only. |

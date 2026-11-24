@@ -3,10 +3,12 @@
 pub mod camera;
 pub mod camera_anim;
 pub mod input;
+pub mod keymap;
 pub mod overlay;
 pub mod selection;
 pub mod sheet;
 pub mod snap_px;
+pub mod tool;
 
 pub use camera::Camera;
 pub use camera_anim::{
@@ -17,3 +19,7 @@ pub use input::{CanvasEvent, CanvasStatus, Navigator, SheetCanvas};
 pub use overlay::{CachedSheet, NetHighlight, OverlayEvent, OverlayPaintScope, OverlayView};
 pub use selection::{RubberBand, Selection, SelectionState};
 pub use sheet::SheetView;
+pub use tool::{
+    CanvasHistory, DragGesture, PlaceGesture, Tool, ToolMachine, ToolOutcome, ToolPhase,
+    ToolRequest, ToolState, WireGesture,
+};

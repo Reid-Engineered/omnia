@@ -24,6 +24,7 @@ use crate::camera_anim::{
     zoom_to_selection_camera,
 };
 use crate::sheet::{SheetDocument, SheetView, grid_level};
+use crate::tool::{self, CanvasHistory, ToolHost, ToolMachine};
 use gpui::{
     App, Bounds, Context, DispatchPhase, Element, ElementId, Entity, EventEmitter, FocusHandle,
     GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, KeyDownEvent,
@@ -31,7 +32,7 @@ use gpui::{
     PinchEvent, Pixels, Point, Render, ScrollDelta, ScrollEvent, ScrollSource, Styled, TouchPhase,
     WeakEntity, Window, div, point, prelude::*,
 };
-use omnia_doc::{Doc, ItemId, Pt, Rect};
+use omnia_doc::{Change, Doc, ItemId, Pt, Rect};
 use omnia_theme::Theme;
 
 /// Lines per wheel notch: Windows' default `SPI_GETWHEELSCROLLLINES`, which GPUI multiplies
@@ -220,6 +221,8 @@ pub struct SheetCanvas {
     doc: Option<Entity<Doc>>,
     sheet_doc: Option<SheetDocument>,
     nav: Navigator,
+    /// T5.2: the tool state machine behind the `Sheet` key context's actions.
+    tools: ToolMachine,
     focus: FocusHandle,
     /// Last pointer position over the sheet, window logical px.
     pointer: Option<Point<f64>>,
@@ -230,6 +233,7 @@ pub struct SheetCanvas {
 }
 
 impl EventEmitter<CanvasEvent> for SheetCanvas {}
+impl EventEmitter<CanvasHistory> for SheetCanvas {}
 
 impl SheetCanvas {
     /// The camera's viewport is replaced by the element's bounds at prepaint and on every
@@ -242,6 +246,7 @@ impl SheetCanvas {
             doc: None,
             sheet_doc: None,
             nav: Navigator::default(),
+            tools: ToolMachine::new(),
             focus: cx.focus_handle(),
             pointer: None,
             viewport: Bounds::default(),
@@ -283,6 +288,11 @@ impl SheetCanvas {
 
     pub fn navigator(&self) -> &Navigator {
         &self.nav
+    }
+
+    /// The sheet's focus: keys resolve in the `Sheet` context only while it holds focus (UD3).
+    pub fn focus_handle(&self) -> &FocusHandle {
+        &self.focus
     }
 
     pub fn is_animating(&self) -> bool {
@@ -494,7 +504,7 @@ impl Render for SheetCanvas {
             }
             None => SheetView::new(self.camera.clone(), self.theme),
         };
-        div()
+        tool::sheet_key_context(div(), cx)
             .size_full()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
@@ -515,6 +525,40 @@ impl Render for SheetCanvas {
                 focus: self.focus.clone(),
                 dragging: self.nav.is_dragging(),
             })
+    }
+}
+
+/// T5.2: the tool machine's view of the canvas (`tool::sheet_key_context`). Pointer gestures
+/// run on `OverlayView`, which holds the selection; here the actions switch tools, cancel and
+/// step history.
+impl ToolHost for SheetCanvas {
+    fn tools(&self) -> &ToolMachine {
+        &self.tools
+    }
+
+    fn tools_mut(&mut self) -> &mut ToolMachine {
+        &mut self.tools
+    }
+
+    fn tool_doc(&self) -> Option<Entity<Doc>> {
+        self.doc.clone()
+    }
+
+    /// This view paints the sheet itself, so a preview change must not notify it (INV11).
+    fn preview_changed(&mut self, _cx: &mut Context<Self>) {}
+
+    /// D7: repaint only when the change meets the viewport; always report history (UD6).
+    fn doc_changed(&mut self, change: &Change, cx: &mut Context<Self>) {
+        if change
+            .dirty
+            .is_some_and(|dirty| dirty.intersects(self.camera.visible()))
+        {
+            cx.notify();
+        }
+        if let Some(doc) = &self.doc {
+            let history = CanvasHistory::of(doc.read(cx));
+            cx.emit(history);
+        }
     }
 }
 

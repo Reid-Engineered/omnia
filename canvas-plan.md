@@ -206,6 +206,7 @@ longer matches the source, stop and record it in the roadmap log.
 | G14 | Glyph atlas entries are keyed by font, glyph, font size, scale factor and one of 4 horizontal subpixel offsets. `paint_glyph` always uses a unit transform. | `window.rs` `paint_glyph`; `text_system.rs` `SUBPIXEL_VARIANTS_X` | Bucket font sizes (K11). Text cannot be rotated. |
 | G15 | `text_system.shape_line(text, font_size, runs, force_width) -> ShapedLine`; `ShapedLine::paint(origin, line_height, align, align_width, window, cx)`. Both Linux (`cosmic_text` `Hinting::Disabled`) and Windows (`DirectWrite` natural measuring) produce size-linear glyph offsets. | `text_system.rs`; `text_system/line.rs` | Cache one base-size `ShapedLine` per label (K8) and scale linearly to the active K11 bucket on direct glyph emission (D6). |
 | G16 | Apps start with `gpui_platform::application().run(..)`; `gpui_platform::headless()` also exists. `window.request_animation_frame()` notifies the current view on the next frame. | `gpui_platform/src/gpui_platform.rs`; `window.rs` | Entry point and animation tick. |
+| G17 | `Window::dispatch_event` calls `refresh()` when the input modality changes: a key down after pointer input, or a pointer move or press after a key. A refreshing window re-renders every cached view (ui-plan.md UG15). | `window.rs` `dispatch_event`, `last_input_modality` | The first key after pointer input repaints `SheetView` once, as a focus change does. Found by T5.2. |
 
 Not settled by reading, so measured in the spike: whether the sprite atlas ever evicts,
 whether a mirrored sprite matrix renders correctly, what `ShapedLine::paint` allocates, and
@@ -664,7 +665,46 @@ impl Camera {
     pub fn scale(&self) -> f64;
     pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
-pub enum Tool { Select, Wire, Place(SymbolId), Label }
+pub enum Tool { Select, Wire, Place(SymbolId), Label }      // T5.2 (tool.rs); ZoomArea (ui-plan.md) not yet
+// T5.2 (tool.rs): pure tool state machine; the host applies its one Command per gesture (INV5).
+pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture), Placing(PlaceGesture),
+                     Wiring(WireGesture) }
+pub struct DragGesture { pub items: Vec<ItemId>, pub pressed: ItemId, pub anchor: Pt,
+                         pub current: Pt, pub orient: Orient }
+impl DragGesture {
+    pub fn delta(&self) -> Pt;                           // snapped to GRID_NM (T5.3: anchor pin)
+    pub fn command(&self, follow: FollowPolicy) -> Option<Command>; // Move, Reorient, or one Batch
+}
+pub struct PlaceGesture { pub symbol: SymbolId, pub at: Option<Pt>, pub orient: Orient }
+pub struct WireGesture { pub start: Option<Pt>, pub cursor: Option<Pt> } // T6.2 extends
+pub enum ToolRequest { Click(ItemId), Place { symbol: SymbolId, at: Pt, orient: Orient },
+                       ReorientSelection(Orient), DeleteSelection } // carried out by T5.3
+pub struct ToolOutcome { pub handled: bool, pub preview_changed: bool, pub capture: bool,
+                         pub release: bool, pub commit: Option<Command>,
+                         pub request: Option<ToolRequest> }
+pub struct ToolMachine { /* tool, state, WiringPrefs, hit scratch */ }
+impl ToolMachine {
+    pub fn with_prefs(prefs: WiringPrefs) -> Self;
+    pub fn tool(&self) -> Tool;
+    pub fn state(&self) -> &ToolState;
+    pub fn set_tool(&mut self, tool: Tool) -> ToolOutcome;  // cancels any gesture first
+    pub fn hover(&mut self, item: Option<ItemId>) -> ToolOutcome;
+    pub fn pointer_down(&mut self, doc: &Doc, at: Pt, tolerance: i32, selection: &[ItemId],
+                        shift: bool) -> ToolOutcome;
+    pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome;
+    pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome; // alt: WK3 at commit
+    pub fn cancel(&mut self) -> ToolOutcome;              // Esc; never a commit
+    pub fn reorient(&mut self, by: Orient) -> ToolOutcome; // R, X, Y
+    pub fn delete(&mut self) -> ToolOutcome;              // Del
+}
+// T5.2: emitted by SheetCanvas after each document step it makes. A second event type rather
+// than ui-plan.md's `CanvasEvent::History`, so existing exhaustive `CanvasEvent` matches build.
+pub struct CanvasHistory { pub can_undo: bool, pub can_redo: bool, pub cursor: u64 }
+// T5.2 (keymap.rs): actions in namespace `canvas`, resolved in key context "Sheet" (UD3).
+pub const SHEET_CONTEXT: &str;                            // "Sheet"
+actions!(canvas, [Rotate, MirrorHorizontal, MirrorVertical, PlaceWire, Cancel, Delete, Undo, Redo]);
+pub fn sheet_bindings() -> Vec<KeyBinding>;               // r, x, y, w (the shell registers these)
+pub fn standalone_bindings() -> Vec<KeyBinding>;          // + escape, delete, ctrl-z, ctrl-y; no shell
 pub struct CanvasStatus { pub cursor: Option<Pt>, pub grid: i32, pub zoom: f32 } // None: pointer not yet
                                                      // over the sheet; grid: drawn K10 step (T1.5)
 pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged }
@@ -743,6 +783,13 @@ impl OverlayView {
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
     pub fn zoom_step(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>);
+    // T5.2 (tool.rs): the `Sheet` key context on the focus root; the tool sees the pointer first.
+    pub fn tool(&self) -> Tool;
+    pub fn tool_state(&self) -> &ToolState;
+    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
+    pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool; // tool, then band
+    pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
+    pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
 }
 // T4.5 (camera_anim.rs): 150 ms ease-out view animations driven by `request_animation_frame` (K13, G16).
 pub const VIEW_ANIM_DURATION: Duration;                    // 150 ms (K13)
@@ -773,7 +820,13 @@ impl SheetCanvas {
     pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>);
     pub fn fit_doc(&mut self, doc: &Doc, cx: &mut Context<Self>);
     pub fn zoom_to_selection_in(&mut self, doc: &Doc, selection: &[ItemId], cx: &mut Context<Self>) -> bool;
-    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
+    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);   // T5.2 (tool.rs)
+    pub fn tool(&self) -> Tool;                                       // T5.2
+    pub fn tool_state(&self) -> &ToolState;                           // T5.2
+    pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool; // T5.2: Esc (UQ14)
+    pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.2: emits CanvasHistory
+    pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.2: emits CanvasHistory
+    pub fn focus_handle(&self) -> &FocusHandle;                       // T5.2 (UINV12)
     // T5.3: a shell-supplied placement provider (see parts-plan.md section 14) builds the
     // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation.
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);

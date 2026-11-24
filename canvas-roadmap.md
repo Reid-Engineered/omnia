@@ -526,7 +526,7 @@ of the `canvas` lane.
 - Note (W0.3): T5.1's code is merged without `follow: FollowPolicy`; [wiring-roadmap.md](wiring-roadmap.md)
   W2.2 adds `FollowPolicy` to `Move` and `Reorient` (WD3; until W2.2, every run detaches).
 
-### T5.2 Tools and keys · todo
+### T5.2 Tools and keys · done
 - Lane: canvas · Depends: T4.6, T5.1 · Read: plan section 5, INV5
 - Owns: `crates/omnia-canvas/src/tool.rs`, `keymap.rs`
 - Do: the tool state machine with states idle, hovering, dragging, placing, wiring; GPUI
@@ -2178,3 +2178,51 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `docs/measurements/T4.6/orion-2026-11-24-remote/`. Follow-up for the
                        file owner: a Linux-only unused-variable warning in
                        `crates/omnia-bench/src/spike/shell_cache.rs:1657`.
+
+2026-11-24 T5.2 done — `tool.rs`: a pure `ToolMachine` over `Tool { Select, Wire, Place, Label }`
+                       with the states idle, hovering, dragging, placing and wiring
+                       (`ToolState`). In Select, a left press on an item drags the selection,
+                       or that item alone if it is not selected. The drag holds preview state
+                       only and commits one `Command` on release: a `Move` by the grid-snapped
+                       delta, with R, X or Y during the drag adding a `Reorient` in the same
+                       `Batch`. Alt at release picks the follow policy (WK3). Esc, a lost
+                       release or a tool change cancel with no edit. `keymap.rs`: actions
+                       `canvas::{Rotate, MirrorHorizontal, MirrorVertical, PlaceWire, Cancel,
+                       Delete, Undo, Redo}` resolve in key context `Sheet`. `sheet_bindings()`
+                       binds R, X, Y and W, which the shell registers (UD3).
+                       `standalone_bindings()` adds Esc, Del, Ctrl+Z and Ctrl+Y for a canvas
+                       without the shell. They are never registered with the shell's keymap,
+                       which binds those keys itself and calls `cancel`, `undo` and `redo`
+                       (UQ14). INV5 tests pass, both pure and through simulated GPUI input on
+                       `OverlayView`. The revision is unchanged over 13 drag moves until
+                       mouse-up, one Ctrl+Z reverts the whole drag (`content_eq`), and Esc
+                       mid-drag followed by a release leaves the revision unchanged. Also 13
+                       transition tests, 4 binding-table tests, and GPUI tests for W, Esc,
+                       R/X/Y mid-drag, Ctrl+Z/Y, keys needing sheet focus, `SheetCanvas`
+                       history, and no `SheetView` repaint during a drag preview (INV11).
+                       Deviations, minimal seams outside Owns that ui-plan.md section 14's
+                       T5.2 row needs: `overlay.rs` gets a `ToolMachine` field, press, move
+                       and release routed to the tool before selection, the `Sheet` key
+                       context on the focus root, pointer capture held during a tool drag, and
+                       a `ToolHost` impl. `input.rs` gets a `ToolMachine` field, the `Sheet`
+                       key context, a `ToolHost` impl, `focus_handle()` (UINV12) and
+                       `EventEmitter<CanvasHistory>`. History is the separate event type
+                       `CanvasHistory`, not a `CanvasEvent::History` variant: a new variant
+                       breaks the exhaustive matches in omnia-app `status_bar.rs` and
+                       omnia-bench `shell_cache.rs`, which this task does not own.
+                       canvas-plan.md section 9 and ui-plan.md sections 10 and 14 are updated
+                       to match. `Tool::ZoomArea` (ui-plan.md, T4.5's) is not added.
+                       For T5.3: both hosts receive `ToolRequest::{Place, ReorientSelection,
+                       DeleteSelection}` and ignore them for now. `DragGesture::command` is the
+                       commit to extend. There are no ghosts yet, so a drag shows no movement
+                       until release. For T6.2: `WireGesture` records only the cursor and the
+                       first click. For U5.1: the canvas actions are `canvas::*`, replacing the
+                       app's `omnia::{Rotate, MirrorHorizontal, MirrorVertical, PlaceWire}`
+                       placeholders; subscribe to `CanvasHistory`. `OverlayView` emits no
+                       history. New GPUI fact G17 (plan section 4): the pinned `Window`
+                       refreshes on a pointer-to-keyboard modality change, so the first key
+                       after pointer input repaints `SheetView` once, as UG15's focus change
+                       does. The INV11 drag test therefore cancels through `cancel()`, the
+                       shell's `NavCancel` path. Checks run locally on Windows: `cargo fmt
+                       --all --check`, both clippy commands, `cargo test --workspace` and
+                       `cargo deny check`, all green.
