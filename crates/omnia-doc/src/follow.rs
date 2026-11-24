@@ -1488,7 +1488,7 @@ mod view_tests {
             }
             let copy = materialize(&d, &items, t, &runs, &detached, &markers, &added).unwrap();
             let (mut got, mut want) = (Vec::new(), Vec::new());
-            for (x, y, w, h) in areas {
+            for &(x, y, w, h) in &areas {
                 let area = Rect::from_points(g(x, y), g(x + w, y + h)).unwrap();
                 RouteSheet::query(&view, area, &mut got);
                 RouteSheet::query(&copy, area, &mut want);
@@ -1506,6 +1506,46 @@ mod view_tests {
                             prop_assert_eq!(RouteSheet::wire(&view, id), RouteSheet::wire(&copy, id));
                         }
                         ItemId::Label(_) => prop_assert!(false, "the view holds no labels"),
+                    }
+                }
+            }
+            // W2.2 (WD4, WINV6): the router's production reads of the view (`visit_segment`,
+            // `collect_box`) give the same routes, refusals and validator verdicts as the
+            // full copy, with the reservation lists unsorted and then sorted as `build`
+            // leaves them. Scale 1 keeps the dogleg box local; scale 6 takes the large-box
+            // fallback.
+            for sorted_reservations in [false, true] {
+                if sorted_reservations {
+                    view.finish_reservations();
+                    for &(x, y, w, h) in &areas {
+                        let area = Rect::from_points(g(x, y), g(x + w, y + h)).unwrap();
+                        RouteSheet::query(&view, area, &mut got);
+                        RouteSheet::query(&copy, area, &mut want);
+                        prop_assert_eq!(sorted(&got), sorted(&want));
+                    }
+                }
+                for &(x, y, w, h) in &areas {
+                    for scale in [1, 6] {
+                        let a = g(x * scale, y * scale);
+                        let b = g((x + w) * scale, (y + h) * scale);
+                        for axis in [Axis::Horizontal, Axis::Vertical] {
+                            let (mut via_view, mut via_copy) = (Vec::new(), Vec::new());
+                            let r_view =
+                                route_on(&view, a, b, axis, &mut RouteScratch::new(), &mut via_view);
+                            let r_copy =
+                                route_on(&copy, a, b, axis, &mut RouteScratch::new(), &mut via_copy);
+                            prop_assert_eq!(r_view, r_copy);
+                            prop_assert_eq!(&via_view, &via_copy);
+                        }
+                        let corner = Pt { x: b.x, y: a.y };
+                        let l: Vec<Wire> = [Wire { a, b: corner }, Wire { a: corner, b }]
+                            .into_iter()
+                            .filter(|w| w.a != w.b)
+                            .collect();
+                        prop_assert_eq!(
+                            check_new_wires_on(&view, &l, [a, b]),
+                            check_new_wires_on(&copy, &l, [a, b])
+                        );
                     }
                 }
             }

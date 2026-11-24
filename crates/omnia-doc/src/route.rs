@@ -847,13 +847,8 @@ pub(crate) fn route_on<S: RouteSheet>(
         {
             break;
         }
-        if best_valid.is_none()
-            && let Some((bk, _)) = best_invalid
-            && bound_key >= bk
-        {
-            // No valid candidate so far, and remaining doglegs cannot beat `best_invalid`,
-            // though a later dogleg could still be valid — keep checking!
-        }
+        // With no valid candidate yet, keep going even past `best_invalid`'s bound: a later
+        // dogleg could still be valid.
         let wires = d.wires(a, b);
         let judged = ends_on_lattice && -limit <= d.m && d.m <= limit;
         let (score, verdict, _) = assess(doc, &wires, [a, b], d.number, judged);

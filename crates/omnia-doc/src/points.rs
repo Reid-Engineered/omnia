@@ -10,9 +10,9 @@ pub(crate) enum End {
     Pin { part: PartId, pin: usize },
 }
 
-/// Compact 8-byte encoding of [`End`] so [`PointEnds`] fits up to 3 ends inline in
-/// 32 bytes (down from 80 bytes for `SmallVec<[End; 3]>`), keeping the point map
-/// L3-cache-resident while avoiding heap allocations up to 3-way junctions.
+/// Compact 8-byte encoding of [`End`] so [`PointEnds`] holds up to 3 ends inline in
+/// 32 bytes. The previous `Vec<End>` allocated for every point; now only points with
+/// more than 3 ends allocate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PackedEnd(u64);
 

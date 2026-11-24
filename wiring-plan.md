@@ -557,7 +557,7 @@ pub fn check_new_wires_in(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2],
                           scratch: &mut Vec<ItemId>) -> Result<(), Blocker>; // no allocation warm
 pub const DOGLEG_REACH_NM: i32;   // WK5
 pub const DOGLEG_CAP: usize;      // WK6
-pub struct RouteScratch { /* candidates, query buffer */ }  // caller-owned, reused (W1.5)
+pub struct RouteScratch { /* doglegs, deferred refusals, local obstacles */ }  // caller-owned, reused (W1.5)
 impl RouteScratch { pub fn new() -> Self; }
 // Returns the lowest-scoring valid candidate or the blocker of the lowest-scoring one.
 // Scores lazily against a lower bound (W2.2): the same answer as scoring every candidate
@@ -622,7 +622,8 @@ original incident wire as their blocker. A detach fallback restarts planning wit
 run fixed at its original geometry, so earlier runs
 also see it. Rigid corner labels move; rerouted and detached labels stay put until W3.6.
 The current nonempty path allocates its view and scratch on each call (sized by the
-selection and the plan, not the sheet); the warm-allocation goal above is not yet met
+selection and the plan, plus membership bitsets of one bit per part and wire id up to the
+highest selected or replaced id); the warm-allocation goal above is not yet met
 beyond the required empty-boundary path. W2.4 must measure
 this implementation before any WB1/WB2/WB7 verdict; no budget claim follows from W2.1.
 

@@ -204,7 +204,11 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 - Lane: doc · Depends: W2.1 · Read: WD3, WINV1, WINV2, WINV4, INV4, INV10
 - Owns: `crates/schematic-doc/src/command.rs`, `undo.rs` (after T5.1)
 - Scope approved 2026-11-17: mechanical caller migrations in document tests and the
-  command benchmark, plus the WB3 benchmark.
+  command benchmark, plus the WB3 benchmark. Windows checks only; no Orion runs.
+- Scope extended 2026-11-23: the owner ran the Orion WB3 campaigns, and the WB3
+  optimisation changed `follow.rs`, `route.rs`, `index.rs`, `points.rs` and `run.rs`
+  (owned by W1.1, W1.5 and W2.1, all `done`) on this task's branch, merged at the
+  owner's direction (PR #115).
 - Implementation, property/allocation checks, and Orion WB3 reference campaign complete.
   The 2026-11-23 round 2 Orion campaign (`29d25b2`) measured a median pass p99 of
   1.815 ms (range 1.658–2.475 ms, median p50 1.531 ms), passing WB3's < 2 ms budget
@@ -805,3 +809,16 @@ pass p50s 1.531 ms — **WB3 (< 2.0 ms) passes** (down from 51.151 ms baseline a
 round 1). Evidence: `docs/measurements/W2.2/orion-2026-11-23-wb3-perf-pass/` and
 `docs/measurements/W2.2.md`.
 
+2026-11-23 W2.2 review fixes - done. Review of round 2 (`29d25b2`) found no
+correctness defect. A throwaway differential test compared `route_on` on the layered
+view against a full copy over 6,000 cases (about 560,000 routes, with doglegs, refusals,
+reservations and the large-box fallback all reached) and agreed on every one. That check
+is now permanent in `w22_view_reads_as_the_full_copy`: routes, refusals and validator
+verdicts through `visit_segment`/`collect_box`, before and after `finish_reservations`, at
+local and large-box spans; property ranges and case count unchanged. Also: removed an
+empty branch in the `route_on` fallback, corrected the `PointEnds` comment and the
+`W2.2.md` inline-capacity note (3 ends), qualified the stale 2026-11-17 "no Orion runs"
+paragraph, and brought `wiring-plan.md`'s `RouteScratch` and view-allocation wording up
+to date (wiring rule 16). The roadmap scope line now records the 2026-11-23 extension.
+`cargo fmt --all --check`, `cargo clippy -p omnia-doc --all-targets -- -D warnings` and
+`cargo test -p omnia-doc` pass locally on Orion; workspace checks run in CI.
