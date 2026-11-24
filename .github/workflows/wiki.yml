@@ -1,0 +1,119 @@
+# Rebuild the GitHub wiki from the plans and roadmaps on main.
+#
+# The wiki is a generated, read-only view; the files in the repository stay the
+# source of truth (AGENTS.md). On pull requests this workflow only tests the
+# generator and builds the pages as an artifact to look at. On main it replaces
+# the wiki's contents with pages built from the main tip, so hand edits are lost.
+#
+# Ordering: the publish job checks out the current main tip, not the commit that
+# triggered the run, and runs one at a time (a newer run cancels an older one).
+# Just before pushing it checks that main has not moved since; if it has, it
+# skips, and the run for the newer commit publishes. A rerun or a late run
+# therefore never rolls the wiki back to an older commit.
+#
+# One-time setup: the wiki repository exists only after its first page is created
+# in the browser (Wiki tab > Create the first page). Until then the publish step
+# fails and says so.
+
+name: Wiki
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "*-plan.md"
+      - "*-roadmap.md"
+      - "ROADMAP.md"
+      - "AGENTS.md"
+      - "docs/measurements/**"
+      - ".github/wiki/**"
+      - ".github/workflows/wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    name: Build wiki pages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: wiki-preview-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test the generator
+        run: python3 -m unittest discover -s .github/wiki -v
+
+      - name: Generate pages
+        run: >-
+          python3 .github/wiki/build_wiki.py --root . --out wiki-out
+          --repo "${{ github.repository }}" --sha "${{ github.sha }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wiki-pages
+          path: wiki-out
+          retention-days: 7
+
+  publish:
+    name: Publish to the wiki
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: wiki-publish
+      cancel-in-progress: true
+    steps:
+      - name: Check out the main tip
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Test the generator
+        run: python3 -m unittest discover -s .github/wiki -v
+
+      - name: Generate pages
+        run: >-
+          python3 .github/wiki/build_wiki.py --root . --out "$RUNNER_TEMP/wiki-out"
+          --repo "${{ github.repository }}" --sha "$(git rev-parse HEAD)"
+
+      - name: Replace the wiki's pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          wiki="$RUNNER_TEMP/wiki"
+          url="https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.wiki.git"
+          if ! git clone --quiet --depth 1 "$url" "$wiki" 2>/dev/null; then
+            echo "::error::Cannot clone ${REPO}.wiki.git. Enable the wiki and create its first page in the browser, then re-run this workflow."
+            exit 1
+          fi
+          # Replace everything except the git metadata: pages removed from the
+          # generator disappear from the wiki too.
+          find "$wiki" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R "$RUNNER_TEMP/wiki-out/." "$wiki/"
+          cd "$wiki"
+          git add --all
+          tip="$(git ls-remote "https://x-access-token:${GITHUB_TOKEN}@github.com/${REPO}.git" refs/heads/main | cut -f1)"
+          if [ "$tip" != "$sha" ]; then
+            echo "main moved to ${tip} after this run checked out ${sha}; skipping so the newer run publishes."
+            exit 0
+          fi
+          if git diff --cached --quiet; then
+            echo "Wiki already matches ${sha}."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit --quiet -m "Regenerate from ${sha}"
+          git push --quiet origin HEAD

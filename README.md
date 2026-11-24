@@ -17,6 +17,7 @@ See the [project roadmap](ROADMAP.md) for the overall path from the technical fo
 | `canvas-plan.md`, `canvas-roadmap.md` | Canvas technical plan and task list |
 | `canvas-plan-prompt.md` | Original planning brief for the infinite-canvas workspace |
 | `docs/` | Measurements, spike results and reference notes |
+| `.github/wiki/` | Generator for the GitHub wiki, a read-only status view of the roadmaps rebuilt on each push to `main` |
 | `design/omnia.figcraft` | FigCraft document: Workspace, Home and First boot screens in the Graphite and Gray themes, the Mark component, and the logo and wordmark boards. Also the source of the theme tokens |
 | `design/mockups/` | Screen exports (Workspace, Home, First boot in both themes) |
 | `design/boards/` | Logo and wordmark board exports |
