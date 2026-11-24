@@ -1,0 +1,2 @@
+incomplete: /home/marcus/omnia/docs/measurements/T4.6/orion-2026-11-23/s100/10k-hover-1: incomplete frame sampling: {'drawn': 600, 'on_time': 600, 'late': 0, 'unmeasured': 0, 'wall_s': 20.2072}, warnings ['baseline snapshot covers 601 draws, expected 600 warm-up frames']
+Orion: Intel(R) Core(TM) i5-7300U CPU @ 2.60GHz, Linux orion-laptop 7.2.7-arch1-1 #1 SMP PREEMPT_DYNAMIC Mon, 21 Sep 2026 18:51:14 +0000 x86_64 GNU/Linux, wayland, eDP-1, source 9abfe05267902dbfe5ba972026b93c777d12a45a, binary SHA-256 6b0f6f28c5e383e4e5cc735796884bd82c4cbb6ab569af7c082e4e1bf20d658b
