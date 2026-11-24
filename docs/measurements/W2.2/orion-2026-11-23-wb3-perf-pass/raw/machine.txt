@@ -1,0 +1,177 @@
+Linux orion-laptop 7.2.7-arch1-1 #1 SMP PREEMPT_DYNAMIC Mon, 21 Sep 2026 18:51:14 +0000 x86_64 GNU/Linux
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           39 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  4
+On-line CPU(s) list:                     0-3
+Vendor ID:                               GenuineIntel
+Model name:                              Intel(R) Core(TM) i5-7300U CPU @ 2.60GHz
+CPU family:                              6
+Model:                                   142
+Thread(s) per core:                      2
+Core(s) per socket:                      2
+Socket(s):                               1
+Stepping:                                9
+Microcode version:                       0xec
+CPU(s) scaling MHz:                      88%
+CPU max MHz:                             3500.0000
+CPU min MHz:                             400.0000
+BogoMIPS:                                5399.81
+Flags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb pti ssbd ibrs ibpb stibp tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust sgx bmi1 avx2 smep bmi2 erms invpcid mpx rdseed adx smap clflushopt intel_pt xsaveopt xsavec xgetbv1 xsaves dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp vnmi md_clear flush_l1d arch_capabilities
+Virtualization:                          VT-x
+L1d cache:                               64 KiB (2 instances)
+L1i cache:                               64 KiB (2 instances)
+L2 cache:                                512 KiB (2 instances)
+L3 cache:                                3 MiB (1 instance)
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-3
+Vulnerability Gather data sampling:      Vulnerable: No microcode
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             KVM: Mitigation: Split huge pages
+Vulnerability L1tf:                      Mitigation; PTE Inversion; VMX conditional cache flushes, SMT vulnerable
+Vulnerability Mds:                       Mitigation; Clear CPU buffers; SMT vulnerable
+Vulnerability Meltdown:                  Mitigation; PTI
+Vulnerability Mmio stale data:           Mitigation; Clear CPU buffers; SMT vulnerable
+Vulnerability Old microcode:             Vulnerable
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Mitigation; IBRS
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; IBRS; IBPB conditional; STIBP conditional; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+Vulnerability Srbds:                     Mitigation; Microcode
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Mitigation; TSX disabled
+Vulnerability Vmscape:                   Mitigation; IBPB before exit to userspace
+               total        used        free      shared  buff/cache   available
+Mem:           7.5Gi       2.6Gi       1.2Gi       196Mi       4.3Gi       4.9Gi
+Swap:          4.0Gi       1.6Gi       2.4Gi
+20HES0Y906
+NAME="Arch Linux"
+PRETTY_NAME="Arch Linux"
+ID=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;23;147;209"
+HOME_URL="https://archlinux.org/"
+DOCUMENTATION_URL="https://wiki.archlinux.org/"
+SUPPORT_URL="https://bbs.archlinux.org/"
+BUG_REPORT_URL="https://gitlab.archlinux.org/groups/archlinux/-/issues"
+PRIVACY_POLICY_URL="https://terms.archlinux.org/docs/privacy-policy/"
+LOGO=archlinux-logo
+rustc 1.98.1 (48a229cea 2026-09-01)
+binary: rustc
+commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985
+commit-date: 2026-09-01
+host: x86_64-unknown-linux-gnu
+release: 1.98.1
+LLVM version: 22.1.8
+cargo 1.98.1 (797e8a9bc 2026-08-05)
+3aa4ba58d4d24e6c8ff1d823312694091469c78baf2f806d28a09fade439670e  /home/marcus/omnia/target/release/deps/follow_command-214e85a1ab50960b
+HEAD=29d25b238a87abd85ac021a51d30adf47f007ca4
+c3e3ef06cfe324f981cc7100204d563771d90c3ba14c94193078b1b426ab1714  crates/omnia-doc/Cargo.toml
+6294a85a2fa24ff0886b439f609d0e9dc60c3596a15b757b5d1585bf3ce0f97a  crates/omnia-doc/proptest-regressions/command.txt
+7418bd1b536ae30cd0522caa21cce0b63125488dfea83f82ffb070b2e758c298  crates/omnia-doc/proptest-regressions/follow.txt
+ef932ed5f27976c97cf6786e986a75e485a43bc9708a310d320e4f0e380c3034  crates/omnia-doc/proptest-regressions/route.txt
+97b216481e9513d19a4194818403668ceb520ec2a6976304fd515693ffbb0314  crates/omnia-doc/src/arena.rs
+fbcc067af4efe7cf8f3d5cd9cf1015a9c945f8e6bf50d1e136343f3732f989eb  crates/omnia-doc/src/command.rs
+a4b033cf7c52d81b88a2773faa2a7e4a8f11d4d829578147613af4b3ce24792c  crates/omnia-doc/src/connectivity.rs
+0fc82d02f7540a07150d619eb98d8b145931e9270ff143bfe7918bd3dfa5970f  crates/omnia-doc/src/doc.rs
+ba7219f615e2eb575785126bf399b8dcb3d346cc84d9cdd589d2220d9d84ee32  crates/omnia-doc/src/follow.rs
+8dd014d1b1b119be455dd364f49ba9cb33a5a8e90f0e44b2f31bf1c53bb5a1f4  crates/omnia-doc/src/geom.rs
+f6faccae44d4d0d9d1fe34e25bee1f3c592ea20a9e07313934b62c46fa50d66a  crates/omnia-doc/src/hit.rs
+fbf7b7a4d933d68ed3f46bf48efeb85d594633a1028e036d7d7bd73d178f15c7  crates/omnia-doc/src/index.rs
+37baf2676934768662e29846ed2fa34c583a23cbd7991bf411bcb875c17cb0fd  crates/omnia-doc/src/io.rs
+8257d1b76be10e303dcad2eed449cddc1ab1b30bc690afe1add80ddb3a96c4af  crates/omnia-doc/src/lib.rs
+b98dbed970232cdfa532648a98a13f4faaeb0e6844315f24b7c1d34f9df8d9a8  crates/omnia-doc/src/points.rs
+6db348f63b60121ef5c7cc4b9000fb762fb040cfe07d0e4547b36dbaf96d1457  crates/omnia-doc/src/prefs.rs
+5b88fbee6cc6abd7bbf82db05ec579009dab9614683c6761ae0525c0662653e6  crates/omnia-doc/src/route.rs
+c59b38f59dee41f68b0aa58091a79c336b6a5eb20e117733b4337386effa8a03  crates/omnia-doc/src/run.rs
+7026835868c56aeb30c71278233806be340cb550d4e7415014d6f05fadc8a4ce  crates/omnia-doc/src/snap.rs
+fcbf8fed4dcc414eee0173846d39d67c76e80d7773c48fb68868140940e3e0b5  crates/omnia-doc/src/undo.rs
+41dc0bf38ef8ab6da51f549ac9bbbf6a7c36e2c0122c53cd94611f70a8e203bc  crates/omnia-doc/tests/add_wires_timing.rs
+81a9a2f4b97e14e845b57a87a253558d198f14618c4181648672ba0c44637c53  crates/omnia-doc/tests/change_contract.rs
+38f837ccb172099d1efd56a21e7c0470107f74b82718c1bf645398ebc2020f14  crates/omnia-doc/tests/follow_alloc.rs
+86227c9db30c0c354d9f8e4a76058b2a1c98c44a67dbcaafd73dec2055d25fe2  crates/omnia-doc/tests/index_alloc.rs
+fb79fa440ea709f9d4d22e4938d96b9f9da5c380fd3719b884216a409dd79502  crates/omnia-doc/tests/route_alloc.rs
+6a78de44a1acd69c080a15ca73dcb2ca9b8250f9e40d18bdeb9854a0b60e5e1f  crates/omnia-symbols/.gitattributes
+e1c53eafd21e84f753bca5b9e3b927a575bd70335b40da04adfbe252ebca7a72  crates/omnia-symbols/Cargo.toml
+c4b9e02026bf2fc7d6b4e0ecd37ec33c237ffb71a3a72f4a50b0a392c05d205f  crates/omnia-symbols/pins.toml
+b7e9dfe4ed85d49ae198a00636ca93ded0fe4dffa71552fbcb1d4f5eafa912d2  crates/omnia-symbols/src/generated.rs
+b43b1d0397ab2a3a839ed36c4c1257350e286f2675d92265c0d7d8cbbdb81106  crates/omnia-symbols/src/lib.rs
+b8d7a03c4711f50a29a2b7542b5f12d45456baeb8789762585476c44638edfc7  crates/omnia-symbols/tests/symbols.rs
+d9639659428a57300af29c561b6fdb45ca8d7b79b947d4851690900b11f7f3fd  crates/omnia-bench/Cargo.toml
+b57b9f30e5ef09b8eb21f9b2d0d2c487b0fe0f7b3f8ead91e0f087e80c18e5fd  crates/omnia-bench/src/generate.rs
+cdffe760f3a27abbd4402b6de07f419f04674ddc91c7673eada7b4f90b6c096c  crates/omnia-bench/benches/follow_command.rs
+a5a30d1a23d910119809b7f440bce94cd4703a192dad2864aed8eb95860fa05e  docs/measurements/W2.2/run.sh
+9298db4a961819fcec7b19d3ab736d7dc126790834234890212af07be9cb262d  docs/measurements/W2.2/summarize.py
+==========
+VULKANINFO
+==========
+
+Vulkan Instance Version: 1.4.357
+
+
+Instance Extensions: count = 26
+-------------------------------
+VK_EXT_acquire_drm_display             : extension revision 1
+VK_EXT_acquire_xlib_display            : extension revision 1
+VK_EXT_debug_report                    : extension revision 10
+VK_EXT_debug_utils                     : extension revision 2
+VK_EXT_direct_mode_display             : extension revision 1
+VK_EXT_display_surface_counter         : extension revision 1
+VK_EXT_headless_surface                : extension revision 1
+VK_EXT_layer_settings                  : extension revision 2
+VK_EXT_surface_maintenance1            : extension revision 1
+VK_EXT_swapchain_colorspace            : extension revision 5
+VK_KHR_device_group_creation           : extension revision 1
+VK_KHR_display                         : extension revision 23
+VK_KHR_external_fence_capabilities     : extension revision 1
+VK_KHR_external_memory_capabilities    : extension revision 1
+VK_KHR_external_semaphore_capabilities : extension revision 1
+VK_KHR_get_display_properties2         : extension revision 1
+VK_KHR_get_physical_device_properties2 : extension revision 2
+VK_KHR_get_surface_capabilities2       : extension revision 1
+VK_KHR_portability_enumeration         : extension revision 1
+VK_KHR_surface                         : extension revision 25
+VK_KHR_surface_maintenance1            : extension revision 1
+VK_KHR_surface_protected_capabilities  : extension revision 1
+VK_KHR_wayland_surface                 : extension revision 6
+VK_KHR_xcb_surface                     : extension revision 6
+VK_KHR_xlib_surface                    : extension revision 6
+VK_LUNARG_direct_driver_loading        : extension revision 1
+
+Instance Layers: count = 2
+--------------------------
+VK_LAYER_MESA_anti_lag      Open-source implementation of the VK_AMD_anti_lag extension. 1.4.303  version 1
+VK_LAYER_MESA_device_select Linux device selection layer                                 1.4.303  version 1
+
+Devices:
+========
+GPU0:
+	apiVersion         = 1.4.354
+	driverVersion      = 26.2.3
+	vendorID           = 0x8086
+	deviceID           = 0x5916
+	deviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+	deviceName         = Intel(R) HD Graphics 620 (KBL GT2)
+	driverID           = DRIVER_ID_INTEL_OPEN_SOURCE_MESA
+	driverName         = Intel open-source Mesa driver
+	driverInfo         = Mesa 26.2.3-arch1.1
+	conformanceVersion = 1.4.0.0
+	deviceUUID         = 86801659-0200-0000-0002-000000000000
+	driverUUID         = 274058c8-ae5f-3692-185a-178664ac3fca
+GPU1:
+	apiVersion         = 1.4.354
+	driverVersion      = 26.2.3
+	vendorID           = 0x10005
+	deviceID           = 0x0000
+	deviceType         = PHYSICAL_DEVICE_TYPE_CPU
+	deviceName         = llvmpipe (LLVM 22.1.8, 256 bits)
+	driverID           = DRIVER_ID_MESA_LLVMPIPE
+	driverName         = llvmpipe
+	driverInfo         = Mesa 26.2.3-arch1.1 (LLVM 22.1.8)
+	conformanceVersion = 1.3.1.1
+	deviceUUID         = 6d657361-3236-2e32-2e33-2d6172636800
+	driverUUID         = 6c6c766d-7069-7065-5555-494400000000

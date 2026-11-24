@@ -11,13 +11,20 @@
 
 use std::cell::Cell;
 
-use crate::{GRID_NM, GeomError, ItemId, Pt, Rect, SHEET_LIMIT_NM};
+use crate::{GRID_NM, GeomError, ItemId, Pt, Rect, SHEET_LIMIT_NM, WireId};
 
 /// K12: the side of one index cell, 8 grid steps.
 pub const INDEX_CELL_NM: i32 = 8 * GRID_NM;
 
 /// Cells per axis: enough to cover `-SHEET_LIMIT_NM..=SHEET_LIMIT_NM`.
-const CELLS_PER_AXIS: usize = (2 * SHEET_LIMIT_NM as i64 / INDEX_CELL_NM as i64) as usize + 1;
+pub(crate) const CELLS_PER_AXIS: usize =
+    (2 * SHEET_LIMIT_NM as i64 / INDEX_CELL_NM as i64) as usize + 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CellItem {
+    item: ItemId,
+    bounds: Rect,
+}
 
 #[derive(Debug, Default, Clone)]
 struct Entry {
@@ -51,7 +58,7 @@ impl Entries {
 #[derive(Debug, Clone)]
 pub struct SpatialIndex {
     /// Row-major, `CELLS_PER_AXIS` squared; each cell lists the items whose bounds meet it.
-    cells: Vec<Vec<ItemId>>,
+    cells: Vec<Vec<CellItem>>,
     parts: Entries,
     wires: Entries,
     labels: Entries,
@@ -103,7 +110,7 @@ impl SpatialIndex {
         let (x0, y0, x1, y1) = cell_span(bounds);
         for cy in y0..=y1 {
             for cx in x0..=x1 {
-                self.cells[cy * CELLS_PER_AXIS + cx].push(item);
+                self.cells[cy * CELLS_PER_AXIS + cx].push(CellItem { item, bounds });
             }
         }
         let entry = self.entry_mut(item);
@@ -126,7 +133,7 @@ impl SpatialIndex {
                 let cell = &mut self.cells[cy * CELLS_PER_AXIS + cx];
                 let at = cell
                     .iter()
-                    .position(|&i| i == item)
+                    .position(|ci| ci.item == item)
                     .expect("indexed item missing from a cell it spans");
                 cell.swap_remove(at);
             }
@@ -143,7 +150,7 @@ impl SpatialIndex {
             out.clear();
             return;
         }
-        self.query_with(area, out, |_, bounds| bounds.intersects(area));
+        self.query_with(area, out, |_, _| true);
     }
 
     /// Replaces `out` with every item whose indexed bounds intersect `area` (edges and corners
@@ -154,11 +161,87 @@ impl SpatialIndex {
         &self,
         area: Rect,
         out: &mut Vec<ItemId>,
+        predicate: impl FnMut(ItemId, Rect) -> bool,
+    ) {
+        self.query_with(area, out, predicate);
+    }
+
+    /// As [`SpatialIndex::query_filtered`], but leaves the visit stamps alone, so a reader
+    /// that must not change the index at all (the follow planner, W2.1) can query it. An
+    /// item registered in several cells is met once per cell; sorting `out` by kind, then
+    /// id, removes the repeats. Allocates nothing when `out` has room for every visit.
+    #[cfg(test)]
+    pub(crate) fn query_filtered_unstamped(
+        &self,
+        area: Rect,
+        out: &mut Vec<ItemId>,
         mut predicate: impl FnMut(ItemId, Rect) -> bool,
     ) {
-        self.query_with(area, out, |item, bounds| {
-            bounds.intersects(area) && predicate(item, bounds)
-        });
+        debug_assert!(area.min.x <= area.max.x && area.min.y <= area.max.y);
+        out.clear();
+        let (x0, y0, x1, y1) = cell_span(area);
+        for cy in y0..=y1 {
+            let row = &self.cells[cy * CELLS_PER_AXIS..][..CELLS_PER_AXIS];
+            for cell in &row[x0..=x1] {
+                for &ci in cell {
+                    if ci.bounds.intersects(area) && predicate(ci.item, ci.bounds) {
+                        out.push(ci.item);
+                    }
+                }
+            }
+        }
+        if x0 != x1 || y0 != y1 {
+            out.sort_unstable_by_key(|&item| item_key(item));
+            out.dedup();
+        }
+    }
+
+    /// Streams every part and wire whose indexed bounds intersect `area` (normalised),
+    /// without allocating or touching visit stamps (W2.1 purity). An item spanning several
+    /// cells under `area` is visited once per shared cell; for a 1D axis-aligned segment
+    /// `area`, every perpendicular wire shares at most one cell with `area`.
+    pub(crate) fn visit_parts_and_wires_unstamped(
+        &self,
+        area: Rect,
+        mut on_item: impl FnMut(ItemId, Rect),
+    ) {
+        debug_assert!(area.min.x <= area.max.x && area.min.y <= area.max.y);
+        let (x0, y0, x1, y1) = cell_span(area);
+        for cy in y0..=y1 {
+            let row = &self.cells[cy * CELLS_PER_AXIS..][..CELLS_PER_AXIS];
+            for cell in &row[x0..=x1] {
+                for &ci in cell {
+                    if ci.bounds.intersects(area) && !matches!(ci.item, ItemId::Label(_)) {
+                        on_item(ci.item, ci.bounds);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Streams every wire whose indexed bounds intersect `area` (normalised),
+    /// without allocating or touching visit stamps (W2.1 purity).
+    pub(crate) fn visit_wires_unstamped(&self, area: Rect, mut on_wire: impl FnMut(WireId, Rect)) {
+        debug_assert!(area.min.x <= area.max.x && area.min.y <= area.max.y);
+        let (x0, y0, x1, y1) = cell_span(area);
+        for cy in y0..=y1 {
+            let row = &self.cells[cy * CELLS_PER_AXIS..][..CELLS_PER_AXIS];
+            for cell in &row[x0..=x1] {
+                for &ci in cell {
+                    if let ItemId::Wire(id) = ci.item
+                        && ci.bounds.intersects(area)
+                    {
+                        on_wire(id, ci.bounds);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Number of K12 cells spanned by a normalised rectangle `area`.
+    pub(crate) fn cell_count(area: Rect) -> usize {
+        let (x0, y0, x1, y1) = cell_span(area);
+        (x1 - x0 + 1).saturating_mul(y1 - y0 + 1)
     }
 
     fn query_with(
@@ -174,14 +257,19 @@ impl SpatialIndex {
         for cy in y0..=y1 {
             let row = &self.cells[cy * CELLS_PER_AXIS..][..CELLS_PER_AXIS];
             for cell in &row[x0..=x1] {
-                for &item in cell {
-                    let entry = self.entry(item).expect("cell lists an item with no entry");
+                for &ci in cell {
+                    if !ci.bounds.intersects(area) {
+                        continue;
+                    }
+                    let entry = self
+                        .entry(ci.item)
+                        .expect("cell lists an item with no entry");
                     if entry.stamp.get() == generation {
                         continue;
                     }
                     entry.stamp.set(generation);
-                    if entry.bounds.is_some_and(|bounds| matches(item, bounds)) {
-                        out.push(item);
+                    if matches(ci.item, ci.bounds) {
+                        out.push(ci.item);
                     }
                 }
             }
@@ -227,6 +315,15 @@ impl SpatialIndex {
     }
 }
 
+#[cfg(test)]
+fn item_key(item: ItemId) -> (u8, u32) {
+    match item {
+        ItemId::Part(id) => (0, id.0),
+        ItemId::Wire(id) => (1, id.0),
+        ItemId::Label(id) => (2, id.0),
+    }
+}
+
 fn item_index(item: ItemId) -> u32 {
     match item {
         ItemId::Part(id) => id.0,
@@ -236,9 +333,9 @@ fn item_index(item: ItemId) -> u32 {
 }
 
 /// Column of `v`, clamped to the grid so an area reaching past K1 still walks valid cells.
-fn cell_of(v: i32) -> usize {
+pub(crate) fn cell_of(v: i32) -> usize {
     let offset = (i64::from(v) + i64::from(SHEET_LIMIT_NM)).clamp(0, 2 * i64::from(SHEET_LIMIT_NM));
-    (offset / i64::from(INDEX_CELL_NM)) as usize
+    ((offset as u32) / (INDEX_CELL_NM as u32)) as usize
 }
 
 pub(crate) fn normalize_rect(r: Rect) -> Rect {
@@ -316,7 +413,14 @@ mod tests {
         index.insert(wire, body).unwrap();
         let row = cell_of(0);
         for cx in 0..CELLS_PER_AXIS {
-            assert_eq!(index.cells[row * CELLS_PER_AXIS + cx], [wire], "cell {cx}");
+            assert_eq!(
+                index.cells[row * CELLS_PER_AXIS + cx],
+                [CellItem {
+                    item: wire,
+                    bounds: body
+                }],
+                "cell {cx}"
+            );
         }
         let total: usize = index.cells.iter().map(Vec::len).sum();
         assert_eq!(total, CELLS_PER_AXIS);
@@ -552,6 +656,51 @@ mod tests {
         }
     }
 
+    proptest! {
+        /// `query_filtered_unstamped` equals a brute-force scan, returns each item once, and
+        /// leaves the index exactly as it was, stamps and generation included (W2.1, W2.2).
+        #[test]
+        fn query_filtered_unstamped_matches_brute_force_and_keeps_stamps(
+            ops in prop::collection::vec(
+                prop_oneof![
+                    4 => (any_item(), prop_oneof![any_rect(), wire_rect()])
+                        .prop_map(|(i, r)| (0u8, i, r)),
+                    1 => any_item().prop_map(|i| (1u8, i, rect(0, 0, 0, 0))),
+                    3 => raw_box().prop_map(|r| (2u8, ItemId::Part(PartId(0)), r)),
+                ],
+                1..200,
+            )
+        ) {
+            let mut index = SpatialIndex::new();
+            let mut model: BTreeMap<(u8, u32), (ItemId, Rect)> = BTreeMap::new();
+            let mut out = Vec::new();
+            for (kind, item, bounds) in ops {
+                match kind {
+                    0 => {
+                        index.insert(item, bounds).unwrap();
+                        model.insert(key(item), (item, bounds));
+                    }
+                    1 => {
+                        index.remove(item);
+                        model.remove(&key(item));
+                    }
+                    _ => {
+                        let norm = normalize_rect(bounds);
+                        let before = format!("{index:?}");
+                        index.query_filtered_unstamped(norm, &mut out, |item, b| {
+                            assert!(b.intersects(norm), "predicate called for non-intersecting item");
+                            norm.contains_rect(b) && !matches!(item, ItemId::Label(_))
+                        });
+                        prop_assert_eq!(before, format!("{index:?}"), "the index changed");
+                        let unique: HashSet<_> = out.iter().map(|&i| key(i)).collect();
+                        prop_assert_eq!(unique.len(), out.len(), "duplicate in query result");
+                        prop_assert_eq!(sorted(&out), brute_filtered(&model, norm));
+                    }
+                }
+            }
+        }
+    }
+
     fn brute_filtered(items: &BTreeMap<(u8, u32), (ItemId, Rect)>, area: Rect) -> Vec<(u8, u32)> {
         items
             .iter()
@@ -698,5 +847,52 @@ mod tests {
         index.query_filtered(pt_box, &mut out, |_, b| pt_box.contains_rect(b));
         assert_eq!(sorted(&out), vec![key(label_pt)]);
         assert_eq!(index.generation.get(), 1);
+    }
+
+    #[test]
+    fn visit_parts_and_wires_unstamped_matches_and_keeps_stamps() {
+        let mut index = SpatialIndex::new();
+        let big = INDEX_CELL_NM;
+        index
+            .insert(ItemId::Part(PartId(0)), rect(0, 0, big * 2, big * 2))
+            .unwrap();
+        index
+            .insert(ItemId::Wire(WireId(1)), rect(0, big / 2, big * 3, big / 2))
+            .unwrap();
+        index
+            .insert(ItemId::Wire(WireId(2)), rect(big, -big, big, big * 2))
+            .unwrap();
+        index
+            .insert(ItemId::Label(LabelId(3)), rect(big, big / 2, big, big / 2))
+            .unwrap();
+
+        let before = format!("{index:?}");
+        let seg_h = rect(0, big / 2, big * 3, big / 2);
+        let mut visited_parts = Vec::new();
+        let mut visited_wires = Vec::new();
+        index.visit_parts_and_wires_unstamped(seg_h, |item, _| match item {
+            ItemId::Part(_) => visited_parts.push(item),
+            ItemId::Wire(_) => visited_wires.push(item),
+            ItemId::Label(_) => unreachable!(),
+        });
+        // Perpendicular WireId(2) spans multiple cells vertically, yet meets horizontal seg_h in one cell.
+        assert_eq!(
+            visited_wires
+                .iter()
+                .filter(|&&i| i == ItemId::Wire(WireId(2)))
+                .count(),
+            1
+        );
+        let mut got = visited_parts;
+        got.extend(visited_wires);
+        let mut got_keys = sorted(&got);
+        got_keys.dedup();
+
+        let mut want = Vec::new();
+        index.query_filtered_unstamped(seg_h, &mut want, |item, _| {
+            !matches!(item, ItemId::Label(_))
+        });
+        assert_eq!(got_keys, sorted(&want));
+        assert_eq!(before, format!("{index:?}"));
     }
 }

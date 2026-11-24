@@ -166,7 +166,7 @@ impl Doc {
         let Some(anchor) = self.anchor_at(at, None) else {
             return;
         };
-        for &end in self.points.at(at) {
+        for end in self.points.at(at) {
             let End::Wire(first) = end else { continue };
             let mut run = Run::default();
             let far = self
@@ -206,7 +206,7 @@ impl Doc {
             self.points
                 .at(at)
                 .iter()
-                .any(|&end| matches!(end, End::Wire(w) if !selected(w)))
+                .any(|end| matches!(end, End::Wire(w) if !selected(w)))
         };
         for &item in items {
             match item {
@@ -236,7 +236,7 @@ impl Doc {
     pub fn affected_runs(&self, boundary: &Boundary, out: &mut Vec<Run>) {
         out.clear();
         for &start in &boundary.points {
-            for &end in self.points.at(start) {
+            for end in self.points.at(start) {
                 let End::Wire(first) = end else { continue };
                 if boundary.is_selected(first) {
                     continue;
@@ -290,7 +290,7 @@ impl Doc {
         let ends = self.points.at(at);
         let pin = ends
             .iter()
-            .filter_map(|&end| match end {
+            .filter_map(|end| match end {
                 End::Pin { part, pin } => Some((part.0, pin)),
                 End::Wire(_) => None,
             })
@@ -329,16 +329,10 @@ impl Doc {
             if let Some(anchor) = self.anchor_at(next, boundary) {
                 return Some((next, anchor));
             }
-            let other = match *self.points.at(next) {
-                [End::Wire(x), End::Wire(y)] => {
-                    if x == current {
-                        y
-                    } else {
-                        x
-                    }
-                }
-                _ => unreachable!("a corner holds exactly two wire ends"),
+            let Some((x, y)) = self.points.at(next).two_wires() else {
+                unreachable!("a corner holds exactly two wire ends");
             };
+            let other = if x == current { y } else { x };
             // A selected wire beyond a corner makes that corner a boundary point; this guards a
             // boundary built from a different selection.
             if boundary.is_some_and(|b| b.is_selected(other)) {
