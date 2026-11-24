@@ -20,32 +20,275 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{Doc, ItemId, PartId, Pt, Rect, Wire, WireId, points::End};
 
+/// Threshold above which local obstacle slices are sorted for binary search;
+/// smaller slices are scanned linearly in L1 cache.
+const LOCAL_SORT_THRESHOLD: usize = 24;
+
+/// Cached part body lookup inside a [`LocalPart`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum BodyCache {
+    Unknown,
+    None,
+    Some(Rect),
+}
+
+/// Cached obstacle part inside a local dogleg window.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocalPart {
+    pub id: PartId,
+    pub envelope: Rect,
+    pub body: BodyCache,
+    /// `u32::MAX` until lazily populated on first envelope intersection.
+    pub pins_start: u32,
+    pub pins_len: u32,
+}
+
+/// Cached obstacle wire inside a local dogleg window, pre-split by orientation.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LocalWire {
+    pub id: WireId,
+    pub wire: Wire,
+    /// Fixed coordinate: `y` for horizontal, `x` for vertical.
+    pub fixed: i32,
+    /// Minimum coordinate along the wire's axis.
+    pub lo: i32,
+    /// Maximum coordinate along the wire's axis.
+    pub hi: i32,
+}
+
+/// Reusable L1-hot snapshot of obstacles intersecting a dogleg reach box.
+/// Kept inside [`RouteScratch`] so warm routes allocate nothing.
+#[derive(Debug, Default)]
+pub(crate) struct LocalObstacles {
+    pub parts: Vec<LocalPart>,
+    pub pins: Vec<Pt>,
+    /// Horizontal wires; sorted by `(fixed = y, lo = min.x, id.0)` iff `wires_h_sorted`.
+    pub wires_h: Vec<LocalWire>,
+    /// Vertical wires; sorted by `(fixed = x, lo = min.y, id.0)` iff `wires_v_sorted`.
+    pub wires_v: Vec<LocalWire>,
+    pub wires_h_sorted: bool,
+    pub wires_v_sorted: bool,
+    /// Reservations; sorted by `(y, x, id.0)` iff `res_yx_sorted`.
+    pub res_yx: Vec<(Pt, PartId)>,
+    /// Reservations sorted by `(x, y, id.0)`, populated iff `res_xy_sorted`.
+    pub res_xy: Vec<(Pt, PartId)>,
+    pub res_yx_sorted: bool,
+    pub res_xy_sorted: bool,
+    /// Scratch deduplication buffers reused across calls.
+    pub seen_parts: Vec<(PartId, Rect, Option<Rect>)>,
+    pub seen_wires: Vec<(WireId, Wire)>,
+}
+
+impl LocalObstacles {
+    pub(crate) fn clear(&mut self) {
+        self.parts.clear();
+        self.pins.clear();
+        self.wires_h.clear();
+        self.wires_v.clear();
+        self.wires_h_sorted = false;
+        self.wires_v_sorted = false;
+        self.res_yx.clear();
+        self.res_xy.clear();
+        self.res_yx_sorted = false;
+        self.res_xy_sorted = false;
+        self.seen_parts.clear();
+        self.seen_wires.clear();
+    }
+
+    pub(crate) fn finish(&mut self) {
+        if self.seen_parts.len() > 1 {
+            self.seen_parts.sort_unstable_by_key(|&(id, _, _)| id.0);
+            self.seen_parts.dedup_by_key(|(id, _, _)| id.0);
+        }
+        for &(id, envelope, cached_body) in &self.seen_parts {
+            let body = match cached_body {
+                Some(r) => BodyCache::Some(r),
+                None => BodyCache::Unknown,
+            };
+            self.parts.push(LocalPart {
+                id,
+                envelope,
+                body,
+                pins_start: u32::MAX,
+                pins_len: 0,
+            });
+        }
+        if self.seen_wires.len() > 1 {
+            self.seen_wires.sort_unstable_by_key(|&(id, _)| id.0);
+            self.seen_wires.dedup_by_key(|(id, _)| id.0);
+        }
+        for &(id, wire) in &self.seen_wires {
+            if wire.a.y == wire.b.y {
+                self.wires_h.push(LocalWire {
+                    id,
+                    wire,
+                    fixed: wire.a.y,
+                    lo: wire.a.x.min(wire.b.x),
+                    hi: wire.a.x.max(wire.b.x),
+                });
+            } else {
+                self.wires_v.push(LocalWire {
+                    id,
+                    wire,
+                    fixed: wire.a.x,
+                    lo: wire.a.y.min(wire.b.y),
+                    hi: wire.a.y.max(wire.b.y),
+                });
+            }
+        }
+        if self.wires_h.len() > LOCAL_SORT_THRESHOLD {
+            self.wires_h
+                .sort_unstable_by_key(|w| (w.fixed, w.lo, w.id.0));
+            self.wires_h_sorted = true;
+        }
+        if self.wires_v.len() > LOCAL_SORT_THRESHOLD {
+            self.wires_v
+                .sort_unstable_by_key(|w| (w.fixed, w.lo, w.id.0));
+            self.wires_v_sorted = true;
+        }
+        if self.res_yx.len() > LOCAL_SORT_THRESHOLD {
+            if !self.res_yx_sorted {
+                self.res_yx
+                    .sort_unstable_by_key(|&(p, id)| (p.y, p.x, id.0));
+                self.res_yx_sorted = true;
+            }
+            self.res_xy.extend_from_slice(&self.res_yx);
+            self.res_xy
+                .sort_unstable_by_key(|&(p, id)| (p.x, p.y, id.0));
+            self.res_xy_sorted = true;
+        }
+    }
+
+    #[inline]
+    fn part_pins<S: RouteSheet>(&mut self, idx: usize, sheet: &S) -> &[Pt] {
+        let part = &mut self.parts[idx];
+        if part.pins_start == u32::MAX {
+            let start = self.pins.len() as u32;
+            let pins = sheet.pins(part.id);
+            self.pins.extend_from_slice(pins);
+            part.pins_start = start;
+            part.pins_len = pins.len() as u32;
+        }
+        let start = part.pins_start as usize;
+        let end = start + part.pins_len as usize;
+        &self.pins[start..end]
+    }
+
+    #[inline]
+    fn part_body<S: RouteSheet>(&mut self, idx: usize, sheet: &S) -> Option<Rect> {
+        let part = &mut self.parts[idx];
+        match part.body {
+            BodyCache::Some(r) => Some(r),
+            BodyCache::None => None,
+            BodyCache::Unknown => {
+                let b = sheet.part_body(part.id);
+                part.body = match b {
+                    Some(r) => BodyCache::Some(r),
+                    None => BodyCache::None,
+                };
+                b
+            }
+        }
+    }
+}
+
+/// An obstacle emitted by [`RouteSheet::visit_segment`].
+pub(crate) enum SegmentHit<'a> {
+    Part {
+        id: PartId,
+        envelope: Rect,
+        body: Option<Rect>,
+        pins: &'a [Pt],
+    },
+    Wire {
+        id: WireId,
+        wire: Wire,
+    },
+    Res {
+        id: PartId,
+        at: Pt,
+    },
+}
+
 /// What WD4's validator and scorer read from a sheet. [`Doc`] is one; the follow planner's
 /// final-geometry view (W2.1) is another, layered over the document without copying it.
 pub(crate) trait RouteSheet {
     /// As [`Doc::query`]: replaces `out` with the items whose indexed bounds meet `area`.
     /// Order is unspecified; callers must not depend on it.
+    #[cfg(test)]
     fn query(&self, area: Rect, out: &mut Vec<ItemId>);
     /// World pins of a live part returned by [`RouteSheet::query`].
     fn pins(&self, id: PartId) -> &[Pt];
     /// A live wire returned by [`RouteSheet::query`].
+    #[cfg(test)]
     fn wire(&self, id: WireId) -> Wire;
     /// As [`Doc::part_body`].
     fn part_body(&self, id: PartId) -> Option<Rect>;
+    /// Streams every part, wire, and reservation whose indexed bounds meet a normalised 1D
+    /// axis-aligned segment box `area` without allocating or mutating index stamps.
+    ///
+    /// Because `area` is 1D, every perpendicular wire shares at most one K12 cell with `area`
+    /// and is visited at most once (making crossing counts exact without deduplication).
+    /// Parts and parallel wires spanning multiple cells may be visited once per shared cell;
+    /// callers apply only idempotent checks to them.
+    fn visit_segment(&self, area: Rect, horizontal: bool, on_hit: impl FnMut(SegmentHit<'_>))
+    where
+        Self: Sized;
+    /// Populates `out` with deduplicated obstacles intersecting normalised box `area`.
+    fn collect_box(&self, area: Rect, out: &mut LocalObstacles)
+    where
+        Self: Sized;
 }
 
 impl RouteSheet for Doc {
+    #[cfg(test)]
     fn query(&self, area: Rect, out: &mut Vec<ItemId>) {
         Doc::query(self, area, out);
     }
     fn pins(&self, id: PartId) -> &[Pt] {
         Doc::pins(self, id).expect("queried part is live")
     }
+    #[cfg(test)]
     fn wire(&self, id: WireId) -> Wire {
         *Doc::wire(self, id).expect("queried wire is live")
     }
     fn part_body(&self, id: PartId) -> Option<Rect> {
         Doc::part_body(self, id)
+    }
+    fn visit_segment(&self, area: Rect, _horizontal: bool, mut on_hit: impl FnMut(SegmentHit<'_>)) {
+        self.index
+            .visit_parts_and_wires_unstamped(area, |item, bounds| match item {
+                ItemId::Part(id) => on_hit(SegmentHit::Part {
+                    id,
+                    envelope: bounds,
+                    body: None,
+                    pins: Doc::pins(self, id).expect("queried part is live"),
+                }),
+                ItemId::Wire(id) => on_hit(SegmentHit::Wire {
+                    id,
+                    wire: Wire {
+                        a: bounds.min,
+                        b: bounds.max,
+                    },
+                }),
+                ItemId::Label(_) => {}
+            });
+    }
+    fn collect_box(&self, area: Rect, out: &mut LocalObstacles) {
+        out.clear();
+        self.index
+            .visit_parts_and_wires_unstamped(area, |item, bounds| match item {
+                ItemId::Part(id) => out.seen_parts.push((id, bounds, None)),
+                ItemId::Wire(id) => out.seen_wires.push((
+                    id,
+                    Wire {
+                        a: bounds.min,
+                        b: bounds.max,
+                    },
+                )),
+                ItemId::Label(_) => {}
+            });
+        out.finish();
     }
 }
 
@@ -114,7 +357,7 @@ fn shared_stretch(a: Wire, b: Wire) -> bool {
 /// Query buffers contain only items intersecting one segment, not the sheet.
 /// Callers remove the old run from the document view before validating it.
 pub fn check_new_wires(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(), Blocker> {
-    check_new_wires_in(doc, wires, own_ends, &mut Vec::new())
+    check_new_wires_ignoring(doc, wires, &own_ends, &[])
 }
 
 /// [`check_new_wires`] with a caller-owned query buffer: allocates nothing once
@@ -123,42 +366,60 @@ pub fn check_new_wires_in(
     doc: &Doc,
     wires: &[Wire],
     own_ends: [Pt; 2],
-    scratch: &mut Vec<ItemId>,
+    _scratch: &mut Vec<ItemId>,
 ) -> Result<(), Blocker> {
-    check_new_wires_ignoring_in(doc, wires, &own_ends, &[], scratch)
+    check_new_wires_ignoring(doc, wires, &own_ends, &[])
 }
 
-/// [`check_new_wires`] on any [`RouteSheet`], with a caller-owned query buffer.
-pub(crate) fn check_new_wires_on<S: RouteSheet + ?Sized>(
+/// [`check_new_wires`] on any [`RouteSheet`], streaming without allocating.
+pub(crate) fn check_new_wires_on<S: RouteSheet>(
     doc: &S,
     wires: &[Wire],
     own_ends: [Pt; 2],
-    scratch: &mut Vec<ItemId>,
 ) -> Result<(), Blocker> {
-    check_new_wires_ignoring_in(doc, wires, &own_ends, &[], scratch)
+    check_new_wires_ignoring(doc, wires, &own_ends, &[])
 }
 
-fn check_new_wires_ignoring_in<S: RouteSheet + ?Sized>(
+fn check_new_wires_ignoring<S: RouteSheet>(
     doc: &S,
     wires: &[Wire],
     own_ends: &[Pt],
     ignore_wires: &[WireId],
-    scratch: &mut Vec<ItemId>,
 ) -> Result<(), Blocker> {
     if !wires.iter().all(|&w| shape_valid(w)) {
         return Err(Blocker::Sheet);
     }
+    let mut first_overlap = None;
     for &w in wires {
-        doc.query(Rect::from_points(w.a, w.b).unwrap(), scratch);
-        if let Some(blocker) = point_blocker(doc, w, own_ends, ignore_wires, scratch) {
+        let area = Rect::from_points(w.a, w.b).unwrap();
+        let horizontal = w.a.y == w.b.y;
+        let mut points = PointRule::new(w, own_ends);
+        let mut overlaps = OverlapRule::new(w);
+        doc.visit_segment(area, horizontal, |hit| match hit {
+            SegmentHit::Part { id, pins, .. } => {
+                points.part(id, pins);
+            }
+            SegmentHit::Wire { id, wire } => {
+                if !ignore_wires.contains(&id) {
+                    points.wire(id, wire);
+                    if first_overlap.is_none() {
+                        overlaps.wire(id, wire);
+                    }
+                }
+            }
+            SegmentHit::Res { id, at } => {
+                points.consider(at, 0, id.0, 0, Blocker::Pin { part: id, pin: 0 });
+            }
+        });
+        if let Some(blocker) = points.blocker() {
             return Err(blocker);
+        }
+        if first_overlap.is_none() {
+            first_overlap = overlaps.blocker();
         }
     }
-    for &w in wires {
-        doc.query(Rect::from_points(w.a, w.b).unwrap(), scratch);
-        if let Some(blocker) = overlap_blocker(doc, w, ignore_wires, scratch) {
-            return Err(blocker);
-        }
+    if let Some(blocker) = first_overlap {
+        return Err(blocker);
     }
     Ok(())
 }
@@ -166,44 +427,6 @@ fn check_new_wires_ignoring_in<S: RouteSheet + ?Sized>(
 /// WD4 rule 1 for one segment: lattice vertices inside the sheet, axis-aligned, not a point.
 fn shape_valid(w: Wire) -> bool {
     on_lattice(w.a) && on_lattice(w.b) && w.a != w.b && (w.a.x == w.b.x || w.a.y == w.b.y)
-}
-
-/// WD4 rule 2 for one segment, over `items` (the query of the segment's bounds): the
-/// first foreign pin, wire end or (at its vertices) wire interior along it from `w.a`.
-fn point_blocker<S: RouteSheet + ?Sized>(
-    doc: &S,
-    w: Wire,
-    own_ends: &[Pt],
-    ignore_wires: &[WireId],
-    items: &[ItemId],
-) -> Option<Blocker> {
-    let mut rule = PointRule::new(w, own_ends);
-    for &item in items {
-        match item {
-            ItemId::Part(part) => rule.part(part, doc.pins(part)),
-            ItemId::Wire(id) if !ignore_wires.contains(&id) => rule.wire(id, doc.wire(id)),
-            ItemId::Wire(_) | ItemId::Label(_) => {}
-        }
-    }
-    rule.blocker()
-}
-
-/// WD4 rule 3 for one segment, over `items`: the first foreign wire it shares a stretch with.
-fn overlap_blocker<S: RouteSheet + ?Sized>(
-    doc: &S,
-    w: Wire,
-    ignore_wires: &[WireId],
-    items: &[ItemId],
-) -> Option<Blocker> {
-    let mut rule = OverlapRule::new(w);
-    for &item in items {
-        if let ItemId::Wire(id) = item
-            && !ignore_wires.contains(&id)
-        {
-            rule.wire(id, doc.wire(id));
-        }
-    }
-    rule.blocker()
 }
 
 type PointKey = (i64, (i32, i32), u8, u32, usize);
@@ -301,9 +524,6 @@ pub enum Axis {
 pub const DOGLEG_REACH_NM: i32 = 8 * crate::GRID_NM;
 /// WK6: at most this many doglegs per route (after the two L-routes).
 pub const DOGLEG_CAP: usize = 128;
-/// Straight or two L-routes, plus WK6's doglegs.
-const CANDIDATE_CAP: usize = 2 + DOGLEG_CAP;
-
 /// WD4's comparison, lowest first; field order is the comparison order.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 struct Score {
@@ -321,6 +541,7 @@ impl Score {
     /// The comparison as one integer: each field in its own bits, most significant
     /// first, so `a.key() < b.key()` exactly when `a < b`. Length is a sum of
     /// distances, never negative.
+    #[inline]
     fn key(self) -> u128 {
         debug_assert!(self.length >= 0);
         (u128::from(self.bodies) << 120)
@@ -331,27 +552,51 @@ impl Score {
     }
 }
 
+/// Compact dogleg candidate (24 bytes) for fast enumeration and sorting by bound key.
+#[derive(Debug, Clone, Copy)]
+struct Dogleg {
+    length: i64,
+    m: i32,
+    number: u16,
+    horizontal_outer: bool,
+}
+
+impl Dogleg {
+    #[inline]
+    fn wires(self, a: Pt, b: Pt) -> [Wire; 3] {
+        if self.horizontal_outer {
+            let p1 = Pt { x: self.m, y: a.y };
+            let p2 = Pt { x: self.m, y: b.y };
+            [Wire { a, b: p1 }, Wire { a: p1, b: p2 }, Wire { a: p2, b }]
+        } else {
+            let p1 = Pt { x: a.x, y: self.m };
+            let p2 = Pt { x: b.x, y: self.m };
+            [Wire { a, b: p1 }, Wire { a: p1, b: p2 }, Wire { a: p2, b }]
+        }
+    }
+
+    #[inline]
+    fn bound_key(self, min_bodies: u8) -> u128 {
+        Score {
+            bodies: min_bodies,
+            bends: 2,
+            crossings: 0,
+            length: self.length,
+            number: self.number,
+        }
+        .key()
+    }
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct Candidate {
     wires: [Wire; 3],
     len: u8,
-    /// A lower bound while `stage` is [`Stage::Bound`], then the full WD4 score.
     score: Score,
-    /// `score.key()` until checked, then `u128::MAX`.
-    key: u128,
-    stage: Stage,
-    /// Once scored: the blocker [`check_new_wires_in`] reports, `None` when valid.
-    verdict: Option<Blocker>,
 }
 
-/// Where a candidate is in [`route`]'s best-first walk.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Stage {
-    Bound,
-    Scored,
-    Checked,
-}
-
+#[cfg(test)]
 impl Candidate {
     fn wires(&self) -> &[Wire] {
         &self.wires[..self.len as usize]
@@ -359,19 +604,21 @@ impl Candidate {
 }
 
 /// Caller-owned buffers for [`route`]. A warm scratch makes `route` allocation
-/// free: the candidate list is reserved on construction and the query buffer
-/// keeps the capacity of the largest query it has served.
+/// free: the dogleg buffers are reserved on construction and the local obstacle
+/// snapshot keeps the capacity of the largest dogleg box it has served.
 #[derive(Debug)]
 pub struct RouteScratch {
-    candidates: Vec<Candidate>,
-    items: Vec<ItemId>,
+    doglegs: Vec<Dogleg>,
+    deferred_invalid: Vec<u16>,
+    local: LocalObstacles,
 }
 
 impl RouteScratch {
     pub fn new() -> Self {
         Self {
-            candidates: Vec::with_capacity(CANDIDATE_CAP),
-            items: Vec::new(),
+            doglegs: Vec::with_capacity(DOGLEG_CAP),
+            deferred_invalid: Vec::with_capacity(DOGLEG_CAP),
+            local: LocalObstacles::default(),
         }
     }
 }
@@ -392,17 +639,14 @@ impl Default for RouteScratch {
 /// lowest-scoring invalid candidate (the same comparison ranks them). `a == b`
 /// routes to nothing.
 ///
-/// Candidates are scored lazily, best first: bends, length and number need no
-/// query and crossings are never negative, so `(0, bends, 0, length, number)`
-/// bounds each score from below. A segment leaving a point strictly inside a
-/// part body passes through that body, so once the first assessment has seen
-/// whether `a` and `b` lie inside one, the body term rises to that count (one
-/// for a straight, which is a single segment). The walk always
-/// takes the least key, scoring a candidate when its bound is least and checking
-/// it when its full score is least. Candidates are therefore checked in exactly
-/// the order of their full scores, and the result equals scoring and sorting all
-/// of them; only candidates that could still win are queried. Scoring a
-/// candidate also judges its validity from the same per-segment queries.
+/// Candidates are evaluated best first: Stage 1 checks the straight or L-route
+/// base candidates and exits immediately when one provably beats every dogleg
+/// (`bends == 2`, `bodies >= min_bodies`). Stage 2 enumerates doglegs in WD4
+/// order, sorts them once by `(length, number)` (exact bound key order), and
+/// evaluates them validity-first against an L1-hot [`LocalObstacles`] snapshot,
+/// stopping as soon as the next dogleg's lower bound reaches the best valid
+/// score. Invalid doglegs are only fully scored on refusal to determine the
+/// exact minimum-score blocker.
 ///
 /// Doglegs: for `d = 1, 2, ...` grid steps (K2) from `a`'s coordinate, H-V-H
 /// (vertical at `x = m`) then V-H-V (horizontal at `y = m`), each first on the
@@ -426,7 +670,7 @@ pub fn route(
 }
 
 /// [`route`] on any [`RouteSheet`].
-pub(crate) fn route_on<S: RouteSheet + ?Sized>(
+pub(crate) fn route_on<S: RouteSheet>(
     doc: &S,
     a: Pt,
     b: Pt,
@@ -438,86 +682,32 @@ pub(crate) fn route_on<S: RouteSheet + ?Sized>(
     if a == b {
         return Ok(());
     }
-    let RouteScratch { candidates, items } = scratch;
-    enumerate_candidates(a, b, first_leg, candidates);
-    let mut first_blocker = None;
-    let mut probed = false;
-    // Unique candidate numbers make every key distinct, so the least is unique.
-    while let Some(candidate) = candidates
-        .iter_mut()
-        .min_by_key(|c| c.key)
-        .filter(|c| c.stage != Stage::Checked)
-    {
-        if candidate.stage == Stage::Bound {
-            let wires = &candidate.wires[..usize::from(candidate.len)];
-            let (score, verdict, inside) =
-                assess(doc, wires, [a, b], candidate.score.number, items);
-            (candidate.score, candidate.verdict) = (score, verdict);
-            candidate.key = score.key();
-            candidate.stage = Stage::Scored;
-            if !probed {
-                // The first assessment's queries cover both ends; raise every bound.
-                probed = true;
-                let (a_inside, b_inside) = (u8::from(inside[0]), u8::from(inside[1]));
-                for other in candidates.iter_mut().filter(|c| c.stage == Stage::Bound) {
-                    other.score.bodies = if other.len == 1 {
-                        a_inside.max(b_inside)
-                    } else {
-                        a_inside + b_inside
-                    };
-                    other.key = other.score.key();
-                }
-            }
-            continue;
-        }
-        candidate.stage = Stage::Checked;
-        candidate.key = u128::MAX;
-        match candidate.verdict {
-            None => {
-                out.extend_from_slice(candidate.wires());
-                return Ok(());
-            }
-            Some(blocker) => {
-                first_blocker.get_or_insert(blocker);
-            }
-        }
-    }
-    // a != b always yields a candidate (the straight or both Ls).
-    Err(first_blocker.unwrap_or(Blocker::Sheet))
-}
+    let RouteScratch {
+        doglegs,
+        deferred_invalid,
+        local,
+    } = scratch;
 
-fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>) {
-    out.clear();
-    let mut push = |points: &[Pt], number: u16| {
-        let mut wires = [Wire { a, b: a }; 3];
-        for (slot, pair) in wires.iter_mut().zip(points.windows(2)) {
-            *slot = Wire {
-                a: pair[0],
-                b: pair[1],
-            };
+    let ends_on_lattice = on_lattice(a) && on_lattice(b);
+    let mut best_valid: Option<(u128, [Wire; 3], u8)> = None;
+    let mut best_invalid: Option<(u128, Blocker)> = None;
+
+    // Stage 1: evaluate base candidates (straight or the two L-routes) before enumerating
+    // any doglegs. Every dogleg has `bodies >= min_bodies` and `bends == 2`, so any valid
+    // base candidate with `bodies <= min_bodies` strictly beats every dogleg.
+    let min_bodies = if a.x == b.x || a.y == b.y {
+        let w0 = Wire { a, b };
+        let (s0, v0, inside) = assess(doc, &[w0], [a, b], 0, ends_on_lattice);
+        let min_bodies = u8::from(inside[0]) + u8::from(inside[1]);
+        if v0.is_none() && s0.bodies <= min_bodies {
+            out.push(w0);
+            return Ok(());
         }
-        let len = points.len() - 1;
-        // WD4's lower bound: the full score without part bodies and crossings.
-        let score = Score {
-            bends: (len - 1) as u8,
-            length: wires[..len]
-                .iter()
-                .map(|w| w.a.manhattan_distance(w.b))
-                .sum(),
-            number,
-            ..Score::default()
-        };
-        out.push(Candidate {
-            wires,
-            len: len as u8,
-            score,
-            key: score.key(),
-            stage: Stage::Bound,
-            verdict: None,
-        });
-    };
-    if a.x == b.x || a.y == b.y {
-        push(&[a, b], 0);
+        match v0 {
+            None => best_valid = Some((s0.key(), [w0, w0, w0], 1)),
+            Some(blocker) => best_invalid = Some((s0.key(), blocker)),
+        }
+        min_bodies
     } else {
         let horizontal_first = Pt { x: b.x, y: a.y };
         let vertical_first = Pt { x: a.x, y: b.y };
@@ -525,9 +715,170 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
             Axis::Horizontal => (horizontal_first, vertical_first),
             Axis::Vertical => (vertical_first, horizontal_first),
         };
-        push(&[a, first, b], 1);
-        push(&[a, second, b], 2);
+        let w1 = [Wire { a, b: first }, Wire { a: first, b }];
+        let (s1, v1, inside) = assess(doc, &w1, [a, b], 1, ends_on_lattice);
+        let min_bodies = u8::from(inside[0]) + u8::from(inside[1]);
+        // L1 has lower bound `(min_bodies, 1, 0, manhattan, 2)`; if L0 is valid with
+        // `min_bodies` and 0 crossings, L0 provably beats both L1 and every dogleg.
+        if v1.is_none() && s1.bodies == min_bodies && s1.crossings == 0 {
+            out.extend_from_slice(&w1);
+            return Ok(());
+        }
+        let k1 = s1.key();
+        match v1 {
+            None => best_valid = Some((k1, [w1[0], w1[1], w1[0]], 2)),
+            Some(blocker) => best_invalid = Some((k1, blocker)),
+        }
+
+        let w2 = [Wire { a, b: second }, Wire { a: second, b }];
+        let (s2, v2, _) = assess(doc, &w2, [a, b], 2, ends_on_lattice);
+        let k2 = s2.key();
+        match v2 {
+            None => {
+                if best_valid.is_none_or(|(bk, _, _)| k2 < bk) {
+                    best_valid = Some((k2, [w2[0], w2[1], w2[0]], 2));
+                }
+            }
+            Some(blocker) => {
+                if best_invalid.is_none_or(|(bk, _)| k2 < bk) {
+                    best_invalid = Some((k2, blocker));
+                }
+            }
+        }
+
+        // If either L-route is valid with `bodies == min_bodies`, it strictly beats every
+        // dogleg (`bends == 2`); return without enumerating doglegs.
+        let dogleg_floor = Score {
+            bodies: min_bodies,
+            bends: 2,
+            ..Score::default()
+        }
+        .key();
+        if let Some((bk, wires, len)) = best_valid
+            && bk < dogleg_floor
+        {
+            out.extend_from_slice(&wires[..usize::from(len)]);
+            return Ok(());
+        }
+        min_bodies
+    };
+
+    // Stage 2: enumerate doglegs, sort once by exact lower-bound key `(length, number)`,
+    // and walk them best-first.
+    doglegs.clear();
+    enumerate_doglegs(a, b, doglegs);
+    doglegs.sort_unstable_by_key(|d| (d.length, d.number));
+
+    let limit = crate::SHEET_LIMIT_NM;
+    let limit64 = i64::from(limit);
+    let reach = i64::from(DOGLEG_REACH_NM);
+    let dx_reach = if a.y != b.y { reach } else { 0 };
+    let dy_reach = if a.x != b.x { reach } else { 0 };
+    let reach_box = Rect {
+        min: Pt {
+            x: (i64::from(a.x.min(b.x)) - dx_reach).clamp(-limit64, limit64) as i32,
+            y: (i64::from(a.y.min(b.y)) - dy_reach).clamp(-limit64, limit64) as i32,
+        },
+        max: Pt {
+            x: (i64::from(a.x.max(b.x)) + dx_reach).clamp(-limit64, limit64) as i32,
+            y: (i64::from(a.y.max(b.y)) + dy_reach).clamp(-limit64, limit64) as i32,
+        },
+    };
+    let use_local = crate::index::SpatialIndex::cell_count(reach_box) <= 64;
+    if use_local {
+        doc.collect_box(reach_box, local);
+        deferred_invalid.clear();
+        for (idx, &d) in doglegs.iter().enumerate() {
+            let best_key = best_valid.map_or(u128::MAX, |(bk, _, _)| bk);
+            if d.bound_key(min_bodies) >= best_key {
+                break;
+            }
+            let shape_ok = ends_on_lattice && -limit <= d.m && d.m <= limit;
+            if !shape_ok {
+                if best_valid.is_none() {
+                    deferred_invalid.push(idx as u16);
+                }
+                continue;
+            }
+            let wires = d.wires(a, b);
+            match assess_local_for_valid(doc, local, &wires, [a, b], d.number, d.length, best_key) {
+                FastEval::Valid(score) => {
+                    let key = score.key();
+                    if key < best_key {
+                        best_valid = Some((key, wires, 3));
+                    }
+                }
+                FastEval::Invalid => {
+                    if best_valid.is_none() {
+                        deferred_invalid.push(idx as u16);
+                    }
+                }
+                FastEval::Pruned => {}
+            }
+        }
+        if let Some((_, wires, len)) = best_valid {
+            out.extend_from_slice(&wires[..usize::from(len)]);
+            return Ok(());
+        }
+        // Refusal path: score deferred invalid doglegs in bound-key order to find the
+        // exact minimum-score blocker per WD4.
+        for &idx in deferred_invalid.iter() {
+            let d = doglegs[usize::from(idx)];
+            if best_invalid.is_some_and(|(bk, _)| d.bound_key(min_bodies) >= bk) {
+                break;
+            }
+            let wires = d.wires(a, b);
+            let judged = ends_on_lattice && -limit <= d.m && d.m <= limit;
+            let (score, verdict, _) = assess_local(doc, local, &wires, [a, b], d.number, judged);
+            let blocker = verdict.expect("deferred dogleg must be invalid");
+            let key = score.key();
+            if best_invalid.is_none_or(|(bk, _)| key < bk) {
+                best_invalid = Some((key, blocker));
+            }
+        }
+        return Err(best_invalid.map_or(Blocker::Sheet, |(_, b)| b));
     }
+
+    // Large reach-box fallback (> 64 cells): stream segments directly against `doc`.
+    for &d in doglegs.iter() {
+        let bound_key = d.bound_key(min_bodies);
+        if let Some((bk, _, _)) = best_valid
+            && bound_key >= bk
+        {
+            break;
+        }
+        if best_valid.is_none()
+            && let Some((bk, _)) = best_invalid
+            && bound_key >= bk
+        {
+            // No valid candidate so far, and remaining doglegs cannot beat `best_invalid`,
+            // though a later dogleg could still be valid — keep checking!
+        }
+        let wires = d.wires(a, b);
+        let judged = ends_on_lattice && -limit <= d.m && d.m <= limit;
+        let (score, verdict, _) = assess(doc, &wires, [a, b], d.number, judged);
+        let key = score.key();
+        match verdict {
+            None => {
+                if best_valid.is_none_or(|(bk, _, _)| key < bk) {
+                    best_valid = Some((key, wires, 3));
+                }
+            }
+            Some(blocker) => {
+                if best_invalid.is_none_or(|(bk, _)| key < bk) {
+                    best_invalid = Some((key, blocker));
+                }
+            }
+        }
+    }
+    if let Some((_, wires, len)) = best_valid {
+        out.extend_from_slice(&wires[..usize::from(len)]);
+        return Ok(());
+    }
+    Err(best_invalid.map_or(Blocker::Sheet, |(_, b)| b))
+}
+
+fn enumerate_doglegs(a: Pt, b: Pt, out: &mut Vec<Dogleg>) {
     let step = i64::from(crate::GRID_NM);
     let reach = i64::from(DOGLEG_REACH_NM);
     let (ax, ay, bx, by) = (
@@ -536,10 +887,12 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
         i64::from(b.x),
         i64::from(b.y),
     );
-    // (a's coordinate, b's coordinate, low, high): H-V-H (m is an x), then V-H-V.
+    let dx_span = (ax - bx).abs();
+    let dy_span = (ay - by).abs();
+    // (a's coordinate, b's coordinate, low, high, orthogonal span): H-V-H (m is an x), then V-H-V.
     let families = [
-        (ax, bx, ax.min(bx) - reach, ax.max(bx) + reach, a.y != b.y),
-        (ay, by, ay.min(by) - reach, ay.max(by) + reach, a.x != b.x),
+        (ax, bx, ax.min(bx) - reach, ax.max(bx) + reach, dy_span),
+        (ay, by, ay.min(by) - reach, ay.max(by) + reach, dx_span),
     ];
     let max_steps = families
         .iter()
@@ -548,8 +901,8 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
         .unwrap_or(0);
     let mut number = 3u16;
     for d in 1..=max_steps {
-        for (family, &(from, to, lo, hi, has_middle)) in families.iter().enumerate() {
-            if !has_middle {
+        for (family, &(from, to, lo, hi, ortho_span)) in families.iter().enumerate() {
+            if ortho_span == 0 {
                 continue;
             }
             let toward = if to > from { 1 } else { -1 };
@@ -559,15 +912,16 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
                     continue;
                 }
                 // Inside [lo, hi]; i32 for any ends within K1.
-                let Ok(m) = i32::try_from(m) else {
+                let Ok(m_i32) = i32::try_from(m) else {
                     continue;
                 };
-                let points = if family == 0 {
-                    [a, Pt { x: m, y: a.y }, Pt { x: m, y: b.y }, b]
-                } else {
-                    [a, Pt { x: a.x, y: m }, Pt { x: b.x, y: m }, b]
-                };
-                push(&points, number);
+                let length = (from - m).abs() + ortho_span + (m - to).abs();
+                out.push(Dogleg {
+                    length,
+                    m: m_i32,
+                    number,
+                    horizontal_outer: family == 0,
+                });
                 number += 1;
                 if usize::from(number - 3) == DOGLEG_CAP {
                     return;
@@ -577,35 +931,79 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
     }
 }
 
+#[cfg(test)]
+fn make_candidate(a: Pt, points: &[Pt], number: u16) -> Candidate {
+    let mut wires = [Wire { a, b: a }; 3];
+    for (slot, pair) in wires.iter_mut().zip(points.windows(2)) {
+        *slot = Wire {
+            a: pair[0],
+            b: pair[1],
+        };
+    }
+    Candidate {
+        wires,
+        len: (points.len() - 1) as u8,
+        score: Score {
+            number,
+            ..Score::default()
+        },
+    }
+}
+
+#[cfg(test)]
+fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>) {
+    out.clear();
+    if a.x == b.x || a.y == b.y {
+        out.push(make_candidate(a, &[a, b], 0));
+    } else {
+        let horizontal_first = Pt { x: b.x, y: a.y };
+        let vertical_first = Pt { x: a.x, y: b.y };
+        let (first, second) = match first_leg {
+            Axis::Horizontal => (horizontal_first, vertical_first),
+            Axis::Vertical => (vertical_first, horizontal_first),
+        };
+        out.push(make_candidate(a, &[a, first, b], 1));
+        out.push(make_candidate(a, &[a, second, b], 2));
+    }
+    let mut doglegs = Vec::with_capacity(DOGLEG_CAP);
+    enumerate_doglegs(a, b, &mut doglegs);
+    for d in doglegs {
+        out.push(Candidate {
+            wires: d.wires(a, b),
+            len: 3,
+            score: Score {
+                number: d.number,
+                ..Score::default()
+            },
+        });
+    }
+}
+
 /// WD4's score of a candidate and its verdict under [`check_new_wires_in`] with
-/// `own_ends`, from one query and one pass over its items per segment. WD4
-/// scores invalid candidates too: clip only the index query to K1 and keep the
-/// original segment for body and crossing tests. A candidate with a valid shape
-/// lies inside K1, so its clipped query is exactly the validator's query, and
-/// the verdict follows the validator's order: the first segment with a point
-/// blocker, else the first with an overlap. Also reports whether each own end
-/// lies strictly inside a part body (the first segment's query covers the
-/// first end, the last segment's the second).
-fn assess<S: RouteSheet + ?Sized>(
+/// `own_ends`, streaming directly over the index cells per segment without
+/// allocating. WD4 scores invalid candidates too: clip only the index query to
+/// K1 and keep the original segment for body and crossing tests.
+fn assess<S: RouteSheet>(
     doc: &S,
     wires: &[Wire],
     own_ends: [Pt; 2],
     number: u16,
-    items: &mut Vec<ItemId>,
+    judged: bool,
 ) -> (Score, Option<Blocker>, [bool; 2]) {
+    debug_assert_eq!(judged, wires.iter().all(|&w| shape_valid(w)));
     let mut score = Score {
         bends: (wires.len() - 1) as u8,
         number,
         ..Score::default()
     };
-    let judged = wires.iter().all(|&w| shape_valid(w));
     let mut point = None;
     let mut overlap = None;
     let mut inside = [false; 2];
     let last = wires.len() - 1;
+    let limit = crate::SHEET_LIMIT_NM;
     for (index, &w) in wires.iter().enumerate() {
         score.length += w.a.manhattan_distance(w.b);
-        let limit = crate::SHEET_LIMIT_NM;
+        let horizontal = w.a.y == w.b.y;
         let area = Rect {
             min: Pt {
                 x: w.a.x.min(w.b.x).clamp(-limit, limit),
@@ -616,36 +1014,516 @@ fn assess<S: RouteSheet + ?Sized>(
                 y: w.a.y.max(w.b.y).clamp(-limit, limit),
             },
         };
-        doc.query(area, items);
         // Rules 2 and 3 matter only until a point blocker is known.
         let rules = judged && point.is_none();
         // Only a valid shape is judged; its bounds exist (inside K1).
         let mut points = rules.then(|| PointRule::new(w, &own_ends));
         let mut overlaps = OverlapRule::new(w);
         let mut through_body = false;
-        for &item in items.iter() {
-            match item {
-                ItemId::Part(id) => {
-                    if let Some(body) = doc.part_body(id) {
-                        through_body |= passes_through(w, body);
-                        inside[0] |= index == 0 && strictly_inside(body, own_ends[0]);
-                        inside[1] |= index == last && strictly_inside(body, own_ends[1]);
-                    }
-                    if let Some(points) = points.as_mut() {
-                        points.part(id, doc.pins(id));
-                    }
+        doc.visit_segment(area, horizontal, |hit| match hit {
+            SegmentHit::Part {
+                id,
+                envelope,
+                body: cached_body,
+                pins,
+            } => {
+                let need_body = (!through_body && passes_through(w, envelope))
+                    || (index == 0 && !inside[0] && strictly_inside(envelope, own_ends[0]))
+                    || (index == last && !inside[1] && strictly_inside(envelope, own_ends[1]));
+                if need_body && let Some(body) = cached_body.or_else(|| doc.part_body(id)) {
+                    through_body |= passes_through(w, body);
+                    inside[0] |= index == 0 && strictly_inside(body, own_ends[0]);
+                    inside[1] |= index == last && strictly_inside(body, own_ends[1]);
                 }
-                ItemId::Wire(id) => {
-                    let other = doc.wire(id);
-                    score.crossings += u32::from(crosses(w, other));
-                    if let Some(points) = points.as_mut() {
-                        points.wire(id, other);
-                        overlaps.wire(id, other);
-                    }
+                if let Some(points) = points.as_mut() {
+                    points.part(id, pins);
                 }
-                ItemId::Label(_) => {}
+            }
+            SegmentHit::Wire { id, wire } => {
+                score.crossings += u32::from(crosses(w, wire));
+                if let Some(points) = points.as_mut() {
+                    points.wire(id, wire);
+                    overlaps.wire(id, wire);
+                }
+            }
+            SegmentHit::Res { id, at } => {
+                if let Some(points) = points.as_mut() {
+                    points.consider(at, 0, id.0, 0, Blocker::Pin { part: id, pin: 0 });
+                }
+            }
+        });
+        score.bodies += u8::from(through_body);
+        if let Some(points) = points {
+            point = points.blocker();
+            if point.is_none() && overlap.is_none() {
+                overlap = overlaps.blocker();
             }
         }
+    }
+    let verdict = if judged {
+        point.or(overlap)
+    } else {
+        Some(Blocker::Sheet)
+    };
+    (score, verdict, inside)
+}
+
+enum FastEval {
+    Valid(Score),
+    Invalid,
+    Pruned,
+}
+
+#[inline]
+fn parallel_wire_blocks(
+    lo: i32,
+    hi: i32,
+    fixed: i32,
+    horizontal: bool,
+    lw: LocalWire,
+    own_ends: [Pt; 2],
+) -> bool {
+    if lo.max(lw.lo) < hi.min(lw.hi) {
+        return true;
+    }
+    if lo <= lw.lo && lw.lo <= hi {
+        let p = if horizontal {
+            Pt { x: lw.lo, y: fixed }
+        } else {
+            Pt { x: fixed, y: lw.lo }
+        };
+        if p != own_ends[0] && p != own_ends[1] {
+            return true;
+        }
+    }
+    if lo <= lw.hi && lw.hi <= hi {
+        let p = if horizontal {
+            Pt { x: lw.hi, y: fixed }
+        } else {
+            Pt { x: fixed, y: lw.hi }
+        };
+        if p != own_ends[0] && p != own_ends[1] {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline]
+fn perp_wire_check(
+    lo: i32,
+    hi: i32,
+    fixed: i32,
+    horizontal: bool,
+    lw: LocalWire,
+    own_ends: [Pt; 2],
+) -> Result<bool, ()> {
+    if lw.lo == fixed || lw.hi == fixed || lw.fixed == lo || lw.fixed == hi {
+        let p = if horizontal {
+            Pt {
+                x: lw.fixed,
+                y: fixed,
+            }
+        } else {
+            Pt {
+                x: fixed,
+                y: lw.fixed,
+            }
+        };
+        if p != own_ends[0] && p != own_ends[1] {
+            return Err(());
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Validity-first, early-exit evaluation of a valid-shape dogleg against an L1-hot
+/// [`LocalObstacles`] snapshot. Returns `FastEval::Valid(score)` iff the dogleg is valid
+/// and beats `best_valid_key`, `FastEval::Invalid` on the first blocking obstacle, or
+/// `FastEval::Pruned` when the partial score already reaches `best_valid_key`.
+fn assess_local_for_valid<S: RouteSheet>(
+    sheet: &S,
+    local: &mut LocalObstacles,
+    wires: &[Wire; 3],
+    own_ends: [Pt; 2],
+    number: u16,
+    length: i64,
+    best_valid_key: u128,
+) -> FastEval {
+    let mut score = Score {
+        bodies: 0,
+        bends: 2,
+        crossings: 0,
+        length,
+        number,
+    };
+    for &w in wires {
+        let horizontal = w.a.y == w.b.y;
+        let area = Rect {
+            min: Pt {
+                x: w.a.x.min(w.b.x),
+                y: w.a.y.min(w.b.y),
+            },
+            max: Pt {
+                x: w.a.x.max(w.b.x),
+                y: w.a.y.max(w.b.y),
+            },
+        };
+        if horizontal {
+            let y = area.min.y;
+            let (x0, x1) = (area.min.x, area.max.x);
+            // 1. Reservations along `w` (fastest early-exit).
+            if local.res_yx_sorted && local.res_yx.len() > LOCAL_SORT_THRESHOLD {
+                let lo = local.res_yx.partition_point(|&(p, _)| (p.y, p.x) < (y, x0));
+                for &(p, _) in &local.res_yx[lo..] {
+                    if p.y != y || p.x > x1 {
+                        break;
+                    }
+                    if p != own_ends[0] && p != own_ends[1] {
+                        return FastEval::Invalid;
+                    }
+                }
+            } else {
+                for &(p, _) in &local.res_yx {
+                    if p.y == y && x0 <= p.x && p.x <= x1 && p != own_ends[0] && p != own_ends[1] {
+                        return FastEval::Invalid;
+                    }
+                }
+            }
+            // 2. Parallel horizontal wires.
+            if local.wires_h_sorted {
+                let lo = local.wires_h.partition_point(|lw| lw.fixed < y);
+                for &lw in &local.wires_h[lo..] {
+                    if lw.fixed != y || lw.lo > x1 {
+                        break;
+                    }
+                    if lw.hi >= x0 && parallel_wire_blocks(x0, x1, y, true, lw, own_ends) {
+                        return FastEval::Invalid;
+                    }
+                }
+            } else {
+                for &lw in &local.wires_h {
+                    if lw.fixed == y
+                        && lw.lo <= x1
+                        && lw.hi >= x0
+                        && parallel_wire_blocks(x0, x1, y, true, lw, own_ends)
+                    {
+                        return FastEval::Invalid;
+                    }
+                }
+            }
+            // 3. Perpendicular vertical wires.
+            if local.wires_v_sorted {
+                let lo = local.wires_v.partition_point(|lw| lw.fixed < x0);
+                for &lw in &local.wires_v[lo..] {
+                    if lw.fixed > x1 {
+                        break;
+                    }
+                    if lw.lo <= y && y <= lw.hi {
+                        match perp_wire_check(x0, x1, y, true, lw, own_ends) {
+                            Ok(crossed) => score.crossings += u32::from(crossed),
+                            Err(()) => return FastEval::Invalid,
+                        }
+                    }
+                }
+            } else {
+                for &lw in &local.wires_v {
+                    if x0 <= lw.fixed && lw.fixed <= x1 && lw.lo <= y && y <= lw.hi {
+                        match perp_wire_check(x0, x1, y, true, lw, own_ends) {
+                            Ok(crossed) => score.crossings += u32::from(crossed),
+                            Err(()) => return FastEval::Invalid,
+                        }
+                    }
+                }
+            }
+        } else {
+            let x = area.min.x;
+            let (y0, y1) = (area.min.y, area.max.y);
+            // 1. Reservations along `w`.
+            if local.res_xy_sorted {
+                let lo = local.res_xy.partition_point(|&(p, _)| (p.x, p.y) < (x, y0));
+                for &(p, _) in &local.res_xy[lo..] {
+                    if p.x != x || p.y > y1 {
+                        break;
+                    }
+                    if p != own_ends[0] && p != own_ends[1] {
+                        return FastEval::Invalid;
+                    }
+                }
+            } else {
+                for &(p, _) in &local.res_yx {
+                    if p.x == x && y0 <= p.y && p.y <= y1 && p != own_ends[0] && p != own_ends[1] {
+                        return FastEval::Invalid;
+                    }
+                }
+            }
+            // 2. Parallel vertical wires.
+            if local.wires_v_sorted {
+                let lo = local.wires_v.partition_point(|lw| lw.fixed < x);
+                for &lw in &local.wires_v[lo..] {
+                    if lw.fixed != x || lw.lo > y1 {
+                        break;
+                    }
+                    if lw.hi >= y0 && parallel_wire_blocks(y0, y1, x, false, lw, own_ends) {
+                        return FastEval::Invalid;
+                    }
+                }
+            } else {
+                for &lw in &local.wires_v {
+                    if lw.fixed == x
+                        && lw.lo <= y1
+                        && lw.hi >= y0
+                        && parallel_wire_blocks(y0, y1, x, false, lw, own_ends)
+                    {
+                        return FastEval::Invalid;
+                    }
+                }
+            }
+            // 3. Perpendicular horizontal wires.
+            if local.wires_h_sorted {
+                let lo = local.wires_h.partition_point(|lw| lw.fixed < y0);
+                for &lw in &local.wires_h[lo..] {
+                    if lw.fixed > y1 {
+                        break;
+                    }
+                    if lw.lo <= x && x <= lw.hi {
+                        match perp_wire_check(y0, y1, x, false, lw, own_ends) {
+                            Ok(crossed) => score.crossings += u32::from(crossed),
+                            Err(()) => return FastEval::Invalid,
+                        }
+                    }
+                }
+            } else {
+                for &lw in &local.wires_h {
+                    if y0 <= lw.fixed && lw.fixed <= y1 && lw.lo <= x && x <= lw.hi {
+                        match perp_wire_check(y0, y1, x, false, lw, own_ends) {
+                            Ok(crossed) => score.crossings += u32::from(crossed),
+                            Err(()) => return FastEval::Invalid,
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Parts intersecting `w`: lazy pins and lazy body only on envelope hit.
+        let mut through_body = false;
+        for part_idx in 0..local.parts.len() {
+            let envelope = local.parts[part_idx].envelope;
+            if !envelope.intersects(area) {
+                continue;
+            }
+            for &p in local.part_pins(part_idx, sheet) {
+                if area.contains(p) && p != own_ends[0] && p != own_ends[1] {
+                    return FastEval::Invalid;
+                }
+            }
+            if !through_body
+                && passes_through(w, envelope)
+                && local
+                    .part_body(part_idx, sheet)
+                    .is_some_and(|body| passes_through(w, body))
+            {
+                through_body = true;
+            }
+        }
+        score.bodies += u8::from(through_body);
+        if score.key() >= best_valid_key {
+            return FastEval::Pruned;
+        }
+    }
+    FastEval::Valid(score)
+}
+
+/// Same exact WD4 score and verdict as [`assess`], evaluated against an L1-hot
+/// [`LocalObstacles`] snapshot (used on the Stage 2 refusal path).
+fn assess_local<S: RouteSheet>(
+    sheet: &S,
+    local: &mut LocalObstacles,
+    wires: &[Wire],
+    own_ends: [Pt; 2],
+    number: u16,
+    judged: bool,
+) -> (Score, Option<Blocker>, [bool; 2]) {
+    debug_assert_eq!(judged, wires.iter().all(|&w| shape_valid(w)));
+    let mut score = Score {
+        bends: (wires.len() - 1) as u8,
+        number,
+        ..Score::default()
+    };
+    let mut point = None;
+    let mut overlap = None;
+    let mut inside = [false; 2];
+    let last = wires.len() - 1;
+    let limit = crate::SHEET_LIMIT_NM;
+    for (index, &w) in wires.iter().enumerate() {
+        score.length += w.a.manhattan_distance(w.b);
+        let horizontal = w.a.y == w.b.y;
+        let area = Rect {
+            min: Pt {
+                x: w.a.x.min(w.b.x).clamp(-limit, limit),
+                y: w.a.y.min(w.b.y).clamp(-limit, limit),
+            },
+            max: Pt {
+                x: w.a.x.max(w.b.x).clamp(-limit, limit),
+                y: w.a.y.max(w.b.y).clamp(-limit, limit),
+            },
+        };
+        let rules = judged && point.is_none();
+        let mut points = rules.then(|| PointRule::new(w, &own_ends));
+        let mut overlaps = OverlapRule::new(w);
+        let mut through_body = false;
+
+        for part_idx in 0..local.parts.len() {
+            let envelope = local.parts[part_idx].envelope;
+            if !envelope.intersects(area) {
+                continue;
+            }
+            let need_body = (!through_body && passes_through(w, envelope))
+                || (index == 0 && !inside[0] && strictly_inside(envelope, own_ends[0]))
+                || (index == last && !inside[1] && strictly_inside(envelope, own_ends[1]));
+            if need_body && let Some(body) = local.part_body(part_idx, sheet) {
+                through_body |= passes_through(w, body);
+                inside[0] |= index == 0 && strictly_inside(body, own_ends[0]);
+                inside[1] |= index == last && strictly_inside(body, own_ends[1]);
+            }
+            if let Some(points) = points.as_mut() {
+                let id = local.parts[part_idx].id;
+                let pins = local.part_pins(part_idx, sheet);
+                points.part(id, pins);
+            }
+        }
+
+        if horizontal {
+            let y = area.min.y;
+            let (x0, x1) = (area.min.x, area.max.x);
+            if let Some(points) = points.as_mut() {
+                if local.wires_h_sorted {
+                    let lo = local.wires_h.partition_point(|lw| lw.fixed < y);
+                    for lw in &local.wires_h[lo..] {
+                        if lw.fixed != y || lw.lo > x1 {
+                            break;
+                        }
+                        if lw.hi >= x0 {
+                            points.wire(lw.id, lw.wire);
+                            overlaps.wire(lw.id, lw.wire);
+                        }
+                    }
+                } else {
+                    for lw in &local.wires_h {
+                        if lw.fixed == y && lw.lo <= x1 && lw.hi >= x0 {
+                            points.wire(lw.id, lw.wire);
+                            overlaps.wire(lw.id, lw.wire);
+                        }
+                    }
+                }
+            }
+            if local.wires_v_sorted {
+                let lo = local.wires_v.partition_point(|lw| lw.fixed < x0);
+                for lw in &local.wires_v[lo..] {
+                    if lw.fixed > x1 {
+                        break;
+                    }
+                    if lw.lo <= y && y <= lw.hi {
+                        score.crossings += u32::from(crosses(w, lw.wire));
+                        if let Some(points) = points.as_mut() {
+                            points.wire(lw.id, lw.wire);
+                        }
+                    }
+                }
+            } else {
+                for lw in &local.wires_v {
+                    if x0 <= lw.fixed && lw.fixed <= x1 && lw.lo <= y && y <= lw.hi {
+                        score.crossings += u32::from(crosses(w, lw.wire));
+                        if let Some(points) = points.as_mut() {
+                            points.wire(lw.id, lw.wire);
+                        }
+                    }
+                }
+            }
+            if let Some(points) = points.as_mut() {
+                if local.res_yx_sorted && local.res_yx.len() > LOCAL_SORT_THRESHOLD {
+                    let lo = local.res_yx.partition_point(|&(p, _)| (p.y, p.x) < (y, x0));
+                    for &(p, id) in &local.res_yx[lo..] {
+                        if p.y != y || p.x > x1 {
+                            break;
+                        }
+                        points.consider(p, 0, id.0, 0, Blocker::Pin { part: id, pin: 0 });
+                    }
+                } else {
+                    for &(p, id) in &local.res_yx {
+                        if p.y == y && x0 <= p.x && p.x <= x1 {
+                            points.consider(p, 0, id.0, 0, Blocker::Pin { part: id, pin: 0 });
+                        }
+                    }
+                }
+            }
+        } else {
+            let x = area.min.x;
+            let (y0, y1) = (area.min.y, area.max.y);
+            if let Some(points) = points.as_mut() {
+                if local.wires_v_sorted {
+                    let lo = local.wires_v.partition_point(|lw| lw.fixed < x);
+                    for lw in &local.wires_v[lo..] {
+                        if lw.fixed != x || lw.lo > y1 {
+                            break;
+                        }
+                        if lw.hi >= y0 {
+                            points.wire(lw.id, lw.wire);
+                            overlaps.wire(lw.id, lw.wire);
+                        }
+                    }
+                } else {
+                    for lw in &local.wires_v {
+                        if lw.fixed == x && lw.lo <= y1 && lw.hi >= y0 {
+                            points.wire(lw.id, lw.wire);
+                            overlaps.wire(lw.id, lw.wire);
+                        }
+                    }
+                }
+            }
+            if local.wires_h_sorted {
+                let lo = local.wires_h.partition_point(|lw| lw.fixed < y0);
+                for lw in &local.wires_h[lo..] {
+                    if lw.fixed > y1 {
+                        break;
+                    }
+                    if lw.lo <= x && x <= lw.hi {
+                        score.crossings += u32::from(crosses(w, lw.wire));
+                        if let Some(points) = points.as_mut() {
+                            points.wire(lw.id, lw.wire);
+                        }
+                    }
+                }
+            } else {
+                for lw in &local.wires_h {
+                    if y0 <= lw.fixed && lw.fixed <= y1 && lw.lo <= x && x <= lw.hi {
+                        score.crossings += u32::from(crosses(w, lw.wire));
+                        if let Some(points) = points.as_mut() {
+                            points.wire(lw.id, lw.wire);
+                        }
+                    }
+                }
+            }
+            if let Some(points) = points.as_mut() {
+                if local.res_xy_sorted {
+                    let lo = local.res_xy.partition_point(|&(p, _)| (p.x, p.y) < (x, y0));
+                    for &(p, id) in &local.res_xy[lo..] {
+                        if p.x != x || p.y > y1 {
+                            break;
+                        }
+                        points.consider(p, 0, id.0, 0, Blocker::Pin { part: id, pin: 0 });
+                    }
+                } else {
+                    for &(p, id) in &local.res_yx {
+                        if p.x == x && y0 <= p.y && p.y <= y1 {
+                            points.consider(p, 0, id.0, 0, Blocker::Pin { part: id, pin: 0 });
+                        }
+                    }
+                }
+            }
+        }
+
         score.bodies += u8::from(through_body);
         if let Some(points) = points {
             point = points.blocker();
@@ -743,24 +1621,22 @@ impl Doc {
 // Shared local merge predicate: exactly two ends, no pin/label, opposite
 // collinear segments. It never repairs pre-existing overlapping geometry.
 fn merge_pair(doc: &Doc, at: Pt) -> Option<(WireId, WireId)> {
+    let (a, b) = doc.points.at(at).two_wires()?;
     if !doc.connectivity.labels_at(at).is_empty() {
         return None;
     }
-    let [End::Wire(a), End::Wire(b)] = doc.points.at(at) else {
-        return None;
-    };
-    let wa = *doc.wire(*a).unwrap();
-    let wb = *doc.wire(*b).unwrap();
+    let wa = *doc.wire(a).unwrap();
+    let wb = *doc.wire(b).unwrap();
     if (wa.a.y == wa.b.y) != (wb.a.y == wb.b.y) || shared_stretch(wa, wb) {
         return None;
     }
-    Some((*a, *b))
+    Some((a, b))
 }
 
 /// W1.4: merge only at the fixed ends vacated by Delete. Union the eligible
 /// pairs before editing so multiple removed branches cannot make order matter.
 pub(crate) fn plan_delete_merges(doc: &Doc, points: &mut Vec<Pt>) -> AddWiresPlan {
-    points.sort_by_key(|&p| pt_key(p));
+    points.sort_unstable_by_key(|&p| pt_key(p));
     points.dedup();
     let mut groups: FxHashMap<WireId, WireId> = FxHashMap::default();
     let mut originals = BTreeMap::new();
@@ -787,6 +1663,12 @@ pub(crate) fn plan_delete_merges(doc: &Doc, points: &mut Vec<Pt>) -> AddWiresPla
             let rb = root(&mut groups, b);
             groups.insert(WireId(ra.0.max(rb.0)), WireId(ra.0.min(rb.0)));
         }
+    }
+    if originals.is_empty() {
+        return AddWiresPlan {
+            remove: Vec::new(),
+            insert: Vec::new(),
+        };
     }
     let mut merged: BTreeMap<u32, Wire> = BTreeMap::new();
     for (&id, &w) in &originals {
@@ -894,6 +1776,168 @@ pub(crate) fn plan_add_wires(doc: &Doc, added: &[Wire]) -> AddWiresPlan {
     )
 }
 
+/// Fast path for [`plan_add_wires`] when every wire in `added` was validated by
+/// `plan_follow` against the final-geometry sheet (`selected_wires` empty, no moved
+/// pin/label landing on any existing wire, and zero labels on the sheet).
+///
+/// Verifies that no endpoint merges and that no existing wire meeting an endpoint of
+/// `added` splits, overlaps, or merges; falls back to [`plan_add_wires`] otherwise.
+pub(crate) fn plan_follow_add_wires(doc: &Doc, added: &[Wire]) -> AddWiresPlan {
+    if added.is_empty() {
+        return AddWiresPlan {
+            remove: Vec::new(),
+            insert: Vec::new(),
+        };
+    }
+    let mut ends: Vec<((i32, i32), bool)> = Vec::with_capacity(added.len() * 2);
+    for &w in added {
+        let horizontal = w.a.y == w.b.y;
+        ends.push((pt_key(w.a), horizontal));
+        ends.push((pt_key(w.b), horizontal));
+    }
+    ends.sort_unstable();
+
+    let mut fallback = false;
+    let mut unique_xy: Vec<(i32, i32)> = Vec::with_capacity(ends.len());
+    let mut i = 0;
+    while i < ends.len() && !fallback {
+        let key = ends[i].0;
+        unique_xy.push(key);
+        let p = Pt { x: key.0, y: key.1 };
+        let start = i;
+        let mut h_count = 0usize;
+        let mut v_count = 0usize;
+        while i < ends.len() && ends[i].0 == key {
+            if ends[i].1 {
+                h_count += 1;
+            } else {
+                v_count += 1;
+            }
+            i += 1;
+        }
+        let add_count = i - start;
+        let mut existing_wires = 0usize;
+        let mut existing_h = 0usize;
+        let mut existing_v = 0usize;
+        let area = Rect { min: p, max: p };
+        // Single-point query visits exactly one K12 cell, so each wire meeting `p` is
+        // seen once; we only query `doc.points.at(p)` if a collinear 2-wire merge is possible.
+        doc.index.visit_wires_unstamped(area, |id, bounds| {
+            if fallback {
+                return;
+            }
+            if bounds.min != p && bounds.max != p {
+                fallback = true;
+                return;
+            }
+            existing_wires += 1;
+            if bounds.min.y == bounds.max.y {
+                existing_h += 1;
+            } else {
+                existing_v += 1;
+            }
+            let e = Wire {
+                a: bounds.min,
+                b: bounds.max,
+            };
+            let far = if e.a == p { e.b } else { e.a };
+            if merge_pair(doc, far).is_some() {
+                fallback = true;
+                return;
+            }
+            doc.index
+                .visit_parts_and_wires_unstamped(bounds, |other_item, other_bounds| {
+                    if fallback {
+                        return;
+                    }
+                    match other_item {
+                        ItemId::Part(pid) => {
+                            if doc
+                                .pins(pid)
+                                .unwrap()
+                                .iter()
+                                .any(|&pin| interior_contains(e, pin))
+                            {
+                                fallback = true;
+                            }
+                        }
+                        ItemId::Wire(oid) if oid != id => {
+                            let other = Wire {
+                                a: other_bounds.min,
+                                b: other_bounds.max,
+                            };
+                            if interior_contains(e, other.a)
+                                || interior_contains(e, other.b)
+                                || interior_contains(other, e.a)
+                                || interior_contains(other, e.b)
+                                || shared_stretch(e, other)
+                            {
+                                fallback = true;
+                            }
+                        }
+                        ItemId::Wire(_) | ItemId::Label(_) => {}
+                    }
+                });
+        });
+        if fallback {
+            break;
+        }
+        if add_count + existing_wires == 2
+            && (h_count + existing_h == 2 || v_count + existing_v == 2)
+            && !doc
+                .points
+                .at(p)
+                .iter()
+                .any(|e| matches!(e, End::Pin { .. }))
+        {
+            fallback = true;
+            break;
+        }
+    }
+
+    if !fallback {
+        let mut unique_yx: Vec<(i32, i32)> = unique_xy.iter().map(|&(x, y)| (y, x)).collect();
+        unique_yx.sort_unstable();
+        for &w in added {
+            let (lo, hi, horizontal) = normalised(w);
+            if horizontal {
+                let idx = unique_yx.partition_point(|&(y, x)| (y, x) <= (lo.y, lo.x));
+                if let Some(&(y, x)) = unique_yx.get(idx)
+                    && y == lo.y
+                    && x < hi.x
+                {
+                    fallback = true;
+                    break;
+                }
+            } else {
+                let idx = unique_xy.partition_point(|&(x, y)| (x, y) <= (lo.x, lo.y));
+                if let Some(&(x, y)) = unique_xy.get(idx)
+                    && x == lo.x
+                    && y < hi.y
+                {
+                    fallback = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if fallback {
+        return plan_add_wires(doc, added);
+    }
+
+    let mut sorted: Vec<Wire> = added.to_vec();
+    sorted.sort_unstable_by(|&lhs, &rhs| {
+        let (llo, lhi, lh) = normalised(lhs);
+        let (rlo, rhi, rh) = normalised(rhs);
+        (pt_key(llo), pt_key(lhi), lh).cmp(&(pt_key(rlo), pt_key(rhi), rh))
+    });
+    AddWiresPlan {
+        remove: Vec::new(),
+        insert: sorted.into_iter().map(|w| (None, w)).collect(),
+    }
+}
+
 /// WD7 preview and execution plan for dragging one wire segment.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SegmentDragPlan {
@@ -981,7 +2025,7 @@ pub(crate) fn plan_segment_drag_inner(
             return EndKind::Anchor;
         }
         let has_label = !doc.connectivity.labels_at(at).is_empty();
-        if let [End::Wire(x), End::Wire(y)] = *ends {
+        if let Some((x, y)) = ends.two_wires() {
             let other_id = if x == wire { y } else { x };
             let other = *doc.wire(other_id).unwrap();
             let other_horiz = other.a.y == other.b.y;
@@ -1118,8 +2162,7 @@ pub(crate) fn plan_segment_drag_inner(
         }
     }
 
-    let mut scratch = Vec::new();
-    check_new_wires_ignoring_in(doc, &check_wires, &own_ends, &ignore_ids, &mut scratch)?;
+    check_new_wires_ignoring(doc, &check_wires, &own_ends, &ignore_ids)?;
 
     Ok(Some(plan_wires_with_replacements(
         doc,
@@ -1189,7 +2232,7 @@ fn plan_wires_with_replacements(
     let mut neighbours = Vec::new();
     for &at in &touched {
         for end in doc.points.at(at) {
-            if let End::Wire(id) = *end {
+            if let End::Wire(id) = end {
                 if selected.contains_key(&id) {
                     continue;
                 }
@@ -1208,7 +2251,7 @@ fn plan_wires_with_replacements(
                 .iter()
                 .any(|e| matches!(e, End::Pin { .. }))
         {
-            let mut surviving = doc.points.at(at).iter().filter_map(|e| match *e {
+            let mut surviving = doc.points.at(at).iter().filter_map(|e| match e {
                 End::Wire(id) if !replaced.iter().any(|&(rid, _)| rid == id) => Some(id),
                 _ => None,
             });
@@ -1395,51 +2438,54 @@ fn plan_wires_with_replacements(
     };
 
     // Merge collinear neighbours along each line, farthest first by geometry.
-    let mut lines: BTreeMap<(u8, i32), Vec<usize>> = BTreeMap::new();
+    let mut line_items: Vec<(u8, i32, i32, usize)> = Vec::with_capacity(atomics.len());
     for (idx, atomic) in atomics.iter().enumerate() {
-        let fixed = if atomic.horizontal {
-            atomic.lo.y
+        let (fixed, along) = if atomic.horizontal {
+            (atomic.lo.y, atomic.lo.x)
         } else {
-            atomic.lo.x
+            (atomic.lo.x, atomic.lo.y)
         };
-        lines
-            .entry((u8::from(!atomic.horizontal), fixed))
-            .or_default()
-            .push(idx);
+        line_items.push((u8::from(!atomic.horizontal), fixed, along, idx));
     }
-    let mut finals: Vec<FinalSeg> = Vec::new();
-    for indices in lines.values_mut() {
-        indices.sort_by_key(|&idx| {
-            let a = &atomics[idx];
-            if a.horizontal { a.lo.x } else { a.lo.y }
+    line_items.sort_unstable();
+    let mut finals: Vec<FinalSeg> = Vec::with_capacity(atomics.len());
+    let mut run: Vec<usize> = Vec::new();
+    let finish_run = |run: &mut Vec<usize>, finals: &mut Vec<FinalSeg>| {
+        if run.is_empty() {
+            return;
+        }
+        let first = &atomics[run[0]];
+        let last = &atomics[*run.last().unwrap()];
+        let mut seg_existing: Vec<WireId> = Vec::new();
+        let mut descending = atomics[run[0]].descending;
+        for &idx in run.iter() {
+            seg_existing.extend_from_slice(&atomics[idx].existing);
+            if atomics[idx].descending != descending {
+                descending = None;
+            }
+        }
+        seg_existing.sort_unstable_by_key(|id| id.0);
+        seg_existing.dedup();
+        finals.push(FinalSeg {
+            lo: first.lo,
+            hi: last.hi,
+            horizontal: first.horizontal,
+            existing: seg_existing,
+            descending: descending.unwrap_or(false),
         });
-        let mut run: Vec<usize> = Vec::new();
-        let finish_run = |run: &mut Vec<usize>, finals: &mut Vec<FinalSeg>| {
-            if run.is_empty() {
-                return;
-            }
-            let first = &atomics[run[0]];
-            let last = &atomics[*run.last().unwrap()];
-            let mut seg_existing: Vec<WireId> = Vec::new();
-            let mut descending = atomics[run[0]].descending;
-            for &idx in run.iter() {
-                seg_existing.extend_from_slice(&atomics[idx].existing);
-                if atomics[idx].descending != descending {
-                    descending = None;
-                }
-            }
-            seg_existing.sort_by_key(|id| id.0);
-            seg_existing.dedup();
-            finals.push(FinalSeg {
-                lo: first.lo,
-                hi: last.hi,
-                horizontal: first.horizontal,
-                existing: seg_existing,
-                descending: descending.unwrap_or(false),
-            });
-            run.clear();
-        };
-        for &idx in indices.iter() {
+        run.clear();
+    };
+    let mut group_start = 0;
+    while group_start < line_items.len() {
+        let (orient, fixed, _, _) = line_items[group_start];
+        let mut group_end = group_start + 1;
+        while group_end < line_items.len()
+            && line_items[group_end].0 == orient
+            && line_items[group_end].1 == fixed
+        {
+            group_end += 1;
+        }
+        for &(_, _, _, idx) in &line_items[group_start..group_end] {
             if let Some(&last_idx) = run.last() {
                 let junction = atomics[last_idx].hi;
                 if atomics[idx].lo != junction || !mergeable(junction) {
@@ -1449,21 +2495,18 @@ fn plan_wires_with_replacements(
             run.push(idx);
         }
         finish_run(&mut run, &mut finals);
+        group_start = group_end;
     }
 
     // Keep the lowest surviving existing id per final segment; the first final
     // segment (in geometry order) wins a split wire's id.
-    finals.sort_by(|lhs, rhs| {
+    finals.sort_unstable_by(|lhs, rhs| {
         (pt_key(lhs.lo), pt_key(lhs.hi), lhs.horizontal).cmp(&(
             pt_key(rhs.lo),
             pt_key(rhs.hi),
             rhs.horizontal,
         ))
     });
-    let existing_wire: BTreeMap<u32, Wire> = existing_sorted
-        .iter()
-        .map(|(id, wire)| (id.0, *wire))
-        .collect();
     let mut used = FxHashSet::default();
     let mut remove: Vec<(WireId, Wire)> = Vec::new();
     let mut insert: Vec<(Option<WireId>, Wire)> = Vec::new();
@@ -1483,7 +2526,10 @@ fn plan_wires_with_replacements(
         match keep {
             Some(id) => {
                 used.insert(id);
-                let old = existing_wire[&id.0];
+                let pos = existing_sorted
+                    .binary_search_by_key(&id.0, |(eid, _)| eid.0)
+                    .expect("kept existing wire is in existing_sorted");
+                let old = existing_sorted[pos].1;
                 let (old_lo, old_hi, _) = normalised(old);
                 if old_lo != seg.lo || old_hi != seg.hi {
                     remove.push((id, old));
@@ -1498,7 +2544,7 @@ fn plan_wires_with_replacements(
             remove.push((id, wire));
         }
     }
-    remove.sort_by_key(|(id, _)| id.0);
+    remove.sort_unstable_by_key(|(id, _)| id.0);
     AddWiresPlan { remove, insert }
 }
 
@@ -2386,7 +3432,8 @@ mod tests {
                 };
                 for (number, wires) in oracle_candidates(lp(a.0, a.1), lp(b.0, b.1), axis) {
                     let ends = [lp(a.0, a.1), lp(b.0, b.1)];
-                    let (actual, _, _) = assess(&doc, &wires, ends, number, &mut Vec::new());
+                    let judged = wires.iter().all(|&w| shape_valid(w));
+                    let (actual, _, _) = assess(&doc, &wires, ends, number, judged);
                     assert_eq!(
                         (
                             actual.bodies,
@@ -3324,6 +4371,43 @@ mod tests {
                     other => prop_assert!(false, "mismatch: {other:?}"),
                 }
             }
+        }
+
+        /// W2.2: `plan_follow_add_wires` equals `plan_add_wires` on every label-free sheet
+        /// for any batch of runs sequentially validated by `route`.
+        #[test]
+        fn w22_plan_follow_add_wires_matches_plan_add_wires(
+            parts in prop::collection::vec(part_strategy(), 0..5),
+            batches in prop::collection::vec(prop::collection::vec(wire_strategy(), 1..4), 0..5),
+            pairs in prop::collection::vec(
+                (
+                    (-6i32..=6, -6i32..=6),
+                    (-6i32..=6, -6i32..=6),
+                    any::<bool>(),
+                ),
+                1..6,
+            ),
+        ) {
+            let doc = random_sheet(&parts, batches);
+            let mut working = snapshot(&doc);
+            let mut scratch = RouteScratch::new();
+            let mut out = Vec::new();
+            let mut added = Vec::new();
+            for ((ax, ay), (bx, by), horiz) in pairs {
+                let a = lp(ax, ay);
+                let b = lp(bx, by);
+                let axis = if horiz { Axis::Horizontal } else { Axis::Vertical };
+                if route(&working, a, b, axis, &mut scratch, &mut out).is_ok() {
+                    for &w in &out {
+                        working.insert_wire(w).unwrap();
+                    }
+                    added.extend_from_slice(&out);
+                }
+            }
+            prop_assert_eq!(
+                plan_follow_add_wires(&doc, &added),
+                plan_add_wires(&doc, &added),
+            );
         }
     }
 }

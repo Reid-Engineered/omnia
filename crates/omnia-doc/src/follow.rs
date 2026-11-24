@@ -2,11 +2,14 @@
 use rustc_hash::FxHashMap;
 
 use crate::{
-    Anchor, Boundary, Doc, INDEX_CELL_NM, ItemId, LabelId, Orient, PartId, Pt, Rect, Run, Wire,
-    WireId,
+    Anchor, Boundary, Doc, ItemId, LabelId, Orient, PartId, Pt, Rect, Run, Wire, WireId,
+    index::{CELLS_PER_AXIS, cell_of},
     points::End,
     prefs::FollowPolicy,
-    route::{Axis, Blocker, RouteScratch, RouteSheet, check_new_wires_on, route_on},
+    route::{
+        Axis, Blocker, LocalObstacles, RouteScratch, RouteSheet, SegmentHit, check_new_wires_on,
+        route_on,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,11 +65,12 @@ impl std::error::Error for FollowError {}
 
 // Scan only selected incidences before allocating Boundary's selected-wire list.
 fn has_boundary(doc: &Doc, items: &[ItemId]) -> bool {
+    let any_wire = items.iter().any(|item| matches!(item, ItemId::Wire(_)));
     let meets = |p| {
         doc.points
             .at(p)
             .iter()
-            .any(|e| matches!(e, End::Wire(w) if !items.contains(&ItemId::Wire(*w))))
+            .any(|e| matches!(e, End::Wire(w) if !any_wire || !items.contains(&ItemId::Wire(w))))
     };
     items.iter().any(|item| match *item {
         ItemId::Part(id) => doc
@@ -76,18 +80,19 @@ fn has_boundary(doc: &Doc, items: &[ItemId]) -> bool {
         ItemId::Label(_) => false,
     })
 }
-fn allows(doc: &Doc, items: &[ItemId], run: &Run, policy: FollowPolicy) -> bool {
+
+fn allows_on(v: &View<'_>, run: &Run, policy: FollowPolicy) -> bool {
     [run.a, run.b]
         .into_iter()
         .filter(|(_, a)| *a == Anchor::Boundary)
         .all(|(p, _)| {
             let mut part_found = false;
-            for e in doc.points.at(p) {
-                if let End::Pin { part, .. } = *e
-                    && items.contains(&ItemId::Part(part))
+            for e in v.doc.points.at(p) {
+                if let End::Pin { part, .. } = e
+                    && let Some(moved) = v.moved_part(part)
                 {
                     part_found = true;
-                    if !policy.part_follows(doc.connected_pins(part) as usize) {
+                    if !policy.part_follows(usize::from(moved.connected_pins)) {
                         return false;
                     }
                 }
@@ -106,6 +111,39 @@ struct MovedPart {
     body: Rect,
     /// Body and pins, as the spatial index registers a part.
     envelope: Rect,
+    /// Cached `doc.connected_pins(id)` for O(1) policy checks.
+    connected_pins: u16,
+}
+
+#[derive(Clone, Copy)]
+enum ViewEntry {
+    /// Index into `View::parts`.
+    MovedPart { idx: u32, envelope: Rect },
+    /// Moved selected wire or newly planned wire, stored inline to avoid lookups.
+    Wire {
+        id: WireId,
+        wire: Wire,
+        bounds: Rect,
+    },
+}
+
+#[derive(Clone, Copy)]
+struct CellNode {
+    entry: ViewEntry,
+    next: u32,
+}
+
+#[inline]
+fn set_bit(bits: &mut [u64], id: u32) {
+    let idx = id as usize;
+    bits[idx >> 6] |= 1u64 << (idx & 63);
+}
+
+#[inline]
+fn has_bit(bits: &[u64], id: u32) -> bool {
+    let idx = id as usize;
+    bits.get(idx >> 6)
+        .is_some_and(|&word| (word & (1u64 << (idx & 63))) != 0)
 }
 
 /// The sheet in its final geometry, as WD4 sees it while the runs are planned: the document
@@ -123,6 +161,8 @@ struct View<'a> {
     base_wires: u32,
     /// Live selected parts in their final position, by id.
     parts: Vec<MovedPart>,
+    /// Compact O(1) membership bitset for `parts`.
+    moved_part_bits: Vec<u64>,
     pins: Vec<Pt>,
     /// Live selected wires, by id.
     selected: Vec<WireId>,
@@ -130,17 +170,21 @@ struct View<'a> {
     moved: Vec<(WireId, Wire)>,
     /// Wires of the replaced (not detached) runs, by id.
     hidden: Vec<WireId>,
+    /// Compact O(1) membership bitset for `selected ∪ hidden`.
+    excluded_wire_bits: Vec<u64>,
     /// Zero-area reservation parts with one pin each, at these points.
     markers: Vec<Pt>,
+    /// Reservations sorted by `(y, x, id.0)` when `res_sorted` is true.
+    res_yx: Vec<(Pt, PartId)>,
+    /// Reservations sorted by `(x, y, id.0)` when `res_sorted` is true.
+    res_xy: Vec<(Pt, PartId)>,
+    res_sorted: bool,
     /// Planned wires and the first wire of the run each replaces.
     added: Vec<(Wire, WireId)>,
-    /// The view's own items by K12 cell; the document's index serves everything else.
-    /// Each entry carries the item's indexed bounds.
-    cells: FxHashMap<(i64, i64), Vec<(ItemId, Rect)>>,
-}
-
-fn view_cell(v: i32) -> i64 {
-    i64::from(v).div_euclid(i64::from(INDEX_CELL_NM))
+    /// Flat arena for the view's own parts and wires by K12 cell (no per-cell Vecs,
+    /// and reservations stay out of cells so body/crossing/overlap checks never see them).
+    cell_heads: FxHashMap<u32, u32>,
+    cell_nodes: Vec<CellNode>,
 }
 
 impl<'a> View<'a> {
@@ -164,6 +208,9 @@ impl<'a> View<'a> {
             .collect();
         selected.sort_unstable_by_key(|id| id.0);
         selected.dedup();
+        let mut moved_part_bits = ids
+            .last()
+            .map_or_else(Vec::new, |last| vec![0u64; (last.0 as usize >> 6) + 1]);
         let mut parts = Vec::with_capacity(ids.len());
         let mut pins = Vec::new();
         for id in ids {
@@ -185,25 +232,35 @@ impl<'a> View<'a> {
                 .map_err(|_| Blocker::Sheet)?;
             let body =
                 Doc::part_bounds_at(at, orient, stored.local_bounds).map_err(|_| Blocker::Sheet)?;
+            set_bit(&mut moved_part_bits, id.0);
             parts.push(MovedPart {
                 id,
                 pins: first..pins.len(),
                 body,
                 envelope,
+                connected_pins: doc.connected_pins(id),
             });
         }
+        let cell_cap = parts.len().max(64);
+        let node_cap = parts.len().saturating_mul(6).max(256);
         Ok(Self {
             doc,
             base_parts: u32::try_from(doc.parts.slots.len()).expect("part id space"),
             base_wires: u32::try_from(doc.wires.slots.len()).expect("wire id space"),
             parts,
+            moved_part_bits,
             pins,
             selected,
             moved: Vec::new(),
             hidden: Vec::new(),
+            excluded_wire_bits: Vec::new(),
             markers: Vec::new(),
+            res_yx: Vec::new(),
+            res_xy: Vec::new(),
+            res_sorted: true,
             added: Vec::new(),
-            cells: FxHashMap::default(),
+            cell_heads: FxHashMap::with_capacity_and_hasher(cell_cap, Default::default()),
+            cell_nodes: Vec::with_capacity(node_cap),
         })
     }
 
@@ -216,12 +273,32 @@ impl<'a> View<'a> {
         }
         self.hidden.sort_unstable_by_key(|id| id.0);
         self.hidden.dedup();
+        self.excluded_wire_bits.fill(0);
+        let max_excluded = self
+            .selected
+            .last()
+            .map(|w| w.0)
+            .max(self.hidden.last().map(|w| w.0));
+        if let Some(max_id) = max_excluded {
+            let words = (max_id as usize >> 6) + 1;
+            if self.excluded_wire_bits.len() < words {
+                self.excluded_wire_bits.resize(words, 0);
+            }
+            for &id in &self.selected {
+                set_bit(&mut self.excluded_wire_bits, id.0);
+            }
+            for &id in &self.hidden {
+                set_bit(&mut self.excluded_wire_bits, id.0);
+            }
+        }
         self.moved.clear();
         self.markers.clear();
+        self.res_yx.clear();
+        self.res_xy.clear();
+        self.res_sorted = true;
         self.added.clear();
-        for list in self.cells.values_mut() {
-            list.clear();
-        }
+        self.cell_heads.clear();
+        self.cell_nodes.clear();
         for i in 0..self.selected.len() {
             let id = self.selected[i];
             if self.is_hidden(id) {
@@ -234,20 +311,33 @@ impl<'a> View<'a> {
             self.moved.push((id, w));
         }
         for i in 0..self.parts.len() {
-            let MovedPart { id, envelope, .. } = self.parts[i];
-            self.register(ItemId::Part(id), envelope);
+            let envelope = self.parts[i].envelope;
+            self.register_entry(
+                ViewEntry::MovedPart {
+                    idx: i as u32,
+                    envelope,
+                },
+                envelope,
+            );
         }
         for i in 0..self.moved.len() {
-            let (id, w) = self.moved[i];
-            self.register(ItemId::Wire(id), wire_rect(w));
+            let (id, wire) = self.moved[i];
+            let bounds = wire_rect(wire);
+            self.register_entry(ViewEntry::Wire { id, wire, bounds }, bounds);
         }
         Ok(())
     }
 
-    fn register(&mut self, item: ItemId, area: Rect) {
-        for cy in view_cell(area.min.y)..=view_cell(area.max.y) {
-            for cx in view_cell(area.min.x)..=view_cell(area.max.x) {
-                self.cells.entry((cx, cy)).or_default().push((item, area));
+    fn register_entry(&mut self, entry: ViewEntry, area: Rect) {
+        let (x0, x1) = (cell_of(area.min.x), cell_of(area.max.x));
+        let (y0, y1) = (cell_of(area.min.y), cell_of(area.max.y));
+        for cy in y0..=y1 {
+            let row = cy * CELLS_PER_AXIS;
+            for cx in x0..=x1 {
+                let head = self.cell_heads.entry((row + cx) as u32).or_insert(u32::MAX);
+                let node_idx = self.cell_nodes.len() as u32;
+                self.cell_nodes.push(CellNode { entry, next: *head });
+                *head = node_idx;
             }
         }
     }
@@ -256,11 +346,20 @@ impl<'a> View<'a> {
         self.hidden.binary_search_by_key(&id.0, |w| w.0).is_ok()
     }
 
-    fn is_selected(&self, id: WireId) -> bool {
-        self.selected.binary_search_by_key(&id.0, |w| w.0).is_ok()
+    #[inline]
+    fn has_moved_part(&self, id: PartId) -> bool {
+        has_bit(&self.moved_part_bits, id.0)
+    }
+
+    #[inline]
+    fn is_excluded_wire(&self, id: WireId) -> bool {
+        has_bit(&self.excluded_wire_bits, id.0)
     }
 
     fn moved_part(&self, id: PartId) -> Option<&MovedPart> {
+        if !self.has_moved_part(id) {
+            return None;
+        }
         self.parts
             .binary_search_by_key(&id.0, |p| p.id.0)
             .ok()
@@ -268,18 +367,19 @@ impl<'a> View<'a> {
     }
 
     /// Whether the document's own entry for `item` is part of the view.
+    #[cfg(test)]
     fn keeps(&self, item: ItemId) -> bool {
         match item {
-            ItemId::Part(id) => self.moved_part(id).is_none(),
-            ItemId::Wire(id) => !self.is_hidden(id) && !self.is_selected(id),
+            ItemId::Part(id) => !self.has_moved_part(id),
+            ItemId::Wire(id) => !self.is_excluded_wire(id),
             ItemId::Label(_) => false,
         }
     }
 
     /// The lowest wire id with an end at `at`, before reservations and planned wires exist.
     fn lowest_wire_end(&self, at: Pt) -> Option<WireId> {
-        let kept = self.doc.points.at(at).iter().filter_map(|end| match *end {
-            End::Wire(id) if !self.is_hidden(id) && !self.is_selected(id) => Some(id),
+        let kept = self.doc.points.at(at).iter().filter_map(|end| match end {
+            End::Wire(id) if !self.is_excluded_wire(id) => Some(id),
             _ => None,
         });
         let moved = self
@@ -294,15 +394,132 @@ impl<'a> View<'a> {
     fn reserve(&mut self, at: Pt) -> PartId {
         let id = PartId(self.base_parts + u32::try_from(self.markers.len()).expect("part ids"));
         self.markers.push(at);
-        self.register(ItemId::Part(id), Rect { min: at, max: at });
+        self.res_yx.push((at, id));
+        self.res_xy.push((at, id));
+        self.res_sorted = false;
         id
+    }
+
+    /// Sorts reservation indices for O(log R) range queries along segments and boxes.
+    fn finish_reservations(&mut self) {
+        self.res_yx
+            .sort_unstable_by_key(|&(p, id)| (p.y, p.x, id.0));
+        self.res_xy
+            .sort_unstable_by_key(|&(p, id)| (p.x, p.y, id.0));
+        self.res_sorted = true;
     }
 
     /// Adds a planned wire replacing a run whose first wire is `source`.
     fn insert(&mut self, wire: Wire, source: WireId) {
         let id = WireId(self.base_wires + u32::try_from(self.added.len()).expect("wire ids"));
         self.added.push((wire, source));
-        self.register(ItemId::Wire(id), wire_rect(wire));
+        let bounds = wire_rect(wire);
+        self.register_entry(ViewEntry::Wire { id, wire, bounds }, bounds);
+    }
+
+    fn visit_view_cells(&self, area: Rect, mut on_entry: impl FnMut(ViewEntry)) {
+        let (x0, x1) = (cell_of(area.min.x), cell_of(area.max.x));
+        let (y0, y1) = (cell_of(area.min.y), cell_of(area.max.y));
+        let mut walk_head = |mut cur: u32| {
+            while cur != u32::MAX {
+                let node = self.cell_nodes[cur as usize];
+                let bounds = match node.entry {
+                    ViewEntry::MovedPart { envelope, .. } => envelope,
+                    ViewEntry::Wire { bounds, .. } => bounds,
+                };
+                if bounds.intersects(area) {
+                    on_entry(node.entry);
+                }
+                cur = node.next;
+            }
+        };
+        let span = (x1 - x0 + 1).saturating_mul(y1 - y0 + 1);
+        if span <= self.cell_heads.len() {
+            for cy in y0..=y1 {
+                let row = cy * CELLS_PER_AXIS;
+                for cx in x0..=x1 {
+                    if let Some(&head) = self.cell_heads.get(&((row + cx) as u32)) {
+                        walk_head(head);
+                    }
+                }
+            }
+        } else {
+            for (&key, &head) in &self.cell_heads {
+                let k = key as usize;
+                let cy = k / CELLS_PER_AXIS;
+                let cx = k - cy * CELLS_PER_AXIS;
+                if (x0..=x1).contains(&cx) && (y0..=y1).contains(&cy) {
+                    walk_head(head);
+                }
+            }
+        }
+    }
+
+    fn visit_reservations_segment(
+        &self,
+        area: Rect,
+        horizontal: bool,
+        mut on_res: impl FnMut(PartId, Pt),
+    ) {
+        if self.markers.is_empty() {
+            return;
+        }
+        if self.res_sorted {
+            if horizontal {
+                let y = area.min.y;
+                let lo = self
+                    .res_yx
+                    .partition_point(|&(p, _)| (p.y, p.x) < (y, area.min.x));
+                for &(p, id) in &self.res_yx[lo..] {
+                    if p.y != y || p.x > area.max.x {
+                        break;
+                    }
+                    on_res(id, p);
+                }
+            } else {
+                let x = area.min.x;
+                let lo = self
+                    .res_xy
+                    .partition_point(|&(p, _)| (p.x, p.y) < (x, area.min.y));
+                for &(p, id) in &self.res_xy[lo..] {
+                    if p.x != x || p.y > area.max.y {
+                        break;
+                    }
+                    on_res(id, p);
+                }
+            }
+        } else {
+            for (i, &p) in self.markers.iter().enumerate() {
+                if area.contains(p) {
+                    on_res(PartId(self.base_parts + i as u32), p);
+                }
+            }
+        }
+    }
+
+    fn collect_reservations_box(&self, area: Rect, out: &mut LocalObstacles) {
+        if self.markers.is_empty() {
+            return;
+        }
+        if self.res_sorted {
+            let lo = self.res_yx.partition_point(|&(p, _)| p.y < area.min.y);
+            for &(p, id) in &self.res_yx[lo..] {
+                if p.y > area.max.y {
+                    break;
+                }
+                if p.x >= area.min.x && p.x <= area.max.x {
+                    out.res_yx.push((p, id));
+                }
+            }
+            out.res_yx_sorted = true;
+        } else {
+            for (i, &p) in self.markers.iter().enumerate() {
+                if area.contains(p) {
+                    out.res_yx.push((p, PartId(self.base_parts + i as u32)));
+                }
+            }
+            out.res_yx_sorted = false;
+        }
     }
 
     /// Reports a view blocker in the document's terms: a reservation is the replaced wire
@@ -332,6 +549,7 @@ fn wire_rect(w: Wire) -> Rect {
 }
 
 impl RouteSheet for View<'_> {
+    #[cfg(test)]
     fn query(&self, area: Rect, out: &mut Vec<ItemId>) {
         if area.min.x > area.max.x || area.min.y > area.max.y {
             out.clear();
@@ -343,32 +561,29 @@ impl RouteSheet for View<'_> {
             .index
             .query_filtered_unstamped(area, out, |item, _| self.keeps(item));
         let start = out.len();
-        let (x0, x1) = (view_cell(area.min.x), view_cell(area.max.x));
-        let (y0, y1) = (view_cell(area.min.y), view_cell(area.max.y));
-        let mut take = |list: &Vec<(ItemId, Rect)>| {
-            for &(item, bounds) in list {
-                if bounds.intersects(area) {
-                    out.push(item);
+        self.visit_view_cells(area, |entry| match entry {
+            ViewEntry::MovedPart { idx, .. } => out.push(ItemId::Part(self.parts[idx as usize].id)),
+            ViewEntry::Wire { id, .. } => out.push(ItemId::Wire(id)),
+        });
+        if self.res_sorted {
+            let lo = self.res_yx.partition_point(|&(p, _)| p.y < area.min.y);
+            for &(p, id) in &self.res_yx[lo..] {
+                if p.y > area.max.y {
+                    break;
                 }
-            }
-        };
-        // Walk whichever is smaller: the cells under the area or the occupied cells.
-        let span = (x1 - x0 + 1).saturating_mul(y1 - y0 + 1);
-        if span <= self.cells.len() as i64 {
-            for cy in y0..=y1 {
-                for cx in x0..=x1 {
-                    if let Some(list) = self.cells.get(&(cx, cy)) {
-                        take(list);
-                    }
+                if p.x >= area.min.x && p.x <= area.max.x {
+                    out.push(ItemId::Part(id));
                 }
             }
         } else {
-            for (&(cx, cy), list) in &self.cells {
-                if (x0..=x1).contains(&cx) && (y0..=y1).contains(&cy) {
-                    take(list);
+            for (i, &p) in self.markers.iter().enumerate() {
+                if area.contains(p) {
+                    out.push(ItemId::Part(PartId(self.base_parts + i as u32)));
                 }
             }
         }
+        let (x0, x1) = (cell_of(area.min.x), cell_of(area.max.x));
+        let (y0, y1) = (cell_of(area.min.y), cell_of(area.max.y));
         if x0 == x1 && y0 == y1 {
             return;
         }
@@ -400,6 +615,7 @@ impl RouteSheet for View<'_> {
         }
     }
 
+    #[cfg(test)]
     fn wire(&self, id: WireId) -> Wire {
         if id.0 >= self.base_wires {
             return self.added[(id.0 - self.base_wires) as usize].0;
@@ -420,6 +636,72 @@ impl RouteSheet for View<'_> {
             Some(part) => Some(part.body),
             None => self.doc.part_body(id),
         }
+    }
+
+    fn visit_segment(&self, area: Rect, horizontal: bool, mut on_hit: impl FnMut(SegmentHit<'_>)) {
+        self.doc
+            .index
+            .visit_parts_and_wires_unstamped(area, |item, bounds| match item {
+                ItemId::Part(id) if !self.has_moved_part(id) => on_hit(SegmentHit::Part {
+                    id,
+                    envelope: bounds,
+                    body: None,
+                    pins: self.doc.pins(id).expect("queried part is live"),
+                }),
+                ItemId::Wire(id) if !self.is_excluded_wire(id) => on_hit(SegmentHit::Wire {
+                    id,
+                    wire: Wire {
+                        a: bounds.min,
+                        b: bounds.max,
+                    },
+                }),
+                _ => {}
+            });
+        self.visit_view_cells(area, |entry| match entry {
+            ViewEntry::MovedPart { idx, envelope } => {
+                let part = &self.parts[idx as usize];
+                on_hit(SegmentHit::Part {
+                    id: part.id,
+                    envelope,
+                    body: Some(part.body),
+                    pins: &self.pins[part.pins.clone()],
+                });
+            }
+            ViewEntry::Wire { id, wire, .. } => on_hit(SegmentHit::Wire { id, wire }),
+        });
+        self.visit_reservations_segment(area, horizontal, |id, at| {
+            on_hit(SegmentHit::Res { id, at });
+        });
+    }
+
+    fn collect_box(&self, area: Rect, out: &mut LocalObstacles) {
+        out.clear();
+        self.doc
+            .index
+            .visit_parts_and_wires_unstamped(area, |item, bounds| match item {
+                ItemId::Part(id) if !self.has_moved_part(id) => {
+                    out.seen_parts.push((id, bounds, None));
+                }
+                ItemId::Wire(id) if !self.is_excluded_wire(id) => {
+                    out.seen_wires.push((
+                        id,
+                        Wire {
+                            a: bounds.min,
+                            b: bounds.max,
+                        },
+                    ));
+                }
+                _ => {}
+            });
+        self.visit_view_cells(area, |entry| match entry {
+            ViewEntry::MovedPart { idx, envelope } => {
+                let part = &self.parts[idx as usize];
+                out.seen_parts.push((part.id, envelope, Some(part.body)));
+            }
+            ViewEntry::Wire { id, wire, .. } => out.seen_wires.push((id, wire)),
+        });
+        self.collect_reservations_box(area, out);
+        out.finish();
     }
 }
 
@@ -457,7 +739,6 @@ fn build(
     doc.affected_runs(&boundary, &mut runs);
     let mut detached = vec![false; runs.len()];
     let mut scratch = RouteScratch::new();
-    let mut query = Vec::new();
     let sheet_error = |blocker| FollowError::NoRoute {
         from: runs[0].a.0,
         to: runs[0].b.0,
@@ -466,6 +747,7 @@ fn build(
     let mut v = View::new(doc, items, t).map_err(sheet_error)?;
     let mut end_markers = Vec::new();
     let mut reservations = Vec::new();
+    let mut wires = Vec::new();
     // A failed rigid attempt under detach policy introduces old geometry. Restart so every
     // earlier run sees it too. Each restart fixes at least one fate, so termination is bounded.
     'restart: loop {
@@ -502,6 +784,7 @@ fn build(
             v.reserve(at);
             end_markers.push(source);
         }
+        v.finish_reservations();
         for (i, r) in runs.iter().enumerate() {
             if detached[i] {
                 plan.fates.push((r.a.0, RunFate::Detached));
@@ -521,7 +804,7 @@ fn build(
             } else {
                 r.b.0
             };
-            let mut wires = Vec::new();
+            wires.clear();
             let rigid = r.b.1 == Anchor::Boundary
                 && r.wires
                     .iter()
@@ -533,12 +816,12 @@ fn build(
                         Ok::<_, Blocker>(())
                     })
                     .is_ok()
-                && check_new_wires_on(&v, &wires, [a, b], &mut query).is_ok();
+                && check_new_wires_on(&v, &wires, [a, b]).is_ok();
             let fate = if rigid {
                 RunFate::Translated
             } else {
                 wires.clear();
-                if !allows(doc, items, r, policy) {
+                if !allows_on(&v, r, policy) {
                     detached[i] = true;
                     continue 'restart;
                 }
@@ -576,7 +859,7 @@ fn build(
                 v.insert(w, r.wires[0]);
             }
             plan.remove.extend_from_slice(&r.wires);
-            plan.add.extend(wires);
+            plan.add.extend_from_slice(&wires);
             plan.fates.push((r.a.0, fate));
         }
         plan.labels.sort_unstable_by_key(|(id, _)| id.0);
@@ -1187,7 +1470,7 @@ mod view_tests {
                     .points
                     .at(p)
                     .iter()
-                    .filter_map(|e| match *e {
+                    .filter_map(|e| match e {
                         End::Wire(id) => Some(id),
                         End::Pin { .. } => None,
                     })
