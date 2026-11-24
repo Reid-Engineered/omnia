@@ -708,16 +708,19 @@ impl ToolMachine {
     pub fn reorient(&mut self, by: Orient) -> ToolOutcome; // R, X, Y
     pub fn delete(&mut self) -> ToolOutcome;              // Del
 }
-// T5.2: emitted by the gesture owner (OverlayView) after every effective edit (commit, undo,
-// redo; later placement and delete) and re-emitted by SheetCanvas while both show one document.
-// A separate event type rather than a `CanvasEvent` variant, so existing exhaustive matches build.
+// T5.2: history emitted by the gesture owner (OverlayView) after every effective edit (commit,
+// undo, redo; later placement and delete) and re-emitted by SheetCanvas while both show one
+// document. A separate event type rather than a `CanvasEvent` variant, so existing exhaustive
+// matches build.
 pub struct CanvasHistory { pub doc: u64, pub can_undo: bool, pub can_redo: bool, pub cursor: u64 }
 pub struct CanvasEdit { pub doc: u64, pub dirty: Option<Rect> } // OverlayView -> SheetCanvas repaint (D7)
 // doc: the source document's doc_key. Events queued in one GPUI update arrive after any
 // document switch in it, so SheetCanvas delivers or re-emits one only if doc is the document
-// it shows at delivery, through the owner still attached and showing it. SheetCanvas emits
-// history sealed, so the final subscriber boundary checks it too:
-pub struct CanvasHistoryEvent(/* private */);             // readable only via subscribe_history
+// it shows at delivery, through the owner still attached and showing it. Both OverlayView and
+// SheetCanvas emit history sealed in `CanvasHistoryEvent` (opaque outside omnia-canvas: no
+// public fields, no accessors, opaque Debug); `SheetCanvas::subscribe_history` is the only way
+// outside omnia-canvas to receive a `CanvasHistory` (contract C2):
+pub struct CanvasHistoryEvent(/* opaque */);              // readable only via subscribe_history
 // T5.2 (keymap.rs): actions in namespace `canvas`, resolved in key context "Sheet" (UD3). The
 // shell reuses Rotate, MirrorHorizontal, MirrorVertical and PlaceWire in its ACTIONS table and
 // generates their R, X, Y and W bindings once from it; it registers nothing from keymap.rs.
@@ -870,6 +873,7 @@ impl SheetCanvas {
 }
 impl Render for SheetCanvas { /* ... */ }
 impl EventEmitter<CanvasEvent> for SheetCanvas {}
+impl EventEmitter<CanvasHistoryEvent> for SheetCanvas {}
 
 // ---- omnia-bench ----
 pub struct CountingAlloc;                                  // #[global_allocator]
@@ -883,6 +887,27 @@ pub fn generate(sheet: StressSheet, seed: u64) -> Doc;
 // All built-in symbols/orientations, K2 pin-lattice placements; unit-lattice wire segments
 // extend from pins in rays (no end on a segment interior, INV2).
 ```
+
+### Supported-use contract (`OverlayView` and `SheetCanvas`, T5.2)
+
+Preconditions of the public canvas API. INV5 and INV11 remain the primary invariants.
+
+- **C1.** An `OverlayView` belongs to exactly one window. It is mounted in that window for as
+  long as it is attached to a `SheetCanvas`. Remounting it in another window is unsupported
+  (`debug_assert!` in debug builds, no-op in release on paint or capture).
+- **C2.** Outside `omnia-canvas`, history reaches a subscriber only through
+  `SheetCanvas::subscribe_history`. That helper delivers an event only if the canvas still
+  shows the event's document at delivery time. `CanvasHistoryEvent` is opaque outside the
+  crate (no public fields, no accessors, opaque `Debug`); a raw subscription yields nothing
+  usable.
+- **C3.** A `SheetCanvas` does not subscribe to its own history. (`subscribe_history` reads the
+  canvas's current document key from a shared `Rc<Cell<Option<u64>>>` rather than re-borrowing
+  the emitting entity, so self-subscription never triggers a GPUI double-borrow panic.)
+- **C4.** Every gesture (drag, rubber band, pending place/wire press) ends by exactly one of:
+  commit to its own document at its stamped revision while it still holds capture, or end with
+  no edit. Either way it releases the capture it took, in the window it took it in, and never
+  a newer capture. Enforced structurally by a `{ window, hitbox, generation }` capture record
+  and a single `OverlayView::end_gesture` path.
 
 Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 

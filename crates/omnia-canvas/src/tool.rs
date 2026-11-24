@@ -41,13 +41,14 @@ use crate::input::SheetCanvas;
 use crate::keymap::{
     Cancel, Delete, MirrorHorizontal, MirrorVertical, PlaceWire, Redo, Rotate, SHEET_CONTEXT, Undo,
 };
-use crate::overlay::OverlayView;
-use gpui::{App, Context, Div, Entity, HitboxId, InteractiveElement, Window};
+use crate::overlay::{GestureEndReason, OverlayView};
+use gpui::{App, Context, Div, Entity, InteractiveElement, Window};
 use omnia_doc::{
     Change, Command, Doc, GRID_NM, ItemId, Orient, Pt, Rect, SymbolId, hit_test,
     prefs::{FollowPolicy, WiringPrefs},
     snap_to,
 };
+use std::rc::Weak;
 
 /// The active tool (canvas-plan section 9).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -598,13 +599,35 @@ pub struct CanvasEdit {
     pub dirty: Option<Rect>,
 }
 
-impl gpui::EventEmitter<CanvasHistory> for OverlayView {}
+impl gpui::EventEmitter<CanvasHistoryEvent> for OverlayView {}
 impl gpui::EventEmitter<CanvasEdit> for OverlayView {}
-/// What [`SheetCanvas`] emits for history. Its payload is readable only through
-/// [`SheetCanvas::subscribe_history`], which drops an event whose document is no longer the
-/// canvas's at delivery, so no subscriber can forget that check.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Opaque history event emitted by [`SheetCanvas`] and [`OverlayView`] (contract C2).
+///
+/// A raw GPUI subscription to this event yields nothing usable: it has no public fields, no
+/// accessors, and its [`std::fmt::Debug`] output omits the payload. Outside `omnia-canvas`,
+/// [`SheetCanvas::subscribe_history`] is the only way to receive a [`CanvasHistory`], and it
+/// delivers an event only when the canvas still shows that event's document at delivery time.
+///
+/// ```compile_fail
+/// use omnia_canvas::tool::CanvasHistoryEvent;
+/// fn read(event: &CanvasHistoryEvent) -> u64 {
+///     event.0.doc
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use omnia_canvas::tool::CanvasHistoryEvent;
+/// fn read(event: &CanvasHistoryEvent) -> bool {
+///     event.can_undo
+/// }
+/// ```
 pub struct CanvasHistoryEvent(pub(crate) CanvasHistory);
+
+impl std::fmt::Debug for CanvasHistoryEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CanvasHistoryEvent(..)")
+    }
+}
 
 impl gpui::EventEmitter<CanvasHistoryEvent> for SheetCanvas {}
 
@@ -621,52 +644,19 @@ pub(crate) trait ToolHost: Sized + 'static {
     /// Repaint the preview. Never notifies `SheetView` (INV11).
     fn preview_changed(&mut self, cx: &mut Context<Self>);
     /// The document changed through this host (commit, undo or redo): repaint, prune, and
-    /// emit [`CanvasHistory`] and [`CanvasEdit`].
+    /// emit [`CanvasHistoryEvent`] and [`CanvasEdit`].
     fn doc_changed(&mut self, change: &Change, cx: &mut Context<Self>);
     /// Carry out a request the machine cannot finish alone. Default: not supported yet
     /// (T5.3 adds placement, reorienting and deleting the selection).
     fn request(&mut self, _request: ToolRequest, _cx: &mut Context<Self>) {}
-    /// Cancel a gesture the host owns (the rubber band). Returns whether one was cancelled.
-    fn cancel_host_gesture(&mut self, _cx: &mut Context<Self>) -> bool {
-        false
-    }
-    /// The hitbox this host captured for its current gesture, if any.
-    fn owned_capture(&self) -> Option<HitboxId> {
-        None
-    }
-    /// Release `owned` without a window at hand, if the window still holds it. Default: the
-    /// host's next paint does it.
-    fn release_later(&mut self, _owned: HitboxId, cx: &mut Context<Self>) {
-        self.preview_changed(cx);
-    }
-    fn forget_capture(&mut self) {}
-}
-
-/// Releases the pointer capture a cancelled gesture held, the tool's or the host's band:
-/// at once given the window, only if this host still owns it (never another element's);
-/// without one, by scheduling the host's next paint, which releases it.
-fn release_capture<H: ToolHost>(host: &mut H, window: Option<&mut Window>, cx: &mut Context<H>) {
-    let Some(owned) = host.owned_capture() else {
-        return;
-    };
-    match window {
-        Some(window) => {
-            if window.captured_hitbox() == Some(owned) {
-                window.release_pointer();
-            }
-            host.forget_capture();
-        }
-        None => host.release_later(owned, cx),
-    }
 }
 
 /// Carries out one [`ToolOutcome`]: applies its commit as one `Doc::apply` (INV5), repaints
-/// the preview, passes on its request and releases the capture a finished gesture held
-/// (`release_capture`). Returns the outcome's flags for the caller's pointer bookkeeping.
+/// the preview, and passes on its request. Capture release is owned exclusively by
+/// [`OverlayView::end_gesture`] (contract C4).
 pub(crate) fn finish<H: ToolHost>(
     host: &mut H,
     mut outcome: ToolOutcome,
-    window: Option<&mut Window>,
     cx: &mut Context<H>,
 ) -> ToolOutcome {
     if let Some(commit) = outcome.commit.take() {
@@ -677,9 +667,6 @@ pub(crate) fn finish<H: ToolHost>(
     }
     if let Some(request) = outcome.request.take() {
         host.request(request, cx);
-    }
-    if outcome.release {
-        release_capture(host, window, cx);
     }
     outcome
 }
@@ -711,59 +698,13 @@ pub(crate) fn apply<H: ToolHost>(host: &mut H, commit: Commit, cx: &mut Context<
     }
 }
 
-fn history_step<H: ToolHost>(
-    host: &mut H,
-    redo: bool,
-    window: Option<&mut Window>,
-    cx: &mut Context<H>,
-) -> bool {
-    // A gesture's preview refers to the current document: drop it before the step.
-    let cancel = host.tools_mut().cancel();
-    finish(host, cancel, window, cx);
-    let doc = host.tool_doc();
-    let change = doc.update(cx, |doc, _| if redo { doc.redo() } else { doc.undo() });
-    match change {
-        Some(change) => {
-            host.doc_changed(&change, cx);
-            true
-        }
-        None => false,
-    }
-}
-
-/// Esc: cancels the tool's gesture or, failing that, the host's. Never edits the document.
-fn cancel<H: ToolHost>(host: &mut H, window: Option<&mut Window>, cx: &mut Context<H>) -> bool {
-    let mut outcome = host.tools_mut().cancel();
-    if !outcome.handled && host.cancel_host_gesture(cx) {
-        // The band's capture goes through the same release as a drag's.
-        outcome.handled = true;
-        outcome.release = true;
-    }
-    finish(host, outcome, window, cx).handled
-}
-
-/// Switches tools: cancels the tool's gesture and the host's (a band whose release the new
-/// tool would otherwise take), and releases only the capture those gestures held.
-fn set_tool<H: ToolHost>(
-    host: &mut H,
-    tool: Tool,
-    window: Option<&mut Window>,
-    cx: &mut Context<H>,
-) {
-    let band = host.cancel_host_gesture(cx);
-    let mut outcome = host.tools_mut().set_tool(tool);
-    outcome.release |= band;
-    finish(host, outcome, window, cx);
-}
-
 fn run<H: ToolHost>(
     host: &mut H,
     step: impl FnOnce(&mut ToolMachine) -> ToolOutcome,
-    window: Option<&mut Window>,
     cx: &mut Context<H>,
 ) {
     let outcome = step(host.tools_mut());
-    finish(host, outcome, window, cx);
+    finish(host, outcome, cx);
 }
 
 /// What the `Sheet` key context's actions do on a view (`OverlayView`, `SheetCanvas`).
@@ -809,32 +750,50 @@ pub(crate) fn sheet_key_context<V: SheetActions>(element: Div, cx: &mut Context<
 }
 
 impl SheetActions for OverlayView {
-    fn action_reorient(&mut self, by: Orient, window: &mut Window, cx: &mut Context<Self>) {
-        run(self, |m| m.reorient(by), Some(window), cx);
+    fn action_reorient(&mut self, by: Orient, _window: &mut Window, cx: &mut Context<Self>) {
+        run(self, |m| m.reorient(by), cx);
     }
 
     fn action_place_wire(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        set_tool(self, Tool::Wire, Some(window), cx);
+        self.end_gesture(
+            GestureEndReason::ToolChange(Tool::Wire),
+            Some(window),
+            Some(cx),
+        );
     }
 
     fn action_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        cancel(self, Some(window), cx)
+        self.end_gesture(GestureEndReason::Cancel, Some(window), Some(cx))
     }
 
-    fn action_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        run(self, ToolMachine::delete, Some(window), cx);
+    fn action_delete(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        run(self, ToolMachine::delete, cx);
     }
 
     fn action_undo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        history_step(self, false, Some(window), cx)
+        self.history_step(false, window, cx)
     }
 
     fn action_redo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        history_step(self, true, Some(window), cx)
+        self.history_step(true, window, cx)
     }
 }
 
 impl OverlayView {
+    fn history_step(&mut self, redo: bool, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // A gesture's preview refers to the current document: drop it before the step (C4).
+        self.end_gesture(GestureEndReason::HistoryStep, Some(window), Some(cx));
+        let doc = self.tool_doc();
+        let change = doc.update(cx, |doc, _| if redo { doc.redo() } else { doc.undo() });
+        match change {
+            Some(change) => {
+                self.doc_changed(&change, cx);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn tool(&self) -> Tool {
         self.tools().tool()
     }
@@ -843,46 +802,25 @@ impl OverlayView {
         self.tools().state()
     }
 
-    /// Switches tools, cancelling any gesture under way, the rubber band included (INV5).
-    /// The next paint releases the pointer capture the cancelled gesture held.
+    /// Switches tools, cancelling any gesture under way, the rubber band included (INV5, C4).
+    /// Releases the pointer capture via [`OverlayView::end_gesture`].
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
-        set_tool(self, tool, None, cx);
+        self.end_gesture(GestureEndReason::ToolChange(tool), None, Some(cx));
     }
 
-    /// Esc: cancels the tool's gesture, or else a rubber band. Never edits the document.
+    /// Esc: cancels the tool's gesture, or else a rubber band. Never edits the document (C4).
     pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        cancel(self, Some(window), cx)
+        self.end_gesture(GestureEndReason::Cancel, Some(window), Some(cx))
     }
 
-    /// Undoes one document step (one committed gesture, INV5); emits [`CanvasHistory`].
+    /// Undoes one document step (one committed gesture, INV5); emits [`CanvasHistoryEvent`].
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        history_step(self, false, Some(window), cx)
+        self.history_step(false, window, cx)
     }
 
-    /// Redoes one document step; emits [`CanvasHistory`].
+    /// Redoes one document step; emits [`CanvasHistoryEvent`].
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        history_step(self, true, Some(window), cx)
-    }
-
-    /// The document was swapped: drop every gesture with no edit (T5.2 review, finding 1).
-    pub(crate) fn tools_document_replaced(&mut self, cx: &mut Context<Self>) {
-        let outcome = self.tools_mut().document_replaced();
-        finish(self, outcome, None, cx);
-    }
-
-    /// Detached or replaced as a canvas's gesture owner: drop every gesture, the band
-    /// included, with no edit, and schedule the release of the capture it held.
-    pub(crate) fn tools_detached(&mut self, cx: &mut Context<Self>) {
-        let mut outcome = self.tools_mut().document_replaced();
-        outcome.release |= self.cancel_host_gesture(cx);
-        finish(self, outcome, None, cx);
-    }
-
-    /// The window lost activation: end a pointer-held gesture with no edit.
-    pub(crate) fn tools_pointer_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut outcome = self.tools_mut().pointer_lost();
-        outcome.release |= self.cancel_host_gesture(cx);
-        finish(self, outcome, Some(window), cx);
+        self.history_step(true, window, cx)
     }
 }
 
@@ -958,18 +896,27 @@ impl SheetCanvas {
         self.doc().map(doc_key) == Some(history.doc)
     }
 
-    /// Subscribes to this canvas's history (UD6). GPUI delivers events after the update that
-    /// emitted them unwinds, so the document may have changed since: an event for any
+    /// Subscribes to this canvas's history (UD6, contract C2). GPUI delivers events after the
+    /// update that emitted them unwinds, so the document may have changed since: an event for any
     /// document but the one the canvas shows at delivery is dropped here, before `on_history`.
+    ///
+    /// Reads the canvas's current document key from a shared cell rather than re-borrowing the
+    /// canvas entity, so even a self-subscription (outside C3) never triggers a GPUI double-borrow
+    /// panic.
     pub fn subscribe_history<T: 'static>(
         canvas: &Entity<Self>,
         cx: &mut Context<T>,
         mut on_history: impl FnMut(&mut T, &CanvasHistory, &mut Context<T>) + 'static,
     ) -> gpui::Subscription {
+        let current_doc = Self::current_doc_key_for(canvas.entity_id(), cx);
         cx.subscribe(
             canvas,
-            move |this, canvas, event: &CanvasHistoryEvent, cx| {
-                if canvas.read(cx).is_current_history(&event.0) {
+            move |this, _canvas, event: &CanvasHistoryEvent, cx| {
+                let matches = current_doc
+                    .as_ref()
+                    .and_then(Weak::upgrade)
+                    .is_some_and(|key| key.get() == Some(event.0.doc));
+                if matches {
                     on_history(this, &event.0, cx);
                 }
             },
@@ -2627,5 +2574,502 @@ mod tests {
             cx.update(|_, cx| overlay.read(cx).selection().is_empty()),
             "the deleted id is not selected again"
         );
+    }
+
+    fn open_hosted(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<Host>,
+        Entity<OverlayView>,
+        Entity<Doc>,
+        &mut VisualTestContext,
+    ) {
+        let doc = cx.new(|_| test_doc());
+        let doc_clone = doc.clone();
+        let (host, cx) = cx.add_window_view(move |window, cx| {
+            window.activate_window();
+            let overlay = cx.new(|cx| {
+                let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+                OverlayView::new(doc_clone, camera, &GRAPHITE, cx)
+            });
+            Host {
+                overlay: Some(overlay),
+            }
+        });
+        cx.run_until_parked();
+        let overlay = cx.update(|_, cx| host.read(cx).overlay.clone().unwrap());
+        (host, overlay, doc, cx)
+    }
+
+    fn unmount(host: &Entity<Host>, cx: &mut App) {
+        host.update(cx, |h, cx| {
+            h.overlay = None;
+            cx.notify();
+        });
+    }
+
+    /// Review 6, finding 3: a Shift-click on an item while a band is live ends the band,
+    /// and its capture is released even when a `SelectionChanged` subscriber unmounts the
+    /// retained overlay before it can paint.
+    #[gpui::test]
+    fn t5_2_a_shift_click_ending_a_band_releases_without_a_paint(cx: &mut TestAppContext) {
+        let (host, overlay, _doc, cx) = open_hosted(cx);
+        down(&overlay, cx, pt(0, -8));
+        drag_to(&overlay, cx, pt(9, 8));
+        assert!(captured(cx));
+        let unmount_host = host.clone();
+        cx.update(|_, cx| {
+            cx.subscribe(
+                &overlay,
+                move |_, event: &crate::overlay::OverlayEvent, cx| {
+                    if *event == crate::overlay::OverlayEvent::SelectionChanged {
+                        unmount(&unmount_host, cx);
+                    }
+                },
+            )
+            .detach();
+        });
+        let at = screen(&overlay, cx, pt(-6, 0));
+        cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::shift());
+        cx.run_until_parked();
+        assert!(
+            cx.update(|_, cx| host.read(cx).overlay.is_none()),
+            "unmounted"
+        );
+        assert!(cx.update(|_, cx| overlay.read(cx).rubber_band().is_none()));
+        assert!(!captured(cx), "the band's capture is released");
+    }
+
+    /// Review 6, finding 3: `set_doc(Some(..))` ending a live band, with the retained overlay
+    /// unmounted in the same update, releases the band's capture.
+    #[gpui::test]
+    fn t5_2_a_document_switch_ending_a_band_releases_without_a_paint(cx: &mut TestAppContext) {
+        let (host, overlay, doc, cx) = open_hosted(cx);
+        let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
+        let canvas = canvas_for(cx, Some(doc), Some(overlay.clone()));
+        down(&overlay, cx, pt(0, -8));
+        drag_to(&overlay, cx, pt(9, 8));
+        assert!(captured(cx));
+        cx.update(|_, cx| {
+            canvas.update(cx, |c, cx| c.set_doc(Some(doc_b.clone()), cx));
+            unmount(&host, cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| overlay.read(cx).rubber_band().is_none()));
+        assert!(!captured(cx), "the band's capture is released");
+    }
+
+    /// Contract C2: a raw GPUI subscription to `CanvasHistoryEvent` yields nothing usable
+    /// (`Debug` reveals no payload; the `compile_fail` doctests on `CanvasHistoryEvent` check
+    /// field opacity from outside the crate).
+    #[gpui::test]
+    fn t5_2_raw_history_subscription_exposes_no_payload(cx: &mut TestAppContext) {
+        let (_overlay, doc, cx) = open_overlay(cx);
+        let canvas = canvas_for(cx, Some(doc.clone()), None);
+        nudge(&doc, cx);
+        let formatted = Rc::new(RefCell::new(Vec::new()));
+        let sink = formatted.clone();
+        cx.update(|_, cx| {
+            let canvas_entity = canvas.clone();
+            let sub = cx.new(|cx| Recorder {
+                _subscription: cx.subscribe(
+                    &canvas_entity,
+                    move |_, _, event: &CanvasHistoryEvent, _| {
+                        sink.borrow_mut().push(format!("{event:?}"));
+                    },
+                ),
+            });
+            std::mem::forget(sub);
+        });
+        let key_str = doc_key(&doc).to_string();
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.undo(window, cx)));
+        cx.run_until_parked();
+        let logs = formatted.borrow();
+        assert_eq!(logs.as_slice(), &["CanvasHistoryEvent(..)"]);
+        assert!(
+            !logs[0].contains(&key_str)
+                && !logs[0].contains("can_undo")
+                && !logs[0].contains("can_redo")
+                && !logs[0].contains("cursor"),
+            "raw Debug output must not reveal payload: {}",
+            logs[0]
+        );
+    }
+
+    /// Contract C3: a canvas subscribed to its own history via `subscribe_history` does not
+    /// panic on a GPUI double-borrow, receives its own current-document history, and still
+    /// drops stale history after a document switch in the same update.
+    #[gpui::test]
+    fn t5_2_a_canvas_can_subscribe_to_its_own_history(cx: &mut TestAppContext) {
+        let (_overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
+        let canvas = canvas_for(cx, Some(doc_a.clone()), None);
+        nudge(&doc_a, cx);
+        nudge(&doc_a, cx);
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let sink = heard.clone();
+        cx.update(|_, cx| {
+            canvas.update(cx, |_, cx| {
+                let me = cx.entity();
+                SheetCanvas::subscribe_history(&me, cx, move |_, history, _| {
+                    sink.borrow_mut().push(*history);
+                })
+                .detach();
+            })
+        });
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.undo(window, cx)));
+        cx.run_until_parked();
+        assert_eq!(
+            heard.borrow().iter().map(|h| h.doc).collect::<Vec<_>>(),
+            vec![doc_key(&doc_a)]
+        );
+        // Undo on A and switch to B in one update: no panic, and A's stale history is dropped.
+        heard.borrow_mut().clear();
+        cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| {
+                c.undo(window, cx);
+                c.set_doc(Some(doc_b.clone()), cx);
+            })
+        });
+        cx.run_until_parked();
+        assert!(
+            heard.borrow().is_empty(),
+            "stale history for A is dropped after switching to B"
+        );
+    }
+
+    /// Contract C4: a deferred capture release scheduled when a gesture ends without a window
+    /// never releases a newer capture taken before the deferred update runs, even when GPUI
+    /// reuses the same hitbox id within the frame (generation guard).
+    #[gpui::test]
+    fn t5_2_deferred_release_never_releases_a_newer_capture(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let rev0 = revision(&doc, cx);
+        // Gesture 1: rubber band on empty space captures the current frame's hitbox.
+        down(&overlay, cx, pt(0, -8));
+        drag_to(&overlay, cx, pt(4, -4));
+        assert!(captured(cx));
+        let first_hitbox = cx.update(|window, _| window.captured_hitbox().unwrap());
+
+        // In one update (so no repaint occurs and GPUI keeps the exact same hitbox id):
+        // end gesture 1 without a window (queuing a deferred release), then start gesture 2
+        // (a drag on R1) on the same hitbox id before the deferred effect runs.
+        let r1_screen = screen(&overlay, cx, pt(-6, 0));
+        cx.update(|window, cx| {
+            overlay.update(cx, |o, cx| o.cancel_rubber_band(cx));
+            window.dispatch_event(
+                gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: r1_screen,
+                    modifiers: Modifiers::none(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+            // Both gestures captured the exact same hitbox id before any repaint, so only the
+            // generation guard prevents gesture 1's deferred release from dropping gesture 2's
+            // capture when effects flush.
+            assert_eq!(window.captured_hitbox(), Some(first_hitbox));
+        });
+        cx.run_until_parked();
+
+        assert_eq!(phase(&overlay, cx), ToolPhase::Dragging);
+        assert!(
+            captured(cx),
+            "the deferred release from gesture 1 must not release gesture 2's capture"
+        );
+        // Gesture 2 still owns capture and commits once on release.
+        drag_to(&overlay, cx, pt(-4, 2));
+        up(&overlay, cx, pt(-4, 2));
+        assert_eq!(revision(&doc, cx), rev0 + 1);
+        assert_eq!(part_at(&doc, cx, 0), pt(-4, 2));
+        assert!(!captured(cx));
+    }
+
+    /// Contract C4 table-driven test: walks every gesture end path listed in canvas-plan /
+    /// T5.2 section 3 across drag, rubber band, and pending place press, asserting at most
+    /// one command, to the stamped document only, clean gesture state, and capture released.
+    #[gpui::test]
+    fn t5_2_every_gesture_end_path_satisfies_c4(cx: &mut TestAppContext) {
+        #[derive(Clone, Copy, Debug)]
+        enum GestureKind {
+            Drag,
+            Band,
+            PendingPlace,
+        }
+
+        #[derive(Clone, Copy, Debug)]
+        enum EndPath {
+            Release,
+            EscCancel,
+            FreshPress,
+            LostCapture,
+            MoveOffSheet,
+            ToolChange,
+            WindowDeactivated,
+            SetDocSome,
+            SetDocNone,
+            Attach,
+            Replace,
+            Detach,
+            DropOverlay,
+            ShiftClickWithBand,
+            CancelRubberBand,
+        }
+
+        let cases: &[(GestureKind, EndPath, u64)] = &[
+            // Drag paths
+            (GestureKind::Drag, EndPath::Release, 1),
+            (GestureKind::Drag, EndPath::EscCancel, 0),
+            (GestureKind::Drag, EndPath::FreshPress, 0),
+            (GestureKind::Drag, EndPath::LostCapture, 0),
+            (GestureKind::Drag, EndPath::MoveOffSheet, 0),
+            (GestureKind::Drag, EndPath::ToolChange, 0),
+            (GestureKind::Drag, EndPath::WindowDeactivated, 0),
+            (GestureKind::Drag, EndPath::SetDocSome, 0),
+            (GestureKind::Drag, EndPath::SetDocNone, 0),
+            (GestureKind::Drag, EndPath::Attach, 0),
+            (GestureKind::Drag, EndPath::Replace, 0),
+            (GestureKind::Drag, EndPath::Detach, 0),
+            (GestureKind::Drag, EndPath::DropOverlay, 0),
+            // Rubber-band paths
+            (GestureKind::Band, EndPath::Release, 0),
+            (GestureKind::Band, EndPath::EscCancel, 0),
+            (GestureKind::Band, EndPath::FreshPress, 0),
+            (GestureKind::Band, EndPath::LostCapture, 0),
+            (GestureKind::Band, EndPath::MoveOffSheet, 0),
+            (GestureKind::Band, EndPath::ToolChange, 0),
+            (GestureKind::Band, EndPath::WindowDeactivated, 0),
+            (GestureKind::Band, EndPath::SetDocSome, 0),
+            (GestureKind::Band, EndPath::SetDocNone, 0),
+            (GestureKind::Band, EndPath::Attach, 0),
+            (GestureKind::Band, EndPath::Replace, 0),
+            (GestureKind::Band, EndPath::Detach, 0),
+            (GestureKind::Band, EndPath::DropOverlay, 0),
+            (GestureKind::Band, EndPath::ShiftClickWithBand, 0),
+            (GestureKind::Band, EndPath::CancelRubberBand, 0),
+            // Pending place-press paths
+            (GestureKind::PendingPlace, EndPath::Release, 0),
+            (GestureKind::PendingPlace, EndPath::EscCancel, 0),
+            (GestureKind::PendingPlace, EndPath::LostCapture, 0),
+            (GestureKind::PendingPlace, EndPath::ToolChange, 0),
+            (GestureKind::PendingPlace, EndPath::WindowDeactivated, 0),
+            (GestureKind::PendingPlace, EndPath::SetDocSome, 0),
+            (GestureKind::PendingPlace, EndPath::SetDocNone, 0),
+            (GestureKind::PendingPlace, EndPath::Attach, 0),
+            (GestureKind::PendingPlace, EndPath::Replace, 0),
+            (GestureKind::PendingPlace, EndPath::Detach, 0),
+            (GestureKind::PendingPlace, EndPath::DropOverlay, 0),
+        ];
+
+        for &(kind, path, expected_edits) in cases {
+            cx.update(|cx| cx.bind_keys(standalone_bindings()));
+            let (host, overlay, doc_a, vcx) = open_hosted(cx);
+            let doc_b = vcx.update(|_, cx| cx.new(|_| test_doc()));
+            let (a0, b0) = vcx.update(|_, cx| (snapshot(doc_a.read(cx)), snapshot(doc_b.read(cx))));
+            let rev_a0 = revision(&doc_a, vcx);
+            let rev_b0 = revision(&doc_b, vcx);
+
+            let canvas = match path {
+                EndPath::Attach => Some(canvas_for(vcx, Some(doc_a.clone()), None)),
+                EndPath::SetDocSome | EndPath::SetDocNone | EndPath::Replace | EndPath::Detach => {
+                    Some(canvas_for(vcx, Some(doc_a.clone()), Some(overlay.clone())))
+                }
+                _ => None,
+            };
+
+            // Start the gesture.
+            match kind {
+                GestureKind::Drag => {
+                    down(&overlay, vcx, pt(-6, 0));
+                    drag_to(&overlay, vcx, pt(-4, 2));
+                    assert_eq!(
+                        phase(&overlay, vcx),
+                        ToolPhase::Dragging,
+                        "{kind:?}/{path:?}"
+                    );
+                    assert!(captured(vcx), "{kind:?}/{path:?}: drag takes capture");
+                }
+                GestureKind::Band => {
+                    down(&overlay, vcx, pt(0, -8));
+                    drag_to(&overlay, vcx, pt(9, 8));
+                    assert!(
+                        vcx.update(|_, cx| overlay.read(cx).rubber_band().is_some()),
+                        "{kind:?}/{path:?}"
+                    );
+                    assert!(captured(vcx), "{kind:?}/{path:?}: band takes capture");
+                }
+                GestureKind::PendingPlace => {
+                    vcx.update(|_, cx| {
+                        overlay.update(cx, |o, cx| o.set_tool(Tool::Place(symbol()), cx));
+                    });
+                    vcx.run_until_parked();
+                    down(&overlay, vcx, pt(2, 2));
+                    assert!(
+                        vcx.update(|_, cx| matches!(
+                            overlay.read(cx).tool_state(),
+                            ToolState::Placing(p) if p.pressed
+                        )),
+                        "{kind:?}/{path:?}"
+                    );
+                }
+            }
+
+            // Trigger the end path.
+            let mut dropped = false;
+            let weak = overlay.downgrade();
+            match path {
+                EndPath::Release => {
+                    up(&overlay, vcx, pt(-4, 2));
+                }
+                EndPath::EscCancel => {
+                    vcx.update(|window, cx| {
+                        overlay.update(cx, |o, cx| o.cancel(window, cx));
+                    });
+                }
+                EndPath::FreshPress | EndPath::ShiftClickWithBand => {
+                    // Shift-click on an item ends a live drag or band without taking a new
+                    // capture, so we can assert capture is released right away.
+                    let at = screen(&overlay, vcx, pt(-6, 0));
+                    vcx.simulate_mouse_down(at, MouseButton::Left, Modifiers::shift());
+                }
+                EndPath::LostCapture => {
+                    let at = screen(&overlay, vcx, pt(-4, 2));
+                    vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+                    vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+                    let button = match kind {
+                        GestureKind::PendingPlace => None,
+                        _ => Some(MouseButton::Left),
+                    };
+                    vcx.simulate_mouse_move(at, button, Modifiers::none());
+                }
+                EndPath::MoveOffSheet => {
+                    let at = screen(&overlay, vcx, pt(-4, 2));
+                    vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+                    vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+                    let outside = gpui::point(gpui::px(-400.0), gpui::px(-400.0));
+                    vcx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+                }
+                EndPath::ToolChange => {
+                    vcx.update(|_, cx| overlay.update(cx, |o, cx| o.set_tool(Tool::Wire, cx)));
+                }
+                EndPath::WindowDeactivated => {
+                    vcx.deactivate_window();
+                }
+                EndPath::SetDocSome => {
+                    let c = canvas.as_ref().unwrap();
+                    vcx.update(|_, cx| c.update(cx, |c, cx| c.set_doc(Some(doc_b.clone()), cx)));
+                }
+                EndPath::SetDocNone => {
+                    let c = canvas.as_ref().unwrap();
+                    vcx.update(|_, cx| c.update(cx, |c, cx| c.set_doc(None, cx)));
+                }
+                EndPath::Attach => {
+                    let c = canvas.as_ref().unwrap();
+                    vcx.update(|_, cx| {
+                        c.update(cx, |c, cx| c.set_overlay(Some(overlay.clone()), cx));
+                    });
+                }
+                EndPath::Replace => {
+                    let c = canvas.as_ref().unwrap();
+                    let other = vcx.update(|_, cx| {
+                        let d = doc_a.clone();
+                        cx.new(|cx| {
+                            OverlayView::new(
+                                d,
+                                Camera::new(Pt::ZERO, 1.0, Bounds::default()),
+                                &GRAPHITE,
+                                cx,
+                            )
+                        })
+                    });
+                    vcx.update(|_, cx| c.update(cx, |c, cx| c.set_overlay(Some(other), cx)));
+                }
+                EndPath::Detach => {
+                    let c = canvas.as_ref().unwrap();
+                    vcx.update(|_, cx| c.update(cx, |c, cx| c.set_overlay(None, cx)));
+                }
+                EndPath::DropOverlay => {
+                    drop(overlay);
+                    vcx.update(|_, cx| unmount(&host, cx));
+                    dropped = true;
+                }
+                EndPath::CancelRubberBand => {
+                    vcx.update(|_, cx| overlay.update(cx, |o, cx| o.cancel_rubber_band(cx)));
+                }
+            }
+            vcx.run_until_parked();
+
+            // Assert C4: capture released, at most one command to stamped doc_a, doc_b untouched.
+            assert!(
+                !captured(vcx),
+                "C4 failed ({kind:?}/{path:?}): capture was not released"
+            );
+            let edits_a = revision(&doc_a, vcx) - rev_a0;
+            assert_eq!(
+                edits_a, expected_edits,
+                "C4 failed ({kind:?}/{path:?}): unexpected edit count on stamped doc"
+            );
+            assert!(
+                edits_a <= 1,
+                "C4 failed ({kind:?}/{path:?}): more than one command applied"
+            );
+            assert_eq!(
+                revision(&doc_b, vcx),
+                rev_b0,
+                "C4 failed ({kind:?}/{path:?}): edited another document"
+            );
+            assert!(
+                vcx.update(|_, cx| doc_b.read(cx).content_eq(&b0)),
+                "C4 failed ({kind:?}/{path:?}): doc B content changed"
+            );
+            if expected_edits == 0 {
+                assert!(
+                    vcx.update(|_, cx| doc_a.read(cx).content_eq(&a0)),
+                    "C4 failed ({kind:?}/{path:?}): doc A changed on a no-edit end path"
+                );
+            }
+            if dropped {
+                assert!(
+                    weak.upgrade().is_none(),
+                    "{kind:?}/{path:?}: overlay dropped"
+                );
+            } else {
+                let live = weak.upgrade().unwrap();
+                assert_ne!(
+                    phase(&live, vcx),
+                    ToolPhase::Dragging,
+                    "C4 failed ({kind:?}/{path:?}): drag state not cleared"
+                );
+                assert!(
+                    vcx.update(|_, cx| live.read(cx).rubber_band().is_none()),
+                    "C4 failed ({kind:?}/{path:?}): rubber band not cleared"
+                );
+                assert!(
+                    vcx.update(|_, cx| !matches!(
+                        live.read(cx).tool_state(),
+                        ToolState::Placing(p) if p.pressed
+                    )),
+                    "C4 failed ({kind:?}/{path:?}): pending place press not cleared"
+                );
+            }
+
+            // A stray mouse-up afterwards must commit nothing and leave capture clear.
+            let rev_after = revision(&doc_a, vcx);
+            vcx.simulate_mouse_up(
+                gpui::point(gpui::px(100.0), gpui::px(100.0)),
+                MouseButton::Left,
+                Modifiers::none(),
+            );
+            vcx.run_until_parked();
+            assert_eq!(
+                revision(&doc_a, vcx),
+                rev_after,
+                "C4 failed ({kind:?}/{path:?}): stray release committed after end"
+            );
+            assert_eq!(revision(&doc_b, vcx), rev_b0);
+            assert!(!captured(vcx));
+        }
     }
 }

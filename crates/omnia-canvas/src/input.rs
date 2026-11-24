@@ -23,18 +23,33 @@ use crate::camera_anim::{
     CameraAnimation, ViewAnimation, fit_rect_camera, fit_sheet_camera, viewport_center,
     zoom_to_selection_camera,
 };
-use crate::overlay::OverlayView;
+use crate::overlay::{GestureEndReason, OverlayView};
 use crate::sheet::{SheetDocument, SheetView, grid_level};
-use crate::tool::{self, CanvasEdit, CanvasHistory, CanvasHistoryEvent};
+use crate::tool::{self, CanvasEdit, CanvasHistoryEvent};
 use gpui::{
-    App, Bounds, Context, DispatchPhase, Element, ElementId, Entity, EventEmitter, FocusHandle,
-    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, KeyDownEvent,
-    KeyUpEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
-    PinchEvent, Pixels, Point, Render, ScrollDelta, ScrollEvent, ScrollSource, Styled,
-    Subscription, TouchPhase, WeakEntity, Window, div, point, prelude::*,
+    App, Bounds, Context, DispatchPhase, Element, ElementId, Entity, EntityId, EventEmitter,
+    FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
+    KeyDownEvent, KeyUpEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, PinchEvent, Pixels, Point, Render, ScrollDelta, ScrollEvent, ScrollSource,
+    Styled, Subscription, TouchPhase, WeakEntity, Window, div, point, prelude::*,
 };
 use omnia_doc::{Doc, ItemId, Pt, Rect};
 use omnia_theme::Theme;
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    rc::{Rc, Weak},
+};
+
+/// T5.2: maps each live [`SheetCanvas`] entity id to its shared current-document key cell so
+/// [`SheetCanvas::subscribe_history`] can check the current document without re-borrowing the
+/// canvas at registration or delivery (contract C3).
+#[derive(Default)]
+struct CanvasDocKeys {
+    keys: HashMap<EntityId, Weak<Cell<Option<u64>>>>,
+}
+
+impl Global for CanvasDocKeys {}
 
 /// Lines per wheel notch: Windows' default `SPI_GETWHEELSCROLLLINES`, which GPUI multiplies
 /// into `ScrollDelta::Lines` (`gpui_windows/src/events.rs`); T0.5 logged ±3 per notch.
@@ -220,6 +235,8 @@ pub struct SheetCanvas {
     camera: Camera,
     theme: &'static Theme,
     doc: Option<Entity<Doc>>,
+    /// T5.2: current `doc`'s key, shared with `subscribe_history` to avoid re-borrowing `Self`.
+    current_doc_key: Rc<Cell<Option<u64>>>,
     sheet_doc: Option<SheetDocument>,
     nav: Navigator,
     /// T5.2: the gesture owner. Tool, cancel, undo and redo go to it (`set_overlay`).
@@ -240,11 +257,23 @@ impl SheetCanvas {
     /// The camera's viewport is replaced by the element's bounds at prepaint and on every
     /// event.
     pub fn new(camera: Camera, theme: &'static Theme, cx: &mut Context<Self>) -> Self {
+        let current_doc_key = Rc::new(Cell::new(None));
+        let id = cx.entity_id();
+        cx.default_global::<CanvasDocKeys>()
+            .keys
+            .insert(id, Rc::downgrade(&current_doc_key));
+        cx.on_release(move |_, cx| {
+            if cx.has_global::<CanvasDocKeys>() {
+                cx.global_mut::<CanvasDocKeys>().keys.remove(&id);
+            }
+        })
+        .detach();
         Self {
             status: CanvasStatus::new(&camera, None),
             camera,
             theme,
             doc: None,
+            current_doc_key,
             sheet_doc: None,
             nav: Navigator::default(),
             overlay: None,
@@ -257,8 +286,17 @@ impl SheetCanvas {
         }
     }
 
+    pub(crate) fn current_doc_key_for(
+        canvas_id: EntityId,
+        cx: &App,
+    ) -> Option<Weak<Cell<Option<u64>>>> {
+        cx.try_global::<CanvasDocKeys>()
+            .and_then(|reg| reg.keys.get(&canvas_id).cloned())
+    }
+
     /// Attaches a document entity to this canvas for rendering and `fit_sheet` (T4.5).
     pub fn with_doc(mut self, doc: Entity<Doc>) -> Self {
+        self.current_doc_key.set(Some(tool::doc_key(&doc)));
         self.sheet_doc = Some(SheetDocument::new(doc.clone()));
         self.doc = Some(doc);
         self
@@ -273,6 +311,7 @@ impl SheetCanvas {
     /// dropping every gesture, or is detached when the document is cleared).
     pub fn set_doc(&mut self, doc: Option<Entity<Doc>>, cx: &mut Context<Self>) {
         self.anim = None;
+        self.current_doc_key.set(doc.as_ref().map(tool::doc_key));
         self.sheet_doc = doc.as_ref().map(|d| SheetDocument::new(d.clone()));
         self.doc = doc;
         self.sync_overlay_doc(cx);
@@ -303,28 +342,35 @@ impl SheetCanvas {
     /// T5.2: attaches the gesture owner, an [`OverlayView`]. Attaching aligns the documents
     /// in the same call: the overlay switches to this canvas's document (dropping its
     /// gestures), or a canvas with none adopts the overlay's. Tool, cancel, undo and redo go to
-    /// the owner, and its [`CanvasHistory`] after every effective edit (a gesture's commit
-    /// included) is re-emitted here for the shell (UD6), only while both show one document.
+    /// the owner, and its history after every effective edit (a gesture's commit included) is
+    /// re-emitted here for the shell (UD6, C2), only while both show one document.
     pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>) {
         self.overlay_subscriptions.clear();
-        // T5.2: an outgoing owner keeps no gesture that could still commit.
+        // T5.2: an outgoing owner keeps no gesture that could still commit (C4).
         if let Some(old) = self.overlay.take()
             && overlay.as_ref() != Some(&old)
         {
-            old.update(cx, |o, cx| o.tools_detached(cx));
+            old.update(cx, |o, cx| {
+                o.end_gesture(GestureEndReason::Detach, None, Some(cx));
+            });
         }
         if let Some(overlay) = &overlay {
             if self.doc.is_none() {
                 let doc = overlay.read(cx).doc().clone();
+                self.current_doc_key.set(Some(tool::doc_key(&doc)));
                 self.sheet_doc = Some(SheetDocument::new(doc.clone()));
                 self.doc = Some(doc);
                 cx.notify();
             }
+            // T5.2: an incoming owner starts clean with no live gesture or capture (C4).
+            overlay.update(cx, |o, cx| {
+                o.end_gesture(GestureEndReason::Attach, None, Some(cx));
+            });
             self.overlay_subscriptions.push(cx.subscribe(
                 overlay,
-                |this, overlay, history: &CanvasHistory, cx| {
-                    if this.accepts(history.doc, &overlay, cx) {
-                        cx.emit(CanvasHistoryEvent(*history));
+                |this, overlay, event: &CanvasHistoryEvent, cx| {
+                    if this.accepts(event.0.doc, &overlay, cx) {
+                        cx.emit(CanvasHistoryEvent(event.0));
                     }
                 },
             ));
@@ -355,7 +401,9 @@ impl SheetCanvas {
             None => {
                 self.overlay_subscriptions.clear();
                 self.overlay = None;
-                overlay.update(cx, |o, cx| o.tools_detached(cx));
+                overlay.update(cx, |o, cx| {
+                    o.end_gesture(GestureEndReason::Detach, None, Some(cx));
+                });
             }
         }
     }
