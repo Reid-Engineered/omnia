@@ -180,7 +180,7 @@ own in turn.
 - Done when: transcript tests show the same request gives byte-identical results through
   `call` and `serve`.
 
-### A1.8 MCP over stdio · todo
+### A1.8 MCP over stdio · done
 - Lane: agent · Depends: A1.7 · Read: mcp-plan.md section 10; AK1; AQ1
 - Owns: `crates/omnia-cli/src/mcp.rs`, `crates/omnia-cli/tests/transcripts/`
 - Do: both protocol eras per mcp-plan.md section 10.5 (amended at A0.2): Omnia's one-era-per-
@@ -686,3 +686,41 @@ before a request that starts with `-`; a test checks that `call -1` is a usage e
 `call -- -1` is answered like `serve` answers `-1`; section 14's A1.7 note mentions `--`.
 Checks rerun locally on Windows, all passing: fmt, workspace clippy, omnia-bench clippy with
 `scene-counts,readback`, `cargo test --workspace`, `cargo deny check`. Nothing measured.
+
+2026-11-24 A1.8 done — `omnia mcp [--root DIR]...` in new `crates/omnia-cli/src/mcp.rs`
+(wired into `main.rs`: the `mcp` command, its usage line, and the one stale usage-test case
+that listed bare `mcp` as an error). Hand-written JSON-RPC 2.0 over stdio, no new dependency
+(AQ1). Both eras of section 10.5 with Omnia's one-era-per-process selection: `initialize`
+selects the handshake era (2025-11-25, or 2025-06-18 when asked; anything else answers
+2025-11-25), any other first request carrying a `_meta` revision or `server/discover`
+selects the stateless era (2026-07-28), and a message of the other era after that is a
+protocol error; no era is guessed from other fields. Handshake era: `initialize`, `ping`,
+`logging/setLevel`. Stateless era: per-request `_meta` revision and client capabilities
+(required; missing is `-32602`), an unsupported revision is `-32022` with
+`data {supported, requested}`, `server/discover`, `resultType: "complete"` and the full
+caching-hint list (`ttlMs`, `cacheScope`) on `tools/list`, `prompts/list`,
+`resources/list`, `resources/templates/list` and `resources/read`, `subscriptions/listen`
+on the resource-subscription filter with later `notifications/resources/updated` tagged by
+the listen request's subscription id, no `ping`. Both eras: `tools/list` built from the
+catalog (input and output schemas, annotations), `tools/call` through
+`Request::from_arguments_value` and `handle_in` in arguments form with `structuredContent`
+plus the same JSON as its text block (tool failures are `isError` results; only malformed
+JSON-RPC and unknown tools are protocol errors), resources (capabilities, schemas, docs,
+doc summary/items/nets, symbols) read through the session's own operations, subscriptions
+in each era's form, the three section 10.3 prompts, level-filtered
+`notifications/message`, and `notifications/cancelled` (recorded; A1 calls are synchronous
+so the named request has always finished, A3.2 gives it jobs). The open-document list is
+tracked in the adapter from its own responses, since the MCP process is the only client of
+its session. Output is compact canonical JSON (sorted keys), so the bytes do not depend on
+`serde_json`'s `preserve_order` feature, which other workspace crates turn on (found by the
+workspace test run; AD8). Done when: ATC-mcp-01 and ATC-mcp-02 pass as exact transcripts
+(`crates/omnia-cli/tests/transcripts/`, with a stateless-era transcript beside them) and the
+prompts each have a fixture there, all run in-process by the `mcp::tests` unit tests, which
+also assert the tools/list names against the catalog and the joined net against the
+fixture bytes. Follow-up for the symbol resource's committed schema (mcp-plan.md 9.3's
+note): none was published, as `crates/omnia-agent/schema/` and its registry are outside
+this task's **Owns**; the resource serves `SymbolInfo` JSON as read by `read::symbols`.
+Checks run locally on Windows and passing: `cargo fmt --all --check`; `cargo clippy
+--workspace --all-targets -- -D warnings`; `cargo clippy -p omnia-bench --all-targets
+--features scene-counts,readback -- -D warnings`; `cargo test --workspace`; `cargo deny
+check`. Windows numbers certify nothing; nothing measured.

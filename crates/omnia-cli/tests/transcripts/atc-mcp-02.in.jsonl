@@ -1,0 +1,10 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "transcript", "version": "1"}}}
+{"jsonrpc": "2.0", "method": "notifications/initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "omnia_nope", "arguments": {}}}
+{"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "omnia_apply", "arguments": {"doc_id": "d99", "expected_revision": 0, "operations": [{"op": "add_label", "at": [0, 0], "text": "CLK"}]}}}
+{"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {"name": "omnia_inspect", "arguments": {"include": ["summary"]}}}
+{"jsonrpc": "2.0", "id": 5, "method": "no/such", "params": {}}
+{"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {"name": "omnia_job_status", "arguments": {"job_id": "j1"}}}
+{this is not json
+[1, 2, 3]
+{"jsonrpc": "2.0", "id": 7, "method": "ping", "params": {}}

@@ -1,0 +1,9 @@
+{"id":1,"jsonrpc":"2.0","result":{"capabilities":{"logging":{},"prompts":{"listChanged":false},"resources":{"listChanged":true,"subscribe":true},"tools":{"listChanged":false}},"protocolVersion":"2025-11-25","serverInfo":{"name":"omnia","version":"0.1.0"}}}
+{"error":{"code":-32601,"message":"unknown tool omnia_nope"},"id":2,"jsonrpc":"2.0"}
+{"id":3,"jsonrpc":"2.0","result":{"content":[{"text":"{\"schema\":\"omnia.agent/1\",\"error\":{\"code\":\"document_not_found\",\"message\":\"no open document has this id\",\"retryable\":false,\"details\":{}},\"warnings\":[]}","type":"text"}],"isError":true,"structuredContent":{"error":{"code":"document_not_found","details":{},"message":"no open document has this id","retryable":false},"schema":"omnia.agent/1","warnings":[]}}}
+{"id":4,"jsonrpc":"2.0","result":{"content":[{"text":"{\"schema\":\"omnia.agent/1\",\"error\":{\"code\":\"schema_violation\",\"message\":\"schema violation: missing field `doc_id`\",\"retryable\":false,\"details\":{\"path\":\"\"}},\"warnings\":[]}","type":"text"}],"isError":true,"structuredContent":{"error":{"code":"schema_violation","details":{"path":""},"message":"schema violation: missing field `doc_id`","retryable":false},"schema":"omnia.agent/1","warnings":[]}}}
+{"error":{"code":-32601,"message":"unknown method no/such"},"id":5,"jsonrpc":"2.0"}
+{"error":{"code":-32601,"message":"unknown tool omnia_job_status"},"id":6,"jsonrpc":"2.0"}
+{"error":{"code":-32700,"message":"key must be a string at line 1 column 2"},"id":null,"jsonrpc":"2.0"}
+{"error":{"code":-32600,"message":"a JSON-RPC message is an object"},"id":null,"jsonrpc":"2.0"}
+{"id":7,"jsonrpc":"2.0","result":{}}

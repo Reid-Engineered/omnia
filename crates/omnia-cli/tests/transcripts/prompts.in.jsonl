@@ -1,0 +1,8 @@
+{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "transcript", "version": "1"}}}
+{"jsonrpc": "2.0", "method": "notifications/initialized"}
+{"jsonrpc": "2.0", "id": 2, "method": "prompts/list", "params": {}}
+{"jsonrpc": "2.0", "id": 3, "method": "prompts/get", "params": {"name": "omnia_inspect_sheet", "arguments": {"doc_id": "d1"}}}
+{"jsonrpc": "2.0", "id": 4, "method": "prompts/get", "params": {"name": "omnia_place_and_wire", "arguments": {"doc_id": "d1", "parts": "R1 and R2, Resistor-IEEE-Standard, 10k", "connections": "R1 pin 2 to R2 pin 1"}}}
+{"jsonrpc": "2.0", "id": 5, "method": "prompts/get", "params": {"name": "omnia_safe_edit_loop", "arguments": {}}}
+{"jsonrpc": "2.0", "id": 6, "method": "prompts/get", "params": {"name": "omnia_nope", "arguments": {}}}
+{"jsonrpc": "2.0", "id": 7, "method": "prompts/get", "params": {"name": "omnia_inspect_sheet", "arguments": {}}}
