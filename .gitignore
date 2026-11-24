@@ -5,3 +5,4 @@ design/globe-o.json
 design/wordmark.json
 *.log
 /target/
+__pycache__/

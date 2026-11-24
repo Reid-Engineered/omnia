@@ -51,16 +51,22 @@ TASK_HEADING = re.compile(r"^### (?P<id>[A-Z]{1,2}\d+\.\d+) (?P<title>.*?) · (?
 TASK_ID = re.compile(r"\b[A-Z]{1,2}\d+\.\d+\b")
 CHECKPOINT = re.compile(r"→\s*(?P<id>[A-Z]{1,2}\d+)")
 # Two entry styles: "2026-11-20 X1.1 done — text" and "- **2026-11-20 · X1.1 · done:** text".
-LOG_START = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2}) (?P<text>.*)$")
+# The first word after the date must be a task or question id, or "plan", so a wrapped
+# line that happens to start with a date (a protocol version, say) stays in its entry.
+LOG_START = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2}) (?P<text>(?:[A-Z]{1,3}\d+(?:\.\d+)?|plan)\b.*)$")
 LOG_START_BULLET = re.compile(r"^- \*\*(?P<date>\d{4}-\d{2}-\d{2}) · (?P<head>.*?):?\*\*:? ?(?P<text>.*)$")
 TABLE_ROW = re.compile(r"^\|(.+)\|\s*$")
+UNESCAPED_PIPE = re.compile(r"(?<!\\)\|")
+CODE_SPAN = re.compile(r"(`+)(?:(?!\1).)+?\1")
+LINK = re.compile(r"\[[^\]]*\]\([^)]*\)")
 # Words allowed in a Depends line besides task ids before it needs a human to read it.
 DEPENDS_FILLER = re.compile(
     r"\b(?:and|parts|sim|context|ui|agent|canvas|wiring)\b|[,;.:\s]|`[^`]*`",
     re.IGNORECASE,
 )
-RELATIVE_LINK = re.compile(r"\]\((?!https?:|#|mailto:)([^)\s]+)\)")
-NO_DEPENDS = {"", "none", "nothing", "—", "-"}
+RELATIVE_LINK = re.compile(r"\]\((?!https?:|#|mailto:)(?P<path>[^)\s]+)(?P<title>\s+\"[^\"]*\")?\)")
+# An explicit "no dependencies"; a missing Depends field is not one.
+NO_DEPENDS = {"none", "nothing", "—", "-"}
 
 
 @dataclass
@@ -104,11 +110,18 @@ class Roadmap:
 
 
 def github_anchor(heading: str, seen: dict[str, int]) -> str:
-    """The id GitHub gives a Markdown heading, including the -1, -2 suffix for repeats."""
-    slug = re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
-    count = seen.get(slug, 0)
-    seen[slug] = count + 1
-    return slug if count == 0 else f"{slug}-{count}"
+    """The id GitHub gives a Markdown heading, including the -1, -2 suffix for repeats.
+
+    Follows GitHub's slugger: a taken slug gets the next free numeric suffix, and every
+    emitted slug is reserved, so "Foo", "Foo", "Foo-1" give foo, foo-1, foo-1-1.
+    """
+    original = re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
+    slug = original
+    while slug in seen:
+        seen[original] += 1
+        slug = f"{original}-{seen[original]}"
+    seen[slug] = 0
+    return slug
 
 
 def parse_status(rest: str) -> tuple[str, str | None]:
@@ -197,9 +210,10 @@ def parse_roadmap(index: int, path: str, page: str, name: str, text: str) -> Roa
         if section == "Human checkpoints":
             row = TABLE_ROW.match(line)
             if row:
-                cells = [c.strip() for c in row.group(1).split("|")]
-                if len(cells) >= 3 and re.fullmatch(r"[A-Z]{1,2}\d+", cells[0]):
-                    roadmap.checkpoints.append(Checkpoint(cells[0], cells[1], " | ".join(cells[2:])))
+                cells = [c.strip() for c in UNESCAPED_PIPE.split(row.group(1))]
+                ident = cells[0].strip("`")
+                if len(cells) >= 3 and re.fullmatch(r"[A-Z]{1,2}\d+", ident):
+                    roadmap.checkpoints.append(Checkpoint(ident, cells[1], " | ".join(cells[2:])))
             continue
         if task is not None:
             if line.startswith("- "):
@@ -229,16 +243,20 @@ def log_start(line: str) -> tuple[str, str] | None:
 def readiness(task: Task, tasks: dict[str, Task]) -> str:
     """'ready', 'waiting', or 'check' (the Depends line needs a person to read it)."""
     deps = task.depends.strip()
+    if not deps:
+        return "check"  # no Depends field at all
     if deps.lower() in NO_DEPENDS:
         return "ready"
-    without_notes = re.sub(r"\([^)]*\)?", "", deps)  # drop "(why)" notes, even unclosed ones
+    notes = re.findall(r"\([^)]*\)?", deps)  # "(why)" notes, even unclosed ones
+    without_notes = re.sub(r"\([^)]*\)?", "", deps)
     ids = TASK_ID.findall(without_notes)
     residue = DEPENDS_FILLER.sub("", TASK_ID.sub("", without_notes))
     if any(i not in tasks for i in ids):
         return "check"
     if any(tasks[i].status != "done" for i in ids):
         return "waiting"
-    if residue or not ids:
+    # A task named inside a note ("and W4.4 if built") is a condition only a person can judge.
+    if residue or not ids or any(TASK_ID.search(note) for note in notes):
         return "check"
     return "ready"
 
@@ -255,12 +273,26 @@ class Links:
         return f"{self.base}/{path}" + (f"#{anchor}" if anchor else "")
 
     def absolute(self, text: str) -> str:
-        """Point relative Markdown links (relative to the repository root) at the repository."""
-        return RELATIVE_LINK.sub(lambda m: f"]({self.file(m.group(1))})", text)
+        """Point relative Markdown links (relative to the repository root) at the repository.
+
+        Text inside code spans is left alone, so link syntax shown as an example survives.
+        """
+        def rewrite(part: str) -> str:
+            return RELATIVE_LINK.sub(
+                lambda m: f"]({self.file(m.group('path'))}{m.group('title') or ''})", part
+            )
+
+        out, last = [], 0
+        for span in CODE_SPAN.finditer(text):
+            out += [rewrite(text[last : span.start()]), span.group(0)]
+            last = span.end()
+        out.append(rewrite(text[last:]))
+        return "".join(out)
 
 
 def cell(text: str) -> str:
-    return text.replace("|", "\\|").replace("\n", " ")
+    """Escape pipes that are not already escaped, for a table cell."""
+    return UNESCAPED_PIPE.sub(r"\\|", text).replace("\n", " ")
 
 
 def status_label(task: Task) -> str:
@@ -293,15 +325,15 @@ def render_log_entry(entry: LogEntry, roadmap_name: str = "", limit: int | None 
 
 
 def shorten(text: str, limit: int | None) -> str:
-    """Cut at a word boundary, closing an open code span so the Markdown stays intact."""
+    """Cut at a word boundary, but never inside a code span or a link."""
     if limit is None or len(text) <= limit:
         return text
-    cut = text[:limit].rsplit(" ", 1)[0]
-    if cut.rfind("[") > cut.rfind(")"):  # do not end inside a link
-        cut = cut[: cut.rfind("[")].rstrip()
-    if cut.count("`") % 2:
-        cut += "`"
-    return cut + " …"
+    end = len(text[:limit].rsplit(" ", 1)[0])
+    for pattern in (CODE_SPAN, LINK):
+        for span in pattern.finditer(text):
+            if span.start() < end < span.end():
+                end = span.start()
+    return text[:end].rstrip() + " …"
 
 
 def all_log(roadmaps: list[Roadmap]) -> list[LogEntry]:
@@ -526,7 +558,7 @@ def page_measurements(root: Path, links: Links) -> str:
         "| --- | --- |",
     ]
     directory = root / "docs" / "measurements"
-    for file in sorted(directory.glob("*.md"), key=lambda p: natural_key(p.name)):
+    for file in sorted(directory.glob("*.md"), key=lambda p: (natural_key(p.name), p.name)):
         title = file.stem
         for line in file.read_text(encoding="utf-8").splitlines():
             if line.startswith("# "):

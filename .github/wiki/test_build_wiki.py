@@ -21,6 +21,8 @@ ROADMAP = """\
 | --- | --- | --- |
 | HX1 | X0.2 | Answers XQ1. |
 | HX2 | During X1.2 | Approves goldens. |
+| `HX3` | X1.7 | Written as code. |
+| HX4 | Either \\| both | Has an escaped pipe. |
 | — | Any time | Answers questions. |
 
 ## Milestone X0: decisions
@@ -53,6 +55,12 @@ ROADMAP = """\
 ### X1.6 Outside · todo
 - Lane: doc · Depends: Y9.9
 
+### X1.7 Conditional · todo
+- Lane: doc · Depends: X0.1 (and X1.4 if built)
+
+### X1.8 No depends field · todo
+- Lane: doc
+
 ## Log
 
 Append one entry per finished task. Newest last.
@@ -65,7 +73,8 @@ Append one entry per finished task. Newest last.
 
 2026-11-21 X0.2 done — owner signed;
                        second line of the entry.
-2026-11-21 X1.2 needs-human — prepared the gate.
+2026-11-21 X1.2 needs-human — prepared the gate for protocol
+2025-11-25 sessions.
 """
 
 OTHER = """\
@@ -91,7 +100,7 @@ class ParseRoadmap(unittest.TestCase):
     def test_statuses_checkpoints_and_milestones(self):
         r = roadmap()
         by_id = {t.id: t for t in r.tasks}
-        self.assertEqual([t.id for t in r.tasks], ["X0.1", "X0.2", "X1.1", "X1.2", "X1.3", "X1.4", "X1.5", "X1.6"])
+        self.assertEqual([t.id for t in r.tasks], ["X0.1", "X0.2", "X1.1", "X1.2", "X1.3", "X1.4", "X1.5", "X1.6", "X1.7", "X1.8"])
         self.assertEqual(by_id["X0.2"].status, "done")
         self.assertEqual(by_id["X0.2"].checkpoint, "HX1")
         self.assertEqual(by_id["X1.2"].status, "needs-human")
@@ -108,13 +117,18 @@ class ParseRoadmap(unittest.TestCase):
         self.assertEqual(by_id["X1.2"].depends, "X1.1 (after the first thing lands)")
 
     def test_checkpoint_table_skips_unnamed_rows(self):
-        self.assertEqual([c.id for c in roadmap().checkpoints], ["HX1", "HX2"])
+        checkpoints = roadmap().checkpoints
+        self.assertEqual([c.id for c in checkpoints], ["HX1", "HX2", "HX3", "HX4"])
+        self.assertEqual((checkpoints[3].when, checkpoints[3].what),
+                         ("Either \\| both", "Has an escaped pipe."))
 
     def test_log_skips_the_template_and_joins_lines(self):
         log = roadmap().log
         self.assertEqual([(e.date, e.text.split(" ")[0]) for e in log],
                          [("2026-11-20", "X0.1"), ("2026-11-21", "X0.2"), ("2026-11-21", "X1.2")])
         self.assertEqual(log[1].text, "X0.2 done — owner signed; second line of the entry.")
+        # A wrapped line that starts with a date is not a new entry.
+        self.assertEqual(log[2].text, "X1.2 needs-human — prepared the gate for protocol 2025-11-25 sessions.")
 
     def test_fenced_and_bullet_log_styles(self):
         text = (
@@ -139,6 +153,8 @@ class ParseRoadmap(unittest.TestCase):
                          "s44-gate--final--todo--hs4")
         self.assertEqual(wiki.github_anchor("Log", seen), "log")
         self.assertEqual(wiki.github_anchor("Log", seen), "log-1")
+        self.assertEqual(wiki.github_anchor("Log-1", seen), "log-1-1")
+        self.assertEqual(wiki.github_anchor("Log", seen), "log-2")
 
 
 class Readiness(unittest.TestCase):
@@ -157,6 +173,13 @@ class Readiness(unittest.TestCase):
     def test_unknown_task_needs_a_person(self):
         self.assertEqual(wiki.readiness(self.tasks["X1.6"], self.tasks), "check")
 
+    def test_a_task_named_in_a_note_is_a_condition(self):
+        # Even with every task outside the note done (the W4.5 case).
+        self.assertEqual(wiki.readiness(self.tasks["X1.7"], self.tasks), "check")
+
+    def test_missing_depends_field_needs_a_person(self):
+        self.assertEqual(wiki.readiness(self.tasks["X1.8"], self.tasks), "check")
+
     def test_no_dependencies(self):
         self.assertEqual(wiki.readiness(self.tasks["X0.1"], self.tasks), "ready")
 
@@ -169,6 +192,9 @@ class Build(unittest.TestCase):
             "canvas-plan.md": "# Plan\n\n## 1. Scope\n\n### D1 Thing\n\n```\n## not a heading\n```\n",
             "docs/measurements/X1.10.md": "# X1.10 later\n",
             "docs/measurements/X1.2.md": "# X1.2 earlier\n",
+            # Equal natural keys: the file name must break the tie, not directory order.
+            "docs/measurements/T2.7.md": "# T2.7\n",
+            "docs/measurements/T02.7.md": "# T02.7\n",
         }
         for name in order(list(files)):
             path = directory / name
@@ -191,7 +217,7 @@ class Build(unittest.TestCase):
             "Plans.md", "Ready-to-start.md", "Wiring-roadmap.md", "_Footer.md", "_Sidebar.md",
         ])
         home = pages["Home.md"]
-        self.assertIn("| [Canvas](Canvas-roadmap) | 2 | 0 | 4 | 0 | 1 | Milestone X1: work |", home)
+        self.assertIn("| [Canvas](Canvas-roadmap) | 2 | 0 | 6 | 0 | 1 | Milestone X1: work |", home)
         self.assertIn("## Ready to start (1)", home)  # X1.1 only
         self.assertIn("Do not edit this wiki", home)
 
@@ -225,10 +251,11 @@ class Build(unittest.TestCase):
             with self.assertRaises(ValueError):
                 wiki.build(root, "owner/name", "0" * 40)
 
-    def test_shorten_closes_code_spans(self):
-        self.assertEqual(wiki.shorten("one `two three` four", 12), "one `two` …")
-        self.assertEqual(wiki.shorten("short", 12), "short")
+    def test_shorten_never_cuts_inside_code_or_links(self):
+        self.assertEqual(wiki.shorten("one `two three` four", 12), "one …")
+        self.assertEqual(wiki.shorten("one ``a ` b c`` four", 12), "one …")
         self.assertEqual(wiki.shorten("see [the plan](x.md) now", 14), "see …")
+        self.assertEqual(wiki.shorten("short", 12), "short")
 
     def test_relative_links_point_at_the_repository(self):
         links = wiki.Links("owner/name", "abc")
@@ -236,6 +263,12 @@ class Build(unittest.TestCase):
             links.absolute("[plan](wiring-plan.md), [web](https://x.y), [here](#top)"),
             "[plan](https://github.com/owner/name/blob/abc/wiring-plan.md), [web](https://x.y), [here](#top)",
         )
+        self.assertEqual(links.absolute('[p](a.md "Title")'),
+                         '[p](https://github.com/owner/name/blob/abc/a.md "Title")')
+        self.assertEqual(links.absolute("write `[x](a.md)` like this"), "write `[x](a.md)` like this")
+
+    def test_escaped_pipes_stay_single_escaped_in_tables(self):
+        self.assertIn("| HX4 | Either \\| both | — | Has an escaped pipe. |", self.build()["Human-checkpoints.md"])
 
 
 class RealRepository(unittest.TestCase):
@@ -247,8 +280,10 @@ class RealRepository(unittest.TestCase):
             before_log = text.split("\n## Log", 1)[0]
             expected = re.findall(r"^### ([A-Z]{1,2}\d+\.\d+) .* · ", before_log, re.MULTILINE)
             parsed = wiki.parse_roadmap(0, path, page, name, text)
-            log_lines = text.split("\n## Log", 1)[1].splitlines()
-            dated = [line for line in log_lines if wiki.log_start(line)]
+            checkpoint_rows = re.findall(
+                r"^\| `?([A-Z]{1,2}\d+)`? \|", text.split("\n## Human checkpoints", 1)[-1].split("\n---", 1)[0],
+                re.MULTILINE,
+            ) if "\n## Human checkpoints" in text else []
             with self.subTest(path=path):
                 self.assertEqual([t.id for t in parsed.tasks], expected)
                 self.assertEqual(
@@ -256,7 +291,14 @@ class RealRepository(unittest.TestCase):
                     "every live task has a Lane",
                 )
                 self.assertTrue(parsed.log, "the log has entries")
-                self.assertEqual(len(parsed.log), len(dated), "no dated log line is dropped")
+                self.assertTrue(all(e.date >= "2026-01-01" for e in parsed.log), "no wrapped line became an entry")
+                self.assertEqual([c.id for c in parsed.checkpoints], checkpoint_rows)
+
+    def test_regressions_from_review(self):
+        sim = wiki.parse_roadmap(4, "sim-roadmap.md", "S", "S", (REPO_ROOT / "sim-roadmap.md").read_text(encoding="utf-8"))
+        self.assertEqual([c.id for c in sim.checkpoints], ["HS1", "HS2", "HS3", "HS4"])
+        mcp = wiki.parse_roadmap(2, "mcp-roadmap.md", "A", "A", (REPO_ROOT / "mcp-roadmap.md").read_text(encoding="utf-8"))
+        self.assertTrue(any("2025-11-25 Tasks claim" in e.text for e in mcp.log))
 
     def test_builds(self):
         pages = wiki.build(REPO_ROOT, "owner/name", "0" * 40)
