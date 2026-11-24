@@ -6,7 +6,10 @@ use crate::{
     WireId,
     points::End,
     prefs::FollowPolicy,
-    route::{Axis, Blocker, RouteScratch, RouteSheet, check_new_wires_on, route_on},
+    route::{
+        Axis, Blocker, PartBody, RouteScratch, RouteSheet, SegmentItem, check_new_wires_on,
+        route_on,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,11 +65,14 @@ impl std::error::Error for FollowError {}
 
 // Scan only selected incidences before allocating Boundary's selected-wire list.
 fn has_boundary(doc: &Doc, items: &[ItemId]) -> bool {
+    let has_selected_wires = items.iter().any(|item| matches!(item, ItemId::Wire(_)));
     let meets = |p| {
-        doc.points
-            .at(p)
-            .iter()
-            .any(|e| matches!(e, End::Wire(w) if !items.contains(&ItemId::Wire(*w))))
+        doc.points.at(p).iter().any(|e| {
+            matches!(
+                e,
+                End::Wire(w) if !has_selected_wires || !items.contains(&ItemId::Wire(*w))
+            )
+        })
     };
     items.iter().any(|item| match *item {
         ItemId::Part(id) => doc
@@ -76,7 +82,7 @@ fn has_boundary(doc: &Doc, items: &[ItemId]) -> bool {
         ItemId::Label(_) => false,
     })
 }
-fn allows(doc: &Doc, items: &[ItemId], run: &Run, policy: FollowPolicy) -> bool {
+fn allows(doc: &Doc, v: &mut View<'_>, run: &Run, policy: FollowPolicy) -> bool {
     [run.a, run.b]
         .into_iter()
         .filter(|(_, a)| *a == Anchor::Boundary)
@@ -84,10 +90,10 @@ fn allows(doc: &Doc, items: &[ItemId], run: &Run, policy: FollowPolicy) -> bool 
             let mut part_found = false;
             for e in doc.points.at(p) {
                 if let End::Pin { part, .. } = *e
-                    && items.contains(&ItemId::Part(part))
+                    && let Some(follows) = v.part_follows_cached(part, policy)
                 {
                     part_found = true;
-                    if !policy.part_follows(doc.connected_pins(part) as usize) {
+                    if !follows {
                         return false;
                     }
                 }
@@ -95,6 +101,96 @@ fn allows(doc: &Doc, items: &[ItemId], run: &Run, policy: FollowPolicy) -> bool 
             // WD3: the wire policy is the fallback for a boundary without a moved part.
             part_found || policy.wire_follows()
         })
+}
+
+/// Compact `min..=max` guarded bitset for O(1) id membership checks.
+#[derive(Debug)]
+struct IdBitSet {
+    base: u32,
+    last: u32,
+    words: Vec<u64>,
+}
+
+impl Default for IdBitSet {
+    fn default() -> Self {
+        Self {
+            base: 1,
+            last: 0,
+            words: Vec::new(),
+        }
+    }
+}
+
+impl IdBitSet {
+    fn from_sorted_u32(ids: impl Iterator<Item = u32> + Clone) -> Self {
+        let mut out = Self::default();
+        let mut iter = ids;
+        let Some(first) = iter.next() else {
+            return out;
+        };
+        let mut last = first;
+        for id in iter.clone() {
+            last = id;
+        }
+        out.base = first;
+        out.last = last;
+        let span = usize::try_from(last - first).expect("id span") + 1;
+        out.words.resize(span.div_ceil(64), 0);
+        out.set(first);
+        for id in iter {
+            out.set(id);
+        }
+        out
+    }
+
+    fn reset_runs(&mut self, runs: &[Run], detached: &[bool]) {
+        self.words.clear();
+        let mut min_id = u32::MAX;
+        let mut max_id = 0u32;
+        let mut any = false;
+        for (run, &is_detached) in runs.iter().zip(detached) {
+            if is_detached {
+                continue;
+            }
+            for &id in &run.wires {
+                any = true;
+                min_id = min_id.min(id.0);
+                max_id = max_id.max(id.0);
+            }
+        }
+        if !any {
+            self.base = 1;
+            self.last = 0;
+            return;
+        }
+        self.base = min_id;
+        self.last = max_id;
+        let span = usize::try_from(max_id - min_id).expect("id span") + 1;
+        self.words.resize(span.div_ceil(64), 0);
+        for (run, &is_detached) in runs.iter().zip(detached) {
+            if is_detached {
+                continue;
+            }
+            for &id in &run.wires {
+                self.set(id.0);
+            }
+        }
+    }
+
+    #[inline]
+    fn set(&mut self, id: u32) {
+        let off = (id - self.base) as usize;
+        self.words[off >> 6] |= 1u64 << (off & 63);
+    }
+
+    #[inline]
+    fn contains(&self, id: u32) -> bool {
+        if id < self.base || id > self.last {
+            return false;
+        }
+        let off = (id - self.base) as usize;
+        ((self.words[off >> 6] >> (off & 63)) & 1) != 0
+    }
 }
 
 /// A selected part in its final position.
@@ -106,6 +202,16 @@ struct MovedPart {
     body: Rect,
     /// Body and pins, as the spatial index registers a part.
     envelope: Rect,
+    /// Cached `policy.part_follows(doc.connected_pins(id))` once evaluated.
+    follows: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CellEntry {
+    MovedPart { idx: u32, bounds: Rect },
+    MovedWire { idx: u32, bounds: Rect },
+    AddedWire { idx: u32, bounds: Rect },
+    Marker { part: PartId, at: Pt },
 }
 
 /// The sheet in its final geometry, as WD4 sees it while the runs are planned: the document
@@ -123,24 +229,38 @@ struct View<'a> {
     base_wires: u32,
     /// Live selected parts in their final position, by id.
     parts: Vec<MovedPart>,
+    part_bits: IdBitSet,
     pins: Vec<Pt>,
     /// Live selected wires, by id.
     selected: Vec<WireId>,
+    selected_bits: IdBitSet,
     /// Selected wires outside the replaced runs, in their final position, by id.
     moved: Vec<(WireId, Wire)>,
     /// Wires of the replaced (not detached) runs, by id.
-    hidden: Vec<WireId>,
+    hidden_bits: IdBitSet,
     /// Zero-area reservation parts with one pin each, at these points.
     markers: Vec<Pt>,
     /// Planned wires and the first wire of the run each replaces.
     added: Vec<(Wire, WireId)>,
-    /// The view's own items by K12 cell; the document's index serves everything else.
-    /// Each entry carries the item's indexed bounds.
-    cells: FxHashMap<(i64, i64), Vec<(ItemId, Rect)>>,
+    /// Head index into [`View::entries`] by packed K12 cell key `(cx, cy)`.
+    cells: FxHashMap<u64, u32>,
+    /// Flat intrusive linked-list nodes `(entry, next)` (`u32::MAX` terminates).
+    entries: Vec<(CellEntry, u32)>,
 }
 
-fn view_cell(v: i32) -> i64 {
-    i64::from(v).div_euclid(i64::from(INDEX_CELL_NM))
+#[inline]
+fn view_cell(v: i32) -> i32 {
+    v.div_euclid(INDEX_CELL_NM)
+}
+
+#[inline]
+fn pack_cell(cx: i32, cy: i32) -> u64 {
+    ((cx as u32 as u64) << 32) | (cy as u32 as u64)
+}
+
+#[inline]
+fn unpack_cell(key: u64) -> (i32, i32) {
+    ((key >> 32) as u32 as i32, key as u32 as i32)
 }
 
 impl<'a> View<'a> {
@@ -164,8 +284,10 @@ impl<'a> View<'a> {
             .collect();
         selected.sort_unstable_by_key(|id| id.0);
         selected.dedup();
+        let part_bits = IdBitSet::from_sorted_u32(ids.iter().map(|id| id.0));
+        let selected_bits = IdBitSet::from_sorted_u32(selected.iter().map(|id| id.0));
         let mut parts = Vec::with_capacity(ids.len());
-        let mut pins = Vec::new();
+        let mut pins = Vec::with_capacity(ids.len() * 2);
         for id in ids {
             let stored = doc.parts.get(id.0).expect("live selected part");
             let at = t.apply(stored.part.at).map_err(|_| Blocker::Sheet)?;
@@ -190,6 +312,7 @@ impl<'a> View<'a> {
                 pins: first..pins.len(),
                 body,
                 envelope,
+                follows: None,
             });
         }
         Ok(Self {
@@ -197,31 +320,47 @@ impl<'a> View<'a> {
             base_parts: u32::try_from(doc.parts.slots.len()).expect("part id space"),
             base_wires: u32::try_from(doc.wires.slots.len()).expect("wire id space"),
             parts,
+            part_bits,
             pins,
             selected,
+            selected_bits,
             moved: Vec::new(),
-            hidden: Vec::new(),
+            hidden_bits: IdBitSet::default(),
             markers: Vec::new(),
             added: Vec::new(),
             cells: FxHashMap::default(),
+            entries: Vec::new(),
+        })
+    }
+
+    fn part_follows_cached(&mut self, id: PartId, policy: FollowPolicy) -> Option<bool> {
+        if !self.part_bits.contains(id.0) {
+            return None;
+        }
+        let idx = self
+            .parts
+            .binary_search_by_key(&id.0, |p| p.id.0)
+            .expect("part bitset matches parts");
+        let part = &mut self.parts[idx];
+        Some(match part.follows {
+            Some(f) => f,
+            None => {
+                let f = policy.part_follows(self.doc.connected_pins(id) as usize);
+                part.follows = Some(f);
+                f
+            }
         })
     }
 
     /// Starts a planning pass: hides the wires of the runs that are not detached, moves the
     /// remaining selected wires, and drops earlier reservations and planned wires.
     fn reset(&mut self, t: Isometry, runs: &[Run], detached: &[bool]) -> Result<(), Blocker> {
-        self.hidden.clear();
-        for (run, _) in runs.iter().zip(detached).filter(|(_, d)| !**d) {
-            self.hidden.extend_from_slice(&run.wires);
-        }
-        self.hidden.sort_unstable_by_key(|id| id.0);
-        self.hidden.dedup();
+        self.hidden_bits.reset_runs(runs, detached);
         self.moved.clear();
         self.markers.clear();
         self.added.clear();
-        for list in self.cells.values_mut() {
-            list.clear();
-        }
+        self.cells.clear();
+        self.entries.clear();
         for i in 0..self.selected.len() {
             let id = self.selected[i];
             if self.is_hidden(id) {
@@ -233,34 +372,66 @@ impl<'a> View<'a> {
             Doc::validate_wire(w).map_err(|_| Blocker::Sheet)?;
             self.moved.push((id, w));
         }
-        for i in 0..self.parts.len() {
-            let MovedPart { id, envelope, .. } = self.parts[i];
-            self.register(ItemId::Part(id), envelope);
+        let est = self.parts.len() + self.moved.len() + runs.len() * 4;
+        if self.entries.capacity() < est {
+            self.entries.reserve(est - self.entries.capacity());
         }
-        for i in 0..self.moved.len() {
-            let (id, w) = self.moved[i];
-            self.register(ItemId::Wire(id), wire_rect(w));
+        if self.cells.capacity() < est {
+            self.cells.reserve(est - self.cells.capacity());
+        }
+        for idx in 0..self.parts.len() {
+            let envelope = self.parts[idx].envelope;
+            self.register_entry(
+                envelope,
+                CellEntry::MovedPart {
+                    idx: u32::try_from(idx).expect("part index"),
+                    bounds: envelope,
+                },
+            );
+        }
+        for idx in 0..self.moved.len() {
+            let bounds = wire_rect(self.moved[idx].1);
+            self.register_entry(
+                bounds,
+                CellEntry::MovedWire {
+                    idx: u32::try_from(idx).expect("wire index"),
+                    bounds,
+                },
+            );
         }
         Ok(())
     }
 
-    fn register(&mut self, item: ItemId, area: Rect) {
+    #[inline]
+    fn push_cell_entry(&mut self, key: u64, entry: CellEntry) {
+        let idx = u32::try_from(self.entries.len()).expect("view entries");
+        let next = self.cells.insert(key, idx).unwrap_or(u32::MAX);
+        self.entries.push((entry, next));
+    }
+
+    fn register_entry(&mut self, area: Rect, entry: CellEntry) {
         for cy in view_cell(area.min.y)..=view_cell(area.max.y) {
             for cx in view_cell(area.min.x)..=view_cell(area.max.x) {
-                self.cells.entry((cx, cy)).or_default().push((item, area));
+                self.push_cell_entry(pack_cell(cx, cy), entry);
             }
         }
     }
 
+    #[inline]
     fn is_hidden(&self, id: WireId) -> bool {
-        self.hidden.binary_search_by_key(&id.0, |w| w.0).is_ok()
+        self.hidden_bits.contains(id.0)
     }
 
+    #[inline]
     fn is_selected(&self, id: WireId) -> bool {
-        self.selected.binary_search_by_key(&id.0, |w| w.0).is_ok()
+        self.selected_bits.contains(id.0)
     }
 
+    #[cfg(test)]
     fn moved_part(&self, id: PartId) -> Option<&MovedPart> {
+        if !self.part_bits.contains(id.0) {
+            return None;
+        }
         self.parts
             .binary_search_by_key(&id.0, |p| p.id.0)
             .ok()
@@ -268,9 +439,11 @@ impl<'a> View<'a> {
     }
 
     /// Whether the document's own entry for `item` is part of the view.
+    #[cfg(test)]
+    #[inline]
     fn keeps(&self, item: ItemId) -> bool {
         match item {
-            ItemId::Part(id) => self.moved_part(id).is_none(),
+            ItemId::Part(id) => !self.part_bits.contains(id.0),
             ItemId::Wire(id) => !self.is_hidden(id) && !self.is_selected(id),
             ItemId::Label(_) => false,
         }
@@ -278,31 +451,51 @@ impl<'a> View<'a> {
 
     /// The lowest wire id with an end at `at`, before reservations and planned wires exist.
     fn lowest_wire_end(&self, at: Pt) -> Option<WireId> {
-        let kept = self.doc.points.at(at).iter().filter_map(|end| match *end {
-            End::Wire(id) if !self.is_hidden(id) && !self.is_selected(id) => Some(id),
-            _ => None,
-        });
-        let moved = self
-            .moved
+        let mut best = self
+            .doc
+            .points
+            .at(at)
             .iter()
-            .filter(|(_, w)| w.a == at || w.b == at)
-            .map(|&(id, _)| id);
-        kept.chain(moved).min_by_key(|id| id.0)
+            .filter_map(|end| match *end {
+                End::Wire(id) if !self.is_hidden(id) && !self.is_selected(id) => Some(id),
+                _ => None,
+            })
+            .min_by_key(|id| id.0);
+        if !self.moved.is_empty()
+            && let Some(&head) = self.cells.get(&pack_cell(view_cell(at.x), view_cell(at.y)))
+        {
+            let mut cur = head;
+            while cur != u32::MAX {
+                let (entry, next) = self.entries[cur as usize];
+                if let CellEntry::MovedWire { idx, .. } = entry {
+                    let (id, w) = self.moved[idx as usize];
+                    if (w.a == at || w.b == at) && best.is_none_or(|b| id.0 < b.0) {
+                        best = Some(id);
+                    }
+                }
+                cur = next;
+            }
+        }
+        best
     }
 
     /// Adds a reservation: a zero-area part with one pin at `at`.
     fn reserve(&mut self, at: Pt) -> PartId {
         let id = PartId(self.base_parts + u32::try_from(self.markers.len()).expect("part ids"));
         self.markers.push(at);
-        self.register(ItemId::Part(id), Rect { min: at, max: at });
+        self.push_cell_entry(
+            pack_cell(view_cell(at.x), view_cell(at.y)),
+            CellEntry::Marker { part: id, at },
+        );
         id
     }
 
     /// Adds a planned wire replacing a run whose first wire is `source`.
     fn insert(&mut self, wire: Wire, source: WireId) {
-        let id = WireId(self.base_wires + u32::try_from(self.added.len()).expect("wire ids"));
+        let idx = u32::try_from(self.added.len()).expect("wire ids");
         self.added.push((wire, source));
-        self.register(ItemId::Wire(id), wire_rect(wire));
+        let bounds = wire_rect(wire);
+        self.register_entry(bounds, CellEntry::AddedWire { idx, bounds });
     }
 
     /// Reports a view blocker in the document's terms: a reservation is the replaced wire
@@ -332,6 +525,7 @@ fn wire_rect(w: Wire) -> Rect {
 }
 
 impl RouteSheet for View<'_> {
+    #[cfg(test)]
     fn query(&self, area: Rect, out: &mut Vec<ItemId>) {
         if area.min.x > area.max.x || area.min.y > area.max.y {
             out.clear();
@@ -345,27 +539,50 @@ impl RouteSheet for View<'_> {
         let start = out.len();
         let (x0, x1) = (view_cell(area.min.x), view_cell(area.max.x));
         let (y0, y1) = (view_cell(area.min.y), view_cell(area.max.y));
-        let mut take = |list: &Vec<(ItemId, Rect)>| {
-            for &(item, bounds) in list {
-                if bounds.intersects(area) {
-                    out.push(item);
+        let mut take_chain = |head: u32| {
+            let mut cur = head;
+            while cur != u32::MAX {
+                let (entry, next) = self.entries[cur as usize];
+                match entry {
+                    CellEntry::MovedPart { idx, bounds } => {
+                        if bounds.intersects(area) {
+                            out.push(ItemId::Part(self.parts[idx as usize].id));
+                        }
+                    }
+                    CellEntry::MovedWire { idx, bounds } => {
+                        if bounds.intersects(area) {
+                            out.push(ItemId::Wire(self.moved[idx as usize].0));
+                        }
+                    }
+                    CellEntry::AddedWire { idx, bounds } => {
+                        if bounds.intersects(area) {
+                            out.push(ItemId::Wire(WireId(self.base_wires + idx)));
+                        }
+                    }
+                    CellEntry::Marker { part, at } => {
+                        if area.contains(at) {
+                            out.push(ItemId::Part(part));
+                        }
+                    }
                 }
+                cur = next;
             }
         };
         // Walk whichever is smaller: the cells under the area or the occupied cells.
-        let span = (x1 - x0 + 1).saturating_mul(y1 - y0 + 1);
-        if span <= self.cells.len() as i64 {
+        let span = (x1 - x0 + 1) * (y1 - y0 + 1);
+        if span <= self.cells.len() as i32 {
             for cy in y0..=y1 {
                 for cx in x0..=x1 {
-                    if let Some(list) = self.cells.get(&(cx, cy)) {
-                        take(list);
+                    if let Some(&head) = self.cells.get(&pack_cell(cx, cy)) {
+                        take_chain(head);
                     }
                 }
             }
         } else {
-            for (&(cx, cy), list) in &self.cells {
+            for (&key, &head) in &self.cells {
+                let (cx, cy) = unpack_cell(key);
                 if (x0..=x1).contains(&cx) && (y0..=y1).contains(&cy) {
-                    take(list);
+                    take_chain(head);
                 }
             }
         }
@@ -390,6 +607,96 @@ impl RouteSheet for View<'_> {
         out.truncate(write);
     }
 
+    fn visit_segment(&self, area: Rect, mut visit: impl FnMut(SegmentItem<'_>)) {
+        if area.min.x > area.max.x || area.min.y > area.max.y {
+            return;
+        }
+        self.doc
+            .index
+            .visit_parts_and_wires_unstamped(area, |item, envelope| match item {
+                ItemId::Part(id) => {
+                    if !self.part_bits.contains(id.0) {
+                        let stored = self.doc.parts.get(id.0).expect("queried part is live");
+                        visit(SegmentItem::Part {
+                            id,
+                            body: PartBody::Lazy { envelope, stored },
+                            pins: &stored.pins,
+                        });
+                    }
+                }
+                ItemId::Wire(id) => {
+                    if !self.is_hidden(id) && !self.is_selected(id) {
+                        let wire = *self.doc.wires.get(id.0).expect("queried wire is live");
+                        visit(SegmentItem::Wire { id, wire });
+                    }
+                }
+                ItemId::Label(_) => unreachable!("labels skipped by index visitor"),
+            });
+
+        if self.cells.is_empty() {
+            return;
+        }
+        let (x0, x1) = (view_cell(area.min.x), view_cell(area.max.x));
+        let (y0, y1) = (view_cell(area.min.y), view_cell(area.max.y));
+        let mut emit_chain = |head: u32| {
+            let mut cur = head;
+            while cur != u32::MAX {
+                let (entry, next) = self.entries[cur as usize];
+                match entry {
+                    CellEntry::MovedPart { idx, bounds } => {
+                        if bounds.intersects(area) {
+                            let mp = &self.parts[idx as usize];
+                            visit(SegmentItem::Part {
+                                id: mp.id,
+                                body: PartBody::Ready(mp.body),
+                                pins: &self.pins[mp.pins.clone()],
+                            });
+                        }
+                    }
+                    CellEntry::MovedWire { idx, bounds } => {
+                        if bounds.intersects(area) {
+                            let (id, wire) = self.moved[idx as usize];
+                            visit(SegmentItem::Wire { id, wire });
+                        }
+                    }
+                    CellEntry::AddedWire { idx, bounds } => {
+                        if bounds.intersects(area) {
+                            let wire = self.added[idx as usize].0;
+                            visit(SegmentItem::Wire {
+                                id: WireId(self.base_wires + idx),
+                                wire,
+                            });
+                        }
+                    }
+                    CellEntry::Marker { part, at } => {
+                        if area.contains(at) {
+                            visit(SegmentItem::Marker { part, at });
+                        }
+                    }
+                }
+                cur = next;
+            }
+        };
+        let span = (x1 - x0 + 1) * (y1 - y0 + 1);
+        if span <= self.cells.len() as i32 {
+            for cy in y0..=y1 {
+                for cx in x0..=x1 {
+                    if let Some(&head) = self.cells.get(&pack_cell(cx, cy)) {
+                        emit_chain(head);
+                    }
+                }
+            }
+        } else {
+            for (&key, &head) in &self.cells {
+                let (cx, cy) = unpack_cell(key);
+                if (x0..=x1).contains(&cx) && (y0..=y1).contains(&cy) {
+                    emit_chain(head);
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
     fn pins(&self, id: PartId) -> &[Pt] {
         if id.0 >= self.base_parts {
             return std::slice::from_ref(&self.markers[(id.0 - self.base_parts) as usize]);
@@ -400,6 +707,7 @@ impl RouteSheet for View<'_> {
         }
     }
 
+    #[cfg(test)]
     fn wire(&self, id: WireId) -> Wire {
         if id.0 >= self.base_wires {
             return self.added[(id.0 - self.base_wires) as usize].0;
@@ -410,6 +718,7 @@ impl RouteSheet for View<'_> {
         }
     }
 
+    #[cfg(test)]
     fn part_body(&self, id: PartId) -> Option<Rect> {
         if id.0 >= self.base_parts {
             // A reservation's zero-area body at an in-sheet point is that point.
@@ -464,8 +773,10 @@ fn build(
         blocker,
     };
     let mut v = View::new(doc, items, t).map_err(sheet_error)?;
+    let has_selected_labels = items.iter().any(|item| matches!(item, ItemId::Label(_)));
     let mut end_markers = Vec::new();
     let mut reservations = Vec::new();
+    let mut wires = Vec::new();
     // A failed rigid attempt under detach policy introduces old geometry. Restart so every
     // earlier run sees it too. Each restart fixes at least one fate, so termination is bounded.
     'restart: loop {
@@ -496,7 +807,10 @@ fn build(
                 reservations.push((at, source));
             }
         }
-        // Marker pin ids must preserve the original lowest-wire-id tie at a shared end.
+        // Multiple runs can share a boundary point; keep only the lowest source id per point.
+        reservations.sort_unstable_by_key(|(at, source)| (at.x, at.y, source.0));
+        reservations.dedup_by_key(|(at, _)| (at.x, at.y));
+        // Marker pin ids must preserve the original lowest-wire-id tie across points.
         reservations.sort_unstable_by_key(|(at, source)| (source.0, at.x, at.y));
         for &(at, source) in &reservations {
             v.reserve(at);
@@ -521,7 +835,7 @@ fn build(
             } else {
                 r.b.0
             };
-            let mut wires = Vec::new();
+            wires.clear();
             let rigid = r.b.1 == Anchor::Boundary
                 && r.wires
                     .iter()
@@ -538,7 +852,7 @@ fn build(
                 RunFate::Translated
             } else {
                 wires.clear();
-                if !allows(doc, items, r, policy) {
+                if !allows(doc, &mut v, r, policy) {
                     detached[i] = true;
                     continue 'restart;
                 }
@@ -559,7 +873,7 @@ fn build(
             };
             if rigid {
                 for &id in &r.labels {
-                    if !items.contains(&ItemId::Label(id)) {
+                    if !has_selected_labels || !items.contains(&ItemId::Label(id)) {
                         let p = t.apply(doc.label(id).unwrap().at).map_err(|_| {
                             FollowError::NoRoute {
                                 from: r.a.0,
@@ -576,7 +890,7 @@ fn build(
                 v.insert(w, r.wires[0]);
             }
             plan.remove.extend_from_slice(&r.wires);
-            plan.add.extend(wires);
+            plan.add.extend_from_slice(&wires);
             plan.fates.push((r.a.0, fate));
         }
         plan.labels.sort_unstable_by_key(|(id, _)| id.0);
@@ -1182,7 +1496,7 @@ mod view_tests {
             // The lowest wire end at a point, before reservations and planned wires.
             let mut probes: Vec<Pt> = copy.wires().flat_map(|(_, w)| [w.a, w.b]).collect();
             probes.extend(d.wires().flat_map(|(_, w)| [w.a, w.b]));
-            for p in probes {
+            for &p in &probes {
                 let expected = copy
                     .points
                     .at(p)
@@ -1232,6 +1546,23 @@ mod view_tests {
             let policy = FollowPolicy::new(true, 10, false).unwrap();
             let _ = plan_follow(&d, &items, t, policy, &mut plan);
             prop_assert_eq!(before, format!("{d:?}"));
+
+            // Routing and segment validation on the layered view agree bit-for-bit with the full copy.
+            let mut scratch_view = RouteScratch::new();
+            let mut scratch_copy = RouteScratch::new();
+            let (mut out_view, mut out_copy) = (Vec::new(), Vec::new());
+            let (mut q_view, mut q_copy) = (Vec::new(), Vec::new());
+            for &[pa, pb] in probes.as_chunks::<2>().0 {
+                let rv = route_on(&view, pa, pb, Axis::Horizontal, &mut scratch_view, &mut out_view);
+                let rc = route_on(&copy, pa, pb, Axis::Horizontal, &mut scratch_copy, &mut out_copy);
+                prop_assert_eq!(rv, rc);
+                prop_assert_eq!(&out_view, &out_copy);
+                if pa != pb && (pa.x == pb.x || pa.y == pb.y) {
+                    let cv = check_new_wires_on(&view, &[Wire { a: pa, b: pb }], [pa, pb], &mut q_view);
+                    let cc = check_new_wires_on(&copy, &[Wire { a: pa, b: pb }], [pa, pb], &mut q_copy);
+                    prop_assert_eq!(cv, cc);
+                }
+            }
         }
     }
 }

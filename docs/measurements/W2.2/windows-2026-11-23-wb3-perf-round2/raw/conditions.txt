@@ -1,0 +1,5 @@
+Power Scheme GUID: 64a64f24-65b9-4b56-befd-5ec1eaced9b3  (Silent)
+BatteryStatus            : 2
+EstimatedChargeRemaining : 100
+Intel(R) Core(TM) i7-14650HX
+Microsoft Windows 11 Home 10.0.26200

@@ -14,36 +14,99 @@
 //! its source id. Fresh ids follow geometry order. Unrelated pre-existing
 //! non-normal geometry is preserved; see `plan_add_wires` for the boundary.
 
-use std::collections::BTreeMap;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BinaryHeap};
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
-use crate::{Doc, ItemId, PartId, Pt, Rect, Wire, WireId, points::End};
+use crate::{Doc, ItemId, PartId, Pt, Rect, Wire, WireId, doc::StoredPart, points::End};
+
+/// Part symbol body passed by [`RouteSheet::visit_segment`]. Unmoved parts defer
+/// [`crate::hit::part_bounds`] behind their indexed `envelope` (`body ∪ pins`).
+pub(crate) enum PartBody<'a> {
+    Ready(Rect),
+    Lazy {
+        envelope: Rect,
+        stored: &'a StoredPart,
+    },
+}
+
+/// An item delivered by [`RouteSheet::visit_segment`].
+pub(crate) enum SegmentItem<'a> {
+    Part {
+        id: PartId,
+        body: PartBody<'a>,
+        pins: &'a [Pt],
+    },
+    Wire {
+        id: WireId,
+        wire: Wire,
+    },
+    /// Zero-area endpoint reservation (carries one pin at `at`, never a body).
+    Marker {
+        part: PartId,
+        at: Pt,
+    },
+}
 
 /// What WD4's validator and scorer read from a sheet. [`Doc`] is one; the follow planner's
 /// final-geometry view (W2.1) is another, layered over the document without copying it.
 pub(crate) trait RouteSheet {
     /// As [`Doc::query`]: replaces `out` with the items whose indexed bounds meet `area`.
     /// Order is unspecified; callers must not depend on it.
+    #[cfg(test)]
     fn query(&self, area: Rect, out: &mut Vec<ItemId>);
+    /// Streams parts, wires, and markers whose bounds meet `area` without sorting or
+    /// deduplicating multi-cell items. For an axis-aligned 1D `area`, every perpendicular
+    /// wire occupies one cell along `area`'s axis and is visited at most once.
+    fn visit_segment(&self, area: Rect, visit: impl FnMut(SegmentItem<'_>));
     /// World pins of a live part returned by [`RouteSheet::query`].
+    #[cfg(test)]
     fn pins(&self, id: PartId) -> &[Pt];
     /// A live wire returned by [`RouteSheet::query`].
+    #[cfg(test)]
     fn wire(&self, id: WireId) -> Wire;
     /// As [`Doc::part_body`].
+    #[cfg(test)]
     fn part_body(&self, id: PartId) -> Option<Rect>;
 }
 
 impl RouteSheet for Doc {
+    #[cfg(test)]
     fn query(&self, area: Rect, out: &mut Vec<ItemId>) {
         Doc::query(self, area, out);
     }
+    fn visit_segment(&self, area: Rect, mut visit: impl FnMut(SegmentItem<'_>)) {
+        if area.min.x > area.max.x || area.min.y > area.max.y {
+            return;
+        }
+        self.index
+            .visit_parts_and_wires_unstamped(area, |item, envelope| match item {
+                ItemId::Part(id) => {
+                    let stored = self.parts.get(id.0).expect("queried part is live");
+                    visit(SegmentItem::Part {
+                        id,
+                        body: PartBody::Lazy { envelope, stored },
+                        pins: &stored.pins,
+                    });
+                }
+                ItemId::Wire(id) => {
+                    let wire = *self.wires.get(id.0).expect("queried wire is live");
+                    visit(SegmentItem::Wire { id, wire });
+                }
+                ItemId::Label(_) => unreachable!("labels skipped by index visitor"),
+            });
+    }
+    #[cfg(test)]
     fn pins(&self, id: PartId) -> &[Pt] {
         Doc::pins(self, id).expect("queried part is live")
     }
+    #[cfg(test)]
     fn wire(&self, id: WireId) -> Wire {
         *Doc::wire(self, id).expect("queried wire is live")
     }
+    #[cfg(test)]
     fn part_body(&self, id: PartId) -> Option<Rect> {
         Doc::part_body(self, id)
     }
@@ -143,22 +206,41 @@ fn check_new_wires_ignoring_in<S: RouteSheet + ?Sized>(
     wires: &[Wire],
     own_ends: &[Pt],
     ignore_wires: &[WireId],
-    scratch: &mut Vec<ItemId>,
+    _scratch: &mut Vec<ItemId>,
 ) -> Result<(), Blocker> {
     if !wires.iter().all(|&w| shape_valid(w)) {
         return Err(Blocker::Sheet);
     }
+    let mut first_overlap = None;
     for &w in wires {
-        doc.query(Rect::from_points(w.a, w.b).unwrap(), scratch);
-        if let Some(blocker) = point_blocker(doc, w, own_ends, ignore_wires, scratch) {
+        let area = Rect::from_points(w.a, w.b).unwrap();
+        let mut points = PointRule::new(w, own_ends);
+        let mut overlaps = first_overlap.is_none().then(|| OverlapRule::new(w));
+        doc.visit_segment(area, |item| match item {
+            SegmentItem::Part { id, pins, .. } => points.part(id, pins),
+            SegmentItem::Wire { id, wire } => {
+                if !ignore_wires.contains(&id) {
+                    points.wire(id, wire);
+                    if let Some(overlaps) = overlaps.as_mut() {
+                        overlaps.wire(id, wire);
+                    }
+                }
+            }
+            SegmentItem::Marker { part, at } => {
+                points.consider(at, 0, part.0, 0, Blocker::Pin { part, pin: 0 });
+            }
+        });
+        if let Some(blocker) = points.blocker() {
             return Err(blocker);
+        }
+        if first_overlap.is_none()
+            && let Some(overlaps) = overlaps
+        {
+            first_overlap = overlaps.blocker();
         }
     }
-    for &w in wires {
-        doc.query(Rect::from_points(w.a, w.b).unwrap(), scratch);
-        if let Some(blocker) = overlap_blocker(doc, w, ignore_wires, scratch) {
-            return Err(blocker);
-        }
+    if let Some(blocker) = first_overlap {
+        return Err(blocker);
     }
     Ok(())
 }
@@ -166,44 +248,6 @@ fn check_new_wires_ignoring_in<S: RouteSheet + ?Sized>(
 /// WD4 rule 1 for one segment: lattice vertices inside the sheet, axis-aligned, not a point.
 fn shape_valid(w: Wire) -> bool {
     on_lattice(w.a) && on_lattice(w.b) && w.a != w.b && (w.a.x == w.b.x || w.a.y == w.b.y)
-}
-
-/// WD4 rule 2 for one segment, over `items` (the query of the segment's bounds): the
-/// first foreign pin, wire end or (at its vertices) wire interior along it from `w.a`.
-fn point_blocker<S: RouteSheet + ?Sized>(
-    doc: &S,
-    w: Wire,
-    own_ends: &[Pt],
-    ignore_wires: &[WireId],
-    items: &[ItemId],
-) -> Option<Blocker> {
-    let mut rule = PointRule::new(w, own_ends);
-    for &item in items {
-        match item {
-            ItemId::Part(part) => rule.part(part, doc.pins(part)),
-            ItemId::Wire(id) if !ignore_wires.contains(&id) => rule.wire(id, doc.wire(id)),
-            ItemId::Wire(_) | ItemId::Label(_) => {}
-        }
-    }
-    rule.blocker()
-}
-
-/// WD4 rule 3 for one segment, over `items`: the first foreign wire it shares a stretch with.
-fn overlap_blocker<S: RouteSheet + ?Sized>(
-    doc: &S,
-    w: Wire,
-    ignore_wires: &[WireId],
-    items: &[ItemId],
-) -> Option<Blocker> {
-    let mut rule = OverlapRule::new(w);
-    for &item in items {
-        if let ItemId::Wire(id) = item
-            && !ignore_wires.contains(&id)
-        {
-            rule.wire(id, doc.wire(id));
-        }
-    }
-    rule.blocker()
 }
 
 type PointKey = (i64, (i32, i32), u8, u32, usize);
@@ -214,25 +258,46 @@ struct PointRule<'a> {
     w: Wire,
     bounds: Rect,
     own_ends: &'a [Pt],
+    corners: [Pt; 2],
+    corner_count: u8,
     best: Option<(PointKey, Blocker)>,
 }
 
 impl<'a> PointRule<'a> {
     fn new(w: Wire, own_ends: &'a [Pt]) -> Self {
+        let mut corners = [w.a, w.b];
+        let mut corner_count = 0u8;
+        for v in [w.a, w.b] {
+            if !own_ends.contains(&v) {
+                corners[corner_count as usize] = v;
+                corner_count += 1;
+            }
+        }
         Self {
             w,
             bounds: Rect::from_points(w.a, w.b).unwrap(),
             own_ends,
+            corners,
+            corner_count,
             best: None,
         }
     }
 
+    #[inline]
     fn consider(&mut self, p: Pt, kind: u8, id: u32, pin: usize, blocker: Blocker) {
         if self.bounds.contains(p) && !self.own_ends.contains(&p) {
             let key = (self.w.a.manhattan_distance(p), pt_key(p), kind, id, pin);
             if self.best.as_ref().is_none_or(|&(old, _)| key < old) {
                 self.best = Some((key, blocker));
             }
+        }
+    }
+
+    #[inline]
+    fn consider_corner(&mut self, p: Pt, id: u32, blocker: Blocker) {
+        let key = (self.w.a.manhattan_distance(p), pt_key(p), 2, id, 0);
+        if self.best.as_ref().is_none_or(|&(old, _)| key < old) {
+            self.best = Some((key, blocker));
         }
     }
 
@@ -246,9 +311,10 @@ impl<'a> PointRule<'a> {
         for p in [other.a, other.b] {
             self.consider(p, 1, id.0, 0, Blocker::WireEnd(id));
         }
-        for v in [self.w.a, self.w.b] {
+        for i in 0..usize::from(self.corner_count) {
+            let v = self.corners[i];
             if interior_contains(other, v) {
-                self.consider(v, 2, id.0, 0, Blocker::WireBody(id));
+                self.consider_corner(v, id.0, Blocker::WireBody(id));
             }
         }
     }
@@ -261,24 +327,39 @@ impl<'a> PointRule<'a> {
 /// WD4 rule 3 accumulated over one segment's items, in any order.
 struct OverlapRule {
     w: Wire,
+    lo: Pt,
+    hi: Pt,
+    horizontal: bool,
     best: Option<(OverlapKey, WireId)>,
 }
 
 impl OverlapRule {
     fn new(w: Wire) -> Self {
-        Self { w, best: None }
+        let (lo, hi, horizontal) = normalised(w);
+        Self {
+            w,
+            lo,
+            hi,
+            horizontal,
+            best: None,
+        }
     }
 
     fn wire(&mut self, id: WireId, other: Wire) {
-        let w = self.w;
-        if shared_stretch(w, other) {
-            let (lo, hi, _) = normalised(other);
+        let (olo, ohi, other_horizontal) = normalised(other);
+        if self.horizontal == other_horizontal
+            && if self.horizontal {
+                self.lo.y == olo.y && self.lo.x.max(olo.x) < self.hi.x.min(ohi.x)
+            } else {
+                self.lo.x == olo.x && self.lo.y.max(olo.y) < self.hi.y.min(ohi.y)
+            }
+        {
             let first = Pt {
-                x: w.a.x.clamp(lo.x, hi.x),
-                y: w.a.y.clamp(lo.y, hi.y),
+                x: self.w.a.x.clamp(olo.x, ohi.x),
+                y: self.w.a.y.clamp(olo.y, ohi.y),
             };
-            let distance = w.a.manhattan_distance(first);
-            let key = (distance, pt_key(lo), pt_key(hi), id.0);
+            let distance = self.w.a.manhattan_distance(first);
+            let key = (distance, pt_key(olo), pt_key(ohi), id.0);
             if self.best.as_ref().is_none_or(|&(old, _)| key < old) {
                 self.best = Some((key, id));
             }
@@ -349,7 +430,6 @@ struct Candidate {
 enum Stage {
     Bound,
     Scored,
-    Checked,
 }
 
 impl Candidate {
@@ -359,19 +439,19 @@ impl Candidate {
 }
 
 /// Caller-owned buffers for [`route`]. A warm scratch makes `route` allocation
-/// free: the candidate list is reserved on construction and the query buffer
-/// keeps the capacity of the largest query it has served.
+/// free: the candidate list is reserved on construction and keeps the capacity
+/// of the candidates it has served.
 #[derive(Debug)]
 pub struct RouteScratch {
     candidates: Vec<Candidate>,
-    items: Vec<ItemId>,
+    heap: BinaryHeap<Reverse<(u128, usize)>>,
 }
 
 impl RouteScratch {
     pub fn new() -> Self {
         Self {
-            candidates: Vec::with_capacity(CANDIDATE_CAP),
-            items: Vec::new(),
+            candidates: Vec::with_capacity(2),
+            heap: BinaryHeap::new(),
         }
     }
 }
@@ -394,15 +474,16 @@ impl Default for RouteScratch {
 ///
 /// Candidates are scored lazily, best first: bends, length and number need no
 /// query and crossings are never negative, so `(0, bends, 0, length, number)`
-/// bounds each score from below. A segment leaving a point strictly inside a
-/// part body passes through that body, so once the first assessment has seen
-/// whether `a` and `b` lie inside one, the body term rises to that count (one
-/// for a straight, which is a single segment). The walk always
-/// takes the least key, scoring a candidate when its bound is least and checking
-/// it when its full score is least. Candidates are therefore checked in exactly
-/// the order of their full scores, and the result equals scoring and sorting all
-/// of them; only candidates that could still win are queried. Scoring a
-/// candidate also judges its validity from the same per-segment queries.
+/// bounds each score from below. Straight and L candidates are enumerated and
+/// checked first; when one is valid with no avoidable body crossing (and zero
+/// crossings for L0 before checking L1), no dogleg can beat it and dogleg
+/// enumeration is skipped. Otherwise doglegs are appended with the exact body
+/// bound from the first assessment and the walk takes the least key, scoring a
+/// candidate when its bound is least and checking it when its full score is
+/// least. Candidates are therefore checked in exactly the order of their full
+/// scores, and the result equals scoring and sorting all of them; only
+/// candidates that could still win are queried. Scoring a candidate also judges
+/// its validity from the same per-segment queries.
 ///
 /// Doglegs: for `d = 1, 2, ...` grid steps (K2) from `a`'s coordinate, H-V-H
 /// (vertical at `x = m`) then V-H-V (horizontal at `y = m`), each first on the
@@ -438,40 +519,90 @@ pub(crate) fn route_on<S: RouteSheet + ?Sized>(
     if a == b {
         return Ok(());
     }
-    let RouteScratch { candidates, items } = scratch;
-    enumerate_candidates(a, b, first_leg, candidates);
+    let RouteScratch { candidates, heap } = scratch;
+    enumerate_base(a, b, first_leg, candidates);
+
+    let (score0, verdict0, inside) = assess(
+        doc,
+        &candidates[0].wires[..usize::from(candidates[0].len)],
+        [a, b],
+        candidates[0].score.number,
+    );
+    let (a_inside, b_inside) = (u8::from(inside[0]), u8::from(inside[1]));
+    let collinear = a.x == b.x || a.y == b.y;
+    if collinear {
+        let min_bodies = a_inside.max(b_inside);
+        if verdict0.is_none() && score0.bodies == min_bodies {
+            out.push(Wire { a, b });
+            return Ok(());
+        }
+    } else {
+        let min_bodies = a_inside + b_inside;
+        if verdict0.is_none() && score0.bodies == min_bodies && score0.crossings == 0 {
+            out.extend_from_slice(&candidates[0].wires[..2]);
+            return Ok(());
+        }
+        let (score1, verdict1, _) = assess(doc, &candidates[1].wires[..2], [a, b], 2);
+        let l0_wins = verdict0.is_none() && score0.bodies == min_bodies;
+        let l1_wins = verdict1.is_none() && score1.bodies == min_bodies;
+        match (l0_wins, l1_wins) {
+            (true, true) => {
+                let winner = if score0.key() <= score1.key() { 0 } else { 1 };
+                out.extend_from_slice(&candidates[winner].wires[..2]);
+                return Ok(());
+            }
+            (true, false) => {
+                out.extend_from_slice(&candidates[0].wires[..2]);
+                return Ok(());
+            }
+            (false, true) => {
+                out.extend_from_slice(&candidates[1].wires[..2]);
+                return Ok(());
+            }
+            (false, false) => {
+                candidates[1].score = score1;
+                candidates[1].verdict = verdict1;
+                candidates[1].key = score1.key();
+                candidates[1].stage = Stage::Scored;
+            }
+        }
+    }
+
+    candidates[0].score = score0;
+    candidates[0].verdict = verdict0;
+    candidates[0].key = score0.key();
+    candidates[0].stage = Stage::Scored;
+
+    enumerate_doglegs(a, b, a_inside + b_inside, candidates);
+
+    heap.clear();
+    heap.extend(
+        candidates
+            .iter()
+            .enumerate()
+            .map(|(i, c)| Reverse((c.key, i))),
+    );
     let mut first_blocker = None;
-    let mut probed = false;
     // Unique candidate numbers make every key distinct, so the least is unique.
-    while let Some(candidate) = candidates
-        .iter_mut()
-        .min_by_key(|c| c.key)
-        .filter(|c| c.stage != Stage::Checked)
-    {
+    while let Some(Reverse((_, idx))) = heap.pop() {
+        let candidate = &mut candidates[idx];
         if candidate.stage == Stage::Bound {
             let wires = &candidate.wires[..usize::from(candidate.len)];
-            let (score, verdict, inside) =
-                assess(doc, wires, [a, b], candidate.score.number, items);
+            let (score, verdict, _) = assess(doc, wires, [a, b], candidate.score.number);
             (candidate.score, candidate.verdict) = (score, verdict);
             candidate.key = score.key();
             candidate.stage = Stage::Scored;
-            if !probed {
-                // The first assessment's queries cover both ends; raise every bound.
-                probed = true;
-                let (a_inside, b_inside) = (u8::from(inside[0]), u8::from(inside[1]));
-                for other in candidates.iter_mut().filter(|c| c.stage == Stage::Bound) {
-                    other.score.bodies = if other.len == 1 {
-                        a_inside.max(b_inside)
-                    } else {
-                        a_inside + b_inside
-                    };
-                    other.key = other.score.key();
-                }
+            if verdict.is_none()
+                && heap
+                    .peek()
+                    .is_none_or(|&Reverse((next_key, _))| candidate.key < next_key)
+            {
+                out.extend_from_slice(candidate.wires());
+                return Ok(());
             }
+            heap.push(Reverse((candidate.key, idx)));
             continue;
         }
-        candidate.stage = Stage::Checked;
-        candidate.key = u128::MAX;
         match candidate.verdict {
             None => {
                 out.extend_from_slice(candidate.wires());
@@ -486,38 +617,43 @@ pub(crate) fn route_on<S: RouteSheet + ?Sized>(
     Err(first_blocker.unwrap_or(Blocker::Sheet))
 }
 
-fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>) {
-    out.clear();
-    let mut push = |points: &[Pt], number: u16| {
-        let mut wires = [Wire { a, b: a }; 3];
-        for (slot, pair) in wires.iter_mut().zip(points.windows(2)) {
-            *slot = Wire {
-                a: pair[0],
-                b: pair[1],
-            };
-        }
-        let len = points.len() - 1;
-        // WD4's lower bound: the full score without part bodies and crossings.
-        let score = Score {
-            bends: (len - 1) as u8,
-            length: wires[..len]
-                .iter()
-                .map(|w| w.a.manhattan_distance(w.b))
-                .sum(),
-            number,
-            ..Score::default()
+fn push_candidate(points: &[Pt], bodies: u8, number: u16, out: &mut Vec<Candidate>) {
+    let mut wires = [Wire {
+        a: points[0],
+        b: points[0],
+    }; 3];
+    for (slot, pair) in wires.iter_mut().zip(points.windows(2)) {
+        *slot = Wire {
+            a: pair[0],
+            b: pair[1],
         };
-        out.push(Candidate {
-            wires,
-            len: len as u8,
-            score,
-            key: score.key(),
-            stage: Stage::Bound,
-            verdict: None,
-        });
+    }
+    let len = points.len() - 1;
+    // WD4's lower bound: the full score without extra bodies and crossings.
+    let score = Score {
+        bodies,
+        bends: (len - 1) as u8,
+        length: wires[..len]
+            .iter()
+            .map(|w| w.a.manhattan_distance(w.b))
+            .sum(),
+        number,
+        ..Score::default()
     };
+    out.push(Candidate {
+        wires,
+        len: len as u8,
+        score,
+        key: score.key(),
+        stage: Stage::Bound,
+        verdict: None,
+    });
+}
+
+fn enumerate_base(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>) {
+    out.clear();
     if a.x == b.x || a.y == b.y {
-        push(&[a, b], 0);
+        push_candidate(&[a, b], 0, 0, out);
     } else {
         let horizontal_first = Pt { x: b.x, y: a.y };
         let vertical_first = Pt { x: a.x, y: b.y };
@@ -525,8 +661,14 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
             Axis::Horizontal => (horizontal_first, vertical_first),
             Axis::Vertical => (vertical_first, horizontal_first),
         };
-        push(&[a, first, b], 1);
-        push(&[a, second, b], 2);
+        push_candidate(&[a, first, b], 0, 1, out);
+        push_candidate(&[a, second, b], 0, 2, out);
+    }
+}
+
+fn enumerate_doglegs(a: Pt, b: Pt, bodies: u8, out: &mut Vec<Candidate>) {
+    if out.capacity() < CANDIDATE_CAP {
+        out.reserve(CANDIDATE_CAP - out.len());
     }
     let step = i64::from(crate::GRID_NM);
     let reach = i64::from(DOGLEG_REACH_NM);
@@ -567,7 +709,7 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
                 } else {
                     [a, Pt { x: a.x, y: m }, Pt { x: b.x, y: m }, b]
                 };
-                push(&points, number);
+                push_candidate(&points, bodies, number, out);
                 number += 1;
                 if usize::from(number - 3) == DOGLEG_CAP {
                     return;
@@ -577,21 +719,26 @@ fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>)
     }
 }
 
+#[cfg(test)]
+fn enumerate_candidates(a: Pt, b: Pt, first_leg: Axis, out: &mut Vec<Candidate>) {
+    enumerate_base(a, b, first_leg, out);
+    enumerate_doglegs(a, b, 0, out);
+}
+
 /// WD4's score of a candidate and its verdict under [`check_new_wires_in`] with
-/// `own_ends`, from one query and one pass over its items per segment. WD4
-/// scores invalid candidates too: clip only the index query to K1 and keep the
-/// original segment for body and crossing tests. A candidate with a valid shape
-/// lies inside K1, so its clipped query is exactly the validator's query, and
-/// the verdict follows the validator's order: the first segment with a point
-/// blocker, else the first with an overlap. Also reports whether each own end
-/// lies strictly inside a part body (the first segment's query covers the
-/// first end, the last segment's the second).
+/// `own_ends`, from one streaming pass per segment. WD4 scores invalid
+/// candidates too: clip only the index query to K1 and keep the original segment
+/// for body and crossing tests. A candidate with a valid shape lies inside K1,
+/// so its clipped query is exactly the validator's query, and the verdict
+/// follows the validator's order: the first segment with a point blocker, else
+/// the first with an overlap. Also reports whether each own end lies strictly
+/// inside a part body (the first segment's query covers the first end, the last
+/// segment's the second).
 fn assess<S: RouteSheet + ?Sized>(
     doc: &S,
     wires: &[Wire],
     own_ends: [Pt; 2],
     number: u16,
-    items: &mut Vec<ItemId>,
 ) -> (Score, Option<Blocker>, [bool; 2]) {
     let mut score = Score {
         bends: (wires.len() - 1) as u8,
@@ -605,51 +752,84 @@ fn assess<S: RouteSheet + ?Sized>(
     let last = wires.len() - 1;
     for (index, &w) in wires.iter().enumerate() {
         score.length += w.a.manhattan_distance(w.b);
+        let (lo, hi, horizontal) = normalised(w);
         let limit = crate::SHEET_LIMIT_NM;
         let area = Rect {
             min: Pt {
-                x: w.a.x.min(w.b.x).clamp(-limit, limit),
-                y: w.a.y.min(w.b.y).clamp(-limit, limit),
+                x: lo.x.clamp(-limit, limit),
+                y: lo.y.clamp(-limit, limit),
             },
             max: Pt {
-                x: w.a.x.max(w.b.x).clamp(-limit, limit),
-                y: w.a.y.max(w.b.y).clamp(-limit, limit),
+                x: hi.x.clamp(-limit, limit),
+                y: hi.y.clamp(-limit, limit),
             },
         };
-        doc.query(area, items);
         // Rules 2 and 3 matter only until a point blocker is known.
         let rules = judged && point.is_none();
         // Only a valid shape is judged; its bounds exist (inside K1).
         let mut points = rules.then(|| PointRule::new(w, &own_ends));
-        let mut overlaps = OverlapRule::new(w);
+        let mut overlaps = (rules && overlap.is_none()).then(|| OverlapRule::new(w));
         let mut through_body = false;
-        for &item in items.iter() {
-            match item {
-                ItemId::Part(id) => {
-                    if let Some(body) = doc.part_body(id) {
-                        through_body |= passes_through(w, body);
-                        inside[0] |= index == 0 && strictly_inside(body, own_ends[0]);
-                        inside[1] |= index == last && strictly_inside(body, own_ends[1]);
-                    }
-                    if let Some(points) = points.as_mut() {
-                        points.part(id, doc.pins(id));
+        doc.visit_segment(area, |item| match item {
+            SegmentItem::Part { id, body, pins } => {
+                let need_body =
+                    !through_body || (index == 0 && !inside[0]) || (index == last && !inside[1]);
+                if need_body {
+                    let resolved = match body {
+                        PartBody::Ready(b) => Some(b),
+                        PartBody::Lazy { envelope, stored } => {
+                            let might_hit = (!through_body
+                                && passes_through_norm(lo, hi, horizontal, envelope))
+                                || (index == 0
+                                    && !inside[0]
+                                    && strictly_inside(envelope, own_ends[0]))
+                                || (index == last
+                                    && !inside[1]
+                                    && strictly_inside(envelope, own_ends[1]));
+                            if might_hit {
+                                crate::hit::part_bounds(&stored.part, stored.local_bounds).ok()
+                            } else {
+                                None
+                            }
+                        }
+                    };
+                    if let Some(body) = resolved {
+                        if !through_body {
+                            through_body = passes_through_norm(lo, hi, horizontal, body);
+                        }
+                        if index == 0 && !inside[0] {
+                            inside[0] = strictly_inside(body, own_ends[0]);
+                        }
+                        if index == last && !inside[1] {
+                            inside[1] = strictly_inside(body, own_ends[1]);
+                        }
                     }
                 }
-                ItemId::Wire(id) => {
-                    let other = doc.wire(id);
-                    score.crossings += u32::from(crosses(w, other));
-                    if let Some(points) = points.as_mut() {
-                        points.wire(id, other);
+                if let Some(points) = points.as_mut() {
+                    points.part(id, pins);
+                }
+            }
+            SegmentItem::Wire { id, wire: other } => {
+                score.crossings += u32::from(crosses_norm(lo, hi, horizontal, other));
+                if let Some(points) = points.as_mut() {
+                    points.wire(id, other);
+                    if let Some(overlaps) = overlaps.as_mut() {
                         overlaps.wire(id, other);
                     }
                 }
-                ItemId::Label(_) => {}
             }
-        }
+            SegmentItem::Marker { part, at } => {
+                if let Some(points) = points.as_mut() {
+                    points.consider(at, 0, part.0, 0, Blocker::Pin { part, pin: 0 });
+                }
+            }
+        });
         score.bodies += u8::from(through_body);
         if let Some(points) = points {
             point = points.blocker();
-            if point.is_none() && overlap.is_none() {
+            if point.is_none()
+                && let Some(overlaps) = overlaps
+            {
                 overlap = overlaps.blocker();
             }
         }
@@ -669,8 +849,8 @@ fn strictly_inside(body: Rect, p: Pt) -> bool {
 
 /// The open segment meets the open rectangle (running along an edge or
 /// touching a corner does not count).
-fn passes_through(w: Wire, body: Rect) -> bool {
-    let (lo, hi, horizontal) = normalised(w);
+#[inline]
+fn passes_through_norm(lo: Pt, hi: Pt, horizontal: bool, body: Rect) -> bool {
     if horizontal {
         body.min.y < lo.y && lo.y < body.max.y && lo.x.max(body.min.x) < hi.x.min(body.max.x)
     } else {
@@ -678,10 +858,16 @@ fn passes_through(w: Wire, body: Rect) -> bool {
     }
 }
 
+#[cfg(test)]
+fn passes_through(w: Wire, body: Rect) -> bool {
+    let (lo, hi, horizontal) = normalised(w);
+    passes_through_norm(lo, hi, horizontal, body)
+}
+
 /// Perpendicular segments meeting at a point interior to both (INV2: not a
 /// connection).
-fn crosses(w: Wire, other: Wire) -> bool {
-    let (lo, hi, horizontal) = normalised(w);
+#[inline]
+fn crosses_norm(lo: Pt, hi: Pt, horizontal: bool, other: Wire) -> bool {
     let (olo, ohi, other_horizontal) = normalised(other);
     if horizontal == other_horizontal {
         return false;
@@ -691,6 +877,12 @@ fn crosses(w: Wire, other: Wire) -> bool {
     } else {
         lo.y < olo.y && olo.y < hi.y && olo.x < lo.x && lo.x < ohi.x
     }
+}
+
+#[cfg(test)]
+fn crosses(w: Wire, other: Wire) -> bool {
+    let (lo, hi, horizontal) = normalised(w);
+    crosses_norm(lo, hi, horizontal, other)
 }
 
 impl Doc {
@@ -743,12 +935,12 @@ impl Doc {
 // Shared local merge predicate: exactly two ends, no pin/label, opposite
 // collinear segments. It never repairs pre-existing overlapping geometry.
 fn merge_pair(doc: &Doc, at: Pt) -> Option<(WireId, WireId)> {
-    if !doc.connectivity.labels_at(at).is_empty() {
-        return None;
-    }
     let [End::Wire(a), End::Wire(b)] = doc.points.at(at) else {
         return None;
     };
+    if !doc.connectivity.labels_at(at).is_empty() {
+        return None;
+    }
     let wa = *doc.wire(*a).unwrap();
     let wb = *doc.wire(*b).unwrap();
     if (wa.a.y == wa.b.y) != (wb.a.y == wb.b.y) || shared_stretch(wa, wb) {
@@ -839,20 +1031,20 @@ struct SourceSeg {
     descending: bool,
 }
 
-#[derive(Clone)]
-struct Atomic {
+#[derive(Clone, Copy)]
+struct RawAtomic {
     lo: Pt,
     hi: Pt,
+    existing: Option<WireId>,
     horizontal: bool,
-    existing: Vec<WireId>,
-    descending: Option<bool>,
+    descending: bool,
 }
 
 struct FinalSeg {
     lo: Pt,
     hi: Pt,
     horizontal: bool,
-    existing: Vec<WireId>,
+    existing: SmallVec<[WireId; 2]>,
     descending: bool,
 }
 
@@ -873,10 +1065,6 @@ fn contains(wire: Wire, p: Pt) -> bool {
     Rect::from_points(wire.a, wire.b).unwrap().contains(p)
 }
 
-fn touches(a: Wire, b: Wire) -> bool {
-    contains(a, b.a) || contains(a, b.b) || contains(b, a.a) || contains(b, a.b)
-}
-
 /// Plans only the added wires' local neighbourhood (D8, INV2).
 /// Direct contacts have an endpoint on the other segment (inclusive); a pure
 /// interior crossing is not a contact. Touched points are the ends of these
@@ -887,11 +1075,7 @@ fn touches(a: Wire, b: Wire) -> bool {
 /// Pre-existing non-normal geometry elsewhere is left unchanged (W2.2 owns
 /// normalising moved geometry; this is not a document-wide repair pass).
 pub(crate) fn plan_add_wires(doc: &Doc, added: &[Wire]) -> AddWiresPlan {
-    plan_wires_with_replacements(
-        doc,
-        &[],
-        &added.iter().map(|&w| (None, w)).collect::<Vec<_>>(),
-    )
+    plan_wires_with_replacements(doc, &[], added, &[])
 }
 
 /// WD7 preview and execution plan for dragging one wire segment.
@@ -1124,6 +1308,7 @@ pub(crate) fn plan_segment_drag_inner(
     Ok(Some(plan_wires_with_replacements(
         doc,
         &replaced,
+        &[],
         &placed_wires,
     )))
 }
@@ -1131,42 +1316,70 @@ pub(crate) fn plan_segment_drag_inner(
 fn plan_wires_with_replacements(
     doc: &Doc,
     replaced: &[(WireId, Wire)],
-    added: &[(Option<WireId>, Wire)],
+    plain_added: &[Wire],
+    tagged_added: &[(Option<WireId>, Wire)],
 ) -> AddWiresPlan {
-    let mut selected: FxHashMap<WireId, Wire> = replaced.iter().copied().collect();
+    let added_len = plain_added.len() + tagged_added.len();
+    let mut selected: FxHashMap<WireId, Wire> =
+        FxHashMap::with_capacity_and_hasher(replaced.len() + added_len, Default::default());
+    for &(id, w) in replaced {
+        selected.insert(id, w);
+    }
     let mut pins = Vec::new();
     let mut labels = Vec::new();
-    let mut scratch = Vec::new();
-    let mut touched = FxHashSet::default();
+    let mut touched: FxHashSet<Pt> =
+        FxHashSet::with_capacity_and_hasher((replaced.len() + added_len) * 2, Default::default());
     for &(_, wire) in replaced {
         touched.extend([wire.a, wire.b]);
     }
-    for &(_, wire) in added {
+    let has_labels = doc.index.label_count() > 0;
+    let added_iter = plain_added
+        .iter()
+        .map(|&w| (None, w))
+        .chain(tagged_added.iter().copied());
+    for (_, wire) in added_iter.clone() {
         touched.extend([wire.a, wire.b]);
-        doc.query(Rect::from_points(wire.a, wire.b).unwrap(), &mut scratch);
-        for &item in &scratch {
-            match item {
+        let area = Rect::from_points(wire.a, wire.b).unwrap();
+        let wire_horiz = wire.a.y == wire.b.y;
+        doc.index
+            .visit_parts_and_wires_unstamped(area, |item, _| match item {
                 ItemId::Wire(id) => {
                     if selected.contains_key(&id) {
-                        continue;
+                        return;
                     }
                     let other = *doc.wire(id).unwrap();
-                    if touches(wire, other) {
+                    let same_axis = wire_horiz == (other.a.y == other.b.y);
+                    let relevant = if same_axis {
+                        area.contains(other.a)
+                            || area.contains(other.b)
+                            || contains(other, wire.a)
+                            || contains(other, wire.b)
+                    } else {
+                        // Perpendicular wires meeting only at a shared endpoint of both
+                        // cannot split or merge; `doc.points` preserves `mergeable(at)`.
+                        (other.a != wire.a && other.a != wire.b && area.contains(other.a))
+                            || (other.b != wire.a && other.b != wire.b && area.contains(other.b))
+                            || (wire.a != other.a && wire.a != other.b && contains(other, wire.a))
+                            || (wire.b != other.a && wire.b != other.b && contains(other, wire.b))
+                    };
+                    if relevant {
                         selected.insert(id, other);
                         touched.extend([other.a, other.b]);
                     }
                 }
                 ItemId::Part(id) => {
-                    pins.extend(
-                        doc.pins(id)
-                            .unwrap()
-                            .iter()
-                            .copied()
-                            .filter(|&p| contains(wire, p)),
-                    );
+                    for &p in doc.pins(id).unwrap() {
+                        if area.contains(p) {
+                            pins.push(p);
+                        }
+                    }
                 }
-                ItemId::Label(id) => labels.push(doc.label(id).unwrap().at),
-            }
+                ItemId::Label(_) => {}
+            });
+        if has_labels {
+            doc.index.visit_labels_unstamped(area, |id| {
+                labels.push(doc.label(id).unwrap().at);
+            });
         }
     }
     touched.extend(pins.iter().copied());
@@ -1174,7 +1387,8 @@ fn plan_wires_with_replacements(
     // One boundary expansion at fixed touched points, using the point store.
     // Only collinear neighbours can merge. Perpendicular untouched ends remain
     // blockers, without being copied or replanned.
-    let mut endpoint_axes = FxHashSet::default();
+    let mut endpoint_axes: FxHashSet<(Pt, bool)> =
+        FxHashSet::with_capacity_and_hasher((selected.len() + added_len) * 2, Default::default());
     for (&id, &wire) in &selected {
         if replaced.iter().any(|&(rid, _)| rid == id) {
             continue;
@@ -1182,70 +1396,71 @@ fn plan_wires_with_replacements(
         let horizontal = wire.a.y == wire.b.y;
         endpoint_axes.extend([(wire.a, horizontal), (wire.b, horizontal)]);
     }
-    for &(_, wire) in added {
+    for (_, wire) in added_iter.clone() {
         let horizontal = wire.a.y == wire.b.y;
         endpoint_axes.extend([(wire.a, horizontal), (wire.b, horizontal)]);
     }
     let mut neighbours = Vec::new();
     for &at in &touched {
-        for end in doc.points.at(at) {
-            if let End::Wire(id) = *end {
-                if selected.contains_key(&id) {
-                    continue;
+        let ends = doc.points.at(at);
+        let mut has_pin = false;
+        let mut surviving_count = 0u32;
+        let mut surv_a = None;
+        let mut surv_b = None;
+        for end in ends {
+            match *end {
+                End::Wire(id) => {
+                    if !selected.contains_key(&id) {
+                        let wire = *doc.wire(id).unwrap();
+                        if endpoint_axes.contains(&(at, wire.a.y == wire.b.y)) {
+                            neighbours.push((id, wire));
+                        }
+                    }
+                    if !replaced.iter().any(|&(rid, _)| rid == id) {
+                        surviving_count += 1;
+                        if surv_a.is_none() {
+                            surv_a = Some(id);
+                        } else if surv_b.is_none() {
+                            surv_b = Some(id);
+                        }
+                    }
                 }
-                let wire = *doc.wire(id).unwrap();
-                if endpoint_axes.contains(&(at, wire.a.y == wire.b.y)) {
-                    neighbours.push((id, wire));
+                End::Pin { .. } => {
+                    has_pin = true;
                 }
             }
         }
+        // Pins/labels at retained outer ends also prevent merging, even when those
+        // points lie outside the new segments. Query points, never the whole sheet.
+        if has_pin {
+            pins.push(at);
+        }
+        let has_label = has_labels && !doc.connectivity.labels_at(at).is_empty();
+        if has_label {
+            labels.push(at);
+        }
         // Vacated points from removed/shrunk segments may leave two surviving
         // collinear wires meeting with no pin or label (analogous to Delete).
-        if doc.connectivity.labels_at(at).is_empty()
-            && !doc
-                .points
-                .at(at)
-                .iter()
-                .any(|e| matches!(e, End::Pin { .. }))
+        if surviving_count == 2
+            && !has_pin
+            && !has_label
+            && let (Some(a), Some(b)) = (surv_a, surv_b)
         {
-            let mut surviving = doc.points.at(at).iter().filter_map(|e| match *e {
-                End::Wire(id) if !replaced.iter().any(|&(rid, _)| rid == id) => Some(id),
-                _ => None,
-            });
-            if let (Some(a), Some(b), None) = (surviving.next(), surviving.next(), surviving.next())
-            {
-                let wa = *doc.wire(a).unwrap();
-                let wb = *doc.wire(b).unwrap();
-                if (wa.a.y == wa.b.y) == (wb.a.y == wb.b.y) && !shared_stretch(wa, wb) {
-                    neighbours.push((a, wa));
-                    neighbours.push((b, wb));
-                }
+            let wa = *doc.wire(a).unwrap();
+            let wb = *doc.wire(b).unwrap();
+            if (wa.a.y == wa.b.y) == (wb.a.y == wb.b.y) && !shared_stretch(wa, wb) {
+                neighbours.push((a, wa));
+                neighbours.push((b, wb));
             }
         }
     }
     selected.extend(neighbours);
     let mut existing_sorted: Vec<_> = selected.iter().map(|(&id, &wire)| (id, wire)).collect();
-    existing_sorted.sort_by_key(|(id, _)| id.0);
-    // Pins/labels at retained outer ends also prevent merging, even when those
-    // points lie outside the new segments. Query points, never the whole sheet.
-    for &at in &touched {
-        if doc
-            .points
-            .at(at)
-            .iter()
-            .any(|end| matches!(end, End::Pin { .. }))
-        {
-            pins.push(at);
-        }
-        // Labels are indexed at their anchor point, which is where the
-        // connectivity keeps them.
-        if !doc.connectivity.labels_at(at).is_empty() {
-            labels.push(at);
-        }
-    }
+    existing_sorted.sort_unstable_by_key(|(id, _)| id.0);
     // Canonical added order: geometry first, so fresh ids do not depend on the
     // caller's wire order.
-    let mut added_sorted: Vec<(Option<WireId>, Wire)> = added.to_vec();
+    let mut added_sorted: Vec<(Option<WireId>, Wire)> = Vec::with_capacity(added_len);
+    added_sorted.extend(added_iter);
     added_sorted.sort_by(|&(lid, lhs), &(rid, rhs)| {
         let (llo, lhi, _) = normalised(lhs);
         let (rlo, rhi, _) = normalised(rhs);
@@ -1293,7 +1508,7 @@ fn plan_wires_with_replacements(
 
     // Feature points: every segment end, pin and label point. A segment is
     // split at every feature point in its interior (INV2, WD9).
-    let mut feature: Vec<Pt> = Vec::new();
+    let mut feature: Vec<Pt> = Vec::with_capacity(sources.len() * 2 + pins.len() + labels.len());
     for source in &sources {
         feature.push(source.lo);
         feature.push(source.hi);
@@ -1303,77 +1518,119 @@ fn plan_wires_with_replacements(
     feature.sort_unstable_by_key(|&p| pt_key(p));
     feature.dedup();
 
-    // Feature points along each line, as (fixed, along) pairs sorted without
-    // repeats: columns by (x, y), rows by (y, x).
-    let cols: Vec<(i32, i32)> = feature.iter().map(|p| (p.x, p.y)).collect();
+    // Feature points along each line: columns are already sorted in `feature` by (x, y);
+    // rows are sorted by (y, x).
     let mut rows: Vec<(i32, i32)> = feature.iter().map(|p| (p.y, p.x)).collect();
     rows.sort_unstable();
 
     // Atomic pieces: maximal sub-segments free of interior feature points.
-    // Identical pieces from overlapping wires are deduplicated here, so no two
-    // final wires can share a stretch.
-    let mut atomic_index: FxHashMap<(u8, i32, i32, i32), usize> = FxHashMap::default();
-    let mut atomics: Vec<Atomic> = Vec::new();
+    // Sort `Copy` pieces by (orientation, fixed, start, end) and group runs in-place
+    // so overlapping pieces deduplicate without per-piece allocations or hash maps.
+    let mut raw_atomics: Vec<RawAtomic> = Vec::with_capacity(sources.len());
     for source in &sources {
-        let (line, fixed, low, high) = if source.horizontal {
-            (&rows, source.lo.y, source.lo.x, source.hi.x)
-        } else {
-            (&cols, source.lo.x, source.lo.y, source.hi.y)
-        };
-        // Feature coordinates strictly between the source's ends, in order.
-        let start = line.partition_point(|&c| c <= (fixed, low));
-        let end = line.partition_point(|&c| c < (fixed, high));
         let mut lo = source.lo;
-        for coordinate in line[start..end]
-            .iter()
-            .map(|&(_, c)| c)
-            .chain(std::iter::once(high))
-        {
-            let hi = if source.horizontal {
-                Pt {
+        if source.horizontal {
+            let fixed = source.lo.y;
+            let (low, high) = (source.lo.x, source.hi.x);
+            let start = rows.partition_point(|&c| c <= (fixed, low));
+            let end = rows.partition_point(|&c| c < (fixed, high));
+            for coordinate in rows[start..end]
+                .iter()
+                .map(|&(_, c)| c)
+                .chain(std::iter::once(high))
+            {
+                let hi = Pt {
                     x: coordinate,
-                    y: source.lo.y,
-                }
-            } else {
-                Pt {
-                    x: source.lo.x,
-                    y: coordinate,
-                }
-            };
-            let key = (
-                u8::from(!source.horizontal),
-                if source.horizontal { lo.y } else { lo.x },
-                if source.horizontal { lo.x } else { lo.y },
-                if source.horizontal { hi.x } else { hi.y },
-            );
-            let idx = *atomic_index.entry(key).or_insert_with(|| {
-                atomics.push(Atomic {
+                    y: fixed,
+                };
+                raw_atomics.push(RawAtomic {
                     lo,
                     hi,
-                    horizontal: source.horizontal,
-                    existing: Vec::new(),
-                    descending: Some(source.descending),
+                    existing: source.existing,
+                    horizontal: true,
+                    descending: source.descending,
                 });
-                atomics.len() - 1
+                lo = hi;
+            }
+        } else {
+            let fixed = source.lo.x;
+            let (low, high) = (source.lo.y, source.hi.y);
+            let start = feature.partition_point(|p| (p.x, p.y) <= (fixed, low));
+            let end = feature.partition_point(|p| (p.x, p.y) < (fixed, high));
+            for coordinate in feature[start..end]
+                .iter()
+                .map(|p| p.y)
+                .chain(std::iter::once(high))
+            {
+                let hi = Pt {
+                    x: fixed,
+                    y: coordinate,
+                };
+                raw_atomics.push(RawAtomic {
+                    lo,
+                    hi,
+                    existing: source.existing,
+                    horizontal: false,
+                    descending: source.descending,
+                });
+                lo = hi;
+            }
+        }
+    }
+    raw_atomics.sort_unstable_by_key(|a| {
+        if a.horizontal {
+            (0u8, a.lo.y, a.lo.x, a.hi.x)
+        } else {
+            (1u8, a.lo.x, a.lo.y, a.hi.y)
+        }
+    });
+
+    // Collapse identical overlapping pieces into unique `(lo, hi, horizontal, existing_range, descending)`.
+    struct UniqueAtomic {
+        lo: Pt,
+        hi: Pt,
+        horizontal: bool,
+        existing: std::ops::Range<usize>,
+        descending: Option<bool>,
+    }
+    let mut unique_atomics: Vec<UniqueAtomic> = Vec::with_capacity(raw_atomics.len());
+    let mut atomic_wire_ids: Vec<WireId> = Vec::with_capacity(raw_atomics.len());
+    for piece in raw_atomics {
+        if let Some(prev) = unique_atomics.last_mut()
+            && prev.horizontal == piece.horizontal
+            && prev.lo == piece.lo
+            && prev.hi == piece.hi
+        {
+            if let Some(id) = piece.existing {
+                atomic_wire_ids.push(id);
+                prev.existing.end = atomic_wire_ids.len();
+            }
+            if prev.descending != Some(piece.descending) {
+                prev.descending = None;
+            }
+        } else {
+            let start = atomic_wire_ids.len();
+            if let Some(id) = piece.existing {
+                atomic_wire_ids.push(id);
+            }
+            unique_atomics.push(UniqueAtomic {
+                lo: piece.lo,
+                hi: piece.hi,
+                horizontal: piece.horizontal,
+                existing: start..atomic_wire_ids.len(),
+                descending: Some(piece.descending),
             });
-            let atomic = &mut atomics[idx];
-            if let Some(id) = source.existing {
-                atomic.existing.push(id);
-            }
-            if atomic.descending != Some(source.descending) {
-                atomic.descending = None;
-            }
-            lo = hi;
         }
     }
 
     // Ends per point over the deduplicated pieces: a merge point must hold
     // exactly the two ends being joined, and no pin or label.
-    let mut incidence: FxHashMap<(i32, i32), u32> = FxHashMap::default();
-    for atomic in &atomics {
-        *incidence.entry(pt_key(atomic.lo)).or_default() += 1;
-        *incidence.entry(pt_key(atomic.hi)).or_default() += 1;
+    let mut atomic_ends: Vec<(i32, i32)> = Vec::with_capacity(unique_atomics.len() * 2);
+    for u in &unique_atomics {
+        atomic_ends.push(pt_key(u.lo));
+        atomic_ends.push(pt_key(u.hi));
     }
+    atomic_ends.sort_unstable();
     let mut pin_keys: Vec<(i32, i32)> = pins.iter().map(|&p| pt_key(p)).collect();
     pin_keys.sort_unstable();
     pin_keys.dedup();
@@ -1381,92 +1638,84 @@ fn plan_wires_with_replacements(
     label_keys.sort_unstable();
     label_keys.dedup();
     let mergeable = |at: Pt| {
-        touched.contains(&at)
-            && incidence.get(&pt_key(at)).copied().unwrap_or(0)
-                + doc
-                    .points
-                    .at(at)
-                    .iter()
-                    .filter(|end| matches!(end, End::Wire(id) if !selected.contains_key(id)))
-                    .count() as u32
-                == 2
-            && pin_keys.binary_search(&pt_key(at)).is_err()
-            && label_keys.binary_search(&pt_key(at)).is_err()
+        if !touched.contains(&at)
+            || pin_keys.binary_search(&pt_key(at)).is_ok()
+            || label_keys.binary_search(&pt_key(at)).is_ok()
+        {
+            return false;
+        }
+        let k = pt_key(at);
+        let lo = atomic_ends.partition_point(|&e| e < k);
+        let hi = atomic_ends.partition_point(|&e| e <= k);
+        let atomic_count = (hi - lo) as u32;
+        atomic_count
+            + doc
+                .points
+                .at(at)
+                .iter()
+                .filter(|end| matches!(end, End::Wire(id) if !selected.contains_key(id)))
+                .count() as u32
+            == 2
     };
 
-    // Merge collinear neighbours along each line, farthest first by geometry.
-    let mut lines: BTreeMap<(u8, i32), Vec<usize>> = BTreeMap::new();
-    for (idx, atomic) in atomics.iter().enumerate() {
-        let fixed = if atomic.horizontal {
-            atomic.lo.y
-        } else {
-            atomic.lo.x
+    // Merge collinear neighbours along each line (already sorted by orientation, fixed, lo).
+    let mut finals: Vec<FinalSeg> = Vec::with_capacity(unique_atomics.len());
+    let mut run_range: Option<(usize, usize)> = None;
+    let finish_run = |run_range: &mut Option<(usize, usize)>, finals: &mut Vec<FinalSeg>| {
+        let Some((start, end)) = run_range.take() else {
+            return;
         };
-        lines
-            .entry((u8::from(!atomic.horizontal), fixed))
-            .or_default()
-            .push(idx);
-    }
-    let mut finals: Vec<FinalSeg> = Vec::new();
-    for indices in lines.values_mut() {
-        indices.sort_by_key(|&idx| {
-            let a = &atomics[idx];
-            if a.horizontal { a.lo.x } else { a.lo.y }
-        });
-        let mut run: Vec<usize> = Vec::new();
-        let finish_run = |run: &mut Vec<usize>, finals: &mut Vec<FinalSeg>| {
-            if run.is_empty() {
-                return;
+        let first = &unique_atomics[start];
+        let last = &unique_atomics[end];
+        let mut seg_existing: SmallVec<[WireId; 2]> = SmallVec::new();
+        let mut descending = first.descending;
+        for u in &unique_atomics[start..=end] {
+            seg_existing.extend_from_slice(&atomic_wire_ids[u.existing.clone()]);
+            if u.descending != descending {
+                descending = None;
             }
-            let first = &atomics[run[0]];
-            let last = &atomics[*run.last().unwrap()];
-            let mut seg_existing: Vec<WireId> = Vec::new();
-            let mut descending = atomics[run[0]].descending;
-            for &idx in run.iter() {
-                seg_existing.extend_from_slice(&atomics[idx].existing);
-                if atomics[idx].descending != descending {
-                    descending = None;
-                }
-            }
-            seg_existing.sort_by_key(|id| id.0);
-            seg_existing.dedup();
-            finals.push(FinalSeg {
-                lo: first.lo,
-                hi: last.hi,
-                horizontal: first.horizontal,
-                existing: seg_existing,
-                descending: descending.unwrap_or(false),
-            });
-            run.clear();
-        };
-        for &idx in indices.iter() {
-            if let Some(&last_idx) = run.last() {
-                let junction = atomics[last_idx].hi;
-                if atomics[idx].lo != junction || !mergeable(junction) {
-                    finish_run(&mut run, &mut finals);
-                }
-            }
-            run.push(idx);
         }
-        finish_run(&mut run, &mut finals);
+        seg_existing.sort_unstable_by_key(|id| id.0);
+        seg_existing.dedup();
+        finals.push(FinalSeg {
+            lo: first.lo,
+            hi: last.hi,
+            horizontal: first.horizontal,
+            existing: seg_existing,
+            descending: descending.unwrap_or(false),
+        });
+    };
+    let mut prev_line: Option<(bool, i32)> = None;
+    for (idx, u) in unique_atomics.iter().enumerate() {
+        let line = (u.horizontal, if u.horizontal { u.lo.y } else { u.lo.x });
+        if prev_line != Some(line) {
+            finish_run(&mut run_range, &mut finals);
+            prev_line = Some(line);
+        } else if let Some((_, last_idx)) = run_range {
+            let junction = unique_atomics[last_idx].hi;
+            if u.lo != junction || !mergeable(junction) {
+                finish_run(&mut run_range, &mut finals);
+            }
+        }
+        match &mut run_range {
+            Some((_, end)) => *end = idx,
+            None => run_range = Some((idx, idx)),
+        }
     }
+    finish_run(&mut run_range, &mut finals);
 
     // Keep the lowest surviving existing id per final segment; the first final
     // segment (in geometry order) wins a split wire's id.
-    finals.sort_by(|lhs, rhs| {
+    finals.sort_unstable_by(|lhs, rhs| {
         (pt_key(lhs.lo), pt_key(lhs.hi), lhs.horizontal).cmp(&(
             pt_key(rhs.lo),
             pt_key(rhs.hi),
             rhs.horizontal,
         ))
     });
-    let existing_wire: BTreeMap<u32, Wire> = existing_sorted
-        .iter()
-        .map(|(id, wire)| (id.0, *wire))
-        .collect();
-    let mut used = FxHashSet::default();
-    let mut remove: Vec<(WireId, Wire)> = Vec::new();
-    let mut insert: Vec<(Option<WireId>, Wire)> = Vec::new();
+    let mut used = vec![false; existing_sorted.len()];
+    let mut remove: Vec<(WireId, Wire)> = Vec::with_capacity(existing_sorted.len());
+    let mut insert: Vec<(Option<WireId>, Wire)> = Vec::with_capacity(finals.len());
     for seg in &finals {
         let wire = if seg.descending {
             Wire {
@@ -1479,11 +1728,16 @@ fn plan_wires_with_replacements(
                 b: seg.hi,
             }
         };
-        let keep = seg.existing.iter().copied().find(|id| !used.contains(id));
+        let keep = seg.existing.iter().copied().find_map(|id| {
+            let pos = existing_sorted
+                .binary_search_by_key(&id.0, |(w, _)| w.0)
+                .expect("kept wire must exist in existing_sorted");
+            (!used[pos]).then_some((id, pos))
+        });
         match keep {
-            Some(id) => {
-                used.insert(id);
-                let old = existing_wire[&id.0];
+            Some((id, pos)) => {
+                used[pos] = true;
+                let old = existing_sorted[pos].1;
                 let (old_lo, old_hi, _) = normalised(old);
                 if old_lo != seg.lo || old_hi != seg.hi {
                     remove.push((id, old));
@@ -1493,12 +1747,12 @@ fn plan_wires_with_replacements(
             None => insert.push((None, wire)),
         }
     }
-    for &(id, wire) in &existing_sorted {
-        if !used.contains(&id) {
+    for (&(id, wire), &was_used) in existing_sorted.iter().zip(&used) {
+        if !was_used {
             remove.push((id, wire));
         }
     }
-    remove.sort_by_key(|(id, _)| id.0);
+    remove.sort_unstable_by_key(|(id, _)| id.0);
     AddWiresPlan { remove, insert }
 }
 
@@ -2386,7 +2640,7 @@ mod tests {
                 };
                 for (number, wires) in oracle_candidates(lp(a.0, a.1), lp(b.0, b.1), axis) {
                     let ends = [lp(a.0, a.1), lp(b.0, b.1)];
-                    let (actual, _, _) = assess(&doc, &wires, ends, number, &mut Vec::new());
+                    let (actual, _, _) = assess(&doc, &wires, ends, number);
                     assert_eq!(
                         (
                             actual.bodies,
@@ -3323,6 +3577,148 @@ mod tests {
                     }
                     other => prop_assert!(false, "mismatch: {other:?}"),
                 }
+            }
+        }
+    }
+
+    fn assess_via_query(
+        doc: &Doc,
+        wires: &[Wire],
+        own_ends: [Pt; 2],
+        number: u16,
+    ) -> (Score, Option<Blocker>, [bool; 2]) {
+        let mut score = Score {
+            bends: (wires.len() - 1) as u8,
+            number,
+            ..Score::default()
+        };
+        let judged = wires.iter().all(|&w| shape_valid(w));
+        let mut point = None;
+        let mut overlap = None;
+        let mut inside = [false; 2];
+        let mut items = Vec::new();
+        let last = wires.len() - 1;
+        for (index, &w) in wires.iter().enumerate() {
+            score.length += w.a.manhattan_distance(w.b);
+            let limit = crate::SHEET_LIMIT_NM;
+            let area = Rect {
+                min: Pt {
+                    x: w.a.x.min(w.b.x).clamp(-limit, limit),
+                    y: w.a.y.min(w.b.y).clamp(-limit, limit),
+                },
+                max: Pt {
+                    x: w.a.x.max(w.b.x).clamp(-limit, limit),
+                    y: w.a.y.max(w.b.y).clamp(-limit, limit),
+                },
+            };
+            RouteSheet::query(doc, area, &mut items);
+            let rules = judged && point.is_none();
+            let mut points = rules.then(|| PointRule::new(w, &own_ends));
+            let mut overlaps = OverlapRule::new(w);
+            let mut through_body = false;
+            for &item in &items {
+                match item {
+                    ItemId::Part(id) => {
+                        if let Some(body) = RouteSheet::part_body(doc, id) {
+                            through_body |= passes_through(w, body);
+                            inside[0] |= index == 0 && strictly_inside(body, own_ends[0]);
+                            inside[1] |= index == last && strictly_inside(body, own_ends[1]);
+                        }
+                        if let Some(points) = points.as_mut() {
+                            points.part(id, RouteSheet::pins(doc, id));
+                        }
+                    }
+                    ItemId::Wire(id) => {
+                        let other = RouteSheet::wire(doc, id);
+                        score.crossings += u32::from(crosses(w, other));
+                        if let Some(points) = points.as_mut() {
+                            points.wire(id, other);
+                            overlaps.wire(id, other);
+                        }
+                    }
+                    ItemId::Label(_) => {}
+                }
+            }
+            score.bodies += u8::from(through_body);
+            if let Some(points) = points {
+                point = points.blocker();
+                if point.is_none() && overlap.is_none() {
+                    overlap = overlaps.blocker();
+                }
+            }
+        }
+        let verdict = if judged {
+            point.or(overlap)
+        } else {
+            Some(Blocker::Sheet)
+        };
+        (score, verdict, inside)
+    }
+
+    fn check_via_query(doc: &Doc, wires: &[Wire], own_ends: [Pt; 2]) -> Result<(), Blocker> {
+        if !wires.iter().all(|&w| shape_valid(w)) {
+            return Err(Blocker::Sheet);
+        }
+        let mut items = Vec::new();
+        for &w in wires {
+            RouteSheet::query(doc, Rect::from_points(w.a, w.b).unwrap(), &mut items);
+            let mut rule = PointRule::new(w, &own_ends);
+            for &item in &items {
+                match item {
+                    ItemId::Part(part) => rule.part(part, RouteSheet::pins(doc, part)),
+                    ItemId::Wire(id) => rule.wire(id, RouteSheet::wire(doc, id)),
+                    ItemId::Label(_) => {}
+                }
+            }
+            if let Some(b) = rule.blocker() {
+                return Err(b);
+            }
+        }
+        for &w in wires {
+            RouteSheet::query(doc, Rect::from_points(w.a, w.b).unwrap(), &mut items);
+            let mut rule = OverlapRule::new(w);
+            for &item in &items {
+                if let ItemId::Wire(id) = item {
+                    rule.wire(id, RouteSheet::wire(doc, id));
+                }
+            }
+            if let Some(b) = rule.blocker() {
+                return Err(b);
+            }
+        }
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+        /// Streaming `visit_segment` in `assess` and `check_new_wires` produces the exact
+        /// same scores, verdicts, inside flags, and blockers as the deduplicated `query` path,
+        /// including across multi-cell wires and large part bodies.
+        #[test]
+        fn streaming_visit_segment_matches_deduplicated_query(
+            parts in prop::collection::vec(part_strategy(), 0..6),
+            batches in prop::collection::vec(prop::collection::vec(wire_strategy(), 1..4), 0..6),
+            a in (-24i32..25, -24i32..25),
+            b in (-24i32..25, -24i32..25),
+            vertical in any::<bool>(),
+        ) {
+            let doc = random_sheet(&parts, batches);
+            let (a, b) = (lp(a.0, a.1), lp(b.0, b.1));
+            if a == b {
+                return Ok(());
+            }
+            let mut candidates = Vec::new();
+            enumerate_candidates(a, b, axis(vertical), &mut candidates);
+            for c in &candidates {
+                let wires = c.wires();
+                let got_assess = assess(&doc, wires, [a, b], c.score.number);
+                let want_assess = assess_via_query(&doc, wires, [a, b], c.score.number);
+                prop_assert_eq!(got_assess, want_assess);
+
+                let mut scratch = Vec::new();
+                let got_check = check_new_wires_on(&doc, wires, [a, b], &mut scratch);
+                let want_check = check_via_query(&doc, wires, [a, b]);
+                prop_assert_eq!(got_check, want_check);
             }
         }
     }

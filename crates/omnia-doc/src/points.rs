@@ -1,6 +1,7 @@
 //! Geometric incidence only: wire bodies and labels never contribute ends.
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::{PartId, Pt, Rect, WireId};
 
@@ -11,7 +12,7 @@ pub(crate) enum End {
 }
 
 #[derive(Debug, Default, Clone)]
-pub(crate) struct Points(FxHashMap<Pt, Vec<End>>);
+pub(crate) struct Points(FxHashMap<Pt, SmallVec<[End; 2]>>);
 
 impl Points {
     pub(crate) fn insert(&mut self, at: Pt, end: End) {
@@ -29,7 +30,7 @@ impl Points {
 
     /// Wire ends and pins at `at`, in insertion order; empty when nothing is there.
     pub(crate) fn at(&self, at: Pt) -> &[End] {
-        self.0.get(&at).map_or(&[], Vec::as_slice)
+        self.0.get(&at).map_or(&[], SmallVec::as_slice)
     }
 
     pub(crate) fn junctions(&self, area: Rect, out: &mut Vec<Pt>) {

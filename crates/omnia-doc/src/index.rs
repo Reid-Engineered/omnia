@@ -56,6 +56,7 @@ pub struct SpatialIndex {
     wires: Entries,
     labels: Entries,
     len: usize,
+    label_count: usize,
     /// Stamp of the latest query. Item stamps never exceed it; 0 means "never visited".
     generation: Cell<u32>,
 }
@@ -76,6 +77,7 @@ impl SpatialIndex {
             wires: Entries::default(),
             labels: Entries::default(),
             len: 0,
+            label_count: 0,
             generation: Cell::new(0),
         }
     }
@@ -87,6 +89,10 @@ impl SpatialIndex {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    pub(crate) fn label_count(&self) -> usize {
+        self.label_count
     }
 
     /// The bounds `item` is registered under, if it is in the index.
@@ -109,6 +115,9 @@ impl SpatialIndex {
         let entry = self.entry_mut(item);
         entry.bounds = Some(bounds);
         self.len += 1;
+        if matches!(item, ItemId::Label(_)) {
+            self.label_count += 1;
+        }
         Ok(old)
     }
 
@@ -132,6 +141,9 @@ impl SpatialIndex {
             }
         }
         self.len -= 1;
+        if matches!(item, ItemId::Label(_)) {
+            self.label_count -= 1;
+        }
         Some(bounds)
     }
 
@@ -165,6 +177,7 @@ impl SpatialIndex {
     /// that must not change the index at all (the follow planner, W2.1) can query it. An
     /// item registered in several cells is met once per cell; sorting `out` by kind, then
     /// id, removes the repeats. Allocates nothing when `out` has room for every visit.
+    #[cfg(test)]
     pub(crate) fn query_filtered_unstamped(
         &self,
         area: Rect,
@@ -191,6 +204,89 @@ impl SpatialIndex {
         if x0 != x1 || y0 != y1 {
             out.sort_unstable_by_key(|&item| item_key(item));
             out.dedup();
+        }
+    }
+
+    /// Streams every indexed part and wire whose bounds intersect `area` (edges and corners
+    /// included), skipping labels before touching the label table, without touching visit
+    /// stamps, sorting, or deduplicating multi-cell items. Allocates nothing.
+    pub(crate) fn visit_parts_and_wires_unstamped(
+        &self,
+        area: Rect,
+        mut visit: impl FnMut(ItemId, Rect),
+    ) {
+        debug_assert!(area.min.x <= area.max.x && area.min.y <= area.max.y);
+        let (x0, y0, x1, y1) = cell_span(area);
+        for cy in y0..=y1 {
+            let row = &self.cells[cy * CELLS_PER_AXIS..][..CELLS_PER_AXIS];
+            for cell in &row[x0..=x1] {
+                for &item in cell {
+                    let entry = match item {
+                        ItemId::Part(id) => self.parts.slot(id.0),
+                        ItemId::Wire(id) => self.wires.slot(id.0),
+                        ItemId::Label(_) => continue,
+                    }
+                    .expect("cell lists an item with no entry");
+                    if let Some(bounds) = entry.bounds
+                        && bounds.intersects(area)
+                    {
+                        visit(item, bounds);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Streams every indexed wire in `at`'s single cell whose bounds contain `at`, without
+    /// touching visit stamps or part/label tables. Allocates nothing.
+    pub(crate) fn visit_wires_at_point_unstamped(
+        &self,
+        at: Pt,
+        mut visit: impl FnMut(crate::WireId),
+    ) {
+        let cx = cell_of(at.x);
+        let cy = cell_of(at.y);
+        let cell = &self.cells[cy * CELLS_PER_AXIS + cx];
+        for &item in cell {
+            if let ItemId::Wire(id) = item {
+                let entry = self
+                    .wires
+                    .slot(id.0)
+                    .expect("cell lists an item with no entry");
+                if let Some(bounds) = entry.bounds
+                    && bounds.contains(at)
+                {
+                    visit(id);
+                }
+            }
+        }
+    }
+
+    /// Streams every indexed label whose anchor lies in `area`, without touching visit stamps
+    /// or part/wire tables. Allocates nothing.
+    pub(crate) fn visit_labels_unstamped(&self, area: Rect, mut visit: impl FnMut(crate::LabelId)) {
+        if self.label_count == 0 {
+            return;
+        }
+        debug_assert!(area.min.x <= area.max.x && area.min.y <= area.max.y);
+        let (x0, y0, x1, y1) = cell_span(area);
+        for cy in y0..=y1 {
+            let row = &self.cells[cy * CELLS_PER_AXIS..][..CELLS_PER_AXIS];
+            for cell in &row[x0..=x1] {
+                for &item in cell {
+                    if let ItemId::Label(id) = item {
+                        let entry = self
+                            .labels
+                            .slot(id.0)
+                            .expect("cell lists an item with no entry");
+                        if let Some(bounds) = entry.bounds
+                            && bounds.intersects(area)
+                        {
+                            visit(id);
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -260,6 +356,7 @@ impl SpatialIndex {
     }
 }
 
+#[cfg(test)]
 fn item_key(item: ItemId) -> (u8, u32) {
     match item {
         ItemId::Part(id) => (0, id.0),
@@ -628,10 +725,28 @@ mod tests {
                             assert!(b.intersects(norm), "predicate called for non-intersecting item");
                             norm.contains_rect(b) && !matches!(item, ItemId::Label(_))
                         });
-                        prop_assert_eq!(before, format!("{index:?}"), "the index changed");
+                        prop_assert_eq!(&before, &format!("{index:?}"), "the index changed");
                         let unique: HashSet<_> = out.iter().map(|&i| key(i)).collect();
                         prop_assert_eq!(unique.len(), out.len(), "duplicate in query result");
                         prop_assert_eq!(sorted(&out), brute_filtered(&model, norm));
+
+                        // Streaming parts/wires visitor matches query_filtered_unstamped and leaves stamps untouched.
+                        let mut streamed = Vec::new();
+                        index.visit_parts_and_wires_unstamped(norm, |item, b| {
+                            assert!(b.intersects(norm));
+                            assert!(!matches!(item, ItemId::Label(_)));
+                            if norm.contains_rect(b) {
+                                streamed.push(item);
+                            }
+                        });
+                        prop_assert_eq!(before, format!("{index:?}"), "streaming changed the index");
+                        let mut streamed_keys = sorted(&streamed);
+                        streamed_keys.dedup();
+                        prop_assert_eq!(streamed_keys, brute_filtered(&model, norm));
+                        prop_assert_eq!(
+                            index.label_count(),
+                            model.keys().filter(|(k, _)| *k == 2).count()
+                        );
                     }
                 }
             }

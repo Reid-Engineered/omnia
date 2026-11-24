@@ -1,0 +1,2 @@
+observations follow_move_100_parts_10k_apply: n=100 p50_ms=1.335100 p99_ms=1.707600 max_ms=2.195100
+                        time:   [1.3311 ms 1.3637 ms 1.3977 ms]

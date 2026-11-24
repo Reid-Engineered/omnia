@@ -462,15 +462,11 @@ fn apply_isometry(
     }
     landed.sort_unstable_by_key(|p| (p.x, p.y));
     landed.dedup();
-    let mut query = Vec::new();
     let mut touched = Vec::new();
     for at in landed {
-        doc.query(Rect { min: at, max: at }, &mut query);
-        for &item in &query {
-            if let ItemId::Wire(id) = item {
-                touched.push(id);
-            }
-        }
+        doc.index.visit_wires_at_point_unstamped(at, |id| {
+            touched.push(id);
+        });
     }
     touched.sort_unstable_by_key(|id| id.0);
     touched.dedup();
@@ -665,11 +661,15 @@ fn validate_lattice(
             worst = Some(p);
         }
     };
+    let check_labels = doc.index.label_count() > 0;
     let mut landed = Vec::new();
     let mut legacy_ends = Vec::new();
-    let mut moved_wires = plan.add.clone();
+    let mut selected_lattice_wires = Vec::new();
     let mut selected_wires = Vec::new();
-    let mut moved_labels: Vec<_> = plan.labels.iter().map(|&(id, _)| id.0).collect();
+    let mut moved_labels = Vec::new();
+    if check_labels {
+        moved_labels.extend(plan.labels.iter().map(|&(id, _)| id.0));
+    }
     for &item in items {
         match item {
             ItemId::Wire(id) => {
@@ -689,69 +689,81 @@ fn validate_lattice(
                     }
                 }
                 // Only a lattice wire can be split off the lattice by a label.
-                if on_lattice(moved.a) && on_lattice(moved.b) {
-                    moved_wires.push(moved);
+                if check_labels && on_lattice(moved.a) && on_lattice(moved.b) {
+                    selected_lattice_wires.push(moved);
                 }
             }
             ItemId::Part(id) => {
                 for &p in doc.pins(id).unwrap() {
-                    landed.push(t.apply(p)?);
+                    let moved = t.apply(p)?;
+                    if !on_lattice(moved) {
+                        landed.push(moved);
+                    }
                 }
             }
             ItemId::Label(id) => {
-                moved_labels.push(id.0);
-                landed.push(t.apply(doc.label(id).unwrap().at)?);
+                if check_labels {
+                    moved_labels.push(id.0);
+                }
+                let moved = t.apply(doc.label(id).unwrap().at)?;
+                if !on_lattice(moved) {
+                    landed.push(moved);
+                }
             }
         }
     }
-    landed.extend(plan.labels.iter().map(|&(_, at)| at));
-    landed.retain(|&p| !on_lattice(p));
-    landed.sort_unstable_by_key(|p| (p.x, p.y));
-    landed.dedup();
-    let mut removed: Vec<_> = plan.remove.iter().map(|id| id.0).collect();
-    removed.sort_unstable();
-    selected_wires.sort_unstable();
-    moved_labels.sort_unstable();
+    for &(_, at) in &plan.labels {
+        if !on_lattice(at) {
+            landed.push(at);
+        }
+    }
     let interior = |w: Wire, p: Pt| {
         p != w.a && p != w.b && Rect::from_points(w.a, w.b).is_ok_and(|r| r.contains(p))
     };
-    let mut query = Vec::new();
-    let tagged = landed
-        .into_iter()
-        .map(|p| (p, false))
-        .chain(legacy_ends.into_iter().map(|p| (p, true)));
-    for (at, legacy) in tagged {
-        let judged = |w: Wire| !legacy || (on_lattice(w.a) && on_lattice(w.b));
-        let mut hit = plan.add.iter().any(|&w| judged(w) && interior(w, at));
-        doc.query(Rect { min: at, max: at }, &mut query);
-        hit |= query.iter().any(|item| match *item {
-            ItemId::Wire(id) => {
-                let w = *doc.wire(id).unwrap();
-                removed.binary_search(&id.0).is_err()
-                    && selected_wires.binary_search(&id.0).is_err()
-                    && judged(w)
-                    && interior(w, at)
+    if !landed.is_empty() || !legacy_ends.is_empty() {
+        landed.sort_unstable_by_key(|p| (p.x, p.y));
+        landed.dedup();
+        let mut removed: Vec<_> = plan.remove.iter().map(|id| id.0).collect();
+        removed.sort_unstable();
+        selected_wires.sort_unstable();
+        let mut query = Vec::new();
+        let tagged = landed
+            .into_iter()
+            .map(|p| (p, false))
+            .chain(legacy_ends.into_iter().map(|p| (p, true)));
+        for (at, legacy) in tagged {
+            let judged = |w: Wire| !legacy || (on_lattice(w.a) && on_lattice(w.b));
+            let mut hit = plan.add.iter().any(|&w| judged(w) && interior(w, at));
+            doc.query(Rect { min: at, max: at }, &mut query);
+            hit |= query.iter().any(|item| match *item {
+                ItemId::Wire(id) => {
+                    let w = *doc.wire(id).unwrap();
+                    removed.binary_search(&id.0).is_err()
+                        && selected_wires.binary_search(&id.0).is_err()
+                        && judged(w)
+                        && interior(w, at)
+                }
+                _ => false,
+            });
+            if hit {
+                report(at);
             }
-            _ => false,
-        });
-        if hit {
-            report(at);
         }
     }
-    for wire in moved_wires {
-        let Ok(bounds) = Rect::from_points(wire.a, wire.b) else {
-            continue;
-        };
-        doc.query(bounds, &mut query);
-        for item in &query {
-            if let ItemId::Label(id) = *item
-                && moved_labels.binary_search(&id.0).is_err()
-            {
-                let at = doc.label(id).unwrap().at;
-                if !on_lattice(at) && interior(wire, at) {
-                    report(at);
+    if check_labels {
+        moved_labels.sort_unstable();
+        for wire in plan.add.iter().copied().chain(selected_lattice_wires) {
+            let Ok(bounds) = Rect::from_points(wire.a, wire.b) else {
+                continue;
+            };
+            doc.index.visit_labels_unstamped(bounds, |id| {
+                if moved_labels.binary_search(&id.0).is_err() {
+                    let at = doc.label(id).unwrap().at;
+                    if !on_lattice(at) && interior(wire, at) {
+                        report(at);
+                    }
                 }
-            }
+            });
         }
     }
     match worst {
@@ -1118,13 +1130,17 @@ fn apply_wire_plan(doc: &mut Doc, plan: crate::route::AddWiresPlan, acc: &mut Ch
     if plan.remove.is_empty() && plan.insert.is_empty() {
         return UndoOp::Batch(Vec::new());
     }
-    let kept: rustc_hash::FxHashSet<WireId> =
-        plan.insert.iter().filter_map(|(keep, _)| *keep).collect();
+    let mut kept: SmallVec<[u32; 64]> = plan
+        .insert
+        .iter()
+        .filter_map(|(keep, _)| keep.map(|id| id.0))
+        .collect();
+    kept.sort_unstable();
     let mut removed: Vec<(WireId, Wire)> = Vec::with_capacity(plan.remove.len());
     for (id, _) in &plan.remove {
         let (wire, bounds) = doc.remove_wire_raw(*id).expect("planned wire must exist");
         acc.record_dirty(bounds);
-        if !kept.contains(id) {
+        if kept.binary_search(&id.0).is_err() {
             acc.record_removed(ItemId::Wire(*id));
         }
         removed.push((*id, wire));
