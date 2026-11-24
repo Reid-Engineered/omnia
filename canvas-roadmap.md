@@ -506,6 +506,7 @@ of the `canvas` lane.
 - Do: `bench hit --sheet 10k` (B7 < 0.2 ms); `bench run --sheet 10k --script hover`
   (p99 < 16 ms, sheet paint count 0); the INV10 and INV11 tests; the T2.7 table again.
 - Done when: all pass on the reference machine; otherwise record and set `needs-human`.
+- Orion 2026-11-23 verdict: `incomplete` on hover warm-up sampling. [Evidence](docs/measurements/T4.6.md).
 
 ## Milestone 5: editing
 
@@ -2093,9 +2094,34 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        T3.4's Windows overhead; Orion decides B9; `ours.max = 0` on all 5 motion
                        runs). Standard checks pass locally; no new dependencies.
 
+2026-11-23 T4.6 needs-human — ran all 150 invocations on Orion at clean main `9abfe05`
+                       under §2.1 (AC, four performance governors, active 1920×1080 Wayland
+                       panel at 60 Hz, 100%/125%, Baloo suspended). Frozen gate and archive
+                       replay returned incomplete. All 20 hover reports warned of 601
+                       warm-up draws against 600 expected. Archived evidence also shows B3/B4
+                       attribution misses and 125% B5 stalls of 51.544 ms (1k zoom) and
+                       50.627 ms (10k zoom). B7 hit p99 was 0.000700 ms [0.000600, 0.000800].
+                       All reports, conditions, binary hashes and replay are recorded in
+                       `docs/measurements/T4.6.md`. One campaign with the frozen script and
+                       budgets. The agent and desktop services are visible in the journal.
+
 2026-11-23 T4.6 needs-human — Orion hover reports exposed an extra draw in the startup
                        count. The hover driver now primes the window and starts its
                        scripted warm-up from a profiler snapshot, so the harness checks
                        warm-up draws between snapshots. The gate still requires exactly
                        the configured warm-up and measured draws. Orion must verify the
                        fix, and the recorded zoom stalls still need investigation (B5).
+
+2026-11-23 T4.6 needs-human — completed the 150-invocation post-fix Orion schedule from
+                       clean main `b6c7981`. Frozen script returned fail (exit 1).
+                       All 20 hover reports passed sampling and INV11 but their
+                       attribution traces were unusable. B3/B4 attribution missed
+                       at both scales. B5 had zero failures. Owner-reported W2.2
+                       CPU work intersected 25 s100 invocations, with 46 exact
+                       snapshot matches. The full campaign is non-certifying
+                       under §2.1. See `docs/measurements/T4.6.md` for hardware,
+                       all raw reports, the literal summary, and the overlap.
+                       Follow-up for T1.6's attribute.py: align validation with
+                       the measured overlay-every-frame trace boundaries. Preserve
+                       the attribution rules. Investigate the pan/zoom stalls with
+                       focused traces before another certification campaign.
