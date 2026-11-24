@@ -508,7 +508,8 @@ of the `canvas` lane.
 - Done when: all pass on the reference machine; otherwise record and set `needs-human`.
 - Orion 2026-11-23 verdicts: `incomplete` on hover warm-up sampling (`9abfe05`), then `fail`
   and non-certifying (`b6c7981`, concurrent W2.2 work). 2026-11-24: hover attribution fixed
-  and the stalls diagnosed as preemption; a clean owner-run campaign is next.
+  and the stalls diagnosed as preemption; a clean owner-run campaign is next:
+  `bash docs/measurements/T4.6/owner-run.sh` at Orion's desk.
   [Evidence](docs/measurements/T4.6.md).
 
 ## Milestone 5: editing
@@ -2140,3 +2141,23 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        3.7-24.4 ms of run-queue wait, in the runs where `t3code` and
                        `claude` were busiest. Next: an owner-run `gate.py run` with
                        T3 Code and its agents closed. Evidence: `docs/measurements/T4.6-stall.md`.
+
+2026-11-24 T4.6 needs-human — made the owner-run campaign one command:
+                       `docs/measurements/T4.6/owner-run.sh` (`--check` for preflight only).
+                       It wraps the frozen `gate.py` unchanged. It refuses to start over SSH
+                       or while T3 Code, a coding agent, `cargo` or `rustc` runs (exact names
+                       and argv path components). It builds current `origin/main` and asks for
+                       sudo once. A root helper sets the `performance` governor and stops
+                       `tailscaled`, reports ready before timing, and restores both when the
+                       wrapper process ends (pidfd). Baloo is left running per plan §2.1
+                       (CPU-only `hit-10k`); the wrapper waits for it to be idle, and live
+                       output goes to tmpfs outside the indexed folders. The gate exit
+                       status is kept (`kde-inhibit` always exits 0). Hangups are ignored.
+                       Per-process CPU time is recorded around the gate (evidence only).
+                       Codex review findings (round 1: four P1, one P2; round 2: one P2, three nits) addressed; tests on Orion,
+                       including real sudo, are in `docs/measurements/T4.6.md`. Status stays
+                       `needs-human`, waiting for the owner run.
+                       Owner approved a remote start (2026-11-24): `--remote` keeps
+                       `tailscaled` and the SSH link up, detaches the run with
+                       `systemd-run --user`, reads the sudo password from a user-only tmpfs
+                       file, and records the mode in `conditions.txt`.
