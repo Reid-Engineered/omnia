@@ -1,0 +1,56 @@
+   Compiling zbus v5.19.0
+   Compiling naga v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling perf-event-data v0.1.8
+   Compiling tempfile v3.27.0
+   Compiling rusty-fork v0.3.1
+   Compiling gpui v0.2.2 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+   Compiling proptest v1.12.0
+   Compiling perf-event2 v0.7.4
+   Compiling bench_metrics v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+   Compiling http_client v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+   Compiling zbus v6.3.0
+   Compiling wgpu-naga-bridge v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling wgpu-hal v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling atspi-common v0.13.0
+   Compiling ashpd v0.13.13
+   Compiling wgpu-core-deps-linux-android-bsd v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling wgpu-core v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling atspi-proxies v0.13.0
+   Compiling atspi v0.29.0
+   Compiling accesskit_atspi_common v0.19.1
+   Compiling oo7 v0.6.0 (https://github.com/zed-industries/oo7?rev=731c1215edb6905876c6137ab300428c7b8d7c13#731c1215)
+   Compiling omnia-doc v0.1.0 (/home/marcus/omnia/crates/omnia-doc)
+   Compiling wgpu v30.0.0 (https://github.com/gfx-rs/wgpu?rev=cddb2f5d80dc0009b2ef6767635140cacf90a007#cddb2f5d)
+   Compiling accesskit_unix v0.22.1
+   Compiling gpui_wgpu v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+   Compiling notify-rust v4.19.0
+   Compiling gpui_linux v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+   Compiling omnia-symbols v0.1.0 (/home/marcus/omnia/crates/omnia-symbols)
+   Compiling omnia-canvas v0.1.0 (/home/marcus/omnia/crates/omnia-canvas)
+   Compiling gpui_platform v0.1.0 (https://github.com/zed-industries/zed?rev=15d136bf8e72ae43b284183ec46940c009460f5c#15d136bf)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 48s
+     Running unittests src/lib.rs (target/debug/deps/omnia_canvas-73cd5d9a4da98e40)
+
+running 2 tests
+test overlay::tests::inv11_net_highlight_never_repaints_sheet ... ok
+test overlay::tests::inv11_hover_selection_and_rubber_band_never_repaint_sheet ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 0.73s
+
+     Running tests/sheet_alloc.rs (target/debug/deps/sheet_alloc-859b27fa6b06e5b1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/sheet_render.rs (target/debug/deps/sheet_render-4381dbc24c3cc4e7)
+test sheet_dots_cover_whole_device_pixels ... skipped: render_to_image unsupported on this platform
+     Running tests/sheet_text_alloc.rs (target/debug/deps/sheet_text_alloc-372d4aa43755b060)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/sheet_text_render.rs (target/debug/deps/sheet_text_render-061c03c124a08036)
+test sheet_text_labels_lod_cap_and_atlas_stability ... skipped: render_to_image unsupported on this platform
+inv11-exit=0
