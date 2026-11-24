@@ -391,9 +391,27 @@ def counts(tasks: list[Task]) -> dict[str, int]:
     return result
 
 
+def percent_done(c: dict[str, int]) -> str:
+    """Done as a share of tasks with a known status, rounded down so 100% means all done.
+
+    Tasks whose status is "other" (replaced, say) are not work left, so they do not count.
+    """
+    total = sum(c[s] for s in STATUSES)
+    return f"{c['done'] * 100 // total}%" if total else "—"
+
+
+def progress(c: dict[str, int]) -> str:
+    """'22% done (2 of 9 tasks)', or 'No counted tasks' when every task is "other"."""
+    total = sum(c[s] for s in STATUSES)
+    if not total:
+        return "No counted tasks"
+    return f"{percent_done(c)} done ({c['done']} of {total} tasks)"
+
+
 def current_milestone(roadmap: Roadmap) -> str:
     for milestone in roadmap.milestones:
-        if any(t.milestone == milestone and t.status != "done" for t in roadmap.tasks):
+        # "other" tasks (replaced, say) are not work left, as in percent_done.
+        if any(t.milestone == milestone and t.status not in ("done", "other") for t in roadmap.tasks):
             return milestone
     return "all done" if roadmap.milestones else "—"
 
@@ -435,16 +453,24 @@ def page_home(roadmaps: list[Roadmap], links: Links, tasks: dict[str, tuple[Task
         "",
         "## Roadmaps",
         "",
-        "| Roadmap | Done | Doing | To do | Blocked | Needs human | Current milestone |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Roadmap | % done | Done | Doing | To do | Blocked | Needs human | Current milestone |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for roadmap in roadmaps:
         c = counts(roadmap.tasks)
         out.append(
-            f"| [{roadmap.name}]({roadmap.page}) | {c['done']} | {c['doing']} | {c['todo']} "
-            f"| {c['blocked']} | {c['needs-human']} | {cell(current_milestone(roadmap))} |"
+            f"| [{roadmap.name}]({roadmap.page}) | {percent_done(c)} | {c['done']} | {c['doing']} "
+            f"| {c['todo']} | {c['blocked']} | {c['needs-human']} | {cell(current_milestone(roadmap))} |"
         )
-    out.append("")
+    c = counts([t for r in roadmaps for t in r.tasks])
+    out += [
+        f"| **All** | **{percent_done(c)}** | {c['done']} | {c['doing']} | {c['todo']} "
+        f"| {c['blocked']} | {c['needs-human']} | |",
+        "",
+        "% done is done tasks over all tasks with a status, rounded down; replaced tasks are",
+        "left out.",
+        "",
+    ]
 
     for status, heading in (("blocked", "Blocked"), ("needs-human", "Needs human"), ("doing", "In progress")):
         rows = [(t, r) for t, r in tasks.values() if t.status == status]
@@ -480,7 +506,7 @@ def page_roadmap(roadmap: Roadmap, links: Links, tasks: dict[str, tuple[Task, Ro
         f"Generated from [{roadmap.path}]({links.file(roadmap.path)}). Task ids link to the",
         "task in the roadmap file.",
         "",
-        f"{c['done']} done, {c['doing']} doing, {c['todo']} to do, {c['blocked']} blocked, "
+        f"**{progress(c)}.** {c['done']} done, {c['doing']} doing, {c['todo']} to do, {c['blocked']} blocked, "
         f"{c['needs-human']} needing a human"
         + (f", {c['other']} other" if c["other"] else "")
         + ".",
@@ -490,7 +516,8 @@ def page_roadmap(roadmap: Roadmap, links: Links, tasks: dict[str, tuple[Task, Ro
     for task in roadmap.tasks:
         groups.setdefault(task.milestone, []).append(task)
     for milestone, group in groups.items():
-        out += [f"## {milestone}", "", "| Task | Title | Status | Lane | Depends |", "| --- | --- | --- | --- | --- |"]
+        out += [f"## {milestone}", "", f"{progress(counts(group))}.", "",
+                "| Task | Title | Status | Lane | Depends |", "| --- | --- | --- | --- | --- |"]
         for task in group:
             out.append(
                 f"| {task_link(task, roadmap, links)} | {cell(task.title)} | {status_label(task)} "
