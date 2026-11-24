@@ -2093,6 +2093,7 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        p99 2.896 ms (`369.08 MB` private memory on Windows UHD driver, matching
                        T3.4's Windows overhead; Orion decides B9; `ours.max = 0` on all 5 motion
                        runs). Standard checks pass locally; no new dependencies.
+
 2026-11-23 T4.6 needs-human — ran all 150 invocations on Orion at clean main `9abfe05`
                        under §2.1 (AC, four performance governors, active 1920×1080 Wayland
                        panel at 60 Hz, 100%/125%, Baloo suspended). Frozen gate and archive
@@ -2103,3 +2104,10 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        All reports, conditions, binary hashes and replay are recorded in
                        `docs/measurements/T4.6.md`. One campaign with the frozen script and
                        budgets. The agent and desktop services are visible in the journal.
+
+2026-11-23 T4.6 needs-human — Orion hover reports exposed an extra draw in the startup
+                       count. The hover driver now primes the window and starts its
+                       scripted warm-up from a profiler snapshot, so the harness checks
+                       warm-up draws between snapshots. The gate still requires exactly
+                       the configured warm-up and measured draws. Orion must verify the
+                       fix, and the recorded zoom stalls still need investigation (B5).

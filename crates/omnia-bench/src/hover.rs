@@ -314,6 +314,7 @@ struct HoverDriver {
     scene_details: Value,
     targets: Vec<HoverTarget>,
     step: u32,
+    draws_before_warmup: u64,
     baseline: Option<FrameDurationSnapshot>,
     sheet_paints_start: u64,
     overlay_paints_start: u64,
@@ -348,6 +349,13 @@ impl HoverDriver {
         let warmup = self.config.warmup;
         let last = warmup + self.config.frames;
         let step = self.step;
+
+        if step == 0 {
+            self.draws_before_warmup = window
+                .frame_duration_snapshot()
+                .draw_duration_histogram
+                .len();
+        }
 
         if step == warmup {
             self.baseline = Some(window.frame_duration_snapshot());
@@ -421,6 +429,7 @@ impl HoverDriver {
             window,
             cx,
             base,
+            draws_before_warmup: self.draws_before_warmup,
             allocs: &self.allocs,
             paint_ms: &mut [],
             paint_sampling: "overlay-every-frame",
@@ -461,7 +470,12 @@ impl Render for HoverRootView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         if !self.started {
             self.started = true;
-            schedule_hover_step(window, self.driver.clone());
+            let driver = self.driver.clone();
+            window.on_next_frame(move |window, _| {
+                // Let the platform draw the configured window before sending hover input.
+                window.refresh();
+                schedule_hover_step(window, driver);
+            });
         }
         self.overlay.clone()
     }
@@ -509,7 +523,8 @@ pub fn run_hover(config: RunConfig) -> Result<Value, String> {
                 overlay: overlay.clone(),
                 scene_details,
                 targets: Vec::new(),
-                step: 1,
+                step: 0,
+                draws_before_warmup: 0,
                 baseline: None,
                 sheet_paints_start: 0,
                 overlay_paints_start: 0,
