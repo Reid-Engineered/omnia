@@ -401,14 +401,17 @@ def percent_done(c: dict[str, int]) -> str:
 
 
 def progress(c: dict[str, int]) -> str:
-    """'22% done (2 of 9 tasks)'."""
+    """'22% done (2 of 9 tasks)', or 'No counted tasks' when every task is "other"."""
     total = sum(c[s] for s in STATUSES)
+    if not total:
+        return "No counted tasks"
     return f"{percent_done(c)} done ({c['done']} of {total} tasks)"
 
 
 def current_milestone(roadmap: Roadmap) -> str:
     for milestone in roadmap.milestones:
-        if any(t.milestone == milestone and t.status != "done" for t in roadmap.tasks):
+        # "other" tasks (replaced, say) are not work left, as in percent_done.
+        if any(t.milestone == milestone and t.status not in ("done", "other") for t in roadmap.tasks):
             return milestone
     return "all done" if roadmap.milestones else "—"
 

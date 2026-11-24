@@ -108,6 +108,14 @@ class PercentDone(unittest.TestCase):
         c = {s: 0 for s in (*wiki.STATUSES, "other")}
         c.update(other=2)
         self.assertEqual(wiki.percent_done(c), "—")
+        self.assertEqual(wiki.progress(c), "No counted tasks")
+
+    def test_replaced_tasks_do_not_hold_back_the_current_milestone(self):
+        r = roadmap(
+            "# R\n\n## Milestone Z0: first\n\n### Z0.1 A · done\n\n### Z0.2 B · replaced by Z1.1\n\n"
+            "## Milestone Z1: second\n\n### Z1.1 C · todo\n"
+        )
+        self.assertEqual(wiki.current_milestone(r), "Milestone Z1: second")
 
 
 class ParseRoadmap(unittest.TestCase):
