@@ -860,20 +860,19 @@ impl Deck {
                     })?;
                 }
                 ".param" | ".params" => {
-                    for t in &toks[1..] {
-                        if let Some((n, _)) = t.split_once('=') {
-                            self.define(Def {
-                                kind: DefKind::Param,
-                                name: n.to_owned(),
-                                scope,
-                                first,
-                                last,
-                                lfirst: li,
-                                llast: li,
-                                ports: Vec::new(),
-                                header_local: false,
-                            })?;
-                        }
+                    let rest = after_head(&code);
+                    for span in assignment_names(rest) {
+                        self.define(Def {
+                            kind: DefKind::Param,
+                            name: rest[span].to_owned(),
+                            scope,
+                            first,
+                            last,
+                            lfirst: li,
+                            llast: li,
+                            ports: Vec::new(),
+                            header_local: false,
+                        })?;
                     }
                 }
                 ".func" => {
@@ -1054,31 +1053,76 @@ impl Deck {
 
 /// Splits `.subckt` header tokens after the name into ports and `PARAMS:` names.
 fn split_header(rest: &[String]) -> (Vec<String>, Vec<String>) {
-    let mut ports = Vec::new();
-    let mut params = Vec::new();
-    let mut in_params = false;
-    for t in rest {
-        let l = lc(t);
-        if let Some(after) = l.strip_prefix("params:") {
-            in_params = true;
-            if !after.is_empty() {
-                let orig = &t[t.len() - after.len()..];
-                if let Some((n, _)) = orig.split_once('=') {
-                    params.push(n.to_owned());
+    let boundary = rest
+        .iter()
+        .position(|t| lc(t).starts_with("params:") || t.contains('='))
+        .unwrap_or(rest.len());
+    let ports = rest[..boundary].to_vec();
+    let mut tail = rest[boundary..].join(" ");
+    if lc(&tail).starts_with("params:") {
+        tail.replace_range(..7, "");
+    }
+    let params = assignment_names(&tail)
+        .into_iter()
+        .map(|r| tail[r].to_owned())
+        .collect();
+    (ports, params)
+}
+
+/// The code after a line's first token.
+fn after_head(code: &str) -> &str {
+    let t = code.trim_start();
+    t.find(|c: char| c.is_ascii_whitespace())
+        .map_or("", |i| &t[i..])
+}
+
+fn is_name_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b'$' | b'#' | b'@')
+}
+
+/// Byte ranges of the names assigned by `name=value` pairs. An `=` is an assignment only at
+/// nesting depth 0 (outside `{}`, `()`, `[]` and quotes) and never as part of `==`, `!=`, `<=`
+/// or `>=`, so `.param GAIN={ LIMIT>=1 }` assigns `GAIN` and leaves `LIMIT` a reference
+/// (re-check of PR #133).
+fn assignment_names(text: &str) -> Vec<std::ops::Range<usize>> {
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    for i in 0..b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => quote = Some(c),
+            b'{' | b'(' | b'[' => depth += 1,
+            b'}' | b')' | b']' => depth -= 1,
+            b'=' if depth == 0 => {
+                let comparison = (i > 0 && matches!(b[i - 1], b'<' | b'>' | b'!' | b'='))
+                    || b.get(i + 1) == Some(&b'=');
+                if comparison {
+                    continue;
+                }
+                let mut end = i;
+                while end > 0 && b[end - 1].is_ascii_whitespace() {
+                    end -= 1;
+                }
+                let mut start = end;
+                while start > 0 && is_name_byte(b[start - 1]) {
+                    start -= 1;
+                }
+                if start < end {
+                    out.push(start..end);
                 }
             }
-            continue;
+            _ => {}
         }
-        if in_params || t.contains('=') {
-            in_params = true;
-            if let Some((n, _)) = t.split_once('=') {
-                params.push(n.to_owned());
-            }
-            continue;
-        }
-        ports.push(t.clone());
     }
-    (ports, params)
+    out
 }
 
 /// Candidate reference names on a logical line: coarse tokens (split on whitespace,
@@ -1093,19 +1137,28 @@ fn split_header(rest: &[String]) -> (Vec<String>, Vec<String>) {
 fn reference_tokens(code: &str) -> BTreeSet<String> {
     let toks = tokens(code);
     let head = lc(&toks[0]);
-    let mut fragments: Vec<&str> = Vec::new();
-    for (i, t) in toks.iter().enumerate().skip(1) {
-        match head.as_str() {
-            ".ends" => return BTreeSet::new(),
-            ".model" | ".subckt" | ".func" if i == 1 => {
-                let name_len = t.split('(').next().unwrap_or_default().len();
-                fragments.push(&t[name_len..]);
+    let mut fragments: Vec<String> = Vec::new();
+    match head.as_str() {
+        ".ends" => return BTreeSet::new(),
+        ".param" | ".params" => {
+            // Blank only the assigned names; everything else, including names inside
+            // comparisons such as `LIMIT>=1`, stays a reference.
+            let mut rest = after_head(code).to_owned();
+            for r in assignment_names(after_head(code)) {
+                let blank = " ".repeat(r.len());
+                rest.replace_range(r, &blank);
             }
-            ".param" | ".params" => match t.split_once('=') {
-                Some((_, rhs)) => fragments.push(rhs),
-                None => fragments.push(t),
-            },
-            _ => fragments.push(t),
+            fragments.push(rest);
+        }
+        _ => {
+            for (i, t) in toks.iter().enumerate().skip(1) {
+                if i == 1 && matches!(head.as_str(), ".model" | ".subckt" | ".func") {
+                    let name_len = t.split('(').next().unwrap_or_default().len();
+                    fragments.push(t[name_len..].to_owned());
+                } else {
+                    fragments.push(t.clone());
+                }
+            }
         }
     }
     let mut out = BTreeSet::new();

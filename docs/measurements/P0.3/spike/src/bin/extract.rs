@@ -58,13 +58,21 @@ fn main() {
                 .join("runs")
                 .join(format!("extract-{secs}"))
         });
-    assert!(
-        !out_dir.join("extract.json").exists(),
-        "{} already holds a run; choose a fresh output directory",
-        out_dir.display()
-    );
+    // Claim the output directory atomically: `create_dir` fails if it already exists, so two
+    // runs (or a rerun after an interrupted one) can never write into the same directory
+    // (re-check of PR #133).
+    if let Some(parent) = out_dir.parent() {
+        std::fs::create_dir_all(parent).expect("results parent");
+    }
+    if let Err(e) = std::fs::create_dir(&out_dir) {
+        eprintln!(
+            "cannot claim {}: {e}; choose a fresh output directory",
+            out_dir.display()
+        );
+        std::process::exit(2);
+    }
     let ex_dir = out_dir.join("extracted");
-    std::fs::create_dir_all(&ex_dir).expect("results dir");
+    std::fs::create_dir(&ex_dir).expect("extracted dir");
 
     let mut j = String::from("{\n  \"spike\": \"PS1\",\n  \"task\": \"P0.3\",\n");
     let _ = writeln!(j, "  \"decks\": {},", report.decks);

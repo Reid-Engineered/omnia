@@ -263,3 +263,44 @@ fn pk10_unsafe_include_in_unselected_section_is_refused() {
     let err = Deck::load(&v, "top.lib", Mode::Archive).unwrap_err();
     assert_eq!(err.code(), "include_unsafe_path");
 }
+
+/// Re-check of PR #133: a comparison inside a `.param` expression is not an assignment, so the
+/// compared name stays a dependency and no bogus parameter is defined.
+#[test]
+fn param_comparisons_are_references_not_assignments() {
+    for op in [">=", "<=", "==", "!="] {
+        for gain in [
+            format!("{{ LIMIT{op}1 }}"),
+            format!("{{ LIMIT {op} 1 }}"),
+            format!("LIMIT{op}1"),
+        ] {
+            let text =
+                format!(".param LIMIT=2\n.param GAIN = {gain}\n.model QG NPN(BF={{GAIN}})\n");
+            let x = extract_one(&text, "QG", DefKind::Model);
+            assert_eq!(
+                block_names(&x),
+                ["param:LIMIT", "param:GAIN", "model:QG"],
+                "{text}"
+            );
+            let mut v = Vfs::new();
+            v.insert("t.lib", text.as_bytes().to_vec());
+            let deck = Deck::load(&v, "t.lib", Mode::Archive).unwrap();
+            assert_eq!(deck.top_level(DefKind::Param), ["LIMIT", "GAIN"], "{text}");
+        }
+    }
+}
+
+/// Header `PARAMS:` defaults with comparisons define only the assigned names.
+#[test]
+fn subckt_header_params_ignore_comparisons() {
+    let x = extract_one(
+        ".param LIMIT=2\n.subckt S a b PARAMS: G={LIMIT>=1} H = { LIMIT != 3 }\nR1 a b {G+H}\n.ends S\n",
+        "S",
+        DefKind::Subckt,
+    );
+    assert_eq!(
+        x.ports.as_deref(),
+        Some(&["a".to_owned(), "b".to_owned()][..])
+    );
+    assert_eq!(block_names(&x), ["param:LIMIT", "subckt:S"]);
+}

@@ -13,9 +13,10 @@ label="${1:-linux}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Every run writes to a fresh directory and never touches the committed campaign files
 # directly under results/ (review of PR #133).
+# The run directory is claimed atomically: plain `mkdir` (no -p) fails if it already exists.
+mkdir -p "$here/results/runs"
 results="$here/results/runs/$label-$(date +%Y%m%dT%H%M%S)"
-if [ -e "$results" ]; then echo "$results already exists; refusing to overwrite a run" >&2; exit 1; fi
-mkdir -p "$results"
+mkdir "$results" || { echo "$results already exists; refusing to overwrite a run" >&2; exit 1; }
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$here/spike/target}"
 bin="$CARGO_TARGET_DIR/release"
 
@@ -43,7 +44,7 @@ snapshot() {
 }
 
 snapshot > "$results/conditions-before-$label.txt"
-"$bin/extract" "$here" "$results"
+"$bin/extract" "$here" "$results/extract"
 "$bin/index_bench" --work "$CARGO_TARGET_DIR/p03-work" --out "$results/index-$label" \
   --parts "$PARTS" --reps "$REPS" --iters "$ITERS" --warmup "$WARMUP" | tee "$results/index-$label.txt"
 snapshot > "$results/conditions-after-$label.txt"

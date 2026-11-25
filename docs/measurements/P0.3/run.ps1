@@ -16,9 +16,10 @@ $ErrorActionPreference = "Stop"
 $Parts = 500; $Reps = 10; $Iters = 200; $Warmup = 20
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+# The run directory is claimed atomically: New-Item without -Force fails if it already exists.
+New-Item -ItemType Directory -Force (Join-Path $here "results/runs") | Out-Null
 $results = Join-Path $here ("results/runs/{0}-{1}" -f $Label, (Get-Date -Format "yyyyMMddTHHmmss"))
-if (Test-Path $results) { throw "$results already exists; refusing to overwrite a run" }
-New-Item -ItemType Directory $results | Out-Null
+New-Item -ItemType Directory $results -ErrorAction Stop | Out-Null
 if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $here "spike/target" }
 $bin = Join-Path $env:CARGO_TARGET_DIR "release"
 
@@ -34,7 +35,7 @@ $hashes | Set-Content (Join-Path $results "binaries-$Label.sha256")
 
 & (Join-Path $here "conditions.ps1") | Set-Content (Join-Path $results "conditions-before-$Label.txt")
 
-& (Join-Path $bin "extract.exe") $here $results
+& (Join-Path $bin "extract.exe") $here (Join-Path $results "extract")
 if ($LASTEXITCODE -ne 0) { throw "extraction expectations failed" }
 
 & (Join-Path $bin "index_bench.exe") --work (Join-Path $env:CARGO_TARGET_DIR "p03-work") `
