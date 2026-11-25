@@ -89,7 +89,7 @@ U1.7 -> U2.6 -> U2.7 -> U2.8
 U1.3 -> U3.1 ; U1.7 -> U3.2 ; U3.1 + U2.6 -> U3.3 ; U3.1 + U2.6 -> U3.4 -> U3.5
 U3.2 -> U3.6 ; U3.4 + U3.5 + U3.6 -> U3.7 [UH3] -> U3.8
 U1.7 -> U4.1, U4.3, U4.4, U4.5 ; U1.6 -> U4.2 ; U3.4 -> U4.6 ; U4.1..U4.6 -> U4.7
-T4.3 + T5.2 + T5.3 + U2.5 -> U5.1      T5.3 + U4.2 + P2.4 -> U5.2      T7.1 + U5.1 -> U5.3
+T4.3 + T5.2 + T5.3 + T5.6 + U2.5 -> U5.1      T5.3 + U4.2 + P2.4 -> U5.2      T7.1 + U5.1 -> U5.3
 W2.3 + U3.3 -> U5.4      T7.3 + U4.1 -> U5.5      T2.7 + U5.1 + U4.7 + U3.8 + U2.8 -> U5.6 [UH4]
 ```
 
@@ -112,7 +112,7 @@ without being drawn.
 | U3.1 to U3.8 | nothing | **now** (after their U dependencies) |
 | U4.1, U4.3 to U4.7 | nothing | **now** (after U1.7) |
 | U4.2 | T2.3 (done) for the symbol list | **now**; placing waits for U5.2 |
-| U5.1 | T4.3 (`select_all`), T5.2 (`undo`, `redo`, `CanvasHistory`, `set_overlay`), T5.3 (`delete_selection`) | after T5.3 |
+| U5.1 | T4.3, T5.2 (`undo`, `redo`, `CanvasHistory`, `set_overlay`), T5.3 (`delete_selection`), T5.6 (`select_all`) | after T5.3 and T5.6 |
 | U5.2 | T5.3 (place tool), parts P2.4 (`Catalog::place_symbol`) | after T5.3 and P2.4 |
 | U5.3 | T7.1 (`cut`, `copy`, `paste`) | after T7.1 |
 | U5.4 | W2.3 (`set_wiring_prefs`, first consumer of the preferences) | after W2.3 |
@@ -558,7 +558,7 @@ without being drawn.
 ## Milestone U5: integration and final report
 
 ### U5.1 Edit actions through the canvas · todo
-- Lane: shell · Depends: T4.3, T5.2, T5.3, U2.5 · Read: UD3, UINV14, T5.2's log entry
+- Lane: shell · Depends: T4.3, T5.2, T5.3, T5.6, U2.5 · Read: UD3, UINV14, T5.2's log entry
 - Owns: `crates/omnia-app/src/workspace.rs` (edit handlers), `actions.rs`, `keymap.rs`
 - Do: route Undo, Redo, Delete and Select All to the canvas methods; drive `can_undo`,
   `can_redo` and the modified state from `CanvasHistory` (T5.2's event type, which the canvas
@@ -778,4 +778,4 @@ development machine.
 2026-11-23 UQ15 review fixes — An independent review found U1.5, U1.7, U4.1, UTC-menu-mouse and UTC-menu-keys still counted total sheet paints in scripts that switch input modality. They now count shell-caused paints (0) with modality paints bounded separately; the UQ15 answer defines the term once. UTC-menu-keys states that a fresh headless window starts in mouse modality at the pinned GPUI, so F10 is one switch.
 2026-11-23 UQ15 review fixes (2) — U5.2's placement case now caps focus-caused paints at one and counts modality paints separately, so a Tab, then a pointer choice, is not double-counted.
 2026-11-23 U0.5 done — Orion reference campaign (owner-approved, run remotely by the coordinating agent; canvas plan 2.1): frozen `run.sh` at `main` `0507b1c`, 10 rotating passes × 4 cases, AC and `performance` governor verified in all 80 snapshots, Baloo suspended. UB10 passes on Orion: `save_10k` median p99 27.314 ms (range 22.617–54.223) < 33.3 ms. `load_10k` median p99 111.4 ms (background executor per D8/UD7). Evidence in `docs/measurements/U0.5/orion-2026-11-23/`. U0.6 needs no `DocSnapshot` request for US4.
-2026-11-25 U0.2 done — Applied every row of [ui-plan.md](ui-plan.md) §14 (approved at UH0) across `canvas-plan.md` (§1 out-of-scope, §9 `omnia-app` crate line, `Tool::ZoomArea` and `SheetCanvas::{select_all, cut, copy, paste, set_wiring_prefs}`, `INV6`, `INV11`, `Q2`), `canvas-roadmap.md` (`Lanes` `shell`/`canvas`, dated notes on `done` tasks `T3.2`, `T4.3`, `T4.5`, `T5.1`, `T5.2`, `T5.3`, and direct updates to `todo` tasks `T7.1` and `T7.3`), `wiring-plan.md` (§1, `WD12`), `wiring-roadmap.md` (`W2.3` `SheetCanvas::set_wiring_prefs`), and `ROADMAP.md` (stages 2 and 4 UI links, `UQ3` and `UQ5` defaults recorded under open decisions). Marked `ui-plan.md` §14 applied. Docs only; nothing measured; wiki unit tests, Hard Rule 1 scan and `git diff --check` pass.
+2026-11-25 U0.2 done — Applied every row of [ui-plan.md](ui-plan.md) §14 (approved at UH0) across `canvas-plan.md` (§1 out-of-scope, §9 `omnia-app` crate line, `Tool::ZoomArea` and `SheetCanvas::{select_all, cut, copy, paste, set_wiring_prefs}`, `INV6` `[T1.2, U1.1]`, `INV11`, `Q2`), `canvas-roadmap.md` (`Lanes` `shell`/`canvas`, dated notes on `done` tasks `T3.2`, `T4.3`, `T4.5`, `T5.1`, `T5.2`, `T5.3`, direct updates to `todo` tasks `T7.1` and `T7.3`, and new canvas-lane follow-up `T5.6`), `wiring-plan.md` (§1, `WD12`), `wiring-roadmap.md` (`W2.3` `SheetCanvas::set_wiring_prefs`), and `ROADMAP.md` (stages 2 and 4 UI links, `UQ3` and `UQ5` defaults recorded under open decisions). Follow-up owners recorded (two §14 items asked of already-`done` tasks were unbuilt on `SheetCanvas`/`Tool`): new canvas-lane task `T5.6` now owns `SheetCanvas::select_all` (`T4.3` follow-up) and `Tool::ZoomArea` (`T4.5` follow-up), and `U5.1` now depends on `T5.6`. Handoff for `U1.9`: `T3.2` landed the shared golden harness (`xtask/src/golden.rs`, `tests/golden/`) before `U1.9`, so `U1.9` should update its own description and `ui-plan.md` §10 (which still credit the initial harness to `U1.9`). Marked `ui-plan.md` §14 applied (PR #137). Docs only; nothing measured; wiki unit tests, Hard Rule 1 scan and `git diff --check` pass.

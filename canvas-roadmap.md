@@ -100,6 +100,7 @@ T2.5 -> T3.2 -+
 T2.2 -> T4.1, T4.2 (doc)    T3.4 + T4.2 -> T4.3 -> T4.4, T4.5 -> T4.6
 T2.2 + T2.4 + T4.1 + T4.2 -> T2.8 (doc) -> T2.5
 T4.1 -> T5.1 (doc)          T4.6 + T5.1 -> T5.2 -> T5.3 -> T5.4
+T5.3 -> T5.6 (SheetCanvas::select_all, Tool::ZoomArea; UI U5.1 follow-up)
 T5.1 -> T6.1 (doc)          T5.4 + T6.1 -> T6.2 -> T6.4      T6.3 -> wiring-roadmap.md W2.1..W2.5
 T6.4 -> T7.1, T7.2, T7.3, T7.4 -> T7.5 [H4]
 ```
@@ -485,7 +486,7 @@ of the `canvas` lane.
 - Done when: the INV11 test passes: a paint counter on `SheetView` does not move during 100
   simulated hover moves, a selection change and a rubber-band drag; goldens for selected
   and hovered states exist in both themes.
-- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 requests `SheetCanvas::select_all` (Ctrl+A is bound by the shell, UD3). `OverlayView::select_all` landed in T4.3; exposing `SheetCanvas::select_all` remains as a follow-up before [ui-roadmap.md](ui-roadmap.md) U5.1.
+- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 requests `SheetCanvas::select_all` (Ctrl+A is bound by the shell, UD3). `OverlayView::select_all` landed in T4.3; exposing `SheetCanvas::select_all` is owned by follow-up task T5.6 before [ui-roadmap.md](ui-roadmap.md) U5.1.
 
 ### T4.4 Net highlight · done
 - Lane: canvas · Depends: T4.1, T4.3 · Read: D7
@@ -503,7 +504,7 @@ of the `canvas` lane.
   position.
 - Done when: tests show the animation ends exactly on the target, input mid-way stops it
   with no jump, and `bench idle` still reports 0 frames one second after it ends.
-- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 requests `SheetCanvas::zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation, used by View and the toolbar). `zoom_step` landed in T4.5; `Tool::ZoomArea` remains unimplemented (`T5.2` left it out of `Tool`) as a follow-up.
+- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 requests `SheetCanvas::zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation, used by View and the toolbar). `zoom_step` landed in T4.5; `Tool::ZoomArea` (`T5.2` left it out of `Tool`) is owned by follow-up task T5.6.
 
 ### T4.6 Gate: milestone 4 · done
 - Lane: bench · Depends: T4.4, T4.5
@@ -577,6 +578,17 @@ of the `canvas` lane.
   and B4. Re-run the T2.7 table.
 - Done when: all pass on the reference machine; otherwise record and set `needs-human`.
 
+### T5.6 Shell canvas hooks: select_all and ZoomArea · todo
+- Lane: canvas · Depends: T5.3 · Read: K13, D7, ui-plan.md UD3, section 10
+- Owns: `SheetCanvas::select_all` in `crates/omnia-canvas/src/input.rs`; `Tool::ZoomArea` in
+  `crates/omnia-canvas/src/tool.rs`, `overlay.rs` and `input.rs`
+- Do: expose `SheetCanvas::select_all` forwarding to `OverlayView::select_all` (`ui-plan.md`
+  §14, `T4.3` follow-up); add `Tool::ZoomArea` (drag a rectangle and zoom to it with the K13
+  ease-out animation, `ui-plan.md` §14, `T4.5` follow-up).
+- Done when: simulated-input tests verify `SheetCanvas::select_all` selects every live item on
+  the active document without repainting `SheetView` (INV11) and `Tool::ZoomArea` drags a
+  rectangle to animate the camera to fit it, with Esc cancelling cleanly (INV5).
+
 ## Milestone 6: wiring
 
 ### T6.1 Wire routing rules · done
@@ -636,8 +648,10 @@ of the `canvas` lane.
 - Lane: canvas · Depends: T6.4 · Read: plan section 6 (last paragraph), G6, ui-plan.md UD5
 - Owns: `crates/omnia-canvas/src/instrument_host.rs`
 - Do: the floating frame, drag, stacking and focus come from [ui-roadmap.md](ui-roadmap.md)
-  U4.1; `instrument_host.rs` holds only the animated stub content inside that frame (an
-  animated trace notifying itself at 60 Hz). Add `bench run --script pan --instrument`.
+  U4.1 (which `ui-roadmap.md` U5.5 mounts inside the frame); `instrument_host.rs` holds only
+  the animated stub content (an animated trace notifying itself at 60 Hz). Add
+  `bench run --script pan --instrument`, hosting that stub content directly without U4.1's
+  shell frame.
 - Done when: `SheetView`'s paint count stays 0 while only the stub animates;
   `bench run --sheet 10k --script pan --instrument` gives p99 < 16 ms on the reference
   machine (otherwise record; then measure again at 30 Hz).

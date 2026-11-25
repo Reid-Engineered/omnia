@@ -391,7 +391,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 | INV3 | A junction dot exists exactly where three or more ends or pins meet. Dots are never stored. [T2.1] |
 | INV4 | The document changes only through `Doc::apply`, `undo`, `redo`. `apply(c)` then `undo()` restores `content_eq` with the original, exact live ids included; `undo` then `redo` likewise. Revision advances monotonically and issued ids remain reserved (D2/D8); persistent-state equality remains stricter. [T5.1] |
 | INV5 | During a gesture the document revision does not change. A committed gesture is exactly one undo step. Esc leaves the revision unchanged. [T5.2] |
-| INV6 | `omnia-canvas` and `omnia-app` ([ui-plan.md](ui-plan.md) UINV1) contain no colour literal; colours come from `omnia-theme`. [T1.2] |
+| INV6 | `omnia-canvas` and `omnia-app` ([ui-plan.md](ui-plan.md) UINV1) contain no colour literal; colours come from `omnia-theme`. [T1.2, U1.1] |
 | INV7 | `SheetView`'s paint calls neither `paint_path` nor `canvas()` and makes no heap allocation once warm. [T2.5] |
 | INV8 | No `f32` holds a world coordinate. World to screen subtracts the camera centre in integers first. [T1.3] |
 | INV9 | Grid snapping is idempotent: `snap_to(snap_to(p, s), s) == snap_to(p, s)`. Priority snapping keeps a snapped point: with `r = snap(p)` and `q = r.at()`, `snap(q) == r` unless a target of a higher WD5 class than `r` lies within the snap radius of `q`; then `snap(q)` is of a higher class. A pin result is therefore always kept. Owner decision 2026-11-16, "radius wins": `snap` never returns a pin, end, junction or body target farther than the radius from `p`, so the earlier `snap(snap(p)) == snap(p)`, which off-grid geometry met only by settling past the radius, no longer applies to `snap` (wiring-plan.md WD5, WINV7). [T1.1, T4.2, W1.3] |
@@ -666,7 +666,7 @@ impl Camera {
     pub fn scale(&self) -> f64;
     pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
-pub enum Tool { Select, Wire, Place(SymbolId), Label, ZoomArea } // T5.2 (tool.rs); ZoomArea (ui-plan.md §14, T4.5 follow-up) not yet in code
+pub enum Tool { Select, Wire, Place(SymbolId), Label, ZoomArea } // T5.2 (tool.rs); ZoomArea owned by T5.6 (T4.5 follow-up, not yet in code)
 // T5.2 (tool.rs): pure tool state machine. One gesture owner, OverlayView, holds it; the owner
 // applies a gesture's one Command only to the document and revision it was planned on (INV5).
 pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture), Placing(PlaceGesture),
@@ -876,7 +876,7 @@ impl SheetCanvas {
     // defaults to SymbolLibrary::place_command when None.
     pub fn set_place_provider(&mut self, provider: Option<PlaceProvider>, cx: &mut Context<Self>); // T5.3
     pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.3 (ui-plan §14)
-    pub fn select_all(&mut self, cx: &mut Context<Self>); // T4.3 follow-up (ui-plan §14; OverlayView has it)
+    pub fn select_all(&mut self, cx: &mut Context<Self>); // T5.6 (T4.3 follow-up, ui-plan §14; OverlayView has it)
     pub fn cut(&mut self, cx: &mut Context<Self>);        // T7.1 (ui-plan §14)
     pub fn copy(&self, cx: &mut Context<Self>);           // T7.1 (ui-plan §14)
     pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>); // T7.1 (ui-plan §14)

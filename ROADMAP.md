@@ -54,7 +54,7 @@ Integrate Home and first-boot screens, project/file navigation, settings, keyboa
 
 **Ready when:** a new user can complete the first-release workflow from launch; loading, empty, error, and recovery states are covered; keyboard access and readability are checked.
 
-**Detailed work:** application UI, Home, first-boot, file lifecycle, preferences, theme switching, recovery, and accessibility in the [UI plan](ui-plan.md) and [UI roadmap](ui-roadmap.md).
+**Detailed work:** application UI, Home, first-boot, file lifecycle, preferences, theme switching, recovery, and accessibility in the [UI plan](ui-plan.md) and [UI roadmap](ui-roadmap.md). This work can proceed alongside editor and simulation development.
 
 ## 5. Prepare and validate a release
 
