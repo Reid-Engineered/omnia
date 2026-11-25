@@ -1,0 +1,6 @@
+* 10-mosfet-pmos-param.lib - generic level-1 PMOS using top-level .param values
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.param VT0P=-0.9 KPP=50u
+.model PMOS_L1 PMOS (LEVEL=1 VTO={VT0P} KP={KPP} GAMMA=0.5 LAMBDA=0.05 PHI=0.7)
+.model PMOS_SLOW PMOS (LEVEL=1 VTO=-1.1 KP=30u)

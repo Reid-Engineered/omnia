@@ -1,0 +1,17 @@
+* 20-crystal-xfmr.lib - crystal resonator with ports on continuation lines, and a coupled transformer
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.SUBCKT XTAL_GENERIC
++ 1 2
++ PARAMS: FS=32.768k Q=50k C0=1.5p CM=3f
+LM 1 3 {1/((6.2832*FS)**2*CM)}
+CM 3 4 {CM}
+RM 4 2 {1/(6.2832*FS*CM*Q)}
+C0 1 2 {C0}
+.ENDS
+*
+.subckt XFMR_1TO2 p1 p2 s1 s2
+LP p1 p2 1m
+LS s1 s2 4m
+K1 LP LS 0.999
+.ends XFMR_1TO2

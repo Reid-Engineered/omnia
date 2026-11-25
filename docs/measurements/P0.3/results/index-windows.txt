@@ -1,0 +1,6 @@
+500 parts, 677 entries, olib 335677 bytes (sha256 029884755ec3cf55161803e8a1b60e62f3d452651cc1d16ebc094fb39688d604)
+first calls: "olib-file": 15.0185, "olib-memory": 13.3136, "folder": 2290.8250
+olib-file    median run p99   19.824 ms  range 17.574-40.759 ms  p50 14.445 ms
+olib-memory  median run p99   15.789 ms  range 14.366-28.049 ms  p50 11.787 ms
+folder       median run p99   60.368 ms  range 50.590-102.790 ms  p50 47.147 ms
+

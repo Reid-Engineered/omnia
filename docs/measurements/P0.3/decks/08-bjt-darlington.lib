@@ -1,0 +1,13 @@
+* 08-bjt-darlington.lib - Darlington built from a stage subcircuit defined later in the file
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.subckt DARLINGTON_NPN C B E
+X1 C B M NPN_STAGE
+X2 C M E NPN_STAGE
+RBE M E 8k
+.ends DARLINGTON_NPN
+*
+.subckt NPN_STAGE c b e
+Q1 c b e 0 NPN_DRV 1.0      ; four-terminal form: substrate node, then area
+.ends NPN_STAGE
+.model NPN_DRV NPN(IS=20f BF=150 VAF=80 RB=5 RC=0.5 RE=0.2)

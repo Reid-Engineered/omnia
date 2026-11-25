@@ -1,0 +1,38 @@
+* 15-opamp-macro-poly.lib - two-stage bipolar-input op-amp macromodel with POLY sources
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Textbook macromodel topology with generic values.
+.subckt OPAMP_MACRO 1 2 3 4 5 params: gain=1
+*        in+ in- v+ v- out
+C1   11 12 5.1p
+C2    6  7 22p
+DC    5 53 DX
+DE   54  5 DX
+DLP  90 91 DX
+DLN  92 90 DX
+DP    4  3 DX
+EGND 99  0 POLY(2) (3,0) (4,0) 0 .5 .5
+FB    7 99 POLY(5) VB VC VE VLP VLN 0 9.8E6 -9E6 9E6 9E6 -9E6
+GA    6  0 11 12 {120E-6*gain}
+GCM   0  6 10 99 2.2E-9
+IEE  10  4 DC 9.5E-6
+HLIM 90  0 VLIM 1K
+Q1   11  2 13 QX
+Q2   12  1 14 QX
+R2    6  9 100.0E3
+RC1   3 11 8.2E3
+RC2   3 12 8.2E3
+RE1  13 10 2.9E3
+RE2  14 10 2.9E3
+REE  10 99 21E6
+RO1   8  5 120
+RO2   7 99 120
+RP    3  4 17E3
+VB    9  0 DC 0
+VC    3 53 DC 2.4
+VE   54  4 DC 2.4
+VLIM  7  8 DC 0
+VLP  91  0 DC 22
+VLN   0 92 DC 22
+.model DX D(IS=750E-18)
+.model QX NPN(IS=750E-18 BF=58)
+.ends OPAMP_MACRO

@@ -1,0 +1,11 @@
+* 16-comparator-func.lib - behavioural comparator using a top-level .func
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.func clampv(x,lo,hi) {min(max(x,lo),hi)}
+.func unusedf(x) {2*x}
+.subckt COMPARATOR_GENERIC inp inn vcc vee out PARAMS: VOH=4.9 VOL=0.1 TD=50n
+BCMP raw 0 V = V(inp) > V(inn) ? VOH : VOL
+EOUT lim 0 VALUE = { clampv(V(raw), V(vee), V(vcc)) }
+RD lim out 100
+CD out 0 {TD/100}
+.ends COMPARATOR_GENERIC

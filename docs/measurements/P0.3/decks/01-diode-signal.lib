@@ -1,0 +1,4 @@
+* 01-diode-signal.lib - generic small-signal silicon diode
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.model DIODE_SIGNAL D(IS=2.52n RS=0.568 N=1.752 CJO=4p M=0.4 TT=20n BV=100 IBV=100u)

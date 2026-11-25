@@ -1,0 +1,5 @@
+.subckt XFMR_1TO2 p1 p2 s1 s2
+LP p1 p2 1m
+LS s1 s2 4m
+K1 LP LS 0.999
+.ends XFMR_1TO2
