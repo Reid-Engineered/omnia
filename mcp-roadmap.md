@@ -193,9 +193,10 @@ own in turn.
 - Done when: ATC-mcp-01 and ATC-mcp-02 pass as exact transcripts on the CI runner; the
   prompts each have a fixture.
 
-### A1.9 Agent contract and evidence · todo
+### A1.9 Agent contract and evidence · done
 - Lane: agent · Depends: A1.8 · Read: mcp-plan.md section 13; AGENTS rule 1
-- Owns: `docs/agent/omnia-agent.md`, `docs/agent/evidence.md`, `docs/agent/CHANGES.md`
+- Owns: `docs/agent/omnia-agent.md`, `docs/agent/evidence.md`, `docs/agent/CHANGES.md`,
+  `crates/omnia-cli/tests/contract.rs`
 - Do: write the contract; point every example at a transcript fixture; take counts from the
   catalog.
 - Done when: a test fails if a documented tool, operation or error code is missing from the
@@ -749,3 +750,41 @@ until opening method and `CallToolRequestParams` wire-shape validation succeeds 
 (safe on 10,000-deep lines) and bound `has_duplicate_keys` recursion depth, and publish
 `omnia://schema/symbols` and `omnia://schema/symbol` (section 9.3); corrected test count note (25
 total in `omnia-cli`: 10 in `main.rs`, 15 in `mcp.rs`). Nothing measured; rule-1 scan clean.
+
+2026-11-25 A1.9 done — wrote `docs/agent/omnia-agent.md`, `docs/agent/evidence.md`, and
+`docs/agent/CHANGES.md` (mcp-plan.md section 13, AK7, AINV11), plus automated drift-detection
+integration tests in `crates/omnia-cli/tests/contract.rs` (4 tests, needed by A1.9's done-when
+check; touches no existing source file). `omnia-agent.md` documents the `omnia.agent/1`
+contract with counts, units and limits taken directly from `omnia capabilities`
+(`Catalog::current()`): 3 pinned MCP revisions (`AK1`), 14 active operations/tools, 7 edit
+operations, 33 error codes (4 retryable), 8 orientations, 3 text fields, 44 committed JSON
+Schema files plus 2 MCP-published symbol schemas, 3 static prompts, 6 exact CI transcript
+fixture pairs, evidence tiers, known limitations, forbidden agent behaviours, and the section 13
+safe edit loop. Every example points to an exact transcript fixture under
+`crates/omnia-cli/tests/transcripts/`. `evidence.md` maps `AINV1`–`AINV13`, `ATC-read-01`,
+`ATC-net-01`, `ATC-edit-01`–`06`, `ATC-save-01`, `ATC-path-01`, `ATC-mcp-01`–`02`, prerequisites
+and gates to their verified files and test functions. `contract.rs` checks byte-for-byte parity
+between `omnia capabilities` and `Catalog::current()`, bidirectional set and field parity for
+operations/tools, edit operations, error codes, counts, units and limits (with negative mutation
+tests proving missing or extra tools, operations, edit operations, error codes, retryable flags
+or counts fail), completeness of transcript fixture references, and existence of every file and
+test cited in `evidence.md`. Checks run locally on Windows and passing: `cargo fmt --all
+--check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo clippy -p omnia-bench
+--all-targets --features scene-counts,readback -- -D warnings`, `cargo test --workspace`, and
+`cargo deny check`. Rule-1 scan clean across all new and changed files (no other companies or
+commercial products named; MCP named as an open standard per AQ8). No dependency added; nothing
+measured. Next: A1.10 (Milestone A1 gate and HA2).
+
+2026-11-25 A1.9 review fixes — addressed all PR #134 independent review findings (Opus 5.5):
+downgraded the 5 reserved/unreturned error codes (`unsupported_in_mode`,
+`protocol_version_unsupported`, `user_gesture_in_progress`, `cancelled`, `job_not_found`) to
+`implemented (read in code)` in `docs/agent/omnia-agent.md`; widened A1.9's **Owns** line to
+include `crates/omnia-cli/tests/contract.rs`; tightened the contract's opening CI-check claim,
+added predicted pins to safe-loop step 3, and removed engine names from limitation 2 for strict
+Rule 1; kept `AINV11` scoped to catalog/schemas in `evidence.md` (citing section 13 for the
+contract test) and added `files.rs`'s `staged_write_failure_halfway_keeps_old_file_and_cleans_temp`
+to `ATC-save-01`; hardened `contract.rs` to verify MCP prompt/symbol-schema counts, parse
+orientations and text fields as strict sets, check planned tokens against active ops/edit ops,
+reject duplicate count/unit keys and orphan/commented test citations, check non-planned gate
+records, and expand negative mutation coverage. Merged `origin/main` (PR #131). Nothing measured;
+Rule-1 scan clean.
