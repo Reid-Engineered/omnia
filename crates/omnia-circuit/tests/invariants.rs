@@ -136,6 +136,75 @@ fn cargo_clippy_deny_flags(manifest_dir: &Path) -> Vec<String> {
     flags
 }
 
+fn build_selected_rustc_hash_rlib(manifest_dir: &Path, tmp_dir: &Path) -> (PathBuf, PathBuf) {
+    let workspace = manifest_dir
+        .parent()
+        .expect("crates dir")
+        .parent()
+        .expect("workspace root");
+    let tree = cargo_tree("omnia-circuit");
+    let version = tree
+        .lines()
+        .find_map(|line| {
+            let mut parts = line.split_whitespace();
+            let name = parts.next()?;
+            let ver = parts.next()?;
+            (name == "rustc-hash").then(|| ver.trim_start_matches('v').to_owned())
+        })
+        .expect("omnia-circuit must depend on rustc-hash");
+    let pkg_spec = format!("rustc-hash@{version}");
+    let target_dir = tmp_dir.join("rustc-hash-target");
+    let output = ProcessCommand::new(env!("CARGO"))
+        .current_dir(workspace)
+        .args([
+            "build",
+            "--lib",
+            "--locked",
+            "--offline",
+            "--message-format=json",
+            "-p",
+            &pkg_spec,
+            "--target-dir",
+        ])
+        .arg(&target_dir)
+        .output()
+        .expect("build Cargo-selected rustc-hash for CINV10 probe");
+    assert!(
+        output.status.success(),
+        "failed to build {pkg_spec} for CINV10 probe:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 cargo JSON output");
+    // Extract the `.rlib` path from the compiler-artifact line for `rustc-hash`.
+    let rlib = stdout
+        .lines()
+        .filter(|line| {
+            line.contains("\"reason\":\"compiler-artifact\"") && line.contains("\"rustc_hash\"")
+        })
+        .find_map(|line| {
+            let marker = "\"filenames\":[";
+            let start = line.find(marker)? + marker.len();
+            let rest = &line[start..];
+            let end = rest.find(']')?;
+            for entry in rest[..end].split(',') {
+                let raw = entry.trim().trim_matches('"');
+                if raw.ends_with(".rlib") {
+                    let unescaped = raw.replace("\\\\", "\\");
+                    return Some(PathBuf::from(unescaped));
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| panic!("no .rlib filename emitted for {pkg_spec}:\n{stdout}"));
+    assert!(
+        rlib.is_file(),
+        "built rustc-hash rlib missing at {}",
+        rlib.display()
+    );
+    let deps_dir = rlib.parent().expect("rlib parent dir").to_path_buf();
+    (deps_dir, rlib)
+}
+
 /// CINV10: `crates/omnia-circuit/clippy.toml` and `[lints.clippy]` in `Cargo.toml` reject every
 /// `HashMap`/`HashSet` traversal path (including `iter()`, `for`, `.into_iter()`, `std::iter::zip`,
 /// and generic `IntoIterator` helpers) while allowing ordered `Vec`/`BTreeMap`/`BTreeSet`
@@ -177,26 +246,11 @@ fn cinv10_clippy_rejects_all_hash_iteration_paths() {
         );
     }
 
-    let deps_dir = std::env::current_exe()
-        .expect("locate test binary")
-        .parent()
-        .expect("deps directory")
-        .to_path_buf();
-    let rustc_hash_rlib = std::fs::read_dir(&deps_dir)
-        .expect("read deps directory")
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .find(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("librustc_hash-") && n.ends_with(".rlib"))
-        })
-        .unwrap_or_else(|| panic!("librustc_hash-*.rlib not found in {}", deps_dir.display()));
-
     let driver = clippy_driver_path();
     let pid = std::process::id();
     let tmp_dir = std::env::temp_dir().join(format!("omnia-circuit-cinv10-{pid}"));
     std::fs::create_dir_all(&tmp_dir).expect("create temp dir for CINV10 probe");
+    let (deps_dir, rustc_hash_rlib) = build_selected_rustc_hash_rlib(manifest_dir, &tmp_dir);
 
     let run_probe = |name: &str, body: &str| {
         let src = tmp_dir.join(format!("{name}.rs"));

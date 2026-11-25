@@ -60,11 +60,17 @@ impl<K: Eq + Hash, V> LookupMap<K, V> {
         hasher.finish() as usize
     }
 
-    fn ensure_capacity_for_insert(&mut self) {
+    #[inline]
+    fn needs_grow_for_new_entry(&self) -> bool {
+        let cap = self.slots.len();
+        cap == 0 || (self.len + 1).saturating_mul(10) > cap.saturating_mul(7)
+    }
+
+    fn grow_for_new_entry(&mut self) {
         let cap = self.slots.len();
         if cap == 0 {
             self.rehash(8);
-        } else if (self.len + 1).saturating_mul(10) > cap.saturating_mul(7) {
+        } else {
             self.rehash(cap.checked_mul(2).expect("LookupMap capacity overflow"));
         }
     }
@@ -108,52 +114,80 @@ impl<K: Eq + Hash, V> LookupMap<K, V> {
         }
     }
 
+    /// Probes for `key` using a precomputed `hash`: returns `Ok(idx)` if `key` is already stored
+    /// or `Err(vacant_idx)` for the first empty slot when the table is non-empty.
     #[inline]
-    fn find_slot(&self, key: &K) -> Option<usize> {
-        let cap = self.slots.len();
-        if cap == 0 {
-            return None;
-        }
-        let mask = cap - 1;
-        let mut idx = Self::hash_key(key) & mask;
+    fn probe_slot(&self, hash: usize, key: &K) -> Result<usize, usize> {
+        let mask = self.slots.len() - 1;
+        let mut idx = hash & mask;
         loop {
             match &self.slots[idx] {
-                Some((k, _)) if k == key => return Some(idx),
+                Some((k, _)) if k == key => return Ok(idx),
                 Some(_) => idx = (idx + 1) & mask,
-                None => return None,
+                None => return Err(idx),
             }
         }
     }
 
-    pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
-        if let Some(idx) = self.find_slot(&key) {
-            let slot = self.slots[idx].as_mut().expect("matched slot populated");
-            return Some(std::mem::replace(&mut slot.1, value));
-        }
-        self.ensure_capacity_for_insert();
+    #[inline]
+    fn find_vacant_slot(&self, hash: usize) -> usize {
         let mask = self.slots.len() - 1;
-        let mut idx = Self::hash_key(&key) & mask;
+        let mut idx = hash & mask;
         while self.slots[idx].is_some() {
             idx = (idx + 1) & mask;
         }
-        self.slots[idx] = Some((key, value));
+        idx
+    }
+
+    pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
+        let hash = Self::hash_key(&key);
+        let vacant_idx = if self.slots.is_empty() {
+            self.grow_for_new_entry();
+            self.find_vacant_slot(hash)
+        } else {
+            match self.probe_slot(hash, &key) {
+                Ok(idx) => {
+                    let slot = self.slots[idx].as_mut().expect("matched slot populated");
+                    return Some(std::mem::replace(&mut slot.1, value));
+                }
+                Err(vacant) => {
+                    if self.needs_grow_for_new_entry() {
+                        self.grow_for_new_entry();
+                        self.find_vacant_slot(hash)
+                    } else {
+                        vacant
+                    }
+                }
+            }
+        };
+        self.slots[vacant_idx] = Some((key, value));
         self.len += 1;
         None
     }
 
     pub(crate) fn get_or_insert_with(&mut self, key: K, make: impl FnOnce() -> V) -> &mut V {
-        if let Some(idx) = self.find_slot(&key) {
-            return &mut self.slots[idx].as_mut().expect("matched slot populated").1;
-        }
-        self.ensure_capacity_for_insert();
-        let mask = self.slots.len() - 1;
-        let mut idx = Self::hash_key(&key) & mask;
-        while self.slots[idx].is_some() {
-            idx = (idx + 1) & mask;
-        }
-        self.slots[idx] = Some((key, make()));
+        let hash = Self::hash_key(&key);
+        let vacant_idx = if self.slots.is_empty() {
+            self.grow_for_new_entry();
+            self.find_vacant_slot(hash)
+        } else {
+            match self.probe_slot(hash, &key) {
+                Ok(idx) => {
+                    return &mut self.slots[idx].as_mut().expect("matched slot populated").1;
+                }
+                Err(vacant) => {
+                    if self.needs_grow_for_new_entry() {
+                        self.grow_for_new_entry();
+                        self.find_vacant_slot(hash)
+                    } else {
+                        vacant
+                    }
+                }
+            }
+        };
+        self.slots[vacant_idx] = Some((key, make()));
         self.len += 1;
-        &mut self.slots[idx].as_mut().expect("slot populated").1
+        &mut self.slots[vacant_idx].as_mut().expect("slot populated").1
     }
 
     #[inline]

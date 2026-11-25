@@ -1,8 +1,8 @@
 # CD7 / CINV10: no hash-map or hash-set iteration anywhere in omnia-circuit.
-# Disallowing `std::collections::HashMap` and `HashSet` (which also covers `FxHashMap` and
-# `FxHashSet`, since they are type aliases) forces all internal lookup tables onto `LookupMap`
-# (which intentionally exposes no iterator or `IntoIterator` impl), closing generic `IntoIterator`
-# and `std::iter::zip` bypasses while keeping `.into_iter()` available for `Vec` and `BTreeMap`.
+# Disallowing `std::collections::{HashMap, HashSet}` and the `rustc_hash::{FxHashMap, FxHashSet}`
+# aliases explicitly forces all internal lookup tables onto `LookupMap` (which intentionally exposes
+# no iterator or `IntoIterator` impl), closing generic `IntoIterator` and `std::iter::zip` bypasses
+# while keeping `.into_iter()` available for `Vec` and `BTreeMap`.
 disallowed-methods = [
     { path = "std::collections::HashMap::iter", reason = "CINV10: hash-map iteration order is non-deterministic" },
     { path = "std::collections::HashMap::iter_mut", reason = "CINV10: hash-map iteration order is non-deterministic" },
