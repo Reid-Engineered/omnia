@@ -142,7 +142,31 @@ fn build_selected_rustc_hash_rlib(manifest_dir: &Path, tmp_dir: &Path) -> (PathB
         .expect("crates dir")
         .parent()
         .expect("workspace root");
-    let tree = cargo_tree("omnia-circuit");
+    let tree_out = ProcessCommand::new(env!("CARGO"))
+        .current_dir(workspace)
+        .args([
+            "tree",
+            "--locked",
+            "--offline",
+            "--depth",
+            "1",
+            "--edges",
+            "normal",
+            "--prefix",
+            "none",
+            "--format",
+            "{p}",
+            "-p",
+            "omnia-circuit",
+        ])
+        .output()
+        .expect("query direct normal dependencies of omnia-circuit");
+    assert!(
+        tree_out.status.success(),
+        "cargo tree failed:\n{}",
+        String::from_utf8_lossy(&tree_out.stderr)
+    );
+    let tree = String::from_utf8(tree_out.stdout).expect("UTF-8 cargo tree output");
     let version = tree
         .lines()
         .find_map(|line| {
@@ -151,9 +175,10 @@ fn build_selected_rustc_hash_rlib(manifest_dir: &Path, tmp_dir: &Path) -> (PathB
             let ver = parts.next()?;
             (name == "rustc-hash").then(|| ver.trim_start_matches('v').to_owned())
         })
-        .expect("omnia-circuit must depend on rustc-hash");
+        .expect("omnia-circuit must have rustc-hash as a direct normal dependency");
     let pkg_spec = format!("rustc-hash@{version}");
     let target_dir = tmp_dir.join("rustc-hash-target");
+    let _ = std::fs::remove_dir_all(&target_dir);
     let output = ProcessCommand::new(env!("CARGO"))
         .current_dir(workspace)
         .args([
@@ -161,7 +186,6 @@ fn build_selected_rustc_hash_rlib(manifest_dir: &Path, tmp_dir: &Path) -> (PathB
             "--lib",
             "--locked",
             "--offline",
-            "--message-format=json",
             "-p",
             &pkg_spec,
             "--target-dir",
@@ -174,35 +198,24 @@ fn build_selected_rustc_hash_rlib(manifest_dir: &Path, tmp_dir: &Path) -> (PathB
         "failed to build {pkg_spec} for CINV10 probe:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).expect("UTF-8 cargo JSON output");
-    // Extract the `.rlib` path from the compiler-artifact line for `rustc-hash`.
-    let rlib = stdout
-        .lines()
-        .filter(|line| {
-            line.contains("\"reason\":\"compiler-artifact\"") && line.contains("\"rustc_hash\"")
+    let deps_dir = target_dir.join("debug").join("deps");
+    let rlibs: Vec<PathBuf> = std::fs::read_dir(&deps_dir)
+        .unwrap_or_else(|e| panic!("read {}: {e}", deps_dir.display()))
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("librustc_hash-") && n.ends_with(".rlib"))
         })
-        .find_map(|line| {
-            let marker = "\"filenames\":[";
-            let start = line.find(marker)? + marker.len();
-            let rest = &line[start..];
-            let end = rest.find(']')?;
-            for entry in rest[..end].split(',') {
-                let raw = entry.trim().trim_matches('"');
-                if raw.ends_with(".rlib") {
-                    let unescaped = raw.replace("\\\\", "\\");
-                    return Some(PathBuf::from(unescaped));
-                }
-            }
-            None
-        })
-        .unwrap_or_else(|| panic!("no .rlib filename emitted for {pkg_spec}:\n{stdout}"));
-    assert!(
-        rlib.is_file(),
-        "built rustc-hash rlib missing at {}",
-        rlib.display()
+        .collect();
+    assert_eq!(
+        rlibs.len(),
+        1,
+        "expected exactly one freshly built rustc_hash .rlib in {}, found {rlibs:?}",
+        deps_dir.display()
     );
-    let deps_dir = rlib.parent().expect("rlib parent dir").to_path_buf();
-    (deps_dir, rlib)
+    (deps_dir, rlibs[0].clone())
 }
 
 /// CINV10: `crates/omnia-circuit/clippy.toml` and `[lints.clippy]` in `Cargo.toml` reject every
