@@ -3,10 +3,154 @@
 //! Interner ids reflect insertion order, so [`StrId`] intentionally does not implement
 //! [`Ord`] or [`PartialOrd`]: callers must never sort output by interned id (CD7, CINV10).
 
-use std::hash::Hasher;
+use std::{
+    borrow::Borrow,
+    hash::{Hash, Hasher},
+};
 
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHasher;
 use smallvec::SmallVec;
+
+/// Non-iterable O(1) hash lookup table backed by `rustc_hash::FxHasher` (CD7, CINV10).
+///
+/// Intentionally exposes no `iter`, `keys`, `values`, `drain`, or `IntoIterator` implementation so
+/// unordered traversal (including via generic `IntoIterator` helpers or `std::iter::zip`) is
+/// impossible at compile time.
+#[derive(Debug, Clone)]
+pub(crate) struct LookupMap<K, V> {
+    slots: Vec<Option<(K, V)>>,
+    len: usize,
+}
+
+impl<K, V> Default for LookupMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K, V> LookupMap<K, V> {
+    #[inline]
+    pub(crate) const fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            len: 0,
+        }
+    }
+
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        if capacity == 0 {
+            return Self::new();
+        }
+        let target = capacity
+            .saturating_mul(10)
+            .div_ceil(7)
+            .max(8)
+            .next_power_of_two();
+        let mut slots = Vec::with_capacity(target);
+        slots.resize_with(target, || None);
+        Self { slots, len: 0 }
+    }
+}
+
+impl<K: Eq + Hash, V> LookupMap<K, V> {
+    #[inline]
+    fn hash_key<Q: Hash + ?Sized>(key: &Q) -> usize {
+        let mut hasher = FxHasher::default();
+        key.hash(&mut hasher);
+        hasher.finish() as usize
+    }
+
+    fn ensure_capacity_for_insert(&mut self) {
+        let cap = self.slots.len();
+        if cap == 0 {
+            self.rehash(8);
+        } else if (self.len + 1).saturating_mul(10) > cap.saturating_mul(7) {
+            self.rehash(cap.checked_mul(2).expect("LookupMap capacity overflow"));
+        }
+    }
+
+    fn rehash(&mut self, new_cap: usize) {
+        debug_assert!(new_cap.is_power_of_two());
+        let mask = new_cap - 1;
+        let mut new_slots = Vec::with_capacity(new_cap);
+        new_slots.resize_with(new_cap, || None);
+        for slot in self.slots.drain(..) {
+            let Some((k, v)) = slot else {
+                continue;
+            };
+            let mut idx = Self::hash_key(&k) & mask;
+            while new_slots[idx].is_some() {
+                idx = (idx + 1) & mask;
+            }
+            new_slots[idx] = Some((k, v));
+        }
+        self.slots = new_slots;
+    }
+
+    #[inline]
+    pub(crate) fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let cap = self.slots.len();
+        if cap == 0 {
+            return None;
+        }
+        let mask = cap - 1;
+        let mut idx = Self::hash_key(key) & mask;
+        loop {
+            match &self.slots[idx] {
+                Some((k, v)) if k.borrow() == key => return Some(v),
+                Some(_) => idx = (idx + 1) & mask,
+                None => return None,
+            }
+        }
+    }
+
+    pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
+        self.ensure_capacity_for_insert();
+        let mask = self.slots.len() - 1;
+        let mut idx = Self::hash_key(&key) & mask;
+        loop {
+            match &mut self.slots[idx] {
+                Some((k, v)) if *k == key => return Some(std::mem::replace(v, value)),
+                Some(_) => idx = (idx + 1) & mask,
+                slot @ None => {
+                    *slot = Some((key, value));
+                    self.len += 1;
+                    return None;
+                }
+            }
+        }
+    }
+
+    pub(crate) fn get_or_insert_with(&mut self, key: K, make: impl FnOnce() -> V) -> &mut V {
+        self.ensure_capacity_for_insert();
+        let mask = self.slots.len() - 1;
+        let mut idx = Self::hash_key(&key) & mask;
+        loop {
+            match &self.slots[idx] {
+                Some((k, _)) if *k == key => break,
+                Some(_) => idx = (idx + 1) & mask,
+                None => {
+                    self.slots[idx] = Some((key, make()));
+                    self.len += 1;
+                    break;
+                }
+            }
+        }
+        &mut self.slots[idx].as_mut().expect("slot populated").1
+    }
+
+    #[inline]
+    pub(crate) fn get_or_default(&mut self, key: K) -> &mut V
+    where
+        V: Default,
+    {
+        self.get_or_insert_with(key, V::default)
+    }
+}
 
 /// Opaque interned string handle (`u32`, CD7).
 ///
@@ -30,7 +174,7 @@ pub struct Interner {
     /// Byte offsets into `bytes`; length is `len + 1` with `offsets[0] == 0`.
     offsets: Vec<u32>,
     /// Hash -> bucket of matching interned ids; zero string duplication and zero allocation on hit.
-    buckets: FxHashMap<u64, SmallVec<[StrId; 1]>>,
+    buckets: LookupMap<u64, SmallVec<[StrId; 1]>>,
 }
 
 impl Default for Interner {
@@ -45,7 +189,7 @@ impl Interner {
         Self {
             bytes: String::new(),
             offsets: vec![0],
-            buckets: FxHashMap::default(),
+            buckets: LookupMap::new(),
         }
     }
 
@@ -57,7 +201,7 @@ impl Interner {
         Self {
             bytes: String::with_capacity(bytes),
             offsets,
-            buckets: FxHashMap::with_capacity_and_hasher(strings, Default::default()),
+            buckets: LookupMap::with_capacity(strings),
         }
     }
 
@@ -96,7 +240,7 @@ impl Interner {
         let end = u32::try_from(self.bytes.len()).expect("interner byte buffer overflow");
         self.offsets.push(end);
         let id = StrId(idx);
-        self.buckets.entry(hash).or_default().push(id);
+        self.buckets.get_or_default(hash).push(id);
         id
     }
 
@@ -155,7 +299,7 @@ mod tests {
         let second = interner.intern("beta");
         // Simulate a hash collision by adding `second` into `first`'s hash bucket.
         let h_first = hash_str("alpha");
-        interner.buckets.entry(h_first).or_default().push(second);
+        interner.buckets.get_or_default(h_first).push(second);
         assert_eq!(interner.get("alpha"), Some(first));
         assert_eq!(interner.intern("alpha"), first);
         assert_eq!(interner.resolve(first), "alpha");

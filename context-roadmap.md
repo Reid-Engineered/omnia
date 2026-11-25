@@ -531,14 +531,18 @@ key form, CD18 tie-breakers, CK3/CK4/CK7, and `cmp_natural` total-order proptest
 note: `Circuit::net_of_pin` returns `Option<NetRef>` instead of panicking on unknown ids.
 Nothing measured; rule-1 scan clean.
 
-2026-11-25 C1.2 review fixes — addressed all PR #128 independent review findings: denied
-`clippy::iter_over_hash_type` in `Cargo.toml` and `std::iter::IntoIterator::into_iter` in
-`clippy.toml` with a `clippy-driver` negative-control test covering `iter()`, `for`, and
-`into_iter()` on `HashMap`/`HashSet` (CINV10); quoted all section 9.2 record tags in CK9
-compound-field components; fixed `cmp_pin_number` so two unnumbered pins tie at the pin-number
-step before geometry and stored index (CD18, CK13); replaced eager `then_some` addition in
-`Circuit::pin_row` with lazy `then` to prevent `u32::MAX` overflow panics; updated
-`context-plan.md` CD7 (CD18 pin order in CSR) and section 12 (`net_of_pin -> Option<NetRef>`);
-expanded `tests/invariants.rs` to randomized insertion permutations with explicit id remapping
-and duplicate designators (CINV3, CINV10); listed `tests/graph.rs` and `tests/invariants.rs` in
-C1.2's **Owns**. Nothing measured; rule-1 scan clean.
+2026-11-25 C1.2 review fixes — addressed all PR #128 independent review findings: replaced
+internal `FxHashMap` fields with a non-iterable `LookupMap` (`rustc_hash::FxHasher`, no
+`IntoIterator` or iterator methods), disallowed `std::collections::HashMap` and `HashSet` in
+`clippy.toml` (closing generic `IntoIterator` and `std::iter::zip` bypasses while keeping
+`.into_iter()` available for `Vec`/`BTreeMap`/`BTreeSet`) and denied `clippy::iter_over_hash_type`,
+`disallowed_methods`, and `disallowed_types` in `Cargo.toml`, verified by positive and negative
+`clippy-driver` controls asserting exact lint diagnostics under Cargo's lint flags (CINV10);
+quoted all section 9.2 record tags in CK9 compound-field components; fixed `cmp_pin_number` so two
+unnumbered pins tie at the pin-number step before geometry and stored index (CD18, CK13); replaced
+eager `then_some` addition in `Circuit::pin_row` with lazy `then` to prevent `u32::MAX` overflow
+panics; updated `context-plan.md` CD7 (CD18 pin order in CSR) and section 12 (`net_of_pin ->
+Option<NetRef>`); expanded `tests/invariants.rs` to randomized insertion permutations with
+explicit id remapping (including `N(wire:<id>)` display names and equal-pin-number duplicate
+designators at distinct positions, CINV3, CINV10); listed `tests/graph.rs` and
+`tests/invariants.rs` in C1.2's **Owns**. Nothing measured; rule-1 scan clean.

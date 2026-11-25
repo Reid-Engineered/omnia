@@ -5,11 +5,10 @@ use std::{cmp::Ordering, ops::Range, sync::Arc};
 
 use omnia_doc::{Doc, LabelId, NetId, PartId, Pt, Rect, SymbolId, WireId};
 use omnia_symbols::SymbolLibrary;
-use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
 use crate::{
-    intern::{Interner, StrId},
+    intern::{Interner, LookupMap, StrId},
     keys::{
         CircuitKey, LabelSortKey, PinSortKey, WireSortKey, format_pin_net_name,
         format_wire_net_name, is_ground_name_hint,
@@ -224,7 +223,7 @@ pub struct Circuit {
     pin_positions: Vec<Pt>,
 
     // ---- Net columns (SoA, ordered in CD18 net order) ----
-    net_id_to_row: FxHashMap<NetId, NetRow>,
+    net_id_to_row: LookupMap<NetId, NetRow>,
     net_ids: Vec<NetId>,
     net_keys: Vec<CircuitKey>,
     net_display_names: Vec<StrId>,
@@ -247,9 +246,9 @@ pub struct Circuit {
     net_ground_ranges: Vec<CsrRange>,
     csr_ground: Vec<GroundEvidence>,
 
-    // ---- Point-query indexes (never iterated: CINV10) ----
-    key_to_net: FxHashMap<CircuitKey, NetRow>,
-    name_to_nets: FxHashMap<StrId, SmallVec<[NetRow; 1]>>,
+    // ---- Point-query indexes (non-iterable LookupMap: CINV10) ----
+    key_to_net: LookupMap<CircuitKey, NetRow>,
+    name_to_nets: LookupMap<StrId, SmallVec<[NetRow; 1]>>,
 }
 
 struct TempNet {
@@ -294,14 +293,13 @@ impl Circuit {
         let mut pin_roles: Vec<PinRole> = Vec::new();
         let mut pin_positions: Vec<Pt> = Vec::new();
 
-        // Discover nets into a Vec indexed through a lookup-only map (never iterated, CINV10).
-        let mut temp_net_map: FxHashMap<NetId, usize> =
-            FxHashMap::with_capacity_and_hasher(estimated_nets, Default::default());
+        // Discover nets into a Vec indexed through a non-iterable LookupMap (CINV10).
+        let mut temp_net_map: LookupMap<NetId, usize> = LookupMap::with_capacity(estimated_nets);
         let mut temp_nets: Vec<TempNet> = Vec::with_capacity(estimated_nets);
 
         let get_or_add_temp_net =
-            |net_id: NetId, map: &mut FxHashMap<NetId, usize>, nets: &mut Vec<TempNet>| -> usize {
-                *map.entry(net_id).or_insert_with(|| {
+            |net_id: NetId, map: &mut LookupMap<NetId, usize>, nets: &mut Vec<TempNet>| -> usize {
+                *map.get_or_insert_with(net_id, || {
                     let idx = nets.len();
                     nets.push(TempNet::new(net_id));
                     idx
@@ -432,8 +430,7 @@ impl Circuit {
         let total_pins = pin_part_rows.len();
 
         let mut pin_nets: Vec<NetRow> = vec![NetRow(0); total_pins];
-        let mut net_id_to_row: FxHashMap<NetId, NetRow> =
-            FxHashMap::with_capacity_and_hasher(net_count, Default::default());
+        let mut net_id_to_row: LookupMap<NetId, NetRow> = LookupMap::with_capacity(net_count);
         let mut net_ids: Vec<NetId> = Vec::with_capacity(net_count);
         let mut net_keys: Vec<CircuitKey> = Vec::with_capacity(net_count);
         let mut net_display_names: Vec<StrId> = Vec::with_capacity(net_count);
@@ -455,10 +452,9 @@ impl Circuit {
         let mut net_ground_ranges: Vec<CsrRange> = Vec::with_capacity(net_count);
         let mut csr_ground: Vec<GroundEvidence> = Vec::new();
 
-        let mut key_to_net: FxHashMap<CircuitKey, NetRow> =
-            FxHashMap::with_capacity_and_hasher(net_count, Default::default());
-        let mut name_to_nets: FxHashMap<StrId, SmallVec<[NetRow; 1]>> =
-            FxHashMap::with_capacity_and_hasher(net_count, Default::default());
+        let mut key_to_net: LookupMap<CircuitKey, NetRow> = LookupMap::with_capacity(net_count);
+        let mut name_to_nets: LookupMap<StrId, SmallVec<[NetRow; 1]>> =
+            LookupMap::with_capacity(net_count);
 
         let mut scratch_name = String::with_capacity(64);
         let mut seen_ground_parts: SmallVec<[PartId; 2]> = SmallVec::new();
@@ -530,7 +526,7 @@ impl Circuit {
                 } else if last_seen_text != Some(label.text.as_ref()) {
                     let cand_str_id = interner.intern(&label.text);
                     csr_candidates.push(cand_str_id);
-                    push_unique_net_row(name_to_nets.entry(cand_str_id).or_default(), net_row);
+                    push_unique_net_row(name_to_nets.get_or_default(cand_str_id), net_row);
                     last_seen_text = Some(&label.text);
                 }
             }
@@ -575,7 +571,7 @@ impl Circuit {
                 (CircuitKey::Wire(wire_id), name_id)
             };
 
-            push_unique_net_row(name_to_nets.entry(display_name_id).or_default(), net_row);
+            push_unique_net_row(name_to_nets.get_or_default(display_name_id), net_row);
             key_to_net.insert(key.clone(), net_row);
             net_id_to_row.insert(temp.doc_net_id, net_row);
 

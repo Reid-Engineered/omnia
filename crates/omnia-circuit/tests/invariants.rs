@@ -106,9 +106,41 @@ fn clippy_driver_path() -> PathBuf {
     path
 }
 
+fn cargo_clippy_deny_flags(manifest_dir: &Path) -> Vec<String> {
+    let cargo_toml = std::fs::read_to_string(manifest_dir.join("Cargo.toml"))
+        .expect("Cargo.toml must exist in omnia-circuit");
+    let mut in_clippy_lints = false;
+    let mut flags = Vec::new();
+    for raw_line in cargo_toml.lines() {
+        let line = raw_line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with('[') {
+            in_clippy_lints = line == "[lints.clippy]";
+            continue;
+        }
+        if in_clippy_lints && let Some((name, val)) = line.split_once('=') {
+            let name = name.trim();
+            let val = val.trim().trim_matches('"');
+            if val == "deny" {
+                flags.push("-D".to_owned());
+                flags.push(format!("clippy::{name}"));
+            }
+        }
+    }
+    assert!(
+        !flags.is_empty(),
+        "CINV10: [lints.clippy] in Cargo.toml must declare deny lints"
+    );
+    flags
+}
+
 /// CINV10: `crates/omnia-circuit/clippy.toml` and `[lints.clippy]` in `Cargo.toml` reject every
-/// hash-map and hash-set iteration path (`iter`, `for _ in &map`, `map.into_iter()`, and `HashSet`
-/// equivalents), verified by running `clippy-driver` on negative controls.
+/// `HashMap`/`HashSet` traversal path (including `iter()`, `for`, `.into_iter()`, `std::iter::zip`,
+/// and generic `IntoIterator` helpers) while allowing ordered `Vec`/`BTreeMap`/`BTreeSet`
+/// `.into_iter()` and `for` loops, verified with positive and negative controls under Cargo's
+/// lint configuration.
 #[test]
 fn cinv10_clippy_rejects_all_hash_iteration_paths() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -117,11 +149,12 @@ fn cinv10_clippy_rejects_all_hash_iteration_paths() {
     for required in [
         "disallowed-methods",
         "disallowed-types",
+        "std::collections::HashMap\"",
+        "std::collections::HashSet\"",
         "std::collections::HashMap::iter",
         "std::collections::HashMap::keys",
         "std::collections::HashMap::values",
         "std::collections::HashMap::drain",
-        "std::iter::IntoIterator::into_iter",
         "std::collections::hash_map::IntoIter",
     ] {
         assert!(
@@ -130,66 +163,124 @@ fn cinv10_clippy_rejects_all_hash_iteration_paths() {
         );
     }
 
-    let cargo_toml = std::fs::read_to_string(manifest_dir.join("Cargo.toml"))
-        .expect("Cargo.toml must exist in omnia-circuit");
-    assert!(
-        cargo_toml.contains("iter_over_hash_type = \"deny\""),
-        "CINV10: Cargo.toml must deny clippy::iter_over_hash_type"
-    );
+    let deny_flags = cargo_clippy_deny_flags(manifest_dir);
+    for expected in [
+        "clippy::iter_over_hash_type",
+        "clippy::disallowed_methods",
+        "clippy::disallowed_types",
+    ] {
+        assert!(
+            deny_flags.iter().any(|f| f == expected),
+            "CINV10: Cargo.toml [lints.clippy] missing `{expected}`"
+        );
+    }
 
     let driver = clippy_driver_path();
-    let cases: &[(&str, &str)] = &[
-        (
-            "map_iter",
-            "use std::collections::HashMap; pub fn f(m: &HashMap<u32, u32>) -> usize { m.iter().count() }",
-        ),
-        (
-            "map_for_ref",
-            "use std::collections::HashMap; pub fn f(m: &HashMap<u32, u32>) -> usize { let mut n = 0; for _ in m { n += 1; } n }",
-        ),
-        (
-            "map_for_val",
-            "use std::collections::HashMap; pub fn f(m: HashMap<u32, u32>) -> usize { let mut n = 0; for _ in m { n += 1; } n }",
-        ),
-        (
-            "map_into_iter",
-            "use std::collections::HashMap; pub fn f(m: HashMap<u32, u32>) -> Vec<(u32, u32)> { m.into_iter().collect() }",
-        ),
-        (
-            "set_for_ref",
-            "use std::collections::HashSet; pub fn f(s: &HashSet<u32>) -> usize { let mut n = 0; for _ in s { n += 1; } n }",
-        ),
-        (
-            "set_into_iter",
-            "use std::collections::HashSet; pub fn f(s: HashSet<u32>) -> Vec<u32> { s.into_iter().collect() }",
-        ),
-    ];
-
     let pid = std::process::id();
     let tmp_dir = std::env::temp_dir().join(format!("omnia-circuit-cinv10-{pid}"));
     std::fs::create_dir_all(&tmp_dir).expect("create temp dir for CINV10 probe");
 
-    for (name, body) in cases {
+    let run_probe = |name: &str, body: &str| {
         let src = tmp_dir.join(format!("{name}.rs"));
         let rlib = tmp_dir.join(format!("{name}.rlib"));
-        let full = format!(
-            "#![deny(clippy::iter_over_hash_type)]\n\
-             #![deny(clippy::disallowed_methods)]\n\
-             #![deny(clippy::disallowed_types)]\n\
-             {body}\n"
-        );
-        std::fs::write(&src, full).expect("write CINV10 probe source");
+        std::fs::write(&src, body).expect("write CINV10 probe source");
         let output = ProcessCommand::new(&driver)
             .current_dir(manifest_dir)
             .args(["--crate-type", "lib", "--edition", "2024", "-D", "warnings"])
+            .args(&deny_flags)
             .arg("-o")
             .arg(&rlib)
             .arg(&src)
             .output()
             .expect("invoke clippy-driver for CINV10 probe");
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        (output.status.success(), stderr)
+    };
+
+    // Positive control: ordered collections (`Vec`, `BTreeMap`, `BTreeSet`) and `.into_iter()`
+    // pass cleanly under the exact same Cargo lint configuration and `clippy.toml`.
+    let (ok, ok_stderr) = run_probe(
+        "ordered_positive_control",
+        "use std::collections::{BTreeMap, BTreeSet};\n\
+         pub fn ordered_ok(v: Vec<u32>, m: BTreeMap<u32, u32>, s: BTreeSet<u32>) -> usize {\n\
+             let a: Vec<u32> = v.into_iter().collect();\n\
+             let b: Vec<(u32, u32)> = m.into_iter().collect();\n\
+             let c: Vec<u32> = s.into_iter().collect();\n\
+             let mut n = a.len() + b.len() + c.len();\n\
+             for x in &a { n += *x as usize; }\n\
+             n\n\
+         }\n",
+    );
+    assert!(
+        ok,
+        "CINV10 positive control failed under Cargo lints + clippy.toml:\n{ok_stderr}"
+    );
+
+    // Negative controls: every unordered traversal path must be rejected specifically by Clippy's
+    // CINV10 lints (never by an unrelated rustc error).
+    let cases: &[(&str, &str, &str)] = &[
+        (
+            "map_iter",
+            "use std::collections::HashMap; pub fn f(m: &HashMap<u32, u32>) -> usize { m.iter().count() }\n",
+            "disallowed_methods",
+        ),
+        (
+            "map_for_ref",
+            "use std::collections::HashMap; pub fn f(m: &HashMap<u32, u32>) -> usize { let mut n = 0; for _ in m { n += 1; } n }\n",
+            "iter_over_hash_type",
+        ),
+        (
+            "map_for_val",
+            "use std::collections::HashMap; pub fn f(m: HashMap<u32, u32>) -> usize { let mut n = 0; for _ in m { n += 1; } n }\n",
+            "iter_over_hash_type",
+        ),
+        (
+            "map_into_iter",
+            "use std::collections::HashMap; pub fn f(m: HashMap<u32, u32>) -> Vec<(u32, u32)> { m.into_iter().collect() }\n",
+            "disallowed_types",
+        ),
+        (
+            "map_zip",
+            "use std::collections::HashMap; pub fn f(m: HashMap<u32, u32>) -> Vec<((u32, u32), usize)> { std::iter::zip(m, 0usize..).collect() }\n",
+            "disallowed_types",
+        ),
+        (
+            "map_generic_into_iter",
+            "use std::collections::HashMap;\n\
+             fn consume<I: IntoIterator>(it: I) -> usize { let mut n = 0; for _ in it { n += 1; } n }\n\
+             pub fn f(m: HashMap<u32, u32>) -> usize { consume(m) }\n",
+            "disallowed_types",
+        ),
+        (
+            "set_for_ref",
+            "use std::collections::HashSet; pub fn f(s: &HashSet<u32>) -> usize { let mut n = 0; for _ in s { n += 1; } n }\n",
+            "iter_over_hash_type",
+        ),
+        (
+            "set_into_iter",
+            "use std::collections::HashSet; pub fn f(s: HashSet<u32>) -> Vec<u32> { s.into_iter().collect() }\n",
+            "disallowed_types",
+        ),
+        (
+            "set_zip",
+            "use std::collections::HashSet; pub fn f(s: HashSet<u32>) -> Vec<(u32, usize)> { std::iter::zip(s, 0usize..).collect() }\n",
+            "disallowed_types",
+        ),
+    ];
+
+    for (name, body, expected_lint) in cases {
+        let (succeeded, stderr) = run_probe(name, body);
         assert!(
-            !output.status.success(),
+            !succeeded,
             "CINV10 negative control `{name}` was unexpectedly accepted by Clippy"
+        );
+        assert!(
+            !stderr.contains("error[E"),
+            "CINV10 negative control `{name}` failed with a rustc compile error instead of Clippy:\n{stderr}"
+        );
+        assert!(
+            stderr.contains(expected_lint),
+            "CINV10 negative control `{name}` did not emit expected lint `{expected_lint}`:\n{stderr}"
         );
     }
 
@@ -255,7 +346,17 @@ fn normalized_nets(circuit: &Circuit, doc: &Doc, remap: &IdRemap) -> Vec<Normali
             NormalizedNet {
                 key_tag,
                 display_name: match circuit.net_key(row) {
-                    CircuitKey::Wire(_) => "<wire-name>".to_owned(),
+                    CircuitKey::Wire(_) => {
+                        let raw_name = circuit.net_display_name(row);
+                        let id_str = raw_name
+                            .strip_prefix("N(wire:")
+                            .and_then(|s| s.strip_suffix(')'))
+                            .unwrap_or_else(|| {
+                                panic!("wire net display name `{raw_name}` must match N(wire:<id>)")
+                            });
+                        let raw_id: u32 = id_str.parse().expect("numeric wire id in N(wire:<id>)");
+                        format!("N(wire:spec{})", remap.wire_to_spec[&raw_id])
+                    }
                     _ => circuit.net_display_name(row).to_owned(),
                 },
                 candidates: circuit
@@ -281,9 +382,9 @@ fn build_permuted_sheet(
     label_order: &[usize],
 ) -> (Doc, Circuit, IdRemap) {
     let mut doc = Doc::new();
-    // Includes duplicate-designator parts ("R1" at two distinct positions and values) plus
-    // natural-order designators ("R2", "R10") and a ground symbol so anchor tie-breakers are
-    // exercised under explicit id remapping.
+    // Includes duplicate-designator parts ("R1" at (0, 0) and (0, 4*STEP)) joined on their equal
+    // pin number "1" so geometry decides after designator and pin number tie, plus natural-order
+    // designators ("R2", "R10") and a ground symbol.
     let part_specs = [
         (
             "Resistor-IEEE-Standard",
@@ -294,48 +395,52 @@ fn build_permuted_sheet(
         ),
         (
             "Resistor-IEEE-Standard",
-            Pt { x: 6 * STEP, y: 0 },
+            Pt { x: 0, y: 4 * STEP },
             Orient::IDENTITY,
             "R1",
             "4k7",
         ),
         (
             "Resistor-IEEE-Standard",
-            Pt { x: 12 * STEP, y: 0 },
+            Pt { x: 6 * STEP, y: 0 },
             Orient::IDENTITY,
             "R2",
             "2k2",
         ),
         (
             "Resistor-IEEE-Standard",
-            Pt { x: 18 * STEP, y: 0 },
+            Pt { x: 12 * STEP, y: 0 },
             Orient::IDENTITY,
             "R10",
             "1k",
         ),
         (
             "Ground-COM-General",
-            Pt { x: 20 * STEP, y: 0 },
+            Pt { x: 14 * STEP, y: 0 },
             Orient::IDENTITY,
             "",
             "",
         ),
     ];
     let wire_specs = [
-        // Duplicate-designator R1[0].2 to R1[1].1 (tests geometry tie-break across duplicate R1s)
+        // Duplicate-designator R1[0].1 (-2*STEP, 0) to R1[1].1 (-2*STEP, 4*STEP): equal
+        // designator AND equal pin number "1", so geometry (y=0 < y=4*STEP) decides the anchor.
+        Wire {
+            a: Pt { x: -2 * STEP, y: 0 },
+            b: Pt {
+                x: -2 * STEP,
+                y: 4 * STEP,
+            },
+        },
+        // R1[0].2 (2*STEP, 0) to R2.1 (4*STEP, 0)
         Wire {
             a: Pt { x: 2 * STEP, y: 0 },
             b: Pt { x: 4 * STEP, y: 0 },
         },
-        // R1[1].2 to R2.1
+        // R2.2 (8*STEP, 0) to R10.1 (10*STEP, 0)
         Wire {
             a: Pt { x: 8 * STEP, y: 0 },
             b: Pt { x: 10 * STEP, y: 0 },
-        },
-        // R2.2 to R10.1
-        Wire {
-            a: Pt { x: 14 * STEP, y: 0 },
-            b: Pt { x: 16 * STEP, y: 0 },
         },
         // Bare wire island (two perpendicular wires)
         Wire {
@@ -351,8 +456,8 @@ fn build_permuted_sheet(
         },
     ];
     let label_specs = [
-        (Pt { x: 14 * STEP, y: 0 }, "VCC"),
-        (Pt { x: 16 * STEP, y: 0 }, "V3V3"),
+        (Pt { x: 8 * STEP, y: 0 }, "VCC"),
+        (Pt { x: 10 * STEP, y: 0 }, "V3V3"),
         (Pt { x: 0, y: 20 * STEP }, "SOLO_B"),
         (
             Pt {
