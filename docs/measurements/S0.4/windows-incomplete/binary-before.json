@@ -1,0 +1,9 @@
+{
+  "sha256": "60c8ac3a8d609f02f45c7c9ab6f0ce5de4b074dafaed48edf08df8b7fc7f0018",
+  "source_head": "343a3312ce8f01cb0e88142c091b9f700274f419",
+  "source_sha256": {
+    "main.rs": "4e1175967fc791835b7a9bae2b96ab3cf8fbbab109841d31fe83964a6c2253e4",
+    "spike/mod.rs": "e4cad62f6423b0dc2859857732f32fe6b4a316c1dbd658d02b57c8921507a0ee",
+    "spike/sim_scope.rs": "138067050899de3637f7348f3d9552b1ae882947cc5944cdac703daa92f88ad4"
+  }
+}
