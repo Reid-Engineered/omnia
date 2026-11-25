@@ -153,7 +153,7 @@ HC2 + (A3.1 or A4.1) -> C5.1          HC2 + measured split tails (CQ7) -> C5.2
   cases are re-run paired (delta off, delta on) on a development machine and recorded,
   labelled non-certifying, and the reference re-run is requested at HC2.
 
-### C1.2 Crate and circuit graph · todo
+### C1.2 Crate and circuit graph · done
 - Lane: circuit · Depends: C0.2 · Read: CD1, CD7, CK1 to CK4, CINV1, CINV10; section 11.2
 - Owns: `crates/omnia-circuit/` (`Cargo.toml`, `clippy.toml`, `src/lib.rs`, `src/graph.rs`,
   `src/keys.rs`, `src/intern.rs`); the crate-list line of the INV12 test in `xtask/src/main.rs`
@@ -513,3 +513,19 @@ clean.
 `follow.rs` and `tool/label.rs`, none of the five guarded files) and that mcp-plan.md 9.2 gave
 the `circuit` field to C2.1 (C2.2 owns it). Both fixed; mcp-plan.md 10.1 also lists `circuit?`
 on `omnia_preview` and `omnia_apply` and states the CD10 exception precisely.
+
+2026-11-25 C1.2 done — added GPUI-free crate `crates/omnia-circuit/` (`Cargo.toml`, `clippy.toml`,
+`src/lib.rs`, `src/intern.rs`, `src/keys.rs`, `src/graph.rs`, `tests/graph.rs`,
+`tests/invariants.rs`) and added `omnia-circuit` to the INV12 crate list in `xtask/src/main.rs`.
+Implemented `Circuit::build` over `Doc`'s public read-only API (CD1, CINV1): dense SoA rows for
+parts, pins and nets, CSR slices for net member pins (both `PinRow` and `(PartId, u32)` in CD18
+pin order, ready for C1.9), member labels (CD18 label order), candidate names and declared ground
+evidence (CK4), contiguous-buffer string interner (`StrId` intentionally non-`Ord`, CD7), CK1
+`CircuitKey` (distinct from `NetId`/`NetKey`/`NodeId`), CK2 display names and candidates, CK3
+`PinRole` (`Unspecified` until C3.1) and `SymbolClass` (`Ground-COM-General` -> `Ground`, else
+`Component` until sim S1.1), CK4 ground evidence/kinds, and CK7 hub flags. `clippy.toml` disallows
+`HashMap`/`HashSet` iteration methods and iterator types (CINV10). Tests verify CINV1, CINV10
+(including insertion-order independence), CTC-key-01 and CTC-name-01 built from scratch, every CK1
+key form, CD18 tie-breakers, CK3/CK4/CK7, and `cmp_natural` total-order proptests. Minor API
+note: `Circuit::net_of_pin` returns `Option<NetRef>` instead of panicking on unknown ids.
+Nothing measured; rule-1 scan clean.
