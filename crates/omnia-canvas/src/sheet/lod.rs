@@ -20,7 +20,7 @@ pub(super) fn wire_run(length_px: f64) -> bool {
     length_px >= MIN_WIRE_RUN_PX
 }
 
-pub(super) fn symbol_box(side_px: f64) -> bool {
+pub(crate) fn symbol_box(side_px: f64) -> bool {
     side_px < MIN_SYMBOL_PX
 }
 
