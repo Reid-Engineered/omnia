@@ -102,18 +102,22 @@ pub fn drag_anchor_pin(doc: &Doc, pressed: ItemId, items: &[ItemId]) -> Option<P
 /// Computes the snapped translation delta for a drag from `anchor` to `current` with mid-drag
 /// reorientation `by` about `pivot` (K2).
 ///
-/// When `current == anchor && by == Orient::IDENTITY`, returns [`Pt::ZERO`] so clicking an
-/// off-grid part without moving remains a zero-delta click rather than jumping.
+/// When `by == Orient::IDENTITY` and the raw pointer movement `current - anchor` snaps to
+/// [`Pt::ZERO`] (less than half a grid step on both axes), returns [`Pt::ZERO`] so clicking an
+/// off-grid part with slight pointer jitter remains a click rather than jumping onto the grid.
 ///
 /// Otherwise, if `anchor_pin` is `Some(p0)`, transforms `p0` by `by` around `pivot`, adds
 /// `current - anchor`, snaps that world pin position onto [`GRID_NM`], and returns the exact
 /// delta from the rotated pin to the snapped grid point so the anchor pin lands on [`GRID_NM`].
 pub fn drag_delta(anchor: Pt, current: Pt, pivot: Pt, by: Orient, anchor_pin: Option<Pt>) -> Pt {
-    if current == anchor && by == Orient::IDENTITY {
-        return Pt::ZERO;
-    }
     let raw_dx = i64::from(current.x) - i64::from(anchor.x);
     let raw_dy = i64::from(current.y) - i64::from(anchor.y);
+    if by == Orient::IDENTITY
+        && let (Ok(dx), Ok(dy)) = (i32::try_from(raw_dx), i32::try_from(raw_dy))
+        && snap_to(Pt { x: dx, y: dy }, GRID_NM) == Pt::ZERO
+    {
+        return Pt::ZERO;
+    }
     if let Some(p0) = anchor_pin {
         let dx = i64::from(p0.x) - i64::from(pivot.x);
         let dy = i64::from(p0.y) - i64::from(pivot.y);
@@ -303,21 +307,25 @@ mod tests {
 
     #[test]
     fn t5_3_drag_delta_snaps_anchor_pin_to_grid_and_keeps_click_at_zero() {
-        // Off-grid anchor pin: clicking without moving stays zero delta.
+        // Off-grid anchor pin: clicking without moving or with sub-half-grid jitter stays zero.
         let off_pin = Pt {
             x: PIN_LATTICE_NM,
             y: PIN_LATTICE_NM,
         };
-        assert_eq!(
-            drag_delta(
-                pt(0, 0),
-                pt(0, 0),
-                pt(0, 0),
-                Orient::IDENTITY,
-                Some(off_pin)
-            ),
-            Pt::ZERO
-        );
+        for jitter in [
+            pt(0, 0),
+            Pt { x: 1, y: 0 },
+            Pt {
+                x: PIN_LATTICE_NM - 1,
+                y: -(PIN_LATTICE_NM - 1),
+            },
+        ] {
+            assert_eq!(
+                drag_delta(pt(0, 0), jitter, pt(0, 0), Orient::IDENTITY, Some(off_pin)),
+                Pt::ZERO,
+                "sub-half-grid jitter {jitter:?} on off-grid part must stay a click"
+            );
+        }
 
         // Moving an off-grid part snaps its anchor pin onto GRID_NM.
         let delta = drag_delta(

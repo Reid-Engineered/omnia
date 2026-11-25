@@ -1338,7 +1338,7 @@ mod tests {
     /// `Command::Transform`, planned and normalised once against the original sheet so a valid
     /// final position commits and one undo restores it completely (INV4, INV5).
     #[test]
-    fn t5_2_r_x_y_during_a_drag_leave_one_plain_move() {
+    fn t5_3_r_x_y_during_a_drag_commit_one_transform() {
         let mut doc = Doc::from_items(
             [],
             [
@@ -3534,8 +3534,13 @@ mod tests {
         );
         assert!(hidden(cx).is_empty(), "hidden items cleared on drag commit");
         assert_eq!(part_at(&doc, cx, 0), pt(-2, 2));
+        let after_move = cx.update(|_, cx| snapshot(doc.read(cx)));
 
-        // Undo restores original state.
+        // Undo restores original state, redo reapplies the plain Move, undo returns to start.
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        cx.simulate_keystrokes("ctrl-y");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&after_move)));
         cx.simulate_keystrokes("ctrl-z");
         assert!(cx.update(|_, cx| doc.read(cx).content_eq(&original)));
 
@@ -3744,5 +3749,118 @@ mod tests {
             0,
             "K2: dragged OpAmp pin 0 y must land on GRID_NM"
         );
+    }
+
+    /// T5.3 P1 regression: clicking an off-grid part (`IC-COM-OpAmp` at `(0, 0)`) with 1 px of
+    /// pointer jitter selects it with unchanged revision and 0 `SheetView` paints instead of
+    /// snapping into a half-grid move.
+    #[gpui::test]
+    fn t5_3_click_with_one_pixel_jitter_on_off_grid_part_selects_without_moving(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| cx.bind_keys(standalone_bindings()));
+        let lib = SymbolLibrary::builtin();
+        let opamp = lib.by_name("IC-COM-OpAmp").unwrap();
+        let def = lib.get(opamp);
+        let doc = cx.new(|_| {
+            Doc::from_items(
+                [(
+                    Part {
+                        symbol: opamp,
+                        at: Pt::ZERO,
+                        orient: Orient::IDENTITY,
+                        designator: "U1".into(),
+                        value: "".into(),
+                    },
+                    def.pins.iter().map(|p| p.at).collect(),
+                    def.bounds,
+                )],
+                [],
+                [],
+            )
+            .unwrap()
+        });
+        let doc_clone = doc.clone();
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = OverlayView::new(doc_clone, camera, &GRAPHITE, cx);
+            window.activate_window();
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+        cx.run_until_parked();
+
+        let rev0 = revision(&doc, cx);
+        let paints0 = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let p = screen(&overlay, cx, Pt::ZERO);
+        let jitter = gpui::point(p.x + gpui::px(1.0), p.y);
+        cx.simulate_mouse_down(p, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(jitter, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(jitter, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+
+        assert_eq!(
+            revision(&doc, cx),
+            rev0,
+            "1 px click jitter on off-grid part must not commit a move"
+        );
+        assert_eq!(part_at(&doc, cx, 0), Pt::ZERO);
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Part(PartId(0))],
+            "1 px click jitter on off-grid part must still select it"
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints0,
+            "INV11: 1 px click jitter must cause 0 SheetView paints"
+        );
+    }
+
+    /// T5.3 P2 regression: installing `set_place_provider` while the attached overlay temporarily
+    /// displays another document still applies once `set_doc` aligns them (parts-plan §14).
+    #[gpui::test]
+    fn t5_3_place_provider_set_during_doc_mismatch_applies_after_set_doc(cx: &mut TestAppContext) {
+        let (overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.new(|_| Doc::new());
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let lib_clone = lib.clone();
+        let stub: PlaceProvider = Rc::new(move |req| {
+            Some(lib_clone.place_command(
+                req.symbol,
+                req.at,
+                req.orient,
+                req.designator,
+                std::sync::Arc::from("from-mismatch-stub"),
+            ))
+        });
+
+        let canvas = canvas_for(cx, Some(doc_a.clone()), Some(overlay.clone()));
+        // Temporarily point the overlay at doc_b so `gesture_owner` returns None.
+        cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_document(doc_b.clone(), cx));
+            canvas.update(cx, |c, cx| c.set_place_provider(Some(stub), cx));
+        });
+        // Now realign canvas + overlay on doc_b via `set_doc` and commit a placement.
+        cx.update(|_, cx| {
+            canvas.update(cx, |c, cx| {
+                c.set_doc(Some(doc_b.clone()), cx);
+                c.set_tool(Tool::Place(res), cx);
+            });
+        });
+        cx.run_until_parked();
+        down(&overlay, cx, pt(1, 1));
+        up(&overlay, cx, pt(1, 1));
+
+        let placed = cx.update(|_, cx| {
+            doc_b
+                .read(cx)
+                .parts()
+                .next()
+                .map(|(_, p)| p.clone())
+                .expect("provider committed part on doc_b")
+        });
+        assert_eq!(&*placed.value, "from-mismatch-stub");
     }
 }

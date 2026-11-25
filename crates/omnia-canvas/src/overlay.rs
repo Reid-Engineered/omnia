@@ -402,6 +402,10 @@ impl OverlayView {
         if self.sheet.read(cx).hidden.as_deref() == lifted_items {
             return;
         }
+        debug_assert!(
+            lifted_items.is_none_or(crate::sheet::is_canonically_sorted),
+            "sync_hidden_items requires canonically sorted items"
+        );
         let next = lifted_items.map(Rc::from);
         self.sheet.update(cx, |sheet, cx| {
             sheet.hidden = next;

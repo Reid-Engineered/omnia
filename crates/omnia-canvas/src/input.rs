@@ -390,9 +390,9 @@ impl SheetCanvas {
         self.overlay = overlay;
         self.sync_overlay_doc(cx);
         if let Some(provider) = self.place_provider.clone()
-            && let Some(owner) = self.gesture_owner(cx)
+            && let Some(overlay) = self.overlay.clone()
         {
-            owner.update(cx, |o, _| o.set_place_provider(Some(provider)));
+            overlay.update(cx, |o, _| o.set_place_provider(Some(provider)));
         }
     }
 
@@ -401,16 +401,16 @@ impl SheetCanvas {
     /// When `Tool::Place(symbol)` commits, the provider builds the [`omnia_doc::Command`] for the
     /// symbol, anchor-pin-snapped point, orientation, and designator. When `None` is installed,
     /// placement defaults to [`omnia_symbols::SymbolLibrary::place_command`]. Stored on
-    /// `SheetCanvas` and forwarded to any attached or future gesture owner so call order with
-    /// [`Self::set_overlay`] never matters.
+    /// `SheetCanvas` and forwarded to any attached or future overlay regardless of document state
+    /// so call order with [`Self::set_overlay`] and [`Self::set_doc`] never matters.
     pub fn set_place_provider(
         &mut self,
         provider: Option<tool::PlaceProvider>,
         cx: &mut Context<Self>,
     ) {
         self.place_provider = provider.clone();
-        if let Some(owner) = self.gesture_owner(cx) {
-            owner.update(cx, |o, _| o.set_place_provider(provider));
+        if let Some(overlay) = self.overlay.clone() {
+            overlay.update(cx, |o, _| o.set_place_provider(provider));
         }
     }
 
@@ -422,7 +422,13 @@ impl SheetCanvas {
         match self.doc.clone() {
             Some(doc) => {
                 if overlay.read(cx).doc() != &doc {
-                    overlay.update(cx, |o, cx| o.set_document(doc, cx));
+                    let provider = self.place_provider.clone();
+                    overlay.update(cx, |o, cx| {
+                        o.set_document(doc, cx);
+                        if provider.is_some() {
+                            o.set_place_provider(provider);
+                        }
+                    });
                 }
             }
             None => {

@@ -1278,4 +1278,260 @@ mod tests {
         assert_eq!(scope.omnia_calls.get(), 0);
         assert_eq!(scope.gpui_calls.get(), 0);
     }
+
+    /// Counting scope that tracks heap allocations strictly inside `omnia` work while pausing
+    /// during `gpui` calls (mirroring B10 / Q5 accounting).
+    struct AllocCountingScope {
+        counting: Cell<bool>,
+        omnia_allocs: Cell<usize>,
+        omnia_calls: Cell<u32>,
+    }
+
+    impl AllocCountingScope {
+        fn new() -> Self {
+            Self {
+                counting: Cell::new(false),
+                omnia_allocs: Cell::new(0),
+                omnia_calls: Cell::new(0),
+            }
+        }
+    }
+
+    impl OverlayPaintScope for AllocCountingScope {
+        fn omnia(&self, work: &mut dyn FnMut()) {
+            self.omnia_calls.set(self.omnia_calls.get() + 1);
+            if !self.counting.get() {
+                work();
+                return;
+            }
+            let prev = crate::sheet::replace_alloc_counter(Some(0));
+            work();
+            let used = crate::sheet::replace_alloc_counter(prev).unwrap_or(0);
+            self.omnia_allocs.set(self.omnia_allocs.get() + used);
+        }
+
+        fn gpui(&self, work: &mut dyn FnMut()) {
+            if !self.counting.get() {
+                work();
+                return;
+            }
+            let paused = crate::sheet::replace_alloc_counter(None);
+            work();
+            crate::sheet::replace_alloc_counter(paused);
+        }
+    }
+
+    /// B10: proves the warm ghost paint path performs zero heap allocations in omnia code for
+    /// both `Place` and `Drag` previews (normal and far-zoom LOD).
+    #[gpui::test]
+    fn t5_3_paint_ghosts_warm_path_makes_zero_omnia_allocations(cx: &mut TestAppContext) {
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let masks = Rc::new(Masks::new());
+        let doc = Rc::new(sample_doc());
+        let alloc_scope = Rc::new(AllocCountingScope::new());
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+
+        struct AllocGhostView {
+            doc: Rc<Doc>,
+            camera: Camera,
+            masks: Rc<Masks>,
+            preview: OwnedPreview,
+            scope: Rc<AllocCountingScope>,
+        }
+
+        impl Render for AllocGhostView {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                struct El {
+                    doc: Rc<Doc>,
+                    camera: Camera,
+                    masks: Rc<Masks>,
+                    preview: OwnedPreview,
+                    scope: Rc<AllocCountingScope>,
+                }
+                impl Element for El {
+                    type RequestLayoutState = ();
+                    type PrepaintState = ();
+                    fn id(&self) -> Option<ElementId> {
+                        None
+                    }
+                    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+                        None
+                    }
+                    fn request_layout(
+                        &mut self,
+                        _id: Option<&GlobalElementId>,
+                        _inspector_id: Option<&InspectorElementId>,
+                        window: &mut Window,
+                        cx: &mut App,
+                    ) -> (LayoutId, ()) {
+                        let mut style = Style::default();
+                        style.size.width = relative(1.0).into();
+                        style.size.height = relative(1.0).into();
+                        (window.request_layout(style, [], cx), ())
+                    }
+                    fn prepaint(
+                        &mut self,
+                        _id: Option<&GlobalElementId>,
+                        _inspector_id: Option<&InspectorElementId>,
+                        _bounds: Bounds<Pixels>,
+                        _layout: &mut (),
+                        _window: &mut Window,
+                        _cx: &mut App,
+                    ) {
+                    }
+                    fn paint(
+                        &mut self,
+                        _id: Option<&GlobalElementId>,
+                        _inspector_id: Option<&InspectorElementId>,
+                        bounds: Bounds<Pixels>,
+                        _layout: &mut (),
+                        _prepaint: &mut (),
+                        window: &mut Window,
+                        cx: &mut App,
+                    ) {
+                        let mut camera = self.camera.clone();
+                        camera.set_viewport(bounds);
+                        let sf = window.scale_factor();
+                        let clip = viewport_clip_dev(bounds, sf, 32.0);
+                        let params = GhostPaintParams {
+                            doc: &self.doc,
+                            camera: &camera,
+                            bounds,
+                            visible_padded: camera.visible(),
+                            sf,
+                            clip,
+                            theme: &GRAPHITE,
+                            masks: &self.masks,
+                            scope: Some(self.scope.as_ref()),
+                        };
+                        let preview = match &self.preview {
+                            OwnedPreview::None => GhostPreview::None,
+                            OwnedPreview::Place { symbol, at, orient } => GhostPreview::Place {
+                                symbol: *symbol,
+                                at: *at,
+                                orient: *orient,
+                            },
+                            OwnedPreview::Drag { items, transform } => GhostPreview::Drag {
+                                items,
+                                transform: *transform,
+                            },
+                        };
+                        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                            paint_ghosts(preview, &params, window, cx);
+                        });
+                    }
+                }
+                div().size_full().child(El {
+                    doc: self.doc.clone(),
+                    camera: self.camera.clone(),
+                    masks: self.masks.clone(),
+                    preview: match &self.preview {
+                        OwnedPreview::None => OwnedPreview::None,
+                        OwnedPreview::Place { symbol, at, orient } => OwnedPreview::Place {
+                            symbol: *symbol,
+                            at: *at,
+                            orient: *orient,
+                        },
+                        OwnedPreview::Drag { items, transform } => OwnedPreview::Drag {
+                            items: items.clone(),
+                            transform: *transform,
+                        },
+                    },
+                    scope: self.scope.clone(),
+                })
+            }
+        }
+
+        let (view, cx) = cx.add_window_view(|_, _| AllocGhostView {
+            doc,
+            camera: Camera::new(Pt::ZERO, 1.0, viewport),
+            masks,
+            preview: OwnedPreview::Place {
+                symbol: res,
+                at: Pt::ZERO,
+                orient: Orient::ROT_90,
+            },
+            scope: alloc_scope.clone(),
+        });
+        cx.run_until_parked();
+
+        // Warm Place path, then count across 5 repaints.
+        alloc_scope.omnia_allocs.set(0);
+        alloc_scope.omnia_calls.set(0);
+        alloc_scope.counting.set(true);
+        for step in 0..5 {
+            view.update(cx, |v, cx| {
+                v.preview = OwnedPreview::Place {
+                    symbol: res,
+                    at: Pt {
+                        x: step * GRID_NM,
+                        y: 0,
+                    },
+                    orient: Orient::ROT_90,
+                };
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        alloc_scope.counting.set(false);
+        assert!(alloc_scope.omnia_calls.get() >= 10);
+        assert_eq!(
+            alloc_scope.omnia_allocs.get(),
+            0,
+            "B10: warm Place ghost paint must not allocate in omnia code"
+        );
+
+        // Warm Drag path (parts, wire, label with Transform), then count across 5 repaints.
+        let drag_items = vec![
+            ItemId::Part(PartId(0)),
+            ItemId::Part(PartId(1)),
+            ItemId::Wire(WireId(0)),
+            ItemId::Label(LabelId(0)),
+        ];
+        view.update(cx, |v, cx| {
+            v.preview = OwnedPreview::Drag {
+                items: drag_items.clone(),
+                transform: Isometry::Transform {
+                    delta: Pt { x: GRID_NM, y: 0 },
+                    pivot: Pt::ZERO,
+                    by: Orient::FLIP_X_ROT_90,
+                },
+            };
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        alloc_scope.omnia_allocs.set(0);
+        alloc_scope.omnia_calls.set(0);
+        alloc_scope.counting.set(true);
+        for step in 1..=5 {
+            view.update(cx, |v, cx| {
+                v.preview = OwnedPreview::Drag {
+                    items: drag_items.clone(),
+                    transform: Isometry::Transform {
+                        delta: Pt {
+                            x: step * GRID_NM,
+                            y: -GRID_NM,
+                        },
+                        pivot: Pt::ZERO,
+                        by: Orient::FLIP_X_ROT_90,
+                    },
+                };
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        alloc_scope.counting.set(false);
+        assert!(alloc_scope.omnia_calls.get() >= 10);
+        assert_eq!(
+            alloc_scope.omnia_allocs.get(),
+            0,
+            "B10: warm Drag ghost paint must not allocate in omnia code"
+        );
+    }
 }

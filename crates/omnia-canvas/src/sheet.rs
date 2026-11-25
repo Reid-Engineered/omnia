@@ -140,6 +140,50 @@ pub(super) fn is_hidden(hidden: &[ItemId], item: ItemId) -> bool {
         .is_ok()
 }
 
+/// Returns `true` when `items` is sorted in canonical [`crate::selection::item_sort_key`] order.
+#[cfg(debug_assertions)]
+pub(crate) fn is_canonically_sorted(items: &[ItemId]) -> bool {
+    items
+        .windows(2)
+        .all(|w| crate::selection::item_sort_key(w[0]) <= crate::selection::item_sort_key(w[1]))
+}
+
+/// Zero-allocation check that at least 3 visible ends (wire endpoints + part pins, INV3) still
+/// meet at `at` after hiding dragged items (T5.3, D7, B10).
+fn visible_junction(doc: &Doc, visible_parts: &[ItemId], visible_wires: &[ItemId], at: Pt) -> bool {
+    let mut ends = 0usize;
+    for &item in visible_wires {
+        if let ItemId::Wire(id) = item
+            && let Some(wire) = doc.wire(id)
+        {
+            if wire.a == at {
+                ends += 1;
+            }
+            if wire.b == at {
+                ends += 1;
+            }
+            if ends >= 3 {
+                return true;
+            }
+        }
+    }
+    for &item in visible_parts {
+        if let ItemId::Part(id) = item
+            && let Some(pins) = doc.pins(id)
+        {
+            for &pin in pins {
+                if pin == at {
+                    ends += 1;
+                    if ends >= 3 {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 #[derive(Debug)]
 struct DocumentCache {
     masks: symbols::Masks,
@@ -311,6 +355,11 @@ impl DocumentCache {
             }
             if let Some(diameter) = diameter {
                 doc.junctions(area, junctions);
+                if !hidden.is_empty() {
+                    let visible_parts = &items[..parts_end];
+                    let visible_wires = &items[parts_end..wires_end];
+                    junctions.retain(|&p| visible_junction(doc, visible_parts, visible_wires, p));
+                }
                 junctions.sort_unstable_by_key(|p| (p.x, p.y));
                 let side = stroke_device_px(diameter, sf);
                 for &p in junctions.iter() {
@@ -361,6 +410,10 @@ impl SheetView {
 
     /// Hides canonically sorted `hidden` items while they are rendered as overlay ghosts (T5.3, D7).
     pub(crate) fn with_hidden(mut self, hidden: Option<Rc<[ItemId]>>) -> Self {
+        debug_assert!(
+            hidden.as_deref().is_none_or(is_canonically_sorted),
+            "SheetView::with_hidden requires canonically sorted items"
+        );
         self.hidden = hidden;
         self
     }
@@ -584,6 +637,11 @@ impl Element for SheetView {
 }
 
 #[cfg(test)]
+pub(crate) fn replace_alloc_counter(value: Option<usize>) -> Option<usize> {
+    tests::ALLOCS.replace(value)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::camera::{BASE_SCALE, MAX_ZOOM, MIN_ZOOM};
@@ -595,7 +653,7 @@ mod tests {
     struct Counting;
 
     thread_local! {
-        static ALLOCS: Cell<Option<usize>> = const { Cell::new(None) };
+        pub(super) static ALLOCS: Cell<Option<usize>> = const { Cell::new(None) };
     }
 
     fn count_allocation() {
@@ -1194,6 +1252,19 @@ mod tests {
             }]))
             .unwrap()
             .added[0];
+        // Add a vertical branch at (0, 0) to form a 3-way T-junction (splits w0 into 2 + branch).
+        let _branch = doc
+            .apply(Command::AddWires(vec![Wire {
+                a: Pt::ZERO,
+                b: Pt {
+                    x: 0,
+                    y: 3 * GRID_NM,
+                },
+            }]))
+            .unwrap();
+        let all_wires: Vec<ItemId> = doc.wires().map(|(id, _)| ItemId::Wire(id)).collect();
+        assert_eq!(all_wires.len(), 3, "T-junction has 3 wire segments");
+        let _ = w0;
 
         let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
         let camera = Camera::new(Pt::ZERO, 1.0, bounds);
@@ -1206,16 +1277,24 @@ mod tests {
             count
         };
 
-        // 2 parts + 1 wire = 3 marks when nothing is hidden.
-        assert_eq!(count_marks(&[]), 3);
-        let hidden = [p0, w0];
-        assert_eq!(count_marks(&hidden), 1);
-        assert_eq!(count_marks(&[p0, p1, w0]), 0);
+        // 2 parts + 3 wire segments + 1 junction dot = 6 marks when nothing is hidden.
+        assert_eq!(count_marks(&[]), 6);
+        // Hiding p0 and one branch wire drops p0, that wire, AND the junction dot (only 2 ends
+        // remain at the origin), leaving 1 part + 2 wires = 3 marks.
+        let mut hidden_partial = vec![p0, all_wires[0]];
+        hidden_partial.sort_unstable_by_key(|&id| crate::selection::item_sort_key(id));
+        assert_eq!(count_marks(&hidden_partial), 3);
 
-        // Warm-path allocation check (B10 / INV7): filtering hidden items allocates nothing.
+        // Hiding all parts and wires leaves 0 marks (no orphaned junction dot).
+        let mut hidden_all = vec![p0, p1];
+        hidden_all.extend_from_slice(&all_wires);
+        hidden_all.sort_unstable_by_key(|&id| crate::selection::item_sort_key(id));
+        assert_eq!(count_marks(&hidden_all), 0);
+
+        // Warm-path allocation check (B10 / INV7): filtering hidden items and junctions allocates nothing.
         ALLOCS.set(Some(0));
         for _ in 0..40 {
-            assert_eq!(count_marks(&hidden), 1);
+            assert_eq!(count_marks(&hidden_partial), 3);
         }
         assert_eq!(ALLOCS.replace(None), Some(0));
     }

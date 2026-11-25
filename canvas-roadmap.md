@@ -553,9 +553,7 @@ of the `canvas` lane.
 ### T5.3 Place, move, rotate, mirror, delete · done
 - Lane: canvas · Depends: T5.2, T5.5 · Read: D7, K2; parts-plan.md §14 (placement provider)
 - Owns: `crates/omnia-canvas/src/tool/place.rs`, `tool/move_.rs`, `overlay/ghosts.rs`; the
-  placement-provider setter on `SheetCanvas` in `crates/omnia-canvas/src/input.rs` (plus
-  coordinator-approved minimal integration hooks in `tool.rs`, `overlay.rs`, `sheet.rs`,
-  `sheet/{symbols,lod,text}.rs`, `lib.rs`, `canvas-plan.md`, `canvas-roadmap.md`)
+  placement-provider setter on `SheetCanvas` in `crates/omnia-canvas/src/input.rs`
 - Do: place a part from `Tool::Place`; drag-move a selection with ghosts in the overlay and
   the dragged items hidden from the sheet; R, X and Y apply to the ghosts during a drag
   and as a command otherwise; Del deletes. Positions snap to the grid by the part's anchor
@@ -2321,7 +2319,14 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        minimal integration hooks in `tool.rs`, `overlay.rs`, `sheet.rs`,
                        `sheet/{symbols,lod,text}.rs`, `lib.rs`, `canvas-plan.md` §9 (rule 12),
                        and `canvas-roadmap.md`; four T5.2 tests updated for T5.3/T5.5 semantics.
-                       145 `omnia-canvas` lib tests + 2 doctests + 36/36 goldens + INV6/INV7
+                       148 `omnia-canvas` lib tests + 2 doctests + 36/36 goldens + INV6/INV7
                        passed locally on Windows (`cargo fmt --all --check`, both `clippy`
                        commands, `cargo test --workspace -j 2`, `cargo deny check`; certifies
-                       nothing; no budget gate).
+                       nothing; no budget gate). Review follow-up (Claude Opus 5.5): require
+                       half-grid raw movement before anchor-pin snapping so 1 px click jitter on
+                       off-grid parts stays a click (0 `SheetView` paints); forward
+                       `place_provider` directly to the attached overlay and across
+                       `sync_overlay_doc`; filter hidden-wire junction dots in `sheet.rs` with 0
+                       warm allocs; add warm `paint_ghosts` allocation-counting test (B10),
+                       `debug_assert!` on sorted hidden slices, plain-drag redo check, and
+                       restored nominal `Owns` line.
