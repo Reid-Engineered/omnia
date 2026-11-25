@@ -141,7 +141,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 - Do: build BSD-3-Clause `libngspice` (no GPL/LGPL libraries bundled or statically linked; system C/compiler runtimes excepted) on Windows and Orion Linux; benchmark worker-process IPC vs in-process `libngspice` for startup latency (`SB3`), binary double streaming rate, and kill-on-cancel reliability (`SB4`); audit linked shared libs and record exact configure flags.
 - Done when: `docs/measurements/S0.3.md` records numbers and binary library audit on both Windows and Orion and flips `SD5` from `HYPOTHESIS` to `DECIDED`; if Orion measurements have not run yet, record Windows diagnostics and set `needs-human`.
 
-### S0.4 Spike SS2: live oscilloscope ring-buffer overhead · todo
+### S0.4 Spike SS2: live oscilloscope ring-buffer overhead · needs-human
 - Lane: bench · Depends: S0.2 · Read: `sim-plan.md` SB5, SB6, SK6, SK8, SINV9; `canvas-plan.md` D7, D8, G6
 - Owns: `crates/omnia-bench/src/spike/sim_scope.rs`, `docs/measurements/S0.4.md`
 - Do: prototype a 2-channel SPSC `SampleRing` fed at 100 kS/s by a background thread and drained by a cached floating scope view over a `1k` sheet at `30 Hz` and `60 Hz`; measure frame times, sheet paint count, and warm Omnia allocations on Orion.
@@ -393,4 +393,15 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        (`STC-erc-02`); S1.2 declares `Analysis` and `ProbeSpec`; `run_erc` and
                        `validate_probes` return `Result` and refuse stale `(lineage, revision)`
                        bindings (`CD18`). Documentation only.
+2026-11-25 S0.4 SS2 needs-human — Windows diagnostics: median run p99 0.840 ms
+                       at 30 Hz and 0.814 ms at 60 Hz, zero sheet paints, warm Omnia
+                       allocations, dropped pairs or missed refreshes. Orion pending
+                       (SB5, SB6, SK6, SK8, SINV9); SK8 stays at 30 Hz. Standard
+                       checks and focused spike tests pass. Evidence and owner command
+                       in docs/measurements/S0.4.md.
+2026-11-25 S0.4 review polish — SS2 uses a shared pair ring (SK6 capacity, D8
+                       per-channel wording) and frame-counted SK8 cadence. S3.3
+                       should use per-channel rings or update the plans if it
+                       adopts the shared ring. The Windows notes explain the 60 Hz
+                       empty updates and preserve the rationale for the rerun.
 ```
