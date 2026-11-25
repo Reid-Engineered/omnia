@@ -578,6 +578,9 @@ impl ToolMachine {
     /// or placement preview (re-snapping anchor pin 0); outside a gesture asks the host to turn
     /// the selection with `Command::Reorient`. Ignored in `Tool::Wire`.
     pub fn reorient(&mut self, by: Orient) -> ToolOutcome {
+        if by == Orient::IDENTITY {
+            return ToolOutcome::default();
+        }
         match &mut self.state {
             ToolState::Dragging(drag) => {
                 drag.by = drag.by.then(by);
@@ -1355,6 +1358,8 @@ mod tests {
         let selected = ItemId::Wire(WireId(1));
         let mut m = ToolMachine::new();
         press(&mut m, &doc, pt(3, 2), &[selected]);
+        assert_eq!(m.reorient(Orient::IDENTITY), ToolOutcome::default());
+        assert!(!dragging(&m).is_lifted());
         m.pointer_move(pt(3, 0), true);
         let expected_orient = Orient::ROT_90.then(Orient::FLIP_X).then(Orient::FLIP_Y);
         for by in [Orient::ROT_90, Orient::FLIP_X, Orient::FLIP_Y] {

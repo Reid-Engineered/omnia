@@ -45,8 +45,11 @@ pub fn anchor_pin_local(symbol: SymbolId) -> Pt {
         .map_or(Pt::ZERO, |pin| pin.at)
 }
 
+/// Largest multiple of [`GRID_NM`] that lies within K1 (`±SHEET_LIMIT_NM`).
+const MAX_GRID_NM: i64 = (SHEET_LIMIT_NM / GRID_NM) as i64 * GRID_NM as i64;
+
 /// Snaps `raw_cursor` so `symbol`'s anchor pin (pin 0) under `orient` lands on [`GRID_NM`] (K2),
-/// keeping the resulting part origin inside K1 (`±SHEET_LIMIT_NM`).
+/// keeping both the anchor pin and resulting part origin inside K1 (`±SHEET_LIMIT_NM`).
 ///
 /// For symbols whose pin 0 lies on [`GRID_NM`] (resistor, capacitor, diode, potentiometer,
 /// ground), this equals `snap_to(raw_cursor, GRID_NM)` away from the sheet edge. For symbols
@@ -54,12 +57,12 @@ pub fn anchor_pin_local(symbol: SymbolId) -> Pt {
 /// origin shifts by a half-grid step so pin 0 lands squarely on [`GRID_NM`].
 pub fn snap_place_origin(symbol: SymbolId, raw_cursor: Pt, orient: Orient) -> Pt {
     let offset = orient.apply(anchor_pin_local(symbol));
-    let limit = i64::from(SHEET_LIMIT_NM);
     let pin_raw = Pt {
-        x: (i64::from(raw_cursor.x) + i64::from(offset.x)).clamp(-limit, limit) as i32,
-        y: (i64::from(raw_cursor.y) + i64::from(offset.y)).clamp(-limit, limit) as i32,
+        x: (i64::from(raw_cursor.x) + i64::from(offset.x)).clamp(-MAX_GRID_NM, MAX_GRID_NM) as i32,
+        y: (i64::from(raw_cursor.y) + i64::from(offset.y)).clamp(-MAX_GRID_NM, MAX_GRID_NM) as i32,
     };
     let snapped_pin = snap_to(pin_raw, GRID_NM);
+    let limit = i64::from(SHEET_LIMIT_NM);
     let mut x = i64::from(snapped_pin.x) - i64::from(offset.x);
     let mut y = i64::from(snapped_pin.y) - i64::from(offset.y);
     let step = i64::from(GRID_NM);
@@ -198,6 +201,11 @@ mod tests {
                     );
                     if let Some(anchor) = def.pins.first() {
                         let world_pin = at + orient.apply(anchor.at);
+                        assert!(
+                            world_pin.is_in_bounds(),
+                            "{} {orient:?} raw={raw:?} pin 0 out of K1: {world_pin:?}",
+                            def.name
+                        );
                         assert_eq!(
                             world_pin.x % GRID_NM,
                             0,

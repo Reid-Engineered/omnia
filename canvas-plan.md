@@ -674,18 +674,21 @@ pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture), Placing(Plac
 pub struct DocStamp { pub key: u64, pub revision: u64 }   // key: doc_key(&Entity<Doc>)
 pub fn doc_key(doc: &Entity<Doc>) -> u64;
 pub struct DragGesture { pub items: Vec<ItemId>, pub pressed: ItemId, pub anchor: Pt,
-                         pub current: Pt, pub base: DocStamp }
+                         pub current: Pt, pub pivot: Pt, pub by: Orient, pub base: DocStamp,
+                         /* private anchor_pin, lifted */ }
 impl DragGesture {
-    pub fn delta(&self) -> Pt;                           // snapped to GRID_NM (T5.3: anchor pin)
-    pub fn command(&self, follow: FollowPolicy) -> Option<Command>; // one Move, or None
+    pub fn is_lifted(&self) -> bool;                     // T5.3: true once moved/reoriented off start
+    pub fn delta(&self) -> Pt;                           // T5.3: anchor-pin snapped to GRID_NM (K2)
+    pub fn isometry(&self) -> Isometry;                  // T5.3/T5.5: Transform { delta, pivot, by }
+    pub fn command(&self, follow: FollowPolicy) -> Option<Command>; // T5.3/T5.5: Move, Transform, or None
 }
-// R, X and Y during a drag are ignored until T5.5's combined move-and-reorient command: Move
-// then Reorient in a Batch normalises in between and can refuse a valid result.
+// T5.3/T5.5: R, X and Y during a drag compose into `DragGesture.by` (previewed as ghosts) and
+// commit as one `Command::Transform` so one undo reverts the whole gesture (INV5).
 pub struct PlaceGesture { pub symbol: SymbolId, pub at: Option<Pt>, pub orient: Orient,
-                          pub pressed: bool }    // only a press made in Place places
+                          pub pressed: bool, /* private raw_cursor */ } // only a press made in Place places
 pub struct WireGesture { pub start: Option<Pt>, pub cursor: Option<Pt> } // T6.2 extends
 pub enum ToolRequest { Click { item: ItemId, base: DocStamp }, Place { symbol: SymbolId, at: Pt, orient: Orient },
-                       ReorientSelection(Orient), DeleteSelection } // carried out by T5.3
+                       ReorientSelection(Orient), DeleteSelection } // T5.3: handled by OverlayView
 pub struct Commit { pub command: Command, pub base: DocStamp }
 pub struct ToolOutcome { pub handled: bool, pub preview_changed: bool, pub capture: bool,
                          pub release: bool, pub commit: Option<Commit>,
@@ -707,8 +710,8 @@ impl ToolMachine {
     pub fn reorient(&mut self, by: Orient) -> ToolOutcome; // R, X, Y
     pub fn delete(&mut self) -> ToolOutcome;              // Del
 }
-// T5.2: history emitted by the gesture owner (OverlayView) after every effective edit (commit,
-// undo, redo; later placement and delete) and re-emitted by SheetCanvas while both show one
+// T5.2/T5.3: history emitted by the gesture owner (OverlayView) after every effective edit (drag
+// commit, place, reorient, delete, undo, redo) and re-emitted by SheetCanvas while both show one
 // document. A separate event type rather than a `CanvasEvent` variant, so existing exhaustive
 // matches build.
 pub struct CanvasHistory { pub doc: u64, pub can_undo: bool, pub can_redo: bool, pub cursor: u64 }

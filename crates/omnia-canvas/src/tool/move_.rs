@@ -14,6 +14,9 @@ use omnia_doc::{
     snap_to,
 };
 
+/// Largest multiple of [`GRID_NM`] that lies within K1 (`±SHEET_LIMIT_NM`).
+const MAX_GRID_NM: i64 = (SHEET_LIMIT_NM / GRID_NM) as i64 * GRID_NM as i64;
+
 /// Applies `orient` to an `i64` offset `(dx, dy)` without risking `i32` overflow.
 #[inline]
 fn apply_orient_i64(orient: Orient, dx: i64, dy: i64) -> (i64, i64) {
@@ -117,10 +120,9 @@ pub fn drag_delta(anchor: Pt, current: Pt, pivot: Pt, by: Orient, anchor_pin: Op
         let (rx, ry) = apply_orient_i64(by, dx, dy);
         let p_rot_x = i64::from(pivot.x) + rx;
         let p_rot_y = i64::from(pivot.y) + ry;
-        let limit = i64::from(SHEET_LIMIT_NM);
         let target = Pt {
-            x: (p_rot_x + raw_dx).clamp(-limit, limit) as i32,
-            y: (p_rot_y + raw_dy).clamp(-limit, limit) as i32,
+            x: (p_rot_x + raw_dx).clamp(-MAX_GRID_NM, MAX_GRID_NM) as i32,
+            y: (p_rot_y + raw_dy).clamp(-MAX_GRID_NM, MAX_GRID_NM) as i32,
         };
         let snapped = snap_to(target, GRID_NM);
         let del_x = i64::from(snapped.x) - p_rot_x;
@@ -347,6 +349,27 @@ mod tests {
         let final_rot_pin = iso.apply(off_pin).unwrap();
         assert_eq!(final_rot_pin.x % G, 0);
         assert_eq!(final_rot_pin.y % G, 0);
+
+        // K1 boundary: dragging to ±SHEET_LIMIT_NM snaps anchor pin on GRID_NM inside K1.
+        for edge in [
+            Pt {
+                x: SHEET_LIMIT_NM,
+                y: SHEET_LIMIT_NM,
+            },
+            Pt {
+                x: -SHEET_LIMIT_NM,
+                y: -SHEET_LIMIT_NM,
+            },
+        ] {
+            let d = drag_delta(pt(0, 0), edge, pt(0, 0), Orient::IDENTITY, Some(off_pin));
+            let snapped_pin = off_pin + d;
+            assert!(
+                snapped_pin.is_in_bounds(),
+                "edge {edge:?} -> pin {snapped_pin:?} out of K1"
+            );
+            assert_eq!(snapped_pin.x % G, 0);
+            assert_eq!(snapped_pin.y % G, 0);
+        }
     }
 
     #[test]
