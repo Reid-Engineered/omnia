@@ -1,0 +1,12 @@
+{"jsonrpc":"2.0","id":"probe-1","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01","io.modelcontextprotocol/clientCapabilities":{}}}}
+{"jsonrpc":"2.0","id":"probe-2","method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+{"jsonrpc":"2.0","id":"no-meta","method":"tools/list","params":{}}
+{"jsonrpc":"2.0","id":"bad-init","method":"initialize","params":{"protocolVersion":"2025-11-25"}}
+{"jsonrpc":"2.0","id":"bad-ping","method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+{"jsonrpc":"2.0","id":"sub-1","method":"subscriptions/listen","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"notifications":{"resourcesListChanged":true,"resourceSubscriptions":["omnia://doc/d1"]}}}
+{"jsonrpc":"2.0","id":"call-1","method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"omnia_new","arguments":{}}}
+{"jsonrpc":"2.0","id":"call-2","method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{},"io.modelcontextprotocol/logLevel":"info"},"name":"omnia_apply","arguments":{"doc_id":"d1","expected_revision":0,"operations":[{"op":"place_part","symbol":"Resistor-IEEE-Standard","at":[0,0],"orient":"identity","designator":"R1","value":"10k"}]}}}
+{"jsonrpc":"2.0","id":"read-1","method":"resources/read","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"uri":"omnia://doc/d1"}}
+{"jsonrpc":"2.0","id":"read-2","method":"resources/read","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"uri":"omnia://symbols/Resistor-IEEE-Standard"}}
+{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"sub-1","reason":"done listening"}}
+{"jsonrpc":"2.0","id":"call-3","method":"tools/call","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}},"name":"omnia_undo","arguments":{"doc_id":"d1","expected_revision":1}}}
