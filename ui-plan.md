@@ -962,28 +962,30 @@ kept every default and approved section 14 as written.
 
 ## 14. Changes to the canvas and wiring plans
 
-Applied by roadmap task U0.2 after the owner reads this plan (UH0). Until then the canvas and
-wiring files stay authoritative for their ids.
+**Applied 2026-11-25 by U0.2** (commit: see PR; [canvas-plan.md](canvas-plan.md),
+[canvas-roadmap.md](canvas-roadmap.md), [wiring-plan.md](wiring-plan.md),
+[wiring-roadmap.md](wiring-roadmap.md) and [ROADMAP.md](ROADMAP.md) are now the source of
+truth for these items).
 
-| Where | Change |
-| --- | --- |
-| canvas-plan.md section 1 | Out of scope "the libraries UI" stays; add "the application shell: see ui-plan.md". |
-| canvas-plan.md section 9, crate list | `omnia-app` line: "window shell; see ui-plan.md section 10". |
-| canvas-plan.md section 9, `Doc` | Add `history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count` (UD6, UD18). |
-| canvas-plan.md section 9, `SheetCanvas` | Add `undo`, `redo`, `delete_selection`, `select_all`, `cut`, `copy`, `paste`, `zoom_step`, `set_wiring_prefs`, `focus_handle`; `Tool::ZoomArea`; the event type `CanvasHistory`. |
-| canvas-plan.md INV6 | "and `omnia-app` (ui-plan.md UINV1)". |
-| canvas-plan.md INV11 | "A hover, selection or drag-move change, or any shell-only change (ui-plan.md UINV2), does not notify `SheetView`." |
-| canvas-plan.md Q2 | Note UQ6's shell overlay tokens in the same file. |
-| canvas-roadmap.md Lanes | New lane `shell` owns `crates/omnia-app/` (ui-roadmap.md); `canvas` keeps `crates/omnia-canvas/`. |
-| canvas-roadmap.md T3.2 | The harness (`xtask/src/golden.rs`, the comparison rule, `tests/golden/`) is created by ui-roadmap.md U1.9; T3.2 adds sheet fixtures and its own done-when to it. |
-| canvas-roadmap.md T4.3 | Also provide `select_all` (Ctrl+A is bound by the shell, UD3). |
-| canvas-roadmap.md T4.5 | Also provide `zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation), used by View and the toolbar. |
-| canvas-roadmap.md T5.1 | Follow-up for doc lane task U2.1: `history_cursor`, `can_undo`, `can_redo`. |
-| canvas-roadmap.md T5.2 | Declare the R, X, Y and W actions, resolved in key context `Sheet`; the shell's `ACTIONS` table reuses those types and generates each binding once (UD3). Provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and the event type `CanvasHistory`, emitted sealed in opaque `CanvasHistoryEvent` after every effective edit, a drag's commit included, by the one gesture owner (`OverlayView`) that `SheetCanvas` delegates to while both show one document. Shell preconditions follow canvas-plan.md section 9 contract C1–C4: an `OverlayView` belongs to one window and is not remounted in another (C1); the shell subscribes only through `SheetCanvas::subscribe_history`, which drops an event for a document the canvas no longer shows at delivery (C2); a `SheetCanvas` does not subscribe to its own history (C3); and every gesture either commits once to its stamped document/revision while holding capture or ends with no edit and releases its capture in the window it took it in (C4). The keymap conflict test (UINV4) covers the combined shell keymap. |
-| canvas-roadmap.md T5.3 | Provide `delete_selection`. |
-| canvas-roadmap.md T7.1 | Ctrl+C, Ctrl+X, Ctrl+V are bound by the shell; T7.1 provides `cut`, `copy`, `paste`. |
-| canvas-roadmap.md T7.3 | The floating frame, drag, stacking and focus come from ui-roadmap.md U4.1. T7.3 supplies the animated stub content inside that frame, keeps `bench run --script pan --instrument` and its done-when; `instrument_host.rs` holds the content only. |
-| wiring-roadmap.md W2.3 | Also provide `SheetCanvas::set_wiring_prefs` (the move tool is the first consumer of `WiringPrefs`); ui-roadmap.md U5.4 calls it. |
-| wiring-plan.md section 1 | Out of scope "a preferences window, persistence of preferences": add "provided by ui-plan.md UD14". |
-| wiring-plan.md WD12 | Add: "Persistence and a settings surface are provided by ui-plan.md UD14. `WiringPrefs` is unchanged; the shell builds it through the checked constructor and applies it with `SheetCanvas::set_wiring_prefs`." |
-| ROADMAP.md | Link ui-plan.md and ui-roadmap.md under stages 2 and 4; record UQ3 and UQ5 defaults against the open decisions on files and autosave. |
+| Where | Change | Status |
+| --- | --- | --- |
+| canvas-plan.md section 1 | Out of scope "the libraries UI" stays; add "the application shell: see ui-plan.md". | Applied (2026-11-25) |
+| canvas-plan.md section 9, crate list | `omnia-app` line: "window shell; see ui-plan.md section 10". | Applied (2026-11-25) |
+| canvas-plan.md section 9, `Doc` | Add `history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count` (UD6, UD18). | Already present (U2.1, PR #70) |
+| canvas-plan.md section 9, `SheetCanvas` | Add `undo`, `redo`, `delete_selection`, `select_all`, `cut`, `copy`, `paste`, `zoom_step`, `set_wiring_prefs`, `focus_handle`; `Tool::ZoomArea`; the event type `CanvasHistory`. | Applied (2026-11-25; `undo`, `redo`, `delete_selection`, `zoom_step`, `focus_handle`, `CanvasHistory` already landed; remaining items sketched for their owning tasks) |
+| canvas-plan.md INV6 | "and `omnia-app` (ui-plan.md UINV1)". | Applied (2026-11-25) |
+| canvas-plan.md INV11 | "A hover, selection or drag-move change, or any shell-only change (ui-plan.md UINV2), does not notify `SheetView`." | Applied (2026-11-25) |
+| canvas-plan.md Q2 | Note UQ6's shell overlay tokens in the same file. | Applied (2026-11-25) |
+| canvas-roadmap.md Lanes | New lane `shell` owns `crates/omnia-app/` (ui-roadmap.md); `canvas` keeps `crates/omnia-canvas/`. | Applied (2026-11-25) |
+| canvas-roadmap.md T3.2 | The harness (`xtask/src/golden.rs`, the comparison rule, `tests/golden/`) is created by ui-roadmap.md U1.9; T3.2 adds sheet fixtures and its own done-when to it. | Applied as note (T3.2 `done`; landed before U1.9, which extends the shared harness) |
+| canvas-roadmap.md T4.3 | Also provide `select_all` (Ctrl+A is bound by the shell, UD3). | Applied as note (T4.3 `done`; `OverlayView::select_all` landed, `SheetCanvas::select_all` noted as follow-up for U5.1) |
+| canvas-roadmap.md T4.5 | Also provide `zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation), used by View and the toolbar. | Applied as note (T4.5 `done`; `zoom_step` landed, `Tool::ZoomArea` noted as unimplemented follow-up) |
+| canvas-roadmap.md T5.1 | Follow-up for doc lane task U2.1: `history_cursor`, `can_undo`, `can_redo`. | Applied as note (T5.1 `done`; U2.1 landed in PR #70) |
+| canvas-roadmap.md T5.2 | Declare the R, X, Y and W actions, resolved in key context `Sheet`; the shell's `ACTIONS` table reuses those types and generates each binding once (UD3). Provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and the event type `CanvasHistory`, emitted sealed in opaque `CanvasHistoryEvent` after every effective edit, a drag's commit included, by the one gesture owner (`OverlayView`) that `SheetCanvas` delegates to while both show one document. Shell preconditions follow canvas-plan.md section 9 contract C1–C4: an `OverlayView` belongs to one window and is not remounted in another (C1); the shell subscribes only through `SheetCanvas::subscribe_history`, which drops an event for a document the canvas no longer shows at delivery (C2); a `SheetCanvas` does not subscribe to its own history (C3); and every gesture either commits once to its stamped document/revision while holding capture or ends with no edit and releases its capture in the window it took it in (C4). The keymap conflict test (UINV4) covers the combined shell keymap. | Applied as note (T5.2 `done`; already delivered in T5.2) |
+| canvas-roadmap.md T5.3 | Provide `delete_selection`. | Applied as note (T5.3 `done`; already delivered in T5.3) |
+| canvas-roadmap.md T7.1 | Ctrl+C, Ctrl+X, Ctrl+V are bound by the shell; T7.1 provides `cut`, `copy`, `paste`. | Applied (2026-11-25) |
+| canvas-roadmap.md T7.3 | The floating frame, drag, stacking and focus come from ui-roadmap.md U4.1. T7.3 supplies the animated stub content inside that frame, keeps `bench run --script pan --instrument` and its done-when; `instrument_host.rs` holds the content only. | Applied (2026-11-25) |
+| wiring-roadmap.md W2.3 | Also provide `SheetCanvas::set_wiring_prefs` (the move tool is the first consumer of `WiringPrefs`); ui-roadmap.md U5.4 calls it. | Applied (2026-11-25) |
+| wiring-plan.md section 1 | Out of scope "a preferences window, persistence of preferences": add "provided by ui-plan.md UD14". | Applied (2026-11-25) |
+| wiring-plan.md WD12 | Add: "Persistence and a settings surface are provided by ui-plan.md UD14. `WiringPrefs` is unchanged; the shell builds it through the checked constructor and applies it with `SheetCanvas::set_wiring_prefs`." | Applied (2026-11-25) |
+| ROADMAP.md | Link ui-plan.md and ui-roadmap.md under stages 2 and 4; record UQ3 and UQ5 defaults against the open decisions on files and autosave. | Applied (2026-11-25) |

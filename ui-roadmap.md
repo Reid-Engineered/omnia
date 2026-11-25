@@ -141,7 +141,7 @@ without being drawn.
   approves section 14. Record each answer in section 13 with its date.
 - Done when: every UQ row has an answer or "default kept", dated.
 
-### U0.2 Make the plans agree · todo
+### U0.2 Make the plans agree · done
 - Lane: any · Depends: U0.1 · Read: ui-plan.md section 14
 - Owns: the canvas-plan.md, canvas-roadmap.md, wiring-plan.md, wiring-roadmap.md and ROADMAP.md
   rows section 14 names
@@ -778,3 +778,4 @@ development machine.
 2026-11-23 UQ15 review fixes — An independent review found U1.5, U1.7, U4.1, UTC-menu-mouse and UTC-menu-keys still counted total sheet paints in scripts that switch input modality. They now count shell-caused paints (0) with modality paints bounded separately; the UQ15 answer defines the term once. UTC-menu-keys states that a fresh headless window starts in mouse modality at the pinned GPUI, so F10 is one switch.
 2026-11-23 UQ15 review fixes (2) — U5.2's placement case now caps focus-caused paints at one and counts modality paints separately, so a Tab, then a pointer choice, is not double-counted.
 2026-11-23 U0.5 done — Orion reference campaign (owner-approved, run remotely by the coordinating agent; canvas plan 2.1): frozen `run.sh` at `main` `0507b1c`, 10 rotating passes × 4 cases, AC and `performance` governor verified in all 80 snapshots, Baloo suspended. UB10 passes on Orion: `save_10k` median p99 27.314 ms (range 22.617–54.223) < 33.3 ms. `load_10k` median p99 111.4 ms (background executor per D8/UD7). Evidence in `docs/measurements/U0.5/orion-2026-11-23/`. U0.6 needs no `DocSnapshot` request for US4.
+2026-11-25 U0.2 done — Applied every row of [ui-plan.md](ui-plan.md) §14 (approved at UH0) across `canvas-plan.md` (§1 out-of-scope, §9 `omnia-app` crate line, `Tool::ZoomArea` and `SheetCanvas::{select_all, cut, copy, paste, set_wiring_prefs}`, `INV6`, `INV11`, `Q2`), `canvas-roadmap.md` (`Lanes` `shell`/`canvas`, dated notes on `done` tasks `T3.2`, `T4.3`, `T4.5`, `T5.1`, `T5.2`, `T5.3`, and direct updates to `todo` tasks `T7.1` and `T7.3`), `wiring-plan.md` (§1, `WD12`), `wiring-roadmap.md` (`W2.3` `SheetCanvas::set_wiring_prefs`), and `ROADMAP.md` (stages 2 and 4 UI links, `UQ3` and `UQ5` defaults recorded under open decisions). Marked `ui-plan.md` §14 applied. Docs only; nothing measured; wiki unit tests, Hard Rule 1 scan and `git diff --check` pass.

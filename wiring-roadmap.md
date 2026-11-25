@@ -226,13 +226,14 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   and `Command::Reorient` (until W2.2, every run detaches).
 
 ### W2.3 Move tool: preview, modifier, refusal · todo
-- Lane: canvas · Depends: W2.2, T5.3, T6.2 · Read: WD11, WK3, WK7, WINV5, WINV11, D7
-- Owns: `crates/schematic-canvas/src/tool/move_.rs` (after T5.3), `overlay/follow.rs`
+- Lane: canvas · Depends: W2.2, T5.3, T6.2 · Read: WD11, WD12, WK3, WK7, WINV5, WINV11, D7, ui-plan.md UD14
+- Owns: `crates/schematic-canvas/src/tool/move_.rs` (after T5.3), `overlay/follow.rs`, and `SheetCanvas::set_wiring_prefs` in `input.rs`
 - Do: call `plan_follow` when the snapped delta, the orientation (R, X, Y during the drag)
   or the modifier changes; draw the plan in the overlay; hide replaced wires with the
   dragged items at drag start; read the modifier from the mouse-up event for the command;
   draw a refused plan in `mark/conflict` with the blocker outlined; treat mouse-up on a
-  refused plan as cancel. Above WK7, ghosts only.
+  refused plan as cancel. Above WK7, ghosts only. Also provide `SheetCanvas::set_wiring_prefs`
+  (the move tool is the first consumer of `WiringPrefs`; [ui-roadmap.md](ui-roadmap.md) U5.4 calls it).
 - Done when: simulated-input tests show the wires in the overlay at the last preview equal
   the document's wires after mouse-up (WINV5); the revision is unchanged through the drag
   and `SheetView` paints exactly twice (WINV11); Alt at mouse-up flips the result
