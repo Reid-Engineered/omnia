@@ -153,10 +153,11 @@ HC2 + (A3.1 or A4.1) -> C5.1          HC2 + measured split tails (CQ7) -> C5.2
   cases are re-run paired (delta off, delta on) on a development machine and recorded,
   labelled non-certifying, and the reference re-run is requested at HC2.
 
-### C1.2 Crate and circuit graph · todo
+### C1.2 Crate and circuit graph · done
 - Lane: circuit · Depends: C0.2 · Read: CD1, CD7, CK1 to CK4, CINV1, CINV10; section 11.2
 - Owns: `crates/omnia-circuit/` (`Cargo.toml`, `clippy.toml`, `src/lib.rs`, `src/graph.rs`,
-  `src/keys.rs`, `src/intern.rs`); the crate-list line of the INV12 test in `xtask/src/main.rs`
+  `src/keys.rs`, `src/intern.rs`, `tests/graph.rs`, `tests/invariants.rs`); the crate-list line of
+  the INV12 test in `xtask/src/main.rs`
 - Do: `Circuit::build`: rows, CSR membership, interner, net keys and display names, roles from
   the symbol library (`unspecified` until C3.1).
 - Done when: CINV1 and CINV10 pass; keys and names match CK1 and CK2 on CTC-key-01 and
@@ -513,3 +514,37 @@ clean.
 `follow.rs` and `tool/label.rs`, none of the five guarded files) and that mcp-plan.md 9.2 gave
 the `circuit` field to C2.1 (C2.2 owns it). Both fixed; mcp-plan.md 10.1 also lists `circuit?`
 on `omnia_preview` and `omnia_apply` and states the CD10 exception precisely.
+
+2026-11-25 C1.2 done — added GPUI-free crate `crates/omnia-circuit/` (`Cargo.toml`, `clippy.toml`,
+`src/lib.rs`, `src/intern.rs`, `src/keys.rs`, `src/graph.rs`, `tests/graph.rs`,
+`tests/invariants.rs`) and added `omnia-circuit` to the INV12 crate list in `xtask/src/main.rs`.
+Implemented `Circuit::build` over `Doc`'s public read-only API (CD1, CINV1): dense SoA rows for
+parts, pins and nets, CSR slices for net member pins (both `PinRow` and `(PartId, u32)` in CD18
+pin order, ready for C1.9), member labels (CD18 label order), candidate names and declared ground
+evidence (CK4), contiguous-buffer string interner (`StrId` intentionally non-`Ord`, CD7), CK1
+`CircuitKey` (distinct from `NetId`/`NetKey`/`NodeId`), CK2 display names and candidates, CK3
+`PinRole` (`Unspecified` until C3.1) and `SymbolClass` (`Ground-COM-General` -> `Ground`, else
+`Component` until sim S1.1), CK4 ground evidence/kinds, and CK7 hub flags. `clippy.toml` disallows
+`HashMap`/`HashSet` iteration methods and iterator types (CINV10). Tests verify CINV1, CINV10
+(including insertion-order independence), CTC-key-01 and CTC-name-01 built from scratch, every CK1
+key form, CD18 tie-breakers, CK3/CK4/CK7, and `cmp_natural` total-order proptests. Minor API
+note: `Circuit::net_of_pin` returns `Option<NetRef>` instead of panicking on unknown ids.
+Nothing measured; rule-1 scan clean.
+
+2026-11-25 C1.2 review fixes — addressed all PR #128 independent review findings: replaced
+internal `FxHashMap` fields with a non-iterable `LookupMap` (`rustc_hash::FxHasher`, no
+`IntoIterator` or iterator methods; probes before growing so hits never rehash), disallowed
+`std::collections::{HashMap, HashSet}` and `rustc_hash::{FxHashMap, FxHashSet}` in `clippy.toml`
+(closing generic `IntoIterator` and `std::iter::zip` bypasses for both std and alias types while
+keeping `.into_iter()` available for `Vec`/`BTreeMap`/`BTreeSet`) and denied
+`clippy::iter_over_hash_type`, `disallowed_methods`, and `disallowed_types` in `Cargo.toml`,
+verified by positive and negative `clippy-driver` controls (including `FxHashMap`/`FxHashSet`)
+asserting exact lint diagnostics under Cargo's lint flags (CINV10);
+quoted all section 9.2 record tags in CK9 compound-field components; fixed `cmp_pin_number` so two
+unnumbered pins tie at the pin-number step before geometry and stored index (CD18, CK13); replaced
+eager `then_some` addition in `Circuit::pin_row` with lazy `then` to prevent `u32::MAX` overflow
+panics; updated `context-plan.md` CD7 (CD18 pin order in CSR) and section 12 (`net_of_pin ->
+Option<NetRef>`); expanded `tests/invariants.rs` to randomized insertion permutations with
+explicit id remapping (including `N(wire:<id>)` display names and equal-pin-number duplicate
+designators at distinct positions, CINV3, CINV10); listed `tests/graph.rs` and
+`tests/invariants.rs` in C1.2's **Owns**. Nothing measured; rule-1 scan clean.
