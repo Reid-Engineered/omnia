@@ -1,0 +1,12 @@
+.subckt OPAMP_DUAL ina+ ina- outa inb+ inb- outb vcc vee
+XA ina+ ina- vcc vee outa OPAMP_CORE
+XB inb+ inb- vcc vee outb OPAMP_CORE
+.ends OPAMP_DUAL
+.subckt OPAMP_CORE 1 2 3 4 5
+RIN 1 2 2Meg
+G1 0 6 1 2 100u
+R1 6 0 1G
+C1 6 0 15.9n
+E2 7 0 6 0 1
+RO 7 5 50
+.ends OPAMP_CORE

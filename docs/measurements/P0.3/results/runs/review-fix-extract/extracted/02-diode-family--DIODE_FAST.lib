@@ -1,0 +1,1 @@
+.model diode_fast d(is=1e-14 rs=0.5 n=1.0 tt=4n cjo=2p bv=75 ibv=5u)

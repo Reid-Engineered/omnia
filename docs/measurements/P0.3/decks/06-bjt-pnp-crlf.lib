@@ -1,0 +1,7 @@
+﻿* 06-bjt-pnp-crlf.lib - generic small-signal PNP transistor (CRLF line endings, UTF-8 byte-order mark)
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.MODEL PNP_GENERIC PNP(IS=650.6E-18 XTI=3 EG=1.11 VAF=115.7 BF=231.7 NE=1.829
++ ISE=54.81f IKF=1.079 XTB=1.5 BR=3.563 NC=2 ISC=0 IKR=0 RC=.715
++ CJC=14.76p MJC=.5383 VJC=.75 FC=.5 CJE=19.82p MJE=.3357 VJE=.75
++ TR=111.3n TF=603.7p ITF=.65 VTF=5 XTF=1.7 RB=10)

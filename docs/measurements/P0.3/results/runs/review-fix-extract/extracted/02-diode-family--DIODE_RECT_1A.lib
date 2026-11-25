@@ -1,0 +1,4 @@
+.MODEL DIODE_RECT_1A D ( IS=14.1n N=1.984 RS=33.89m
++ IKF=94.81 XTI=3 EG=1.11      ; temperature terms
++ CJO=51.17p M=.2762 VJ=.3905  ; junction capacitance
++ FC=.5 ISR=100p NR=2 BV=1000 IBV=10u TT=4.761u )

@@ -1,0 +1,7 @@
+.subckt ZENER_5V1 A K
+D1 A K DF
+DR K X DR
+VZ X A 4.95
+.model DF D(IS=1e-14 RS=1.5 CJO=150p M=0.33 VJ=0.75)
+.model DR D(IS=1e-17 N=0.8 RS=2)
+.ends ZENER_5V1

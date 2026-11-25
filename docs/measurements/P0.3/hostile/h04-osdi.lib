@@ -1,0 +1,4 @@
+* SPDX-License-Identifier: CC0-1.0
+* Hostile fixture for the Omnia P0.3 spike: must be refused.
+pre_osdi device.osdi
+.model DX D(IS=1e-14)

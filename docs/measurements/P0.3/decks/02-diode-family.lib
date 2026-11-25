@@ -1,0 +1,11 @@
+* 02-diode-family.lib - three generic rectifier and switching diodes
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+*
+.MODEL DIODE_RECT_1A D ( IS=14.1n N=1.984 RS=33.89m
++ IKF=94.81 XTI=3 EG=1.11      ; temperature terms
++ CJO=51.17p M=.2762 VJ=.3905  ; junction capacitance
++ FC=.5 ISR=100p NR=2 BV=1000 IBV=10u TT=4.761u )
+*
+.model diode_fast d(is=1e-14 rs=0.5 n=1.0 tt=4n cjo=2p bv=75 ibv=5u)
+.Model Diode_Schottky D(IS=1u RS=0.2 N=1.05 CJO=50p M=0.5 EG=0.69 XTI=2 BV=40 IBV=1m)

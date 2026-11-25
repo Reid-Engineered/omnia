@@ -1,0 +1,5 @@
+* SPDX-License-Identifier: CC0-1.0
+* Hostile fixture for the Omnia P0.3 spike: must be refused.
+.subckt NEEDS_MODEL a k
+D1 a k DMISSING
+.ends NEEDS_MODEL

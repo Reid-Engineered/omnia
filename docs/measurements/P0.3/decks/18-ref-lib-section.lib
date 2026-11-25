@@ -1,0 +1,8 @@
+* 18-ref-lib-section.lib - trimmed reference selecting one section of a corners library
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.lib "inc/corners.lib" TT
+.subckt REF_TRIMMED OUT GND PARAMS: VNOM=1.2
+VREF OUT N1 {VNOM+VREF_TRIM}
+D1 N1 GND DREF_TT
+.ends REF_TRIMMED

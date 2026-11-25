@@ -1,0 +1,5 @@
+* 09-mosfet-nmos-l1.lib - generic level-1 NMOS
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.model NMOS_L1 NMOS (LEVEL=1 VTO=0.7 KP=110u GAMMA=0.4 LAMBDA=0.04 PHI=0.7
++ TOX=9.5n CGSO=0.3n CGDO=0.3n CJ=0.4m MJ=0.5 CJSW=0.3n MJSW=0.33)

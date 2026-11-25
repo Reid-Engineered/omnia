@@ -1,0 +1,62 @@
+# P0.3 / PS1 one-command run on a Windows development machine. Certifies nothing (AGENTS rule 3).
+#
+#   pwsh -File docs/measurements/P0.3/run.ps1 [-Label windows]
+#
+# Builds the spike (release, offline, versions from spike/Cargo.lock), snapshots conditions,
+# runs the 20-deck extractor and the hostile set, then the PB3 index timing with the schedule
+# fixed below, snapshots conditions again and records the binaries' SHA-256. Honours an
+# existing CARGO_TARGET_DIR; otherwise builds into spike/target (git-ignored).
+#
+# Every run writes to a fresh results/runs/<label>-<timestamp>/ and never touches the
+# committed campaign files directly under results/ (review of PR #133).
+param([string]$Label = "windows")
+$ErrorActionPreference = "Stop"
+
+# Schedule, fixed before the first timed run.
+$Parts = 500; $Reps = 10; $Iters = 200; $Warmup = 20
+
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Claims a run directory atomically. Creating the directory is idempotent on Windows, so the
+# claim is an exclusive `.claim` file: FileMode.CreateNew fails with "file exists" if another
+# launch already holds the directory, before this run writes anything there.
+function New-RunDirectory([string]$Path) {
+    [System.IO.Directory]::CreateDirectory($Path) | Out-Null
+    $claim = [System.IO.File]::Open((Join-Path $Path ".claim"), [System.IO.FileMode]::CreateNew)
+    $claim.Dispose()
+}
+if ($env:P03_CLAIM_SELFTEST) {
+    # Self-test: claiming the same path twice must fail the second time.
+    $probe = Join-Path ([System.IO.Path]::GetTempPath()) ("p03-claim-" + [guid]::NewGuid())
+    New-RunDirectory $probe
+    try { New-RunDirectory $probe; "claim self-test: FAIL (second claim succeeded)"; exit 1 }
+    catch { "claim self-test: second claim refused ($($_.Exception.InnerException.Message))" }
+    finally { Remove-Item -Recurse -Force $probe }
+    exit 0
+}
+$results = [System.IO.Path]::GetFullPath(
+    (Join-Path $here ("results/runs/{0}-{1}" -f $Label, (Get-Date -Format "yyyyMMddTHHmmss"))))
+New-RunDirectory $results
+if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $here "spike/target" }
+$bin = Join-Path $env:CARGO_TARGET_DIR "release"
+
+Push-Location (Join-Path $here "spike")
+try {
+    cargo build --offline --locked --release --bins
+    if ($LASTEXITCODE -ne 0) { throw "build failed" }
+} finally { Pop-Location }
+
+$hashes = Get-FileHash -Algorithm SHA256 (Join-Path $bin "extract.exe"), (Join-Path $bin "index_bench.exe") |
+    ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path -Leaf $_.Path) }
+$hashes | Set-Content (Join-Path $results "binaries-$Label.sha256")
+
+& (Join-Path $here "conditions.ps1") | Set-Content (Join-Path $results "conditions-before-$Label.txt")
+
+& (Join-Path $bin "extract.exe") $here (Join-Path $results "extract")
+if ($LASTEXITCODE -ne 0) { throw "extraction expectations failed" }
+
+& (Join-Path $bin "index_bench.exe") --work (Join-Path $env:CARGO_TARGET_DIR "p03-work") `
+    --out (Join-Path $results "index-$Label") --parts $Parts --reps $Reps --iters $Iters --warmup $Warmup |
+    Tee-Object (Join-Path $results "index-$Label.txt")
+if ($LASTEXITCODE -ne 0) { throw "index bench failed" }
+
+& (Join-Path $here "conditions.ps1") | Set-Content (Join-Path $results "conditions-after-$Label.txt")

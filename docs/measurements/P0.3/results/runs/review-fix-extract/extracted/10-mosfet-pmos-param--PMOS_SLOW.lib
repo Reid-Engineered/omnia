@@ -1,0 +1,1 @@
+.model PMOS_SLOW PMOS (LEVEL=1 VTO=-1.1 KP=30u)

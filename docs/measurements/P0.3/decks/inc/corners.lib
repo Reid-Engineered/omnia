@@ -1,0 +1,11 @@
+* corners.lib - process corners for the generic trimmed reference
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.lib TT
+.param VREF_TRIM=0
+.model DREF_TT D(IS=1e-14 N=1.0)
+.endl TT
+.lib FF
+.param VREF_TRIM=0.01
+.model DREF_TT D(IS=2e-14 N=0.98)
+.endl FF

@@ -1,0 +1,274 @@
+# P0.3 spike PS1: expected extraction results for the 20 decks and the hostile set.
+#
+# `blocks` lists "<kind>:<name>" in emitted (flattened source) order; `lines` is the number
+# of physical lines in the extracted text; `ports` is the `.subckt` port list.
+# Fixed before the first run of the extractor. One correction after that run, logged in
+# P0.3.md: 05-bjt-npn-generic NPN_GENERIC `lines` 7 -> 6 (a hand miscount of the fixture;
+# the block is physical lines 4-9 of a 10-line file).
+
+[[deck]]
+file = "01-diode-signal.lib"
+constructs = ["model", "parenthesised parameters"]
+[[deck.entry]]
+name = "DIODE_SIGNAL"
+kind = "model"
+blocks = ["model:DIODE_SIGNAL"]
+lines = 1
+
+[[deck]]
+file = "02-diode-family.lib"
+constructs = ["several models", "+ continuations", "; inline comments", "mixed-case directives", "case-insensitive lookup"]
+[[deck.entry]]
+name = "DIODE_RECT_1A"
+kind = "model"
+blocks = ["model:DIODE_RECT_1A"]
+lines = 4
+[[deck.entry]]
+name = "DIODE_FAST"
+kind = "model"
+blocks = ["model:diode_fast"]
+lines = 1
+[[deck.entry]]
+name = "diode_schottky"
+kind = "model"
+blocks = ["model:Diode_Schottky"]
+lines = 1
+
+[[deck]]
+file = "03-zener-subckt.lib"
+constructs = ["subckt", "models local to a subckt", "element named like its model"]
+[[deck.entry]]
+name = "ZENER_5V1"
+kind = "subckt"
+ports = ["A", "K"]
+blocks = ["subckt:ZENER_5V1"]
+lines = 7
+
+[[deck]]
+file = "04-led-generic.lib"
+constructs = ["model without parentheses", "tab separators", "spaces around ="]
+[[deck.entry]]
+name = "LED_RED"
+kind = "model"
+blocks = ["model:LED_RED"]
+lines = 2
+
+[[deck]]
+file = "05-bjt-npn-generic.lib"
+constructs = ["comment and blank lines between continuations", "$ inline comment"]
+[[deck.entry]]
+name = "NPN_GENERIC"
+kind = "model"
+blocks = ["model:NPN_GENERIC"]
+lines = 6
+
+[[deck]]
+file = "06-bjt-pnp-crlf.lib"
+constructs = ["CRLF line endings", "UTF-8 byte-order mark"]
+[[deck.entry]]
+name = "PNP_GENERIC"
+kind = "model"
+blocks = ["model:PNP_GENERIC"]
+lines = 4
+
+[[deck]]
+file = "07-bjt-pair.lib"
+constructs = ["subckt using a top-level model", "unused model excluded", ".ends without a name"]
+[[deck.entry]]
+name = "NPN_PAIR"
+kind = "subckt"
+ports = ["C1", "B1", "C2", "B2", "E"]
+blocks = ["model:NPN_PAIR_Q", "subckt:NPN_PAIR"]
+lines = 7
+
+[[deck]]
+file = "08-bjt-darlington.lib"
+constructs = ["transitive subckt -> subckt -> model closure", "forward references", "four-terminal Q with area"]
+[[deck.entry]]
+name = "DARLINGTON_NPN"
+kind = "subckt"
+ports = ["C", "B", "E"]
+blocks = ["subckt:DARLINGTON_NPN", "subckt:NPN_STAGE", "model:NPN_DRV"]
+lines = 9
+
+[[deck]]
+file = "09-mosfet-nmos-l1.lib"
+constructs = ["MOSFET model", "space before parenthesis"]
+[[deck.entry]]
+name = "NMOS_L1"
+kind = "model"
+blocks = ["model:NMOS_L1"]
+lines = 2
+
+[[deck]]
+file = "10-mosfet-pmos-param.lib"
+constructs = ["top-level .param dependency", "brace expressions"]
+[[deck.entry]]
+name = "PMOS_L1"
+kind = "model"
+blocks = ["param:VT0P", "param:KPP", "model:PMOS_L1"]
+lines = 2
+[[deck.entry]]
+name = "PMOS_SLOW"
+kind = "model"
+blocks = ["model:PMOS_SLOW"]
+lines = 1
+
+[[deck]]
+file = "11-mosfet-power-subckt.lib"
+constructs = ["PARAMS: on the header line", "uppercase directives", "local models"]
+[[deck.entry]]
+name = "NMOS_POWER"
+kind = "subckt"
+ports = ["D", "G", "S"]
+blocks = ["subckt:NMOS_POWER"]
+lines = 8
+
+[[deck]]
+file = "12-jfet-n.lib"
+constructs = ["JFET model", "mixed-case parameter names"]
+[[deck.entry]]
+name = "NJF_GENERIC"
+kind = "model"
+blocks = ["model:NJF_GENERIC"]
+lines = 3
+
+[[deck]]
+file = "13-opamp-generic.lib"
+constructs = ["PARAMS: on a continuation line", "nested .subckt", "X instance with PARAMS:"]
+[[deck.entry]]
+name = "OPAMP_GENERIC"
+kind = "subckt"
+ports = ["inp", "inn", "vcc", "vee", "out"]
+blocks = ["subckt:OPAMP_GENERIC"]
+lines = 19
+
+[[deck]]
+file = "14-opamp-dual.lib"
+constructs = ["subckt calling a later subckt twice", "node names containing + and -"]
+[[deck.entry]]
+name = "OPAMP_DUAL"
+kind = "subckt"
+ports = ["ina+", "ina-", "outa", "inb+", "inb-", "outb", "vcc", "vee"]
+blocks = ["subckt:OPAMP_DUAL", "subckt:OPAMP_CORE"]
+lines = 12
+
+[[deck]]
+file = "15-opamp-macro-poly.lib"
+constructs = ["POLY controlled sources", "lowercase params:", "element names that look like keywords (DC)"]
+[[deck.entry]]
+name = "OPAMP_MACRO"
+kind = "subckt"
+ports = ["1", "2", "3", "4", "5"]
+blocks = ["subckt:OPAMP_MACRO"]
+lines = 35
+
+[[deck]]
+file = "16-comparator-func.lib"
+constructs = ["top-level .func dependency", "behavioural B source", "unused .func excluded"]
+[[deck.entry]]
+name = "COMPARATOR_GENERIC"
+kind = "subckt"
+ports = ["inp", "inn", "vcc", "vee", "out"]
+blocks = ["func:clampv", "subckt:COMPARATOR_GENERIC"]
+lines = 7
+
+[[deck]]
+file = "17-shunt-ref-include.lib"
+constructs = [".include of a local file", "closure across the include"]
+[[deck.entry]]
+name = "SHUNT_REF_2V5"
+kind = "subckt"
+ports = ["K", "A", "REF"]
+blocks = ["subckt:SHUNT_CORE", "model:DSHUNT", "subckt:SHUNT_REF_2V5"]
+lines = 9
+
+[[deck]]
+file = "18-ref-lib-section.lib"
+constructs = [".lib <file> <section> include", "parameter from the selected section"]
+[[deck.entry]]
+name = "REF_TRIMMED"
+kind = "subckt"
+ports = ["OUT", "GND"]
+blocks = ["param:VREF_TRIM", "model:DREF_TT", "subckt:REF_TRIMMED"]
+lines = 6
+
+[[deck]]
+file = "19-opto-nested-shadow.lib"
+constructs = ["three nesting levels", "local model shadowing a top-level model", "use before local definition"]
+[[deck.entry]]
+name = "OPTO_GENERIC"
+kind = "subckt"
+ports = ["A", "K", "C", "E"]
+blocks = ["model:DLED", "subckt:OPTO_GENERIC"]
+lines = 18
+
+[[deck]]
+file = "20-crystal-xfmr.lib"
+constructs = ["ports on continuation lines", "PARAMS: on its own continuation", "K coupling", ".ENDS without a name"]
+[[deck.entry]]
+name = "XTAL_GENERIC"
+kind = "subckt"
+ports = ["1", "2"]
+blocks = ["subckt:XTAL_GENERIC"]
+lines = 8
+[[deck.entry]]
+name = "XFMR_1TO2"
+kind = "subckt"
+ports = ["p1", "p2", "s1", "s2"]
+blocks = ["subckt:XFMR_1TO2"]
+lines = 5
+
+# Hostile set: every file must be refused with this error code. `entry` names what to
+# extract when the refusal can only come from extraction.
+[[hostile]]
+file = "h01-control.lib"
+code = "forbidden"
+[[hostile]]
+file = "h02-include-parent.lib"
+code = "include_unsafe_path"
+[[hostile]]
+file = "h03-include-absolute.lib"
+code = "include_unsafe_path"
+[[hostile]]
+file = "h04-osdi.lib"
+code = "forbidden"
+[[hostile]]
+file = "h05-latin1.lib"
+code = "not_utf8"
+[[hostile]]
+file = "h06-unterminated.lib"
+code = "unterminated_subckt"
+[[hostile]]
+file = "h07-include-cycle.lib"
+code = "include_cycle"
+[[hostile]]
+file = "h08-include-missing.lib"
+code = "include_missing"
+[[hostile]]
+file = "h09-ends-mismatch.lib"
+code = "ends_name_mismatch"
+[[hostile]]
+file = "h10-codemodel.lib"
+code = "forbidden"
+[[hostile]]
+file = "h11-unresolved-model.lib"
+code = "unresolved"
+entry = "NEEDS_MODEL"
+[[hostile]]
+file = "h12-include-unc.lib"
+code = "include_unsafe_path"
+[[hostile]]
+file = "h13-csdf.lib"
+code = "forbidden"
+[[hostile]]
+file = "h14-system.lib"
+code = "forbidden"
+[[hostile]]
+file = "h15-orphan-continuation.lib"
+code = "orphan_continuation"
+# Added after the independent review of PR #133 (an unsafe include inside an unselected
+# .lib section must still be refused).
+[[hostile]]
+file = "h16-section-escape.lib"
+code = "include_unsafe_path"
