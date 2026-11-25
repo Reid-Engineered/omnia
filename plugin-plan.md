@@ -49,11 +49,11 @@ Status words follow the repository conventions:
   replaces it.
 
 WebAssembly (Wasm), WIT, WASI, TOML, RON, ZIP, JSON, JSON-RPC, SPDX, SHA-256, Ed25519, Wayland,
-X11, DMA-BUF, Vulkan, `wasmtime`, `wit-bindgen`, `gpui`, `wgpu`, `ngspice` and `RIS-C` are named
-here as open standards, graphics/windowing interfaces, open-source crates or first-party engines
-already referenced in the repository. `Reid-Engineered/Spectare` is named as a first-party target
-workspace plugin. Operating systems appear only as `AGENTS.md` names them (Linux and Windows). No
-third-party company or commercial product is named (AGENTS hard rule 1).
+X11, DMA-BUF, Vulkan, AccessKit, `wasmtime`, `wit-bindgen`, `gpui`, `wgpu`, `ngspice` and `RIS-C`
+are named here as open standards, graphics/windowing interfaces, open-source crates or first-party
+engines already referenced in the repository. `Reid-Engineered/Spectare` is named as a first-party
+target workspace plugin. Operating systems appear only as `AGENTS.md` names them (Linux and
+Windows). No third-party company or commercial product is named (AGENTS hard rule 1).
 
 ## 1. Scope
 
@@ -268,11 +268,11 @@ Plugins cover three complementary roles without duplicating `.opart`/`.olib` or 
 - **Level 0 (Bundle — Declarative):** pure data validated against strict Rust schemas. Zero code
   execution, instant load, safe by default.
 - **Level 1 (Wasm — WebAssembly Component Model / WIT via `wasmtime`):** portable single-binary
-  `.wasm` components compiled from Rust or any WIT-capable language. Memory-safe, OS-sandboxed,
-  cross-platform (Linux + Windows with one artifact), ABI-stable across Rust and GPUI upgrades.
-  Each enabled Wasm plugin runs inside its own single-threaded worker actor (serialising at most
-  one in-flight invocation per plugin at a time, `EK5`), preventing re-entrancy races and bounding
-  thread usage.
+  `.wasm` components compiled from Rust or any WIT-capable language. Memory-safe, sandboxed by the
+  Wasm runtime, cross-platform (Linux + Windows with one artifact), ABI-stable across Rust and GPUI
+  upgrades. Each enabled Wasm plugin runs inside its own single-threaded worker actor (serialising
+  at most one in-flight invocation per plugin at a time, `EK5`), preventing re-entrancy races and
+  bounding thread usage.
 - **Level 2 (Sidecar — Out-of-process executable over local IPC):** native companion binaries
   launched and supervised by `omnia-plugin-ipc`. Crash-isolated (a sidecar panic or segfault never
   takes down Omnia or loses unsaved schematics), language- and GPU-toolchain-independent, and
@@ -615,6 +615,8 @@ interface doc-read {
     revision: func() -> doc-revision;
     inspect-json: func(filter-json: string) -> result<string, string>;
     circuit-context: func(view-json: string) -> result<string, string>;
+    // Automatically scoped to the caller's own `plugin_id` namespace; reading
+    // another plugin's `ext` block is refused by construction.
     get-doc-ext: func() -> option<ext-entry>;
     get-item-ext: func(item: item-id) -> option<ext-entry>;
 }
@@ -774,7 +776,7 @@ None of the files below are edited by `E0.1`; each row names the task that makes
 | `.github/wiki/build_wiki.py` | Register `("plugin-roadmap.md", "Plugin-roadmap", "Plugins")` in `ROADMAPS`, `("plugin-plan.md", "Plugins")` in `PLANS`, and add `plugin` to `DEPENDS_FILLER`. | `E0.2` |
 | `docs/file-format-proposal.md` | Reserve optional section kind `EXT_DATA` for namespaced `omnia-doc` extension blocks (`EK7`, noting older binary readers that skip unknown sections do not preserve `EXT_DATA` on re-save). | `E0.2` |
 | `deny.toml` | Log any approved `wasmtime` / `wit-bindgen` SPDX licence exception (only after `ES1` audit and owner `HE1` sign-off). | `E0.5` (`HE1`) |
-| `parts-plan.md`, `ui-plan.md`, `mcp-plan.md`, `canvas-plan.md` (section 9), `crates/omnia-agent/src/files.rs`, `crates/omnia-app` (`UTC-open-bad` fixture) | Update RON version facts from v3 to v4 (`EK7`, `EQ3`): `Doc::load` accepts v2, v3 and v4; bump unsupported-version fixtures (`PTC-version-refuse`, `UTC-open-bad`, `files.rs`) from `version: 4` to `version: 5`; document `DocExt`, `Command::PluginPatch` and `Change::ext_changed`. | `E2.1` (in the same PR as `omnia-doc` changes, after `P2.3`, `C1.9` and `C1.1`) |
+| `parts-plan.md`, `ui-plan.md`, `mcp-plan.md`, `canvas-plan.md` (section 9), `crates/omnia-agent/src/files.rs`, and (if `U2.3` has already merged) `UTC-open-bad` app fixture in `crates/omnia-app/src/files.rs` or `crates/omnia-app/tests/shell_*.rs` | Update RON version facts from v3 to v4 (`EK7`, `EQ3`): `Doc::load` accepts v2, v3 and v4; bump unsupported-version fixtures (`PTC-version-refuse`, `files.rs`, and `UTC-open-bad` in whichever of `E2.1`/`U2.3` merges second) from `version: 4` to `version: 5`; document `DocExt`, `Command::PluginPatch` and `Change::ext_changed`. | `E2.1` (in the same PR as `omnia-doc` changes, after `P2.3`, `C1.9` and `C1.1`; `UTC-open-bad` app fixture by whichever of `E2.1` and `U2.3` merges second) |
 | `ui-plan.md` (sections 1, 5 and 10) | Document the workbench mode/tab host slot, plugin dock/overlay slots, Plugin Manager dialog, and `--safe-mode`. | `E3.3` |
 | `mcp-plan.md` | Note that plugin-contributed ERC findings appear under `<plugin_id>:<rule_id>` without suppressing built-in findings (`EINV13`). | `E2.3` |
 | `THIRD_PARTY.md` | Record any new third-party dependencies added by `omnia-plugin-wasm` or `omnia-plugin-ipc`. | `E2.2`, `E4.1` |
