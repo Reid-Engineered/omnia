@@ -28,7 +28,8 @@
 #      stopped), but waits for the indexer to be idle after the build before timing starts;
 #   5. records every process's CPU time just before and just after the gate, so the foreign
 #      load over the whole campaign can be read off afterwards (evidence, not a gate input);
-#   6. runs the gate under kde-inhibit and keeps the gate's own exit status.
+#   6. resets KDE idle/dimming via ScreenSaver.SimulateUserActivity, then runs the gate under
+#      kde-inhibit (--power --screenSaver --colorCorrect --notifications) and keeps its exit status.
 #
 # Closing the terminal does not stop the campaign (hangups are ignored); Ctrl-C stops it, and
 # the gate then restores the panel scale itself. Output goes outside the checkout, because the
@@ -216,18 +217,23 @@ except ProcessLookupError:
     cpu_times > "$out/cpu-before.json"
     # Reset KDE's idle/dimming timer before inhibiting so a stale remote DPMS wake cannot leave a
     # pending PowerDevil idle-dim transition armed mid-campaign (2026-11-25 s100/10k-drag-part-3).
-    qdbus6 org.freedesktop.ScreenSaver /ScreenSaver SimulateUserActivity >/dev/null 2>&1 || true
+    local wake_out wake_rc=0
+    wake_out=$(qdbus6 org.freedesktop.ScreenSaver /ScreenSaver SimulateUserActivity 2>&1) || wake_rc=$?
+    {
+        echo "SimulateUserActivity before inhibit: exit $wake_rc${wake_out:+ ($wake_out)}"
+    } >> "$out/conditions.txt"
     sleep 1
     # kde-inhibit always exits 0, so the gate's status is written from inside it. PowerDevil's
-    # inhibition flags and panel dimming state are sampled after its activation delay (about 5 s)
-    # and recorded; the gate itself checks DPMS before and after every invocation.
+    # inhibition flags and panel brightness/dimming state are sampled after its activation delay
+    # (about 5 s) and recorded; the gate itself checks DPMS before and after every invocation.
     kde-inhibit --power --screenSaver --colorCorrect --notifications bash -c '
         sleep 6
         {
             echo "PowerManagement.HasInhibit: $(qdbus6 org.freedesktop.PowerManagement /org/freedesktop/PowerManagement/Inhibit HasInhibit 2>&1 || true)"
             echo "PolicyAgent.HasInhibition(1): $(qdbus6 org.kde.Solid.PowerManagement.PolicyAgent /org/kde/Solid/PowerManagement/PolicyAgent HasInhibition 1 2>&1 || true)"
             echo "PolicyAgent.HasInhibition(4): $(qdbus6 org.kde.Solid.PowerManagement.PolicyAgent /org/kde/Solid/PowerManagement/PolicyAgent HasInhibition 4 2>&1 || true)"
-            echo "Brightness: $(kscreen-doctor -o 2>&1 | grep -i brightness | head -n 1 || true)"
+            echo "Brightness/dimming:"
+            kscreen-doctor -o 2>&1 | grep -iE "brightness|dim" || true
         } > "$1/inhibit.txt"
         python3 -B "$2" run "$1/gate"
         echo $? > "$1/gate-exit.txt"
@@ -239,6 +245,8 @@ except ProcessLookupError:
         echo "finished $(date -u +%FT%TZ), gate exit $status"
         echo "inhibition 6 s into the inhibitor:"
         cat "$out/inhibit.txt" 2>/dev/null || true
+        echo "brightness/dimming after:"
+        kscreen-doctor -o 2>&1 | grep -iE "brightness|dim" || true
         echo "baloo after:"
         balooctl6 status 2>&1 || true
     } >> "$out/conditions.txt"
