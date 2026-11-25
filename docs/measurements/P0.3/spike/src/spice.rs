@@ -421,6 +421,32 @@ impl Flattener<'_> {
         self.files.len() - 1
     }
 
+    /// The `PK10` path rules for one include directive: allowed in this mode, safe, and naming
+    /// a file inside the archive.
+    fn check_target(&self, from: &str, line: usize, raw_path: &str) -> Result<String, SpiceError> {
+        if self.mode == Mode::Embedded {
+            return Err(SpiceError::IncludeInEmbedded {
+                file: from.to_owned(),
+                line,
+            });
+        }
+        let Some(target) = resolve_include(from, raw_path) else {
+            return Err(SpiceError::IncludeUnsafePath {
+                file: from.to_owned(),
+                line,
+                path: raw_path.to_owned(),
+            });
+        };
+        if self.vfs.get(&target).is_none() {
+            return Err(SpiceError::IncludeMissing {
+                file: from.to_owned(),
+                line,
+                path: target,
+            });
+        }
+        Ok(target)
+    }
+
     fn include(
         &mut self,
         stack: &mut Vec<String>,
@@ -548,9 +574,6 @@ impl Flattener<'_> {
                 }
                 ".include" | ".inc" | ".lib" => {
                     last_was_directive = true;
-                    if !Self::emitting(&want, in_section) {
-                        continue;
-                    }
                     let arg = toks.get(1).ok_or(SpiceError::Malformed {
                         file: path.to_owned(),
                         line: n,
@@ -567,6 +590,13 @@ impl Flattener<'_> {
                             line: n,
                             what: ".lib without a section",
                         });
+                    }
+                    // Every include path in the file is checked under the PK10 path rules,
+                    // including those in unselected `.lib` sections (review of PR #133);
+                    // only selected ones are followed.
+                    self.check_target(path, n, arg)?;
+                    if !Self::emitting(&want, in_section) {
+                        continue;
                     }
                     self.include(stack, path, n, arg, sec)?;
                 }
@@ -1052,39 +1082,42 @@ fn split_header(rest: &[String]) -> (Vec<String>, Vec<String>) {
 }
 
 /// Candidate reference names on a logical line: coarse tokens (split on whitespace,
-/// brackets, commas, quotes and `=`) plus a finer split on expression operators, minus the
-/// directive keyword, the element name and any name the line itself defines. Over-inclusion is
-/// harmless (an extra block); under-inclusion is not.
+/// brackets, commas, quotes and `=`) plus a finer split on expression operators.
+///
+/// Names are skipped by *position*, never by value: the directive keyword or element name
+/// (first token), the name a `.model`/`.subckt`/`.func` line defines (second token), and the
+/// left-hand side of each `name=value` on a `.param` line. Any other occurrence of the same
+/// text is still a reference, so `D1 a k D1` with a top-level `.model D1`, or
+/// `.model VT NMOS(VTO={VT})` with a top-level `.param VT`, keeps its dependency (review of
+/// PR #133). Over-inclusion is harmless (an extra block); under-inclusion is not.
 fn reference_tokens(code: &str) -> BTreeSet<String> {
     let toks = tokens(code);
     let head = lc(&toks[0]);
-    let mut skip: BTreeSet<String> = BTreeSet::new();
-    skip.insert(head.clone());
-    match head.as_str() {
-        ".model" | ".subckt" | ".func" => {
-            if let Some(n) = toks.get(1) {
-                skip.insert(lc(n.split('(').next().unwrap_or_default()));
+    let mut fragments: Vec<&str> = Vec::new();
+    for (i, t) in toks.iter().enumerate().skip(1) {
+        match head.as_str() {
+            ".ends" => return BTreeSet::new(),
+            ".model" | ".subckt" | ".func" if i == 1 => {
+                let name_len = t.split('(').next().unwrap_or_default().len();
+                fragments.push(&t[name_len..]);
             }
+            ".param" | ".params" => match t.split_once('=') {
+                Some((_, rhs)) => fragments.push(rhs),
+                None => fragments.push(t),
+            },
+            _ => fragments.push(t),
         }
-        ".param" | ".params" => {
-            for t in &toks[1..] {
-                if let Some((n, _)) = t.split_once('=') {
-                    skip.insert(lc(n));
-                }
-            }
-        }
-        ".ends" => return BTreeSet::new(),
-        _ => {}
     }
     let mut out = BTreeSet::new();
     let coarse = |c: char| c.is_ascii_whitespace() || "(){}[],=\"'".contains(c);
     let fine = |c: char| "*/+-^<>!?:&|%".contains(c);
-    for t in code.split(coarse).filter(|t| !t.is_empty()) {
-        out.insert(lc(t));
-        for f in t.split(fine).filter(|f| !f.is_empty()) {
-            out.insert(lc(f));
+    for frag in fragments {
+        for t in frag.split(coarse).filter(|t| !t.is_empty()) {
+            out.insert(lc(t));
+            for f in t.split(fine).filter(|f| !f.is_empty()) {
+                out.insert(lc(f));
+            }
         }
     }
-    out.retain(|t| !skip.contains(t));
     out
 }

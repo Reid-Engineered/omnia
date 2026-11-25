@@ -1,7 +1,9 @@
 //! Runs the PS1 extractor over the 20 decks and the hostile set.
 //!
-//! Usage: `extract [<P0.3 dir>]` (default: the parent of this crate). Writes
-//! `results/extract.json` and one `results/extracted/<deck>--<entry>.lib` per extraction.
+//! Usage: `extract [<P0.3 dir> [<output dir>]]` (defaults: the parent of this crate, and a
+//! fresh `results/runs/extract-<unix seconds>/`). Writes `<output dir>/extract.json` and one
+//! `<output dir>/extracted/<deck>--<entry>.lib` per extraction, and refuses an output directory
+//! that already holds a run.
 //! Exits 1 if any expectation in `decks/expect.toml` fails.
 
 use std::fmt::Write as _;
@@ -42,7 +44,25 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."));
     let report = decks::run(&root);
-    let out_dir = root.join("results");
+    // Never write over the committed campaign in `results/` (review of PR #133): the output
+    // goes to the directory given, or to a fresh `results/runs/extract-<unix seconds>/`.
+    let out_dir = std::env::args()
+        .nth(2)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_secs();
+            root.join("results")
+                .join("runs")
+                .join(format!("extract-{secs}"))
+        });
+    assert!(
+        !out_dir.join("extract.json").exists(),
+        "{} already holds a run; choose a fresh output directory",
+        out_dir.display()
+    );
     let ex_dir = out_dir.join("extracted");
     std::fs::create_dir_all(&ex_dir).expect("results dir");
 

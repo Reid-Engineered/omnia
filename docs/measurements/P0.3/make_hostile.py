@@ -24,11 +24,15 @@ FILES = {
     "h13-csdf.lib": ".csdf\n.model DX D(IS=1e-14)\n",
     "h14-system.lib": "system calc\n.model DX D(IS=1e-14)\n",
     "h15-orphan-continuation.lib": "+ IS=1e-14\n.model DX D(IS=1e-14)\n",
+    # Added after the review of PR #133: an unsafe include inside an unselected .lib section.
+    "h16-section-escape.lib": '.lib "inc/h16-corners.lib" TT\n.model DX D(IS=1e-14)\n',
+    "inc/h16-corners.lib": ".lib TT\n.model DTT D(IS=1e-14)\n.endl TT\n"
+    + '.lib FF\n.include "../../escape.lib"\n.endl FF\n',
 }
 
 
 def main() -> None:
-    os.makedirs("hostile", exist_ok=True)
+    os.makedirs(os.path.join("hostile", "inc"), exist_ok=True)
     for name, body in FILES.items():
         with open(os.path.join("hostile", name), "wb") as f:
             f.write((HEADER + body).encode("ascii"))

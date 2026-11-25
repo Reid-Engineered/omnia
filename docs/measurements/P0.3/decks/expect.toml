@@ -267,3 +267,8 @@ code = "forbidden"
 [[hostile]]
 file = "h15-orphan-continuation.lib"
 code = "orphan_continuation"
+# Added after the independent review of PR #133 (an unsafe include inside an unselected
+# .lib section must still be refused).
+[[hostile]]
+file = "h16-section-escape.lib"
+code = "include_unsafe_path"

@@ -189,3 +189,77 @@ fn pk3_and_pd2_refusals_before_decompression() {
         Err(IndexError::TooManyEntries(1025))
     ));
 }
+
+fn extract_one(text: &str, entry: &str, kind: DefKind) -> omnia_p03_spike::spice::Extraction {
+    let mut v = Vfs::new();
+    v.insert("t.lib", text.as_bytes().to_vec());
+    Deck::load(&v, "t.lib", Mode::Archive)
+        .unwrap()
+        .extract(entry, kind)
+        .unwrap()
+}
+
+fn block_names(x: &omnia_p03_spike::spice::Extraction) -> Vec<String> {
+    x.blocks
+        .iter()
+        .map(|b| format!("{}:{}", b.kind.as_str(), b.name))
+        .collect()
+}
+
+/// Review of PR #133: an element named like the top-level model it uses keeps the model.
+#[test]
+fn same_name_element_and_model_keeps_dependency() {
+    let x = extract_one(
+        ".model DSAME D(IS=1e-14)\n.subckt CLAMP a k\nDSAME a k DSAME\n.ends CLAMP\n",
+        "CLAMP",
+        DefKind::Subckt,
+    );
+    assert_eq!(block_names(&x), ["model:DSAME", "subckt:CLAMP"]);
+}
+
+/// Review of PR #133: an `X` instance named like the top-level subcircuit it calls.
+#[test]
+fn same_name_instance_and_subckt_keeps_dependency() {
+    let x = extract_one(
+        ".subckt XAMP i o\nR1 i o 1k\n.ends XAMP\n.subckt TOP i o\nXAMP i o XAMP\n.ends TOP\n",
+        "TOP",
+        DefKind::Subckt,
+    );
+    assert_eq!(block_names(&x), ["subckt:XAMP", "subckt:TOP"]);
+}
+
+/// Review of PR #133: a `.model` using a top-level `.param` of the same name keeps it.
+#[test]
+fn same_name_model_and_param_keeps_dependency() {
+    let x = extract_one(
+        ".param VT=0.7\n.model VT NMOS(LEVEL=1 VTO={VT})\n",
+        "VT",
+        DefKind::Model,
+    );
+    assert_eq!(block_names(&x), ["param:VT", "model:VT"]);
+}
+
+/// Review of PR #133: a `.param` whose right-hand side uses a same-named outer value, and a
+/// `.param` line that defines one name from another on the same line.
+#[test]
+fn param_right_hand_sides_are_references() {
+    let x = extract_one(
+        ".param BASE=2\n.param GAIN={BASE*2}\n.model QG NPN(BF={GAIN})\n",
+        "QG",
+        DefKind::Model,
+    );
+    assert_eq!(block_names(&x), ["param:BASE", "param:GAIN", "model:QG"]);
+}
+
+/// Review of PR #133: an unsafe include in an unselected `.lib` section is still refused.
+#[test]
+fn pk10_unsafe_include_in_unselected_section_is_refused() {
+    let mut v = Vfs::new();
+    v.insert("top.lib", b".lib \"c.lib\" TT\n".to_vec());
+    v.insert(
+        "c.lib",
+        b".lib TT\n.model D1 D\n.endl TT\n.lib FF\n.include \"../x.lib\"\n.endl FF\n".to_vec(),
+    );
+    let err = Deck::load(&v, "top.lib", Mode::Archive).unwrap_err();
+    assert_eq!(err.code(), "include_unsafe_path");
+}

@@ -1,0 +1,8 @@
+* SPDX-License-Identifier: CC0-1.0
+* Hostile fixture for the Omnia P0.3 spike: must be refused.
+.lib TT
+.model DTT D(IS=1e-14)
+.endl TT
+.lib FF
+.include "../../escape.lib"
+.endl FF

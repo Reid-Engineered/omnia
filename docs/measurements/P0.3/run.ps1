@@ -6,6 +6,9 @@
 # runs the 20-deck extractor and the hostile set, then the PB3 index timing with the schedule
 # fixed below, snapshots conditions again and records the binaries' SHA-256. Honours an
 # existing CARGO_TARGET_DIR; otherwise builds into spike/target (git-ignored).
+#
+# Every run writes to a fresh results/runs/<label>-<timestamp>/ and never touches the
+# committed campaign files directly under results/ (review of PR #133).
 param([string]$Label = "windows")
 $ErrorActionPreference = "Stop"
 
@@ -13,8 +16,9 @@ $ErrorActionPreference = "Stop"
 $Parts = 500; $Reps = 10; $Iters = 200; $Warmup = 20
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$results = Join-Path $here "results"
-New-Item -ItemType Directory -Force $results | Out-Null
+$results = Join-Path $here ("results/runs/{0}-{1}" -f $Label, (Get-Date -Format "yyyyMMddTHHmmss"))
+if (Test-Path $results) { throw "$results already exists; refusing to overwrite a run" }
+New-Item -ItemType Directory $results | Out-Null
 if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $here "spike/target" }
 $bin = Join-Path $env:CARGO_TARGET_DIR "release"
 
@@ -30,7 +34,7 @@ $hashes | Set-Content (Join-Path $results "binaries-$Label.sha256")
 
 & (Join-Path $here "conditions.ps1") | Set-Content (Join-Path $results "conditions-before-$Label.txt")
 
-& (Join-Path $bin "extract.exe") $here
+& (Join-Path $bin "extract.exe") $here $results
 if ($LASTEXITCODE -ne 0) { throw "extraction expectations failed" }
 
 & (Join-Path $bin "index_bench.exe") --work (Join-Path $env:CARGO_TARGET_DIR "p03-work") `
