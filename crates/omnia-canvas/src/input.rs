@@ -242,6 +242,9 @@ pub struct SheetCanvas {
     /// T5.2: the gesture owner. Tool, cancel, undo and redo go to it (`set_overlay`).
     overlay: Option<Entity<OverlayView>>,
     overlay_subscriptions: Vec<Subscription>,
+    /// T5.3: shell-supplied placement provider (`parts-plan.md` section 14), forwarded to the
+    /// attached gesture owner regardless of `set_place_provider`/`set_overlay` call order.
+    place_provider: Option<tool::PlaceProvider>,
     focus: FocusHandle,
     /// Last pointer position over the sheet, window logical px.
     pointer: Option<Point<f64>>,
@@ -278,6 +281,7 @@ impl SheetCanvas {
             nav: Navigator::default(),
             overlay: None,
             overlay_subscriptions: Vec::new(),
+            place_provider: None,
             focus: cx.focus_handle(),
             pointer: None,
             viewport: Bounds::default(),
@@ -385,6 +389,29 @@ impl SheetCanvas {
         }
         self.overlay = overlay;
         self.sync_overlay_doc(cx);
+        if let Some(provider) = self.place_provider.clone()
+            && let Some(owner) = self.gesture_owner(cx)
+        {
+            owner.update(cx, |o, _| o.set_place_provider(Some(provider)));
+        }
+    }
+
+    /// T5.3: installs or clears the shell-supplied placement provider (`parts-plan.md` section 14).
+    ///
+    /// When `Tool::Place(symbol)` commits, the provider builds the [`omnia_doc::Command`] for the
+    /// symbol, anchor-pin-snapped point, orientation, and designator. When `None` is installed,
+    /// placement defaults to [`omnia_symbols::SymbolLibrary::place_command`]. Stored on
+    /// `SheetCanvas` and forwarded to any attached or future gesture owner so call order with
+    /// [`Self::set_overlay`] never matters.
+    pub fn set_place_provider(
+        &mut self,
+        provider: Option<tool::PlaceProvider>,
+        cx: &mut Context<Self>,
+    ) {
+        self.place_provider = provider.clone();
+        if let Some(owner) = self.gesture_owner(cx) {
+            owner.update(cx, |o, _| o.set_place_provider(provider));
+        }
     }
 
     /// Keeps the attached overlay on this canvas's document (`set_doc`, `set_overlay`).

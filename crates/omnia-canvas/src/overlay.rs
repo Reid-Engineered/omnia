@@ -13,6 +13,7 @@
 //! - All overlay colours come exclusively from `omnia-theme` tokens (`stage/select`,
 //!   `stage/select-halo`, `stage/hover`, `stage/net-highlight`, INV6).
 
+mod ghosts;
 mod net;
 
 pub use net::NetHighlight;
@@ -88,6 +89,8 @@ pub struct CachedSheet {
     camera: Camera,
     theme: &'static Theme,
     document: Option<SheetDocument>,
+    /// T5.3: dragged items hidden from `SheetView` while rendered as overlay ghosts (D7).
+    hidden: Option<Rc<[ItemId]>>,
     paints: Rc<Cell<u64>>,
     renders: u64,
 }
@@ -98,9 +101,21 @@ impl CachedSheet {
             camera,
             theme,
             document,
+            hidden: None,
             paints: Rc::new(Cell::new(0)),
             renders: 0,
         }
+    }
+
+    /// Shared symbol masks from the cached document for overlay ghosts (T5.3).
+    pub(crate) fn masks(&self) -> Option<&crate::sheet::symbols::Masks> {
+        self.document.as_ref().map(SheetDocument::masks)
+    }
+
+    /// Currently hidden dragged items, if any (T5.3 tests).
+    #[cfg(test)]
+    pub(crate) fn hidden_items(&self) -> &[ItemId] {
+        self.hidden.as_deref().unwrap_or(&[])
     }
 
     /// Number of times [`SheetView::paint`] actually executed (not replayed from cache).
@@ -120,6 +135,7 @@ impl Render for CachedSheet {
         let view = match &self.document {
             Some(document) => {
                 SheetView::with_document(self.camera.clone(), self.theme, document.clone())
+                    .with_hidden(self.hidden.clone())
             }
             None => SheetView::new(self.camera.clone(), self.theme),
         };
@@ -291,6 +307,8 @@ pub struct OverlayView {
     state: SelectionState,
     /// T5.2: the tool state machine; it sees the pointer before selection does.
     tools: ToolMachine,
+    /// T5.3: optional shell-supplied placement provider (`parts-plan.md` section 14).
+    place_provider: Option<tool::PlaceProvider>,
     net_highlight: NetHighlight,
     focus: FocusHandle,
     viewport: Bounds<Pixels>,
@@ -338,6 +356,7 @@ impl OverlayView {
             theme,
             state: SelectionState::from_prefs(prefs),
             tools: ToolMachine::with_prefs(*prefs),
+            place_provider: None,
             net_highlight: NetHighlight::new(),
             focus: cx.focus_handle(),
             viewport: Bounds::default(),
@@ -361,6 +380,33 @@ impl OverlayView {
     /// Replaces or clears the [`OverlayPaintScope`] used for B10 allocation accounting.
     pub fn set_paint_scope(&mut self, scope: Option<Rc<dyn OverlayPaintScope>>) {
         self.scope = scope;
+    }
+
+    /// T5.3: installs or clears the placement provider used when `Tool::Place` commits
+    /// (`parts-plan.md` section 14). Defaults to [`omnia_symbols::SymbolLibrary::place_command`]
+    /// when `None`.
+    pub fn set_place_provider(&mut self, provider: Option<tool::PlaceProvider>) {
+        self.place_provider = provider;
+    }
+
+    /// Syncs `CachedSheet.hidden` with the active drag items so `SheetView` hides dragged items
+    /// once the drag lifts off (paint 1) and restores them on drag end (paint 2) (D7, INV11, B10).
+    /// Plain clicks that never lift leave `hidden == None` (0 `SheetView` paints, INV11).
+    fn sync_hidden_items(&mut self, cx: &mut Context<Self>) {
+        let lifted_items: Option<&[ItemId]> = match self.tools.state() {
+            tool::ToolState::Dragging(drag) if drag.is_lifted() && !drag.items.is_empty() => {
+                Some(drag.items.as_slice())
+            }
+            _ => None,
+        };
+        if self.sheet.read(cx).hidden.as_deref() == lifted_items {
+            return;
+        }
+        let next = lifted_items.map(Rc::from);
+        self.sheet.update(cx, |sheet, cx| {
+            sheet.hidden = next;
+            cx.notify();
+        });
     }
 
     pub fn doc(&self) -> &Entity<Doc> {
@@ -836,6 +882,10 @@ impl OverlayView {
             }
         };
 
+        if let Some(cx) = cx.as_deref_mut() {
+            self.sync_hidden_items(cx);
+        }
+
         if !self.tools.is_dragging()
             && !self.state.is_rubber_banding()
             && let Some(record) = self.capture.take()
@@ -1051,6 +1101,7 @@ impl ToolHost for OverlayView {
     }
 
     fn preview_changed(&mut self, cx: &mut Context<Self>) {
+        self.sync_hidden_items(cx);
         cx.notify();
     }
 
@@ -1067,13 +1118,61 @@ impl ToolHost for OverlayView {
     }
 
     fn request(&mut self, request: ToolRequest, cx: &mut Context<Self>) {
-        // T5.2: a click selects its item only on the document it was made on, and only if
-        // the item still exists there (another command may have deleted it mid-press).
-        if let ToolRequest::Click { item, base } = request
-            && tool::doc_key(&self.doc) == base.key
-            && item_exists(self.doc.read(cx), item)
-        {
-            self.set_selection([item], cx);
+        match request {
+            ToolRequest::Click { item, base } => {
+                // T5.2: a click selects its item only on the document it was made on, and only if
+                // the item still exists there (another command may have deleted it mid-press).
+                if tool::doc_key(&self.doc) == base.key && item_exists(self.doc.read(cx), item) {
+                    self.set_selection([item], cx);
+                }
+            }
+            ToolRequest::Place { symbol, at, orient } => {
+                let base = tool::DocStamp {
+                    key: tool::doc_key(&self.doc),
+                    revision: self.doc.read(cx).revision(),
+                };
+                let command = tool::place::build_place_command(
+                    self.doc.read(cx),
+                    symbol,
+                    at,
+                    orient,
+                    self.place_provider.as_ref(),
+                );
+                if let Some(command) = command {
+                    tool::apply(self, tool::Commit { command, base }, cx);
+                }
+            }
+            ToolRequest::ReorientSelection(by) => {
+                let base = tool::DocStamp {
+                    key: tool::doc_key(&self.doc),
+                    revision: self.doc.read(cx).revision(),
+                };
+                let follow = self.tools.prefs().follow_policy(false);
+                let command = tool::move_::reorient_selection_command(
+                    self.doc.read(cx),
+                    self.state.selection(),
+                    by,
+                    follow,
+                );
+                if let Some(command) = command {
+                    tool::apply(self, tool::Commit { command, base }, cx);
+                }
+            }
+            ToolRequest::DeleteSelection => {
+                let base = tool::DocStamp {
+                    key: tool::doc_key(&self.doc),
+                    revision: self.doc.read(cx).revision(),
+                };
+                let with_wires = self.tools.prefs().delete_wires_with_part;
+                let command = tool::move_::delete_selection_command(
+                    self.doc.read(cx),
+                    self.state.selection(),
+                    with_wires,
+                );
+                if let Some(command) = command {
+                    tool::apply(self, tool::Commit { command, base }, cx);
+                }
+            }
         }
     }
 }
@@ -1245,15 +1344,43 @@ impl Element for OverlayLayer {
                 let sf = window.scale_factor();
                 let view = overlay.read(cx);
                 let doc = self.doc.read(cx);
+                let sheet = view.sheet.read(cx);
+                let ghost_preview = match view.tools.state() {
+                    tool::ToolState::Placing(place) => match place.at {
+                        Some(at) => ghosts::GhostPreview::Place {
+                            symbol: place.symbol,
+                            at,
+                            orient: place.orient,
+                        },
+                        None => ghosts::GhostPreview::None,
+                    },
+                    tool::ToolState::Dragging(drag)
+                        if drag.is_lifted() && !drag.items.is_empty() =>
+                    {
+                        ghosts::GhostPreview::Drag {
+                            items: &drag.items,
+                            transform: drag.isometry(),
+                        }
+                    }
+                    _ => ghosts::GhostPreview::None,
+                };
                 let ctx = OverlayPaintContext {
                     doc,
                     camera: &camera,
                     bounds,
                     sf,
                     theme: self.theme,
+                    masks: sheet.masks(),
                     scope,
                 };
-                paint_overlay(&view.state, &view.net_highlight, &ctx, window);
+                paint_overlay(
+                    &view.state,
+                    &view.net_highlight,
+                    ghost_preview,
+                    &ctx,
+                    window,
+                    cx,
+                );
             });
         }
 
@@ -1653,14 +1780,17 @@ struct OverlayPaintContext<'a> {
     bounds: Bounds<Pixels>,
     sf: f32,
     theme: &'static Theme,
+    masks: Option<&'a crate::sheet::symbols::Masks>,
     scope: Option<&'a dyn OverlayPaintScope>,
 }
 
 fn paint_overlay(
     state: &SelectionState,
     net_highlight: &NetHighlight,
+    ghost_preview: ghosts::GhostPreview<'_>,
     ctx: &OverlayPaintContext<'_>,
     window: &mut Window,
+    cx: &App,
 ) {
     let OverlayPaintContext {
         doc,
@@ -1668,12 +1798,27 @@ fn paint_overlay(
         bounds,
         sf,
         theme,
+        masks,
         scope,
     } = *ctx;
-    let hovered = state.hovered();
-    let selection = state.selection();
+    let is_dragging_ghosts = matches!(ghost_preview, ghosts::GhostPreview::Drag { .. });
+    let hovered = if is_dragging_ghosts {
+        None
+    } else {
+        state.hovered()
+    };
+    let selection = if is_dragging_ghosts {
+        &[][..]
+    } else {
+        state.selection()
+    };
     let band = state.rubber_band().filter(|b| b.is_visible());
-    if hovered.is_none() && selection.is_empty() && band.is_none() && net_highlight.is_empty() {
+    if hovered.is_none()
+        && selection.is_empty()
+        && band.is_none()
+        && (is_dragging_ghosts || net_highlight.is_empty())
+        && !ghost_preview.is_active()
+    {
         return;
     }
 
@@ -1822,16 +1967,19 @@ fn paint_overlay(
             window.paint_layer(|window| {
                 run_omnia(scope, || {
                     // T4.4: whole-net wire highlight in `stage/net-highlight` (underneath selection handles).
-                    let wire_paint = net::WirePaintParams {
-                        camera,
-                        visible_padded,
-                        sf,
-                        width_dev: wire_select_dev,
-                        clip,
-                        theme,
-                        scope,
-                    };
-                    net::paint_wires(doc, net_highlight.wires(), &wire_paint, window);
+                    // Skip while dragging ghosts so hidden/dragged wires do not leave stationary highlights behind.
+                    if !is_dragging_ghosts {
+                        let wire_paint = net::WirePaintParams {
+                            camera,
+                            visible_padded,
+                            sf,
+                            width_dev: wire_select_dev,
+                            clip,
+                            theme,
+                            scope,
+                        };
+                        net::paint_wires(doc, net_highlight.wires(), &wire_paint, window);
+                    }
 
                     // Hovered item outline (hovered wires are painted by `net::paint_wires` above, with
                     // their Layer 1 hover halo indicating the hovered segment).
@@ -1986,6 +2134,24 @@ fn paint_overlay(
                     }
                 });
             });
+
+            // T5.3: placement preview and drag-move ghosts (D7, INV6, INV11).
+            if ghost_preview.is_active()
+                && let Some(masks) = masks
+            {
+                let ghost_params = ghosts::GhostPaintParams {
+                    doc,
+                    camera,
+                    bounds,
+                    visible_padded,
+                    sf,
+                    clip,
+                    theme,
+                    masks,
+                    scope,
+                };
+                ghosts::paint_ghosts(ghost_preview, &ghost_params, window, cx);
+            }
         });
     });
 }

@@ -17,8 +17,8 @@
 //! The grid walks the lattice directly. Document paint reuses its query and paint buffers
 //! and uses prebuilt raster keys and SVG bytes (B10, INV7).
 
-mod lod;
-mod symbols;
+pub(crate) mod lod;
+pub(crate) mod symbols;
 mod text;
 mod wires;
 
@@ -121,6 +121,23 @@ impl SheetDocument {
             cache: Rc::new(DocumentCache::default()),
         }
     }
+
+    /// Shared symbol sprite masks for overlay ghosts (T5.3, zero duplicate atlas buffers).
+    pub(crate) fn masks(&self) -> &symbols::Masks {
+        &self.cache.masks
+    }
+}
+
+/// Zero-allocation membership test against a canonically sorted slice of hidden items (T5.3, B10).
+#[inline]
+pub(super) fn is_hidden(hidden: &[ItemId], item: ItemId) -> bool {
+    if hidden.is_empty() {
+        return false;
+    }
+    let key = crate::selection::item_sort_key(item);
+    hidden
+        .binary_search_by_key(&key, |&id| crate::selection::item_sort_key(id))
+        .is_ok()
 }
 
 #[derive(Debug)]
@@ -208,6 +225,7 @@ impl DocumentCache {
         doc: &Doc,
         camera: &Camera,
         sf: f32,
+        hidden: &[ItemId],
         mut layer: impl FnMut(Layer, &mut EmitMarks<'a, '_>),
     ) {
         let mut scratch = self.scratch.borrow_mut();
@@ -236,6 +254,9 @@ impl DocumentCache {
             },
         };
         doc.query(area, items);
+        if !hidden.is_empty() {
+            items.retain(|&id| !is_hidden(hidden, id));
+        }
         items.sort_unstable_by_key(|id| match *id {
             ItemId::Part(id) => (0, id.0),
             ItemId::Wire(id) => (1, id.0),
@@ -313,6 +334,8 @@ pub struct SheetView {
     camera: Camera,
     theme: &'static Theme,
     document: Option<SheetDocument>,
+    /// T5.3: canonically sorted items currently hidden during an active drag (D7, B10).
+    hidden: Option<Rc<[ItemId]>>,
 }
 
 impl SheetView {
@@ -322,6 +345,7 @@ impl SheetView {
             camera,
             theme,
             document: None,
+            hidden: None,
         }
     }
 
@@ -331,7 +355,14 @@ impl SheetView {
             camera,
             theme,
             document: Some(document),
+            hidden: None,
         }
+    }
+
+    /// Hides canonically sorted `hidden` items while they are rendered as overlay ghosts (T5.3, D7).
+    pub(crate) fn with_hidden(mut self, hidden: Option<Rc<[ItemId]>>) -> Self {
+        self.hidden = hidden;
+        self
     }
 
     pub fn camera(&self) -> &Camera {
@@ -377,22 +408,33 @@ impl SheetView {
                         let doc = document.doc.read(cx);
                         let ink = gpui_color(self.theme.stage_ink);
                         let ink_secondary = gpui_color(self.theme.stage_ink_secondary);
-                        document.cache.draw(doc, &camera, scale_factor, |_, emit| {
-                            scope.gpui(|| {
-                                window.paint_layer(|window| {
-                                    scope.omnia(|| {
-                                        emit(&mut |mark| {
-                                            paint_mark(window, cx, mark, scale_factor, ink, scope);
+                        let hidden = self.hidden.as_deref().unwrap_or(&[]);
+                        document
+                            .cache
+                            .draw(doc, &camera, scale_factor, hidden, |_, emit| {
+                                scope.gpui(|| {
+                                    window.paint_layer(|window| {
+                                        scope.omnia(|| {
+                                            emit(&mut |mark| {
+                                                paint_mark(
+                                                    window,
+                                                    cx,
+                                                    mark,
+                                                    scale_factor,
+                                                    ink,
+                                                    scope,
+                                                );
+                                            });
                                         });
                                     });
                                 });
                             });
-                        });
                         let scratch = document.cache.scratch.borrow();
                         let text_frame = text::TextFrame {
                             doc,
                             parts: &scratch.items[..scratch.parts_end],
                             labels: &scratch.items[scratch.wires_end..],
+                            hidden,
                             camera: &camera,
                             viewport: bounds,
                             scale_factor,
@@ -650,7 +692,7 @@ mod tests {
         let cache = DocumentCache::default();
         let paint = |camera: &Camera| {
             let mut marks = 0;
-            cache.draw(&doc, camera, 1.25, |_, emit| {
+            cache.draw(&doc, camera, 1.25, &[], |_, emit| {
                 emit(&mut |mark| {
                     match mark {
                         Mark::Quad(bounds) => {
@@ -699,7 +741,7 @@ mod tests {
             let (sheet, _) = sheet(zoom, (0.0, 0.0));
             let mut quads = 0;
             let mut sprites = 0;
-            cache.draw(&doc, sheet.camera(), 1.5, |_, emit| {
+            cache.draw(&doc, sheet.camera(), 1.5, &[], |_, emit| {
                 emit(&mut |mark| match mark {
                     Mark::Quad(_) => quads += 1,
                     Mark::Sprite(_) => sprites += 1,
@@ -719,7 +761,7 @@ mod tests {
             let (view, _) = sheet(zoom, (0.0, 0.0));
             let mut quads = 0;
             let mut sprites = 0;
-            cache.draw(doc, view.camera(), 1.25, |_, emit| {
+            cache.draw(doc, view.camera(), 1.25, &[], |_, emit| {
                 emit(&mut |mark| match mark {
                     Mark::Quad(_) => quads += 1,
                     Mark::Sprite(_) => sprites += 1,
@@ -814,7 +856,7 @@ mod tests {
             let (view, _) = sheet(zoom, (0.0, 0.0));
             let mut quads = 0;
             let mut sprites = 0;
-            cache.draw(&doc, view.camera(), 1.25, |_, emit| {
+            cache.draw(&doc, view.camera(), 1.25, &[], |_, emit| {
                 emit(&mut |mark| match mark {
                     Mark::Quad(_) => quads += 1,
                     Mark::Sprite(_) => sprites += 1,
@@ -1098,5 +1140,83 @@ mod tests {
         assert_eq!(full + faded, quads.len() - 1);
         // The faded dots are three of every four lattice points.
         assert!(faded > 2 * full && faded < 4 * full, "{full} {faded}");
+    }
+
+    #[test]
+    fn t5_3_hidden_items_skip_draw_with_zero_warm_allocations() {
+        let mut doc = Doc::new();
+        let library = omnia_symbols::SymbolLibrary::builtin();
+        let def = library.get(library.by_name("Resistor-IEEE-Standard").unwrap());
+        let p0 = doc
+            .apply(Command::PlacePart {
+                part: Part {
+                    symbol: def.id,
+                    at: Pt {
+                        x: -4 * GRID_NM,
+                        y: 0,
+                    },
+                    orient: Orient::IDENTITY,
+                    designator: "R1".into(),
+                    value: "10k".into(),
+                },
+                local_pins: def.pins.iter().map(|pin| pin.at).collect(),
+                local_bounds: def.bounds,
+            })
+            .unwrap()
+            .added[0];
+        let p1 = doc
+            .apply(Command::PlacePart {
+                part: Part {
+                    symbol: def.id,
+                    at: Pt {
+                        x: 4 * GRID_NM,
+                        y: 0,
+                    },
+                    orient: Orient::IDENTITY,
+                    designator: "R2".into(),
+                    value: "22k".into(),
+                },
+                local_pins: def.pins.iter().map(|pin| pin.at).collect(),
+                local_bounds: def.bounds,
+            })
+            .unwrap()
+            .added[0];
+        let w0 = doc
+            .apply(Command::AddWires(vec![Wire {
+                a: Pt {
+                    x: -2 * GRID_NM,
+                    y: 0,
+                },
+                b: Pt {
+                    x: 2 * GRID_NM,
+                    y: 0,
+                },
+            }]))
+            .unwrap()
+            .added[0];
+
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let camera = Camera::new(Pt::ZERO, 1.0, bounds);
+        let cache = DocumentCache::default();
+        let count_marks = |hidden: &[ItemId]| {
+            let mut count = 0usize;
+            cache.draw(&doc, &camera, 1.0, hidden, |_, emit| {
+                emit(&mut |_| count += 1);
+            });
+            count
+        };
+
+        // 2 parts + 1 wire = 3 marks when nothing is hidden.
+        assert_eq!(count_marks(&[]), 3);
+        let hidden = [p0, w0];
+        assert_eq!(count_marks(&hidden), 1);
+        assert_eq!(count_marks(&[p0, p1, w0]), 0);
+
+        // Warm-path allocation check (B10 / INV7): filtering hidden items allocates nothing.
+        ALLOCS.set(Some(0));
+        for _ in 0..40 {
+            assert_eq!(count_marks(&hidden), 1);
+        }
+        assert_eq!(ALLOCS.replace(None), Some(0));
     }
 }

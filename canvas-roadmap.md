@@ -550,10 +550,12 @@ of the `canvas` lane.
 - Done when: the INV5 test passes: the revision is unchanged through a simulated drag until
   mouse-up, one undo reverts the whole drag, and Esc mid-drag leaves the revision unchanged.
 
-### T5.3 Place, move, rotate, mirror, delete · todo
+### T5.3 Place, move, rotate, mirror, delete · done
 - Lane: canvas · Depends: T5.2, T5.5 · Read: D7, K2; parts-plan.md §14 (placement provider)
 - Owns: `crates/omnia-canvas/src/tool/place.rs`, `tool/move_.rs`, `overlay/ghosts.rs`; the
-  placement-provider setter on `SheetCanvas` in `crates/omnia-canvas/src/input.rs`
+  placement-provider setter on `SheetCanvas` in `crates/omnia-canvas/src/input.rs` (plus
+  coordinator-approved minimal integration hooks in `tool.rs`, `overlay.rs`, `sheet.rs`,
+  `sheet/{symbols,lod,text}.rs`, `lib.rs`, `canvas-plan.md`, `canvas-roadmap.md`)
 - Do: place a part from `Tool::Place`; drag-move a selection with ghosts in the overlay and
   the dragged items hidden from the sheet; R, X and Y apply to the ghosts during a drag
   and as a command otherwise; Del deletes. Positions snap to the grid by the part's anchor
@@ -2294,3 +2296,32 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `t5_5_transform_geometry_follow_inv4_inv10` proptest, and
                        `GenStep::Transform` in the INV4/INV10 sequence proptest. Standard
                        checks run locally on Windows (certifies nothing; no budget gate).
+
+2026-11-25 T5.3 done — implemented place, move, rotate, mirror, delete and overlay ghosts
+                       (D7, K2, INV4, INV5, INV6, INV7, INV11, B10, WD3, WD10, parts-plan
+                       §14, ui-plan §14). `tool/place.rs`: `PlaceRequest`, `PlaceProvider`,
+                       anchor-pin grid snapping (`snap_place_origin`, keeping pin 0 on
+                       `GRID_NM` for all 6 symbols and 8 orientations including half-grid
+                       `IC-COM-OpAmp`), deterministic designator generation, and
+                       `build_place_command` falling back to `SymbolLibrary::place_command`
+                       when no provider is installed. `tool/move_.rs`: deterministic
+                       lattice-safe `selection_pivot`, anchor-pin drag snapping (`drag_delta`),
+                       `Command::Move` / `Command::Transform` (T5.5, mid-drag R/X/Y as one
+                       undo step), idle `Command::Reorient`, and `Command::Delete` (WQ4
+                       default `with_wires = false`). `overlay/ghosts.rs`: two-layer
+                       placement preview and drag-move ghost renderer reusing `SheetDocument`
+                       alpha-mask sprites and `omnia-theme` tokens only (INV6, B10). `sheet.rs`
+                       and `sheet/text.rs`: zero-allocation hidden-item filtering during active
+                       drags; `DragGesture::is_lifted` keeps plain selection clicks at 0
+                       `SheetView` paints (INV11) while painting `SheetView` exactly twice per
+                       drag (lift-off hide + release/cancel restore). `input.rs` / `overlay.rs`:
+                       `SheetCanvas::set_place_provider` (order-independent with `set_overlay`),
+                       `OverlayView::set_place_provider`, and `delete_selection`, preserving
+                       T5.2 C1–C4 and `subscribe_history`. Deviations: coordinator approved
+                       minimal integration hooks in `tool.rs`, `overlay.rs`, `sheet.rs`,
+                       `sheet/{symbols,lod,text}.rs`, `lib.rs`, `canvas-plan.md` §9 (rule 12),
+                       and `canvas-roadmap.md`; four T5.2 tests updated for T5.3/T5.5 semantics.
+                       145 `omnia-canvas` lib tests + 2 doctests + 36/36 goldens + INV6/INV7
+                       passed locally on Windows (`cargo fmt --all --check`, both `clippy`
+                       commands, `cargo test --workspace -j 2`, `cargo deny check`; certifies
+                       nothing; no budget gate).

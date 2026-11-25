@@ -227,6 +227,7 @@ pub(super) struct TextFrame<'a> {
     pub(super) doc: &'a Doc,
     pub(super) parts: &'a [ItemId],
     pub(super) labels: &'a [ItemId],
+    pub(super) hidden: &'a [ItemId],
     pub(super) camera: &'a Camera,
     pub(super) viewport: Bounds<Pixels>,
     pub(super) scale_factor: f32,
@@ -602,6 +603,9 @@ impl TextCache {
         let len = self.query_buf.len();
         for qi in 0..len {
             let item = self.query_buf[qi];
+            if crate::sheet::is_hidden(frame.hidden, item) {
+                continue;
+            }
             match item {
                 ItemId::Part(part_id) if buckets.part.is_some() || buckets.pin.is_some() => {
                     self.collect_part_item(part_id, frame, buckets, Some(window), scope);
@@ -628,6 +632,9 @@ impl TextCache {
 
         if buckets.part.is_some() || buckets.pin.is_some() {
             for &item in frame.parts {
+                if crate::sheet::is_hidden(frame.hidden, item) {
+                    continue;
+                }
                 let ItemId::Part(part_id) = item else {
                     continue;
                 };
@@ -637,6 +644,9 @@ impl TextCache {
 
         if let Some(bucket) = buckets.net {
             for &item in frame.labels {
+                if crate::sheet::is_hidden(frame.hidden, item) {
+                    continue;
+                }
                 let ItemId::Label(label_id) = item else {
                     continue;
                 };
@@ -1850,6 +1860,7 @@ mod tests {
             doc: &doc,
             parts: &items[..parts_end],
             labels: &items[wires_end..],
+            hidden: &[],
             camera: &camera,
             viewport: bounds,
             scale_factor: 1.0,
@@ -2039,6 +2050,7 @@ mod tests {
                 doc: &doc,
                 parts: &[],
                 labels: &[],
+                hidden: &[],
                 camera: &camera_initial,
                 viewport: bounds,
                 scale_factor: 1.0,
@@ -2091,6 +2103,7 @@ mod tests {
                 doc: &doc,
                 parts: &[],
                 labels: &[],
+                hidden: &[],
                 camera: &camera,
                 viewport: bounds,
                 scale_factor: 1.0,
@@ -2132,6 +2145,7 @@ mod tests {
                 doc: &doc,
                 parts: &[],
                 labels: &[],
+                hidden: &[],
                 camera: &camera,
                 viewport: bounds,
                 scale_factor: 1.0,
@@ -2205,6 +2219,7 @@ mod tests {
                     doc,
                     parts: &parts,
                     labels: &labels,
+                    hidden: &[],
                     camera: cam,
                     viewport: bounds,
                     scale_factor: sf,

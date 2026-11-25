@@ -814,7 +814,13 @@ impl OverlayView {
     pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool; // tool, then band
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
+    // T5.3 (tool/place.rs, tool/move_.rs): placement provider (parts-plan.md section 14) and delete.
+    pub fn set_place_provider(&mut self, provider: Option<PlaceProvider>);
+    pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);
 }
+// T5.3 (tool/place.rs): placement request and shell-supplied provider (parts-plan.md section 14).
+pub struct PlaceRequest { pub symbol: SymbolId, pub at: Pt, pub orient: Orient, pub designator: Arc<str> }
+pub type PlaceProvider = Rc<dyn Fn(PlaceRequest) -> Option<Command>>;
 // T4.5 (camera_anim.rs): 150 ms ease-out view animations driven by `request_animation_frame` (K13, G16).
 pub const VIEW_ANIM_DURATION: Duration;                    // 150 ms (K13)
 pub const FIT_FILL_FRACTION: f64;                          // 0.9 (5% margin per side)
@@ -863,7 +869,10 @@ impl SheetCanvas {
         -> Subscription;              // T5.2: drops an event for a document no longer shown
     pub fn is_current_history(&self, history: &CanvasHistory) -> bool; // T5.2
     // T5.3: a shell-supplied placement provider (see parts-plan.md section 14) builds the
-    // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation.
+    // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation;
+    // defaults to SymbolLibrary::place_command when None.
+    pub fn set_place_provider(&mut self, provider: Option<PlaceProvider>, cx: &mut Context<Self>); // T5.3
+    pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.3 (ui-plan §14)
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);

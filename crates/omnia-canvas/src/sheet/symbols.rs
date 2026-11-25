@@ -2,7 +2,7 @@
 
 use crate::{camera::Camera, snap_px::device_rect};
 use gpui::{Bounds, Pixels, SharedString, TransformationMatrix};
-use omnia_doc::{Orient, Part, Pt};
+use omnia_doc::{Orient, Part, Pt, SymbolId};
 use omnia_symbols::{SymbolDef, SymbolLibrary};
 
 const SYMBOL_STROKE_NM: f64 = 254_000.0;
@@ -11,21 +11,21 @@ const MAX_BUCKET: u32 = 40; // 2^(40/4) = 1024 device pixels (2048 mask texels).
 const DOT: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4"/></svg>"#;
 
 #[derive(Debug)]
-pub(super) struct Mask {
-    pub(super) key: SharedString,
-    pub(super) svg: Vec<u8>,
+pub(crate) struct Mask {
+    pub(crate) key: SharedString,
+    pub(crate) svg: Vec<u8>,
     side: u32,
 }
 
 #[derive(Debug)]
-pub(super) struct Masks {
+pub(crate) struct Masks {
     library: std::sync::Arc<SymbolLibrary>,
     symbols: Vec<Mask>,
     dot: Mask,
 }
 
 impl Masks {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let library = SymbolLibrary::builtin();
         let symbols = library
             .iter()
@@ -55,30 +55,42 @@ impl Masks {
         }
     }
 
-    pub(super) fn symbol(&self, part: &Part, camera: &Camera, sf: f32) -> Option<Shape<'_>> {
-        if part.symbol.index() >= self.library.len() {
-            return None;
-        }
-        let def = self.library.get(part.symbol);
+    pub(crate) fn symbol_def(&self, symbol: SymbolId) -> Option<&SymbolDef> {
+        (symbol.index() < self.library.len()).then(|| self.library.get(symbol))
+    }
+
+    pub(crate) fn symbol_at(
+        &self,
+        symbol: SymbolId,
+        at: Pt,
+        orient: Orient,
+        camera: &Camera,
+        sf: f32,
+    ) -> Option<Shape<'_>> {
+        let def = self.symbol_def(symbol)?;
         let side = world_side(def) * camera.scale();
         let mid = Pt {
             x: def.bounds.min.x.midpoint(def.bounds.max.x),
             y: def.bounds.min.y.midpoint(def.bounds.max.y),
         };
-        let offset = part.orient.apply(mid);
-        let anchor = camera.world_to_screen(part.at);
+        let offset = orient.apply(mid);
+        let anchor = camera.world_to_screen(at);
         let x = (anchor.x + f64::from(offset.x) * camera.scale()) * f64::from(sf);
         let y = (anchor.y + f64::from(offset.y) * camera.scale()) * f64::from(sf);
         let device_side = side * f64::from(sf);
         let bucket = ((device_side.log2() * 4.0).floor() as u32).min(MAX_BUCKET);
-        let mask = &self.symbols[part.symbol.index() * (MAX_BUCKET + 1) as usize + bucket as usize];
+        let mask = &self.symbols[symbol.index() * (MAX_BUCKET + 1) as usize + bucket as usize];
         Some(Shape {
             x,
             y,
             logical_side: side,
-            orient: part.orient,
+            orient,
             mask,
         })
+    }
+
+    pub(super) fn symbol(&self, part: &Part, camera: &Camera, sf: f32) -> Option<Shape<'_>> {
+        self.symbol_at(part.symbol, part.at, part.orient, camera, sf)
     }
 
     pub(super) fn dot(&self, x: f64, y: f64, diameter: f64, sf: f32) -> Shape<'_> {
@@ -96,16 +108,16 @@ fn world_side(def: &SymbolDef) -> f64 {
     f64::from(def.bounds.max.x - def.bounds.min.x)
 }
 
-pub(super) struct Shape<'a> {
-    pub(super) x: f64,
-    pub(super) y: f64,
-    pub(super) logical_side: f64,
+pub(crate) struct Shape<'a> {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) logical_side: f64,
     orient: Orient,
-    pub(super) mask: &'a Mask,
+    pub(crate) mask: &'a Mask,
 }
 
 impl Shape<'_> {
-    pub(super) fn sprite(&self, sf: f32) -> (Bounds<Pixels>, TransformationMatrix) {
+    pub(crate) fn sprite(&self, sf: f32) -> (Bounds<Pixels>, TransformationMatrix) {
         let raster = self.mask.side;
         let half = f64::from(raster) / 2.0;
         let left = (self.x - half).round();
