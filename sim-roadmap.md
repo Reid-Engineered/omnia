@@ -399,4 +399,9 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        (SB5, SB6, SK6, SK8, SINV9); SK8 stays at 30 Hz. Standard
                        checks and focused spike tests pass. Evidence and owner command
                        in docs/measurements/S0.4.md.
+2026-11-25 S0.4 review polish — SS2 uses a shared pair ring (SK6 capacity, D8
+                       per-channel wording) and frame-counted SK8 cadence. S3.3
+                       should use per-channel rings or update the plans if it
+                       adopts the shared ring. The Windows notes explain the 60 Hz
+                       empty updates and preserve the rationale for the rerun.
 ```
