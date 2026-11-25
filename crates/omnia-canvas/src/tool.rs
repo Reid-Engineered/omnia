@@ -37,6 +37,11 @@
 //! The GPUI side: [`sheet_key_context`] puts a view's focus element in the `Sheet` key
 //! context and routes the [`crate::keymap`] actions through [`SheetActions`].
 
+pub mod move_;
+pub mod place;
+
+pub use place::{PlaceProvider, PlaceRequest};
+
 use crate::input::SheetCanvas;
 use crate::keymap::{
     Cancel, Delete, MirrorHorizontal, MirrorVertical, PlaceWire, Redo, Rotate, SHEET_CONTEXT, Undo,
@@ -44,9 +49,8 @@ use crate::keymap::{
 use crate::overlay::{GestureEndReason, OverlayView};
 use gpui::{App, Context, Div, Entity, InteractiveElement, Window};
 use omnia_doc::{
-    Change, Command, Doc, GRID_NM, ItemId, Orient, Pt, Rect, SymbolId, hit_test,
+    Change, Command, Doc, Isometry, ItemId, Orient, Pt, Rect, SymbolId, hit_test,
     prefs::{FollowPolicy, WiringPrefs},
-    snap_to,
 };
 use std::rc::Weak;
 
@@ -93,35 +97,46 @@ pub struct DragGesture {
     pub anchor: Pt,
     /// World point of the pointer now.
     pub current: Pt,
+    /// Deterministic, lattice-safe pivot for mid-drag R, X and Y reorientation (T5.3, T5.5).
+    pub pivot: Pt,
+    /// Orientation composed from R, X and Y pressed during the drag (T5.3, T5.5).
+    pub by: Orient,
     /// The document the drag started on.
     pub base: DocStamp,
+    /// World position of the dragged part's anchor pin (pin 0) at drag start for K2 snapping.
+    anchor_pin: Option<Pt>,
+    /// True once the drag has actually moved or reoriented off its starting position (T5.3, D7,
+    /// INV11). Plain selection clicks never lift, keeping click-selection SheetView paints at 0.
+    lifted: bool,
 }
 
 impl DragGesture {
-    /// The pointer movement, snapped to the grid so items stay on it (K2).
+    /// Whether the drag has visually lifted off the sheet (hidden on `SheetView`, drawn as ghost).
+    pub fn is_lifted(&self) -> bool {
+        self.lifted
+    }
+
+    /// The pointer movement, snapped so a dragged part's anchor pin lands on `GRID_NM` (K2),
+    /// or snapped directly to `GRID_NM` for wire/label-only drags.
     pub fn delta(&self) -> Pt {
-        let d = |a: i32, b: i32| {
-            // Both ends are inside K1, so the difference fits i32 (|d| <= 2e9).
-            i32::try_from(i64::from(b) - i64::from(a)).expect("K1 keeps a drag inside i32")
-        };
-        snap_to(
-            Pt {
-                x: d(self.anchor.x, self.current.x),
-                y: d(self.anchor.y, self.current.y),
-            },
-            GRID_NM,
+        move_::drag_delta(
+            self.anchor,
+            self.current,
+            self.pivot,
+            self.by,
+            self.anchor_pin,
         )
     }
 
-    /// The one command this drag commits: a `Move` by [`Self::delta`], or `None` for a drag
-    /// that moved nothing (INV5).
+    /// The live preview and commit [`Isometry`] for this drag (T5.3, T5.5).
+    pub fn isometry(&self) -> Isometry {
+        move_::drag_isometry(self.delta(), self.pivot, self.by)
+    }
+
+    /// The one command this drag commits: `Command::Move`, `Command::Transform` (when R, X or Y
+    /// was applied mid-drag, T5.5), or `None` for a click that changed nothing (INV5).
     pub fn command(&self, follow: FollowPolicy) -> Option<Command> {
-        let delta = self.delta();
-        (delta != Pt::ZERO).then(|| Command::Move {
-            items: self.items.clone(),
-            delta,
-            follow,
-        })
+        move_::drag_command(&self.items, self.delta(), self.pivot, self.by, follow)
     }
 }
 
@@ -129,12 +144,15 @@ impl DragGesture {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PlaceGesture {
     pub symbol: SymbolId,
-    /// The grid point under the pointer, once the pointer has been over the sheet.
+    /// The snapped placement origin under the pointer, once the pointer has been over the sheet.
+    /// Snapped so anchor pin 0 lands on `GRID_NM` (K2).
     pub at: Option<Pt>,
     /// R, X and Y pressed while placing, composed in order.
     pub orient: Orient,
     /// A left press was made in this tool and not yet released: only its release places.
     pub pressed: bool,
+    /// Last raw world cursor position, kept so R/X/Y re-snaps `at` for the new orientation.
+    raw_cursor: Option<Pt>,
 }
 
 /// `Tool::Wire` state. T6.2 adds the route preview, WD5 snapping and the commits.
@@ -292,6 +310,7 @@ impl ToolMachine {
                 at: None,
                 orient: Orient::IDENTITY,
                 pressed: false,
+                raw_cursor: None,
             }),
         }
     }
@@ -386,15 +405,21 @@ impl ToolMachine {
                     } else {
                         vec![hit.item]
                     };
+                    let pivot = move_::selection_pivot(doc, &items).unwrap_or(at);
+                    let anchor_pin = move_::drag_anchor_pin(doc, hit.item, &items);
                     self.state = ToolState::Dragging(DragGesture {
                         items,
                         pressed: hit.item,
                         anchor: at,
                         current: at,
+                        pivot,
+                        by: Orient::IDENTITY,
                         base: DocStamp {
                             key: doc_key,
                             revision: doc.revision(),
                         },
+                        anchor_pin,
+                        lifted: false,
                     });
                     ToolOutcome {
                         handled: true,
@@ -408,9 +433,16 @@ impl ToolMachine {
             }
             ToolState::Dragging(_) => unreachable!("a stale drag was reset above"),
             ToolState::Placing(place) => {
-                place.at = Some(snap_to(at, GRID_NM));
+                let next = Some(place::snap_place_origin(place.symbol, at, place.orient));
+                let changed = place.at != next;
+                place.raw_cursor = Some(at);
+                place.at = next;
                 place.pressed = true;
-                ToolOutcome::handled()
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: changed,
+                    ..ToolOutcome::default()
+                }
             }
             ToolState::Wiring(wire) => {
                 wire.cursor = Some(at);
@@ -440,9 +472,13 @@ impl ToolMachine {
                 }
                 let before = drag.delta();
                 drag.current = at;
+                let after = drag.delta();
+                if after != Pt::ZERO {
+                    drag.lifted = true;
+                }
                 ToolOutcome {
                     handled: true,
-                    preview_changed: drag.delta() != before,
+                    preview_changed: after != before,
                     ..ToolOutcome::default()
                 }
             }
@@ -450,7 +486,8 @@ impl ToolMachine {
                 if !left_held {
                     place.pressed = false;
                 }
-                let next = Some(snap_to(at, GRID_NM));
+                place.raw_cursor = Some(at);
+                let next = Some(place::snap_place_origin(place.symbol, at, place.orient));
                 let changed = place.at != next;
                 place.at = next;
                 ToolOutcome {
@@ -498,7 +535,8 @@ impl ToolMachine {
                 }
             }
             ToolState::Placing(place) => {
-                let at = snap_to(at, GRID_NM);
+                place.raw_cursor = Some(at);
+                let at = place::snap_place_origin(place.symbol, at, place.orient);
                 place.at = Some(at);
                 // Only a press made in this tool places: a release left over from another
                 // tool (a drag or band cut short by the switch) does nothing.
@@ -536,13 +574,24 @@ impl ToolMachine {
         }
     }
 
-    /// R, X or Y: composes `by` into a placement's orientation; outside a gesture asks the
-    /// host to turn the selection (T5.3). A drag ignores it until omnia-doc can commit a
-    /// combined move and reorient as one edit (see the module docs); so does the wire tool.
+    /// R, X or Y: composes `by` into an active drag (T5.3/T5.5, committed as `Command::Transform`)
+    /// or placement preview (re-snapping anchor pin 0); outside a gesture asks the host to turn
+    /// the selection with `Command::Reorient`. Ignored in `Tool::Wire`.
     pub fn reorient(&mut self, by: Orient) -> ToolOutcome {
+        if by == Orient::IDENTITY {
+            return ToolOutcome::default();
+        }
         match &mut self.state {
-            ToolState::Placing(PlaceGesture { orient, .. }) => {
-                *orient = orient.then(by);
+            ToolState::Dragging(drag) => {
+                drag.by = drag.by.then(by);
+                drag.lifted = true;
+                ToolOutcome::preview()
+            }
+            ToolState::Placing(place) => {
+                place.orient = place.orient.then(by);
+                if let Some(raw) = place.raw_cursor {
+                    place.at = Some(place::snap_place_origin(place.symbol, raw, place.orient));
+                }
                 ToolOutcome::preview()
             }
             ToolState::Idle | ToolState::Hovering(_) if self.tool == Tool::Select => ToolOutcome {
@@ -822,6 +871,11 @@ impl OverlayView {
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.history_step(true, window, cx)
     }
+
+    /// Deletes the current selection outside a gesture (`ui-plan.md` section 14, T5.3).
+    pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.action_delete(window, cx);
+    }
 }
 
 /// `SheetCanvas` delegates every tool call to the attached gesture owner, and only while the
@@ -958,6 +1012,11 @@ impl SheetCanvas {
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.action_redo(window, cx);
     }
+
+    /// Deletes the current selection through the gesture owner (`ui-plan.md` section 14, T5.3).
+    pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.action_delete(window, cx);
+    }
 }
 
 #[cfg(test)]
@@ -968,7 +1027,7 @@ mod tests {
     use gpui::{
         AppContext, Bounds, Modifiers, MouseButton, Pixels, TestAppContext, VisualTestContext,
     };
-    use omnia_doc::{Label, Part, PartId, Wire, WireId};
+    use omnia_doc::{GRID_NM, Label, Part, PartId, Wire, WireId};
     use omnia_symbols::SymbolLibrary;
     use omnia_theme::GRAPHITE;
     use std::{cell::RefCell, rc::Rc};
@@ -1064,6 +1123,7 @@ mod tests {
                 at: None,
                 orient: Orient::IDENTITY,
                 pressed: false,
+                raw_cursor: None,
             })
         );
         m.set_tool(Tool::Label);
@@ -1274,11 +1334,11 @@ mod tests {
         assert_eq!(m.state(), &ToolState::Wiring(WireGesture::default()));
     }
 
-    /// Review finding 3: R, X and Y during a drag are ignored until omnia-doc can commit a
-    /// combined move and reorient, so the reported case commits its valid move and nothing
-    /// rolls back.
+    /// T5.3 / T5.5 (PR 125 review case): R, X and Y during a drag compose into one
+    /// `Command::Transform`, planned and normalised once against the original sheet so a valid
+    /// final position commits and one undo restores it completely (INV4, INV5).
     #[test]
-    fn t5_2_r_x_y_during_a_drag_leave_one_plain_move() {
+    fn t5_3_r_x_y_during_a_drag_commit_one_transform() {
         let mut doc = Doc::from_items(
             [],
             [
@@ -1298,24 +1358,37 @@ mod tests {
         let selected = ItemId::Wire(WireId(1));
         let mut m = ToolMachine::new();
         press(&mut m, &doc, pt(3, 2), &[selected]);
+        assert_eq!(m.reorient(Orient::IDENTITY), ToolOutcome::default());
+        assert!(!dragging(&m).is_lifted());
         m.pointer_move(pt(3, 0), true);
+        let expected_orient = Orient::ROT_90.then(Orient::FLIP_X).then(Orient::FLIP_Y);
         for by in [Orient::ROT_90, Orient::FLIP_X, Orient::FLIP_Y] {
-            assert_eq!(m.reorient(by), ToolOutcome::default());
+            assert!(m.reorient(by).preview_changed);
         }
         let Some(Commit { command, .. }) = m.pointer_up(pt(3, 0), false).commit else {
             panic!("expected a commit");
         };
         assert_eq!(
             command,
-            Command::Move {
+            Command::Transform {
                 items: vec![selected],
                 delta: pt(0, -2),
+                pivot: pt(3, 2),
+                by: expected_orient,
                 follow: WiringPrefs::default().follow_policy(false),
             }
         );
         let rev = doc.revision();
-        doc.apply(command).expect("the moved position is valid");
+        doc.apply(command)
+            .expect("the transformed position is valid");
         assert_eq!(doc.revision(), rev + 1);
+        assert_eq!(
+            doc.wire(WireId(1)),
+            Some(&Wire {
+                a: pt(3, 1),
+                b: pt(3, -1),
+            })
+        );
         assert!(doc.undo().is_some());
         assert!(doc.content_eq(&original), "INV4/INV5: one undo restores");
     }
@@ -1627,11 +1700,18 @@ mod tests {
 
     #[gpui::test]
     fn t5_2_a_drag_preview_does_not_repaint_the_sheet(cx: &mut TestAppContext) {
-        // INV11: only a commit's dirty rectangle repaints the sheet; the preview never does.
+        // D7 / INV11 / T5.3: SheetView paints once at drag start (to hide dragged items), 0 times
+        // during drag moves, once at drag end/cancel (to restore hidden items), and 0 on stray
+        // release — exactly 2 paints per drag.
         let (overlay, _doc, cx) = open_overlay(cx);
         let paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
         let press = screen(&overlay, cx, pt(-6, 0));
         cx.simulate_mouse_down(press, MouseButton::Left, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints,
+            "INV11: press before drag lift-off does not paint SheetView"
+        );
         for step in 1..=8 {
             drag_to(
                 &overlay,
@@ -1644,23 +1724,31 @@ mod tests {
         }
         assert_eq!(
             cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
-            paints
+            paints + 1,
+            "D7/INV11: drag lift-off paints SheetView once to hide, 0 times across further moves"
         );
         // Cancel through the shell's path (`NavCancel` calls `cancel`, UQ14). A keystroke here
         // would also bring GPUI's input-modality refresh (UG17); that case is counted apart in
         // `t5_2_esc_mid_drag_paints_only_for_the_modality_switch`.
         assert!(cx.update(|window, cx| overlay.update(cx, |o, cx| o.cancel(window, cx))));
+        cx.run_until_parked();
         assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints + 2,
+            "D7: drag cancel paints SheetView once to restore hidden items"
+        );
         cx.simulate_mouse_up(press, MouseButton::Left, Modifiers::none());
         assert_eq!(
             cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
-            paints
+            paints + 2,
+            "stray release after cancel does not paint SheetView"
         );
     }
 
-    /// INV11 with UQ15 for a real Esc key: GPUI's own input-modality refresh (UG17) may paint
-    /// the sheet at most once per observed switch between pointer and keyboard input, and
-    /// nothing the canvas does invalidates the sheet (its entity is never notified).
+    /// INV11 with UQ15 for a real Esc key: drag start hides items (1 canvas notify), drag moves
+    /// trigger 0 sheet notifies, Esc unhides items (1 canvas notify, coalescing with GPUI's UG17
+    /// modality switch), and the subsequent release triggers 0 paints.
     #[gpui::test]
     fn t5_2_esc_mid_drag_paints_only_for_the_modality_switch(cx: &mut TestAppContext) {
         let (overlay, doc, cx) = open_overlay(cx);
@@ -1677,7 +1765,21 @@ mod tests {
             |cx: &mut VisualTestContext| cx.update(|window, _| window.last_input_was_keyboard());
         let rev0 = revision(&doc, cx);
         down(&overlay, cx, pt(-6, 0));
+        assert_eq!(notifies.get(), 0, "0 sheet notifies before drag lift-off");
         drag_to(&overlay, cx, pt(-3, 0));
+        assert_eq!(notifies.get(), 1, "1 sheet notify at drag lift-off (hide)");
+        let after_lift = paints(cx);
+        drag_to(&overlay, cx, pt(-1, 0));
+        assert_eq!(
+            notifies.get(),
+            1,
+            "0 sheet notifies during subsequent drag moves"
+        );
+        assert_eq!(
+            paints(cx),
+            after_lift,
+            "0 sheet paints during subsequent drag moves"
+        );
         let before = paints(cx);
         let pointer_modality = keyboard(cx);
         assert!(
@@ -1685,17 +1787,18 @@ mod tests {
             "the drag leaves the window in pointer modality"
         );
 
-        // The Esc: its paints are bounded by the modality switches it made (UQ15).
+        // The Esc: 1 canvas notify to unhide + at most 1 modality-switch refresh (UQ15).
         cx.simulate_keystrokes("escape");
         assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
         let modality_switches = u64::from(keyboard(cx) != pointer_modality);
         assert_eq!(modality_switches, 1, "the Esc switches to keyboard input");
         let after_esc = paints(cx);
-        let modality_paints = after_esc - before;
+        let esc_paints = after_esc - before;
         assert!(
-            modality_paints <= modality_switches,
-            "UQ15: {modality_paints} sheet paints for {modality_switches} modality switches"
+            esc_paints >= 1 && esc_paints <= 1 + modality_switches,
+            "D7/UQ15: {esc_paints} sheet paints for unhide + {modality_switches} modality switches"
         );
+        assert_eq!(notifies.get(), 2, "1 sheet notify at drag end (unhide)");
 
         // The release: a mouse-up keeps keyboard modality at the pinned GPUI, so it may not
         // paint the sheet at all.
@@ -1706,7 +1809,7 @@ mod tests {
             after_esc,
             "the release paints the sheet 0 times"
         );
-        assert_eq!(notifies.get(), 0, "no canvas-caused sheet paint");
+        assert_eq!(notifies.get(), 2, "only start and end notified SheetView");
         assert_eq!(revision(&doc, cx), rev0);
     }
 
@@ -1905,7 +2008,8 @@ mod tests {
         cx.simulate_keystrokes("escape");
         assert_eq!(tool(cx), Tool::Select);
 
-        // R, X, Y and Del leave a drag under way alone; its release commits one move.
+        // R, X and Y apply to the drag preview (T5.3/T5.5); Del is ignored mid-drag; release
+        // commits one `Command::Transform` reverted by a single Ctrl+Z (INV5).
         let rev0 = revision(&doc, cx);
         down(&overlay, cx, pt(-6, 0));
         drag_to(&overlay, cx, pt(-4, 1));
@@ -1917,10 +2021,14 @@ mod tests {
         assert_eq!(part_at(&doc, cx, 0), pt(-4, 1));
         assert_eq!(
             cx.update(|_, cx| doc.read(cx).part(PartId(0)).unwrap().orient),
-            Orient::IDENTITY
+            Orient::ROT_90.then(Orient::FLIP_X).then(Orient::FLIP_Y)
         );
         cx.simulate_keystrokes("ctrl-z");
         assert_eq!(part_at(&doc, cx, 0), pt(-6, 0));
+        assert_eq!(
+            cx.update(|_, cx| doc.read(cx).part(PartId(0)).unwrap().orient),
+            Orient::IDENTITY
+        );
 
         // With no tool gesture, Esc cancels a rubber band instead.
         down(&overlay, cx, pt(0, -8));
@@ -2889,7 +2997,7 @@ mod tests {
             (GestureKind::Band, EndPath::Undo, 1),
             (GestureKind::Band, EndPath::Redo, 1),
             // Pending place-press paths
-            (GestureKind::PendingPlace, EndPath::Release, 0),
+            (GestureKind::PendingPlace, EndPath::Release, 1),
             (GestureKind::PendingPlace, EndPath::EscCancel, 0),
             (GestureKind::PendingPlace, EndPath::LostCapture, 0),
             (GestureKind::PendingPlace, EndPath::MoveOffSheet, 0),
@@ -3191,6 +3299,15 @@ mod tests {
                     )),
                     "C4 failed ({kind:?}/{path:?}): pending place press not cleared"
                 );
+                assert!(
+                    vcx.update(|_, cx| live
+                        .read(cx)
+                        .sheet_entity()
+                        .read(cx)
+                        .hidden_items()
+                        .is_empty()),
+                    "T5.3/C4 failed ({kind:?}/{path:?}): hidden items not restored"
+                );
             }
 
             // A stray mouse-up afterwards must commit nothing and leave capture clear.
@@ -3209,5 +3326,541 @@ mod tests {
             assert_eq!(revision(&doc_b, vcx), rev_b0);
             assert!(!captured(vcx));
         }
+    }
+
+    // ---- T5.3 simulated-input tests ----
+
+    /// T5.3 done-when: placing a part from `Tool::Place` with R/X/Y reorientation, anchor-pin
+    /// grid snapping (K2, verified on `IC-COM-OpAmp`), default `SymbolLibrary::place_command`
+    /// fallback, Esc cancel, and undo/redo.
+    #[gpui::test]
+    fn t5_3_simulated_place_with_reorient_anchor_pin_snap_esc_and_undo(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let original = cx.update(|_, cx| snapshot(doc.read(cx)));
+        let lib = SymbolLibrary::builtin();
+        let opamp = lib.by_name("IC-COM-OpAmp").unwrap();
+        let opamp_def = lib.get(opamp);
+
+        // Enter Tool::Place(OpAmp).
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_tool(Tool::Place(opamp), cx)));
+        cx.run_until_parked();
+        assert_eq!(phase(&overlay, cx), ToolPhase::Placing);
+
+        // Move pointer to an off-grid coordinate, then press R and X before placing.
+        let raw = Pt {
+            x: 2 * G + G / 4,
+            y: -3 * G - G / 5,
+        };
+        let raw_screen = screen(&overlay, cx, raw);
+        cx.simulate_mouse_move(raw_screen, None, Modifiers::none());
+        cx.simulate_keystrokes("r x");
+        let expected_orient = Orient::ROT_90.then(Orient::FLIP_X);
+        let preview_at = cx.update(|_, cx| match overlay.read(cx).tool_state() {
+            ToolState::Placing(p) => {
+                assert_eq!(p.orient, expected_orient);
+                p.at.expect("preview position computed")
+            }
+            other => panic!("expected Placing, got {other:?}"),
+        });
+        // Verify anchor pin 0 lies strictly on GRID_NM (K2) even for half-grid OpAmp.
+        let preview_pin0 = preview_at + expected_orient.apply(opamp_def.pins[0].at);
+        assert_eq!(preview_pin0.x % G, 0);
+        assert_eq!(preview_pin0.y % G, 0);
+
+        // Click to commit placement (fallback to SymbolLibrary::place_command).
+        let rev0 = revision(&doc, cx);
+        cx.simulate_mouse_down(raw_screen, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_up(raw_screen, MouseButton::Left, Modifiers::none());
+        assert_eq!(revision(&doc, cx), rev0 + 1);
+        assert_eq!(cx.update(|_, cx| doc.read(cx).part_count()), 3);
+
+        let (placed_id, placed_part) = cx.update(|_, cx| {
+            doc.read(cx)
+                .parts()
+                .find(|(_, p)| p.symbol == opamp)
+                .map(|(id, p)| (id, p.clone()))
+                .expect("placed op-amp exists")
+        });
+        assert_eq!(placed_part.orient, expected_orient);
+        assert_eq!(&*placed_part.designator, "U1");
+        let world_pin0 = cx.update(|_, cx| doc.read(cx).pins(placed_id).unwrap()[0]);
+        assert_eq!(world_pin0.x % G, 0, "K2: anchor pin 0 x on grid");
+        assert_eq!(world_pin0.y % G, 0, "K2: anchor pin 0 y on grid");
+
+        // Esc leaves Tool::Place cleanly with no extra edit.
+        let rev_placed = revision(&doc, cx);
+        let placed_snap = cx.update(|_, cx| snapshot(doc.read(cx)));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).tool()), Tool::Select);
+        assert_eq!(revision(&doc, cx), rev_placed);
+
+        // Undo and redo revert and restore the placement cleanly (INV4/INV5).
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        cx.simulate_keystrokes("ctrl-y");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&placed_snap)));
+    }
+
+    /// T5.3 done-when: `SheetCanvas::set_place_provider` (parts-plan.md §14) commits the
+    /// stub provider's returned `Command`, works regardless of `set_overlay` call order,
+    /// honours `None` refusal, emits `CanvasHistory`, and undoes cleanly.
+    #[gpui::test]
+    fn t5_3_stub_placement_provider_command_is_committed_and_undone(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let captured_requests = Rc::new(RefCell::new(Vec::<PlaceRequest>::new()));
+        let reqs_clone = captured_requests.clone();
+        let lib_clone = lib.clone();
+        let stub: PlaceProvider = Rc::new(move |req| {
+            reqs_clone.borrow_mut().push(req.clone());
+            Some(lib_clone.place_command(
+                req.symbol,
+                req.at,
+                req.orient,
+                req.designator,
+                std::sync::Arc::from("4.7k-stub"),
+            ))
+        });
+
+        // Install provider on SheetCanvas BEFORE attaching overlay to prove order-independence.
+        let canvas = cx.update(|_, cx| {
+            let doc = doc.clone();
+            let overlay = overlay.clone();
+            cx.new(|cx| {
+                let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+                let mut canvas = SheetCanvas::new(camera, &GRAPHITE, cx).with_doc(doc);
+                canvas.set_place_provider(Some(stub), cx);
+                canvas.set_overlay(Some(overlay), cx);
+                canvas
+            })
+        });
+        let history = record_history(&canvas, cx);
+        let original = cx.update(|_, cx| snapshot(doc.read(cx)));
+
+        cx.update(|_, cx| canvas.update(cx, |c, cx| c.set_tool(Tool::Place(res), cx)));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("y");
+        let target = pt(2, -3);
+        down(&overlay, cx, target);
+        up(&overlay, cx, target);
+
+        // Stub provider received the exact snapped request and its custom value was committed.
+        let reqs = captured_requests.borrow();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].symbol, res);
+        assert_eq!(reqs[0].at, target);
+        assert_eq!(reqs[0].orient, Orient::FLIP_Y);
+        assert_eq!(&*reqs[0].designator, "R2"); // R1 already exists in test_doc().
+        let placed = cx.update(|_, cx| {
+            doc.read(cx)
+                .parts()
+                .find(|(_, p)| &*p.designator == "R2")
+                .map(|(_, p)| p.clone())
+                .expect("stub-provided part committed")
+        });
+        assert_eq!(&*placed.value, "4.7k-stub");
+        assert_eq!(placed.at, target);
+        assert_eq!(placed.orient, Orient::FLIP_Y);
+        assert_eq!(history.borrow().len(), 1, "C2: placement emits history");
+
+        // A provider returning None declines placement without modifying the document.
+        let rev_before = revision(&doc, cx);
+        let decline: PlaceProvider = Rc::new(|_| None);
+        cx.update(|_, cx| canvas.update(cx, |c, cx| c.set_place_provider(Some(decline), cx)));
+        down(&overlay, cx, pt(4, -3));
+        up(&overlay, cx, pt(4, -3));
+        assert_eq!(revision(&doc, cx), rev_before);
+
+        // Undo via SheetCanvas reverts the stub-placed part.
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.undo(window, cx)));
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+    }
+
+    /// T5.3 done-when: `SheetView` paints **exactly twice per drag** (once at drag start to
+    /// hide dragged items, 0 times across drag motion, once at drag end to restore & commit),
+    /// and hidden items are present during drag and cleared on end.
+    #[gpui::test]
+    fn t5_3_sheet_view_paints_exactly_twice_per_drag_commit_and_cancel(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let original = cx.update(|_, cx| snapshot(doc.read(cx)));
+        let paints =
+            |cx: &mut VisualTestContext| cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let hidden = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                overlay
+                    .read(cx)
+                    .sheet_entity()
+                    .read(cx)
+                    .hidden_items()
+                    .to_vec()
+            })
+        };
+
+        // 1. Drag-move commit: exactly 2 SheetView paints (start + end).
+        let p0 = paints(cx);
+        down(&overlay, cx, pt(-6, 0));
+        assert_eq!(
+            paints(cx),
+            p0,
+            "press before drag lift-off does not paint SheetView"
+        );
+        assert!(hidden(cx).is_empty(), "items stay visible until drag lifts");
+        drag_to(&overlay, cx, pt(-5, 0));
+        assert_eq!(
+            paints(cx),
+            p0 + 1,
+            "drag start (lift-off) paints SheetView once (hide)"
+        );
+        assert_eq!(hidden(cx), vec![R1], "R1 hidden from SheetView during drag");
+        for step in 1..=20 {
+            let at = Pt {
+                x: -5 * G + step * G / 3,
+                y: step * G / 5,
+            };
+            drag_to(&overlay, cx, at);
+            assert_eq!(
+                paints(cx),
+                p0 + 1,
+                "INV11: 0 SheetView paints during drag move step {step}"
+            );
+        }
+        up(&overlay, cx, pt(-2, 2));
+        assert_eq!(
+            paints(cx),
+            p0 + 2,
+            "T5.3 done-when: SheetView painted exactly twice for the entire drag"
+        );
+        assert!(hidden(cx).is_empty(), "hidden items cleared on drag commit");
+        assert_eq!(part_at(&doc, cx, 0), pt(-2, 2));
+        let after_move = cx.update(|_, cx| snapshot(doc.read(cx)));
+
+        // Undo restores original state, redo reapplies the plain Move, undo returns to start.
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        cx.simulate_keystrokes("ctrl-y");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&after_move)));
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+
+        // 2. Drag cancelled via shell path (`cancel`, no modality switch): also exactly 2 paints.
+        // Switch back to pointer modality first with a benign hover move so `p1` is clean.
+        let hover_pt = screen(&overlay, cx, pt(0, -8));
+        cx.simulate_mouse_move(hover_pt, None, Modifiers::none());
+        let p1 = paints(cx);
+        let rev1 = revision(&doc, cx);
+        down(&overlay, cx, pt(-6, 0));
+        assert_eq!(paints(cx), p1);
+        drag_to(&overlay, cx, pt(-5, 1));
+        assert_eq!(paints(cx), p1 + 1);
+        assert_eq!(hidden(cx), vec![R1]);
+        for step in 2..=10 {
+            drag_to(&overlay, cx, pt(-6 + step, 1));
+            assert_eq!(paints(cx), p1 + 1);
+        }
+        assert!(cx.update(|window, cx| overlay.update(cx, |o, cx| o.cancel(window, cx))));
+        cx.run_until_parked();
+        assert_eq!(
+            paints(cx),
+            p1 + 2,
+            "T5.3 done-when: cancelled drag also paints SheetView exactly twice"
+        );
+        assert!(hidden(cx).is_empty(), "hidden items restored on cancel");
+        assert_eq!(
+            revision(&doc, cx),
+            rev1,
+            "INV5: cancel leaves revision unchanged"
+        );
+    }
+
+    /// T5.3 done-when: rotate (R) and mirror (X, Y) during a drag commit as one `Command::Transform`
+    /// reverted by a single undo, and idle R/X/Y on a selection commit `Command::Reorient` with
+    /// undo/redo.
+    #[gpui::test]
+    fn t5_3_rotate_and_mirror_during_drag_and_idle_with_undo(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let original = cx.update(|_, cx| snapshot(doc.read(cx)));
+
+        // 1. Mid-drag rotate + mirror X + mirror Y -> one Command::Transform, one undo.
+        let rev0 = revision(&doc, cx);
+        down(&overlay, cx, pt(-6, 0));
+        drag_to(&overlay, cx, pt(-3, 2));
+        cx.simulate_keystrokes("r");
+        assert_eq!(
+            revision(&doc, cx),
+            rev0,
+            "INV5: R mid-drag does not edit doc"
+        );
+        cx.simulate_keystrokes("x");
+        assert_eq!(
+            revision(&doc, cx),
+            rev0,
+            "INV5: X mid-drag does not edit doc"
+        );
+        cx.simulate_keystrokes("y");
+        assert_eq!(
+            revision(&doc, cx),
+            rev0,
+            "INV5: Y mid-drag does not edit doc"
+        );
+        up(&overlay, cx, pt(-3, 2));
+        assert_eq!(
+            revision(&doc, cx),
+            rev0 + 1,
+            "one Transform commit on release"
+        );
+        assert_eq!(part_at(&doc, cx, 0), pt(-3, 2));
+        assert_eq!(
+            cx.update(|_, cx| doc.read(cx).part(PartId(0)).unwrap().orient),
+            Orient::ROT_90.then(Orient::FLIP_X).then(Orient::FLIP_Y)
+        );
+        let after_drag = cx.update(|_, cx| snapshot(doc.read(cx)));
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(
+            cx.update(|_, cx| doc.read(cx).content_eq(&original)),
+            "one undo reverts the entire drag + R + X + Y"
+        );
+        cx.simulate_keystrokes("ctrl-y");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&after_drag)));
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+
+        // 2. Idle R, X, Y on a selected part -> direct Command::Reorient + undo/redo.
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_selection([R1], cx)));
+        let rev1 = revision(&doc, cx);
+        cx.simulate_keystrokes("r");
+        assert_eq!(revision(&doc, cx), rev1 + 1);
+        assert_eq!(
+            cx.update(|_, cx| doc.read(cx).part(PartId(0)).unwrap().orient),
+            Orient::ROT_90
+        );
+        cx.simulate_keystrokes("x");
+        assert_eq!(revision(&doc, cx), rev1 + 2);
+        assert_eq!(
+            cx.update(|_, cx| doc.read(cx).part(PartId(0)).unwrap().orient),
+            Orient::ROT_90.then(Orient::FLIP_X)
+        );
+        cx.simulate_keystrokes("y");
+        assert_eq!(revision(&doc, cx), rev1 + 3);
+        assert_eq!(
+            cx.update(|_, cx| doc.read(cx).part(PartId(0)).unwrap().orient),
+            Orient::ROT_90.then(Orient::FLIP_X).then(Orient::FLIP_Y)
+        );
+        let reoriented = cx.update(|_, cx| snapshot(doc.read(cx)));
+        cx.simulate_keystrokes("ctrl-z ctrl-z ctrl-z");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        cx.simulate_keystrokes("ctrl-y ctrl-y ctrl-y");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&reoriented)));
+    }
+
+    /// T5.3 done-when: Del key and `SheetCanvas::delete_selection` delete the selected items,
+    /// prune selection, emit `CanvasHistory`, and undo/redo restore exact items and IDs.
+    #[gpui::test]
+    fn t5_3_delete_selection_via_key_and_canvas_method_with_undo(cx: &mut TestAppContext) {
+        let (overlay, doc, cx) = open_overlay(cx);
+        let canvas = canvas_for(cx, Some(doc.clone()), Some(overlay.clone()));
+        let history = record_history(&canvas, cx);
+        let original = cx.update(|_, cx| snapshot(doc.read(cx)));
+
+        // Del with empty selection is a no-op.
+        let rev0 = revision(&doc, cx);
+        cx.simulate_keystrokes("delete");
+        assert_eq!(revision(&doc, cx), rev0);
+        assert!(history.borrow().is_empty());
+
+        // Select R1 and press Del.
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_selection([R1], cx)));
+        cx.simulate_keystrokes("delete");
+        assert_eq!(revision(&doc, cx), rev0 + 1);
+        assert!(cx.update(|_, cx| doc.read(cx).part(PartId(0)).is_none()));
+        assert!(cx.update(|_, cx| overlay.read(cx).selection().is_empty()));
+        assert_eq!(history.borrow().len(), 1);
+        let after_del = cx.update(|_, cx| snapshot(doc.read(cx)));
+
+        // Undo restores R1 with exact id, redo deletes again.
+        cx.simulate_keystrokes("ctrl-z");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        cx.simulate_keystrokes("ctrl-y");
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&after_del)));
+
+        // Select C1 and call `SheetCanvas::delete_selection` (shell's Del path, ui-plan §14).
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_selection([C1], cx)));
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.delete_selection(window, cx)));
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| doc.read(cx).part(PartId(1)).is_none()));
+        cx.update(|window, cx| canvas.update(cx, |c, cx| c.undo(window, cx)));
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| doc.read(cx).content_eq(&after_del)));
+    }
+
+    /// T5.3 done-when: dragging an off-grid part snaps its anchor pin (pin 0) onto `GRID_NM` (K2).
+    #[gpui::test]
+    fn t5_3_drag_part_snaps_anchor_pin_to_grid(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.bind_keys(standalone_bindings()));
+        let lib = SymbolLibrary::builtin();
+        let opamp = lib.by_name("IC-COM-OpAmp").unwrap();
+        let def = lib.get(opamp);
+        // Start with OpAmp at (0, 0) so its pin 0 is off-grid at (-4.5*G, -1.5*G).
+        let doc = cx.new(|_| {
+            Doc::from_items(
+                [(
+                    Part {
+                        symbol: opamp,
+                        at: Pt::ZERO,
+                        orient: Orient::IDENTITY,
+                        designator: "U1".into(),
+                        value: "".into(),
+                    },
+                    def.pins.iter().map(|p| p.at).collect(),
+                    def.bounds,
+                )],
+                [],
+                [],
+            )
+            .unwrap()
+        });
+        let doc_clone = doc.clone();
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = OverlayView::new(doc_clone, camera, &GRAPHITE, cx);
+            window.activate_window();
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+        cx.run_until_parked();
+
+        down(&overlay, cx, Pt::ZERO);
+        let dest = Pt {
+            x: 2 * G + G / 4,
+            y: -G - G / 5,
+        };
+        drag_to(&overlay, cx, dest);
+        up(&overlay, cx, dest);
+
+        let pin0 = cx.update(|_, cx| doc.read(cx).pins(PartId(0)).unwrap()[0]);
+        assert_eq!(
+            pin0.x % G,
+            0,
+            "K2: dragged OpAmp pin 0 x must land on GRID_NM"
+        );
+        assert_eq!(
+            pin0.y % G,
+            0,
+            "K2: dragged OpAmp pin 0 y must land on GRID_NM"
+        );
+    }
+
+    /// T5.3 P1 regression: clicking an off-grid part (`IC-COM-OpAmp` at `(0, 0)`) with 1 px of
+    /// pointer jitter selects it with unchanged revision and 0 `SheetView` paints instead of
+    /// snapping into a half-grid move.
+    #[gpui::test]
+    fn t5_3_click_with_one_pixel_jitter_on_off_grid_part_selects_without_moving(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| cx.bind_keys(standalone_bindings()));
+        let lib = SymbolLibrary::builtin();
+        let opamp = lib.by_name("IC-COM-OpAmp").unwrap();
+        let def = lib.get(opamp);
+        let doc = cx.new(|_| {
+            Doc::from_items(
+                [(
+                    Part {
+                        symbol: opamp,
+                        at: Pt::ZERO,
+                        orient: Orient::IDENTITY,
+                        designator: "U1".into(),
+                        value: "".into(),
+                    },
+                    def.pins.iter().map(|p| p.at).collect(),
+                    def.bounds,
+                )],
+                [],
+                [],
+            )
+            .unwrap()
+        });
+        let doc_clone = doc.clone();
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = OverlayView::new(doc_clone, camera, &GRAPHITE, cx);
+            window.activate_window();
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+        cx.run_until_parked();
+
+        let rev0 = revision(&doc, cx);
+        let paints0 = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let p = screen(&overlay, cx, Pt::ZERO);
+        let jitter = gpui::point(p.x + gpui::px(1.0), p.y);
+        cx.simulate_mouse_down(p, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(jitter, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(jitter, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+
+        assert_eq!(
+            revision(&doc, cx),
+            rev0,
+            "1 px click jitter on off-grid part must not commit a move"
+        );
+        assert_eq!(part_at(&doc, cx, 0), Pt::ZERO);
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![ItemId::Part(PartId(0))],
+            "1 px click jitter on off-grid part must still select it"
+        );
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints0,
+            "INV11: 1 px click jitter must cause 0 SheetView paints"
+        );
+    }
+
+    /// T5.3 P2 regression: installing `set_place_provider` while the attached overlay temporarily
+    /// displays another document still applies once `set_doc` aligns them (parts-plan §14).
+    #[gpui::test]
+    fn t5_3_place_provider_set_during_doc_mismatch_applies_after_set_doc(cx: &mut TestAppContext) {
+        let (overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.new(|_| Doc::new());
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let lib_clone = lib.clone();
+        let stub: PlaceProvider = Rc::new(move |req| {
+            Some(lib_clone.place_command(
+                req.symbol,
+                req.at,
+                req.orient,
+                req.designator,
+                std::sync::Arc::from("from-mismatch-stub"),
+            ))
+        });
+
+        let canvas = canvas_for(cx, Some(doc_a.clone()), Some(overlay.clone()));
+        // Temporarily point the overlay at doc_b so `gesture_owner` returns None.
+        cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_document(doc_b.clone(), cx));
+            canvas.update(cx, |c, cx| c.set_place_provider(Some(stub), cx));
+        });
+        // Now realign canvas + overlay on doc_b via `set_doc` and commit a placement.
+        cx.update(|_, cx| {
+            canvas.update(cx, |c, cx| {
+                c.set_doc(Some(doc_b.clone()), cx);
+                c.set_tool(Tool::Place(res), cx);
+            });
+        });
+        cx.run_until_parked();
+        down(&overlay, cx, pt(1, 1));
+        up(&overlay, cx, pt(1, 1));
+
+        let placed = cx.update(|_, cx| {
+            doc_b
+                .read(cx)
+                .parts()
+                .next()
+                .map(|(_, p)| p.clone())
+                .expect("provider committed part on doc_b")
+        });
+        assert_eq!(&*placed.value, "from-mismatch-stub");
     }
 }

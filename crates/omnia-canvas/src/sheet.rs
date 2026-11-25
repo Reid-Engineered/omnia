@@ -17,8 +17,8 @@
 //! The grid walks the lattice directly. Document paint reuses its query and paint buffers
 //! and uses prebuilt raster keys and SVG bytes (B10, INV7).
 
-mod lod;
-mod symbols;
+pub(crate) mod lod;
+pub(crate) mod symbols;
 mod text;
 mod wires;
 
@@ -121,6 +121,92 @@ impl SheetDocument {
             cache: Rc::new(DocumentCache::default()),
         }
     }
+
+    /// Shared symbol sprite masks for overlay ghosts (T5.3, zero duplicate atlas buffers).
+    pub(crate) fn masks(&self) -> &symbols::Masks {
+        &self.cache.masks
+    }
+}
+
+/// Zero-allocation membership test against a canonically sorted slice of hidden items (T5.3, B10).
+#[inline]
+pub(super) fn is_hidden(hidden: &[ItemId], item: ItemId) -> bool {
+    if hidden.is_empty() {
+        return false;
+    }
+    let key = crate::selection::item_sort_key(item);
+    hidden
+        .binary_search_by_key(&key, |&id| crate::selection::item_sort_key(id))
+        .is_ok()
+}
+
+/// Returns `true` when `items` is sorted in canonical [`crate::selection::item_sort_key`] order.
+pub(crate) fn is_canonically_sorted(items: &[ItemId]) -> bool {
+    items
+        .windows(2)
+        .all(|w| crate::selection::item_sort_key(w[0]) <= crate::selection::item_sort_key(w[1]))
+}
+
+/// Zero-allocation check whether any hidden item (wire endpoint or part pin) touches `at`
+/// (T5.3, D7, B10). Lets `DocumentCache::draw` skip scanning all visible items for junctions
+/// untouched by the current drag selection.
+fn hidden_touches_point(doc: &Doc, hidden: &[ItemId], at: Pt) -> bool {
+    for &item in hidden {
+        match item {
+            ItemId::Wire(id) => {
+                if let Some(wire) = doc.wire(id)
+                    && (wire.a == at || wire.b == at)
+                {
+                    return true;
+                }
+            }
+            ItemId::Part(id) => {
+                if let Some(pins) = doc.pins(id)
+                    && pins.contains(&at)
+                {
+                    return true;
+                }
+            }
+            ItemId::Label(_) => {}
+        }
+    }
+    false
+}
+
+/// Zero-allocation check that at least 3 visible ends (wire endpoints + part pins, INV3) still
+/// meet at `at` after hiding dragged items (T5.3, D7, B10).
+fn visible_junction(doc: &Doc, visible_parts: &[ItemId], visible_wires: &[ItemId], at: Pt) -> bool {
+    let mut ends = 0usize;
+    for &item in visible_wires {
+        if let ItemId::Wire(id) = item
+            && let Some(wire) = doc.wire(id)
+        {
+            if wire.a == at {
+                ends += 1;
+            }
+            if wire.b == at {
+                ends += 1;
+            }
+            if ends >= 3 {
+                return true;
+            }
+        }
+    }
+    for &item in visible_parts {
+        if let ItemId::Part(id) = item
+            && let Some(pins) = doc.pins(id)
+        {
+            for &pin in pins {
+                if pin == at {
+                    ends += 1;
+                    if ends >= 3 {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 #[derive(Debug)]
@@ -208,6 +294,7 @@ impl DocumentCache {
         doc: &Doc,
         camera: &Camera,
         sf: f32,
+        hidden: &[ItemId],
         mut layer: impl FnMut(Layer, &mut EmitMarks<'a, '_>),
     ) {
         let mut scratch = self.scratch.borrow_mut();
@@ -236,6 +323,9 @@ impl DocumentCache {
             },
         };
         doc.query(area, items);
+        if !hidden.is_empty() {
+            items.retain(|&id| !is_hidden(hidden, id));
+        }
         items.sort_unstable_by_key(|id| match *id {
             ItemId::Part(id) => (0, id.0),
             ItemId::Wire(id) => (1, id.0),
@@ -290,6 +380,14 @@ impl DocumentCache {
             }
             if let Some(diameter) = diameter {
                 doc.junctions(area, junctions);
+                if !hidden.is_empty() {
+                    let visible_parts = &items[..parts_end];
+                    let visible_wires = &items[parts_end..wires_end];
+                    junctions.retain(|&p| {
+                        !hidden_touches_point(doc, hidden, p)
+                            || visible_junction(doc, visible_parts, visible_wires, p)
+                    });
+                }
                 junctions.sort_unstable_by_key(|p| (p.x, p.y));
                 let side = stroke_device_px(diameter, sf);
                 for &p in junctions.iter() {
@@ -313,6 +411,8 @@ pub struct SheetView {
     camera: Camera,
     theme: &'static Theme,
     document: Option<SheetDocument>,
+    /// T5.3: canonically sorted items currently hidden during an active drag (D7, B10).
+    hidden: Option<Rc<[ItemId]>>,
 }
 
 impl SheetView {
@@ -322,6 +422,7 @@ impl SheetView {
             camera,
             theme,
             document: None,
+            hidden: None,
         }
     }
 
@@ -331,7 +432,18 @@ impl SheetView {
             camera,
             theme,
             document: Some(document),
+            hidden: None,
         }
+    }
+
+    /// Hides canonically sorted `hidden` items while they are rendered as overlay ghosts (T5.3, D7).
+    pub(crate) fn with_hidden(mut self, hidden: Option<Rc<[ItemId]>>) -> Self {
+        debug_assert!(
+            hidden.as_deref().is_none_or(is_canonically_sorted),
+            "SheetView::with_hidden requires canonically sorted items"
+        );
+        self.hidden = hidden;
+        self
     }
 
     pub fn camera(&self) -> &Camera {
@@ -377,22 +489,33 @@ impl SheetView {
                         let doc = document.doc.read(cx);
                         let ink = gpui_color(self.theme.stage_ink);
                         let ink_secondary = gpui_color(self.theme.stage_ink_secondary);
-                        document.cache.draw(doc, &camera, scale_factor, |_, emit| {
-                            scope.gpui(|| {
-                                window.paint_layer(|window| {
-                                    scope.omnia(|| {
-                                        emit(&mut |mark| {
-                                            paint_mark(window, cx, mark, scale_factor, ink, scope);
+                        let hidden = self.hidden.as_deref().unwrap_or(&[]);
+                        document
+                            .cache
+                            .draw(doc, &camera, scale_factor, hidden, |_, emit| {
+                                scope.gpui(|| {
+                                    window.paint_layer(|window| {
+                                        scope.omnia(|| {
+                                            emit(&mut |mark| {
+                                                paint_mark(
+                                                    window,
+                                                    cx,
+                                                    mark,
+                                                    scale_factor,
+                                                    ink,
+                                                    scope,
+                                                );
+                                            });
                                         });
                                     });
                                 });
                             });
-                        });
                         let scratch = document.cache.scratch.borrow();
                         let text_frame = text::TextFrame {
                             doc,
                             parts: &scratch.items[..scratch.parts_end],
                             labels: &scratch.items[scratch.wires_end..],
+                            hidden,
                             camera: &camera,
                             viewport: bounds,
                             scale_factor,
@@ -542,6 +665,11 @@ impl Element for SheetView {
 }
 
 #[cfg(test)]
+pub(crate) fn replace_alloc_counter(value: Option<usize>) -> Option<usize> {
+    tests::ALLOCS.replace(value)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::camera::{BASE_SCALE, MAX_ZOOM, MIN_ZOOM};
@@ -553,7 +681,7 @@ mod tests {
     struct Counting;
 
     thread_local! {
-        static ALLOCS: Cell<Option<usize>> = const { Cell::new(None) };
+        pub(super) static ALLOCS: Cell<Option<usize>> = const { Cell::new(None) };
     }
 
     fn count_allocation() {
@@ -650,7 +778,7 @@ mod tests {
         let cache = DocumentCache::default();
         let paint = |camera: &Camera| {
             let mut marks = 0;
-            cache.draw(&doc, camera, 1.25, |_, emit| {
+            cache.draw(&doc, camera, 1.25, &[], |_, emit| {
                 emit(&mut |mark| {
                     match mark {
                         Mark::Quad(bounds) => {
@@ -699,7 +827,7 @@ mod tests {
             let (sheet, _) = sheet(zoom, (0.0, 0.0));
             let mut quads = 0;
             let mut sprites = 0;
-            cache.draw(&doc, sheet.camera(), 1.5, |_, emit| {
+            cache.draw(&doc, sheet.camera(), 1.5, &[], |_, emit| {
                 emit(&mut |mark| match mark {
                     Mark::Quad(_) => quads += 1,
                     Mark::Sprite(_) => sprites += 1,
@@ -719,7 +847,7 @@ mod tests {
             let (view, _) = sheet(zoom, (0.0, 0.0));
             let mut quads = 0;
             let mut sprites = 0;
-            cache.draw(doc, view.camera(), 1.25, |_, emit| {
+            cache.draw(doc, view.camera(), 1.25, &[], |_, emit| {
                 emit(&mut |mark| match mark {
                     Mark::Quad(_) => quads += 1,
                     Mark::Sprite(_) => sprites += 1,
@@ -814,7 +942,7 @@ mod tests {
             let (view, _) = sheet(zoom, (0.0, 0.0));
             let mut quads = 0;
             let mut sprites = 0;
-            cache.draw(&doc, view.camera(), 1.25, |_, emit| {
+            cache.draw(&doc, view.camera(), 1.25, &[], |_, emit| {
                 emit(&mut |mark| match mark {
                     Mark::Quad(_) => quads += 1,
                     Mark::Sprite(_) => sprites += 1,
@@ -1098,5 +1226,128 @@ mod tests {
         assert_eq!(full + faded, quads.len() - 1);
         // The faded dots are three of every four lattice points.
         assert!(faded > 2 * full && faded < 4 * full, "{full} {faded}");
+    }
+
+    #[test]
+    fn t5_3_hidden_items_skip_draw_with_zero_warm_allocations() {
+        let mut doc = Doc::new();
+        let library = omnia_symbols::SymbolLibrary::builtin();
+        let def = library.get(library.by_name("Resistor-IEEE-Standard").unwrap());
+        let p0 = doc
+            .apply(Command::PlacePart {
+                part: Part {
+                    symbol: def.id,
+                    at: Pt {
+                        x: -4 * GRID_NM,
+                        y: 0,
+                    },
+                    orient: Orient::IDENTITY,
+                    designator: "R1".into(),
+                    value: "10k".into(),
+                },
+                local_pins: def.pins.iter().map(|pin| pin.at).collect(),
+                local_bounds: def.bounds,
+            })
+            .unwrap()
+            .added[0];
+        let p1 = doc
+            .apply(Command::PlacePart {
+                part: Part {
+                    symbol: def.id,
+                    at: Pt {
+                        x: 4 * GRID_NM,
+                        y: 0,
+                    },
+                    orient: Orient::IDENTITY,
+                    designator: "R2".into(),
+                    value: "22k".into(),
+                },
+                local_pins: def.pins.iter().map(|pin| pin.at).collect(),
+                local_bounds: def.bounds,
+            })
+            .unwrap()
+            .added[0];
+        let w0 = doc
+            .apply(Command::AddWires(vec![Wire {
+                a: Pt {
+                    x: -2 * GRID_NM,
+                    y: 0,
+                },
+                b: Pt {
+                    x: 2 * GRID_NM,
+                    y: 0,
+                },
+            }]))
+            .unwrap()
+            .added[0];
+        // Add a vertical branch at (0, 0) to form a 3-way T-junction (splits w0 into 2 + branch),
+        // plus a vertical wire at R2's left pin (2G, 0) to form a 2-wire + 1-pin junction.
+        let _branch = doc
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: Pt::ZERO,
+                    b: Pt {
+                        x: 0,
+                        y: 3 * GRID_NM,
+                    },
+                },
+                Wire {
+                    a: Pt {
+                        x: 2 * GRID_NM,
+                        y: 0,
+                    },
+                    b: Pt {
+                        x: 2 * GRID_NM,
+                        y: 3 * GRID_NM,
+                    },
+                },
+            ]))
+            .unwrap();
+        let all_wires: Vec<ItemId> = doc.wires().map(|(id, _)| ItemId::Wire(id)).collect();
+        assert_eq!(all_wires.len(), 4, "T-junction + pin-junction wires");
+        let _ = w0;
+
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let camera = Camera::new(Pt::ZERO, 1.0, bounds);
+        let cache = DocumentCache::default();
+        let count_marks = |hidden: &[ItemId]| {
+            let mut count = 0usize;
+            cache.draw(&doc, &camera, 1.0, hidden, |_, emit| {
+                emit(&mut |_| count += 1);
+            });
+            count
+        };
+
+        // 2 parts + 4 wire segments + 2 junction dots ((0,0) and R2's left pin (2G,0)) = 8 marks.
+        assert_eq!(count_marks(&[]), 8);
+        // Hiding p1 (R2) drops R2 AND its 2-wire+1-pin junction dot (pin-counting branch), while
+        // the untouched (0,0) T-junction dot stays -> 1 part + 4 wires + 1 dot = 6 marks.
+        assert_eq!(count_marks(&[p1]), 6);
+        // Hiding p0 (touches neither junction) drops only p0 -> 1 part + 4 wires + 2 dots = 7 marks.
+        assert_eq!(count_marks(&[p0]), 7);
+        // Hiding p0 and one T-junction branch wire drops p0, that wire, AND the (0,0) dot (only 2
+        // ends remain there), while the pin junction stays -> 1 part + 3 wires + 1 dot = 5 marks.
+        let t_wire = all_wires
+            .iter()
+            .copied()
+            .find(|&id| matches!(id, ItemId::Wire(w) if doc.wire(w).is_some_and(|w| w.a == Pt::ZERO && w.b.y == 3 * GRID_NM)))
+            .expect("vertical branch at origin");
+        let mut hidden_partial = vec![p0, t_wire];
+        hidden_partial.sort_unstable_by_key(|&id| crate::selection::item_sort_key(id));
+        assert_eq!(count_marks(&hidden_partial), 5);
+
+        // Hiding all parts and wires leaves 0 marks (no orphaned junction dots).
+        let mut hidden_all = vec![p0, p1];
+        hidden_all.extend_from_slice(&all_wires);
+        hidden_all.sort_unstable_by_key(|&id| crate::selection::item_sort_key(id));
+        assert_eq!(count_marks(&hidden_all), 0);
+
+        // Warm-path allocation check (B10 / INV7): filtering hidden items and junctions allocates nothing.
+        ALLOCS.set(Some(0));
+        for _ in 0..40 {
+            assert_eq!(count_marks(&hidden_partial), 5);
+            assert_eq!(count_marks(&[p1]), 6);
+        }
+        assert_eq!(ALLOCS.replace(None), Some(0));
     }
 }
