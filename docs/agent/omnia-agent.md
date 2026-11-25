@@ -1,8 +1,9 @@
 # Omnia Agent Contract (`omnia.agent/1`)
 
 This document is the authoritative contract for agents and scripts driving Omnia's headless
-schematic surface. Every count and capability entry below is checked in CI against the live
-output of `omnia capabilities` (`Catalog::current()`) and the committed JSON Schemas under
+schematic surface. Every catalog count, active operation and MCP tool, edit operation, error
+code, unit, limit, orientation, and text field below is checked in CI against the live output of
+`omnia capabilities` (`Catalog::current()`) and the committed JSON Schemas under
 `crates/omnia-agent/schema/`. Every protocol example points to an exact transcript fixture under
 `crates/omnia-cli/tests/transcripts/` that runs byte-for-byte in CI.
 
@@ -13,16 +14,17 @@ See [evidence.md](evidence.md) for the invariant, scenario and test evidence reg
 
 Every capability in this contract carries one of three evidence tiers:
 
-- **`implemented and tested`** — shipped in code and exercised by automated tests or exact CI
-  transcript fixtures.
-- **`implemented (read in code)`** — present in source code and verified by reading, without a
-  dedicated end-to-end runtime test yet (none in A1).
+- **`implemented and tested`** — shipped in code and exercised end-to-end by automated tests or
+  exact CI transcript fixtures.
+- **`implemented (read in code)`** — present in source code (and schema/decoder round-trip tested
+  where applicable) without a reachable runtime handler in A1 headless mode.
 - **`planned`** — specified in the plans for a later milestone; not listed in `omnia capabilities`
   or MCP `tools/list`, and refused as `unknown_operation` if called today.
 
 ## Catalog counts
 
-All counts match `omnia capabilities` and `omnia schema` for schema `omnia.agent/1` (`AK7`):
+All counts match `omnia capabilities`, `omnia schema`, and `omnia mcp` for schema `omnia.agent/1`
+(`AK7`):
 
 | Metric | Value | Source |
 | --- | --- | --- |
@@ -58,8 +60,7 @@ starting at `d1` per session and are never reused.
 | Idempotency cache entries (`AK5`) | `limits.idempotency_cache_entries` | `256` |
 | Max open documents per session (`AK6`) | `limits.open_documents` | `8` |
 
-Orientations (`AD12`): `identity`, `rot_90`, `rot_180`, `rot_270`, `flip_x`, `flip_x_rot_90`,
-`flip_y`, `flip_x_rot_270`.
+Orientations (`AD12`): `identity`, `rot_90`, `rot_180`, `rot_270`, `flip_x`, `flip_x_rot_90`, `flip_y`, `flip_x_rot_270`.
 
 Text fields: `designator`, `value`, `label`.
 
@@ -106,9 +107,10 @@ request execute atomically as one `Command::Batch` and one undo step (`AD5`).
 ### Error codes
 
 Every failure returns `{code, message, retryable, details, hint?}` (`AD6`). Every code below is
-published in `omnia capabilities` (`Catalog::current().error_codes`) and verified by schema and
-decoder tests; codes tied to later milestones (`user_gesture_in_progress`, `cancelled`,
-`job_not_found`) are reserved in schema `omnia.agent/1` today.
+published in `omnia capabilities` (`Catalog::current().error_codes`) and covered by schema and
+decoder round-trip tests. Five reserved codes (`unsupported_in_mode`,
+`protocol_version_unsupported`, `user_gesture_in_progress`, `cancelled`, `job_not_found`) are
+not returned by headless A1 handlers today and therefore carry `implemented (read in code)`.
 
 | Code | Retryable | Details fields | Evidence |
 | --- | --- | --- | --- |
@@ -116,8 +118,8 @@ decoder tests; codes tied to later milestones (`user_gesture_in_progress`, `canc
 | `schema_violation` | `false` | `{path}` | `implemented and tested` |
 | `unknown_operation` | `false` | `{}` | `implemented and tested` |
 | `limit_exceeded` | `false` | `{limit, value}` | `implemented and tested` |
-| `unsupported_in_mode` | `false` | `{}` | `implemented and tested` |
-| `protocol_version_unsupported` | `false` | `{}` | `implemented and tested` |
+| `unsupported_in_mode` | `false` | `{}` (reserved; schema/decoder tested, not returned in headless A1) | `implemented (read in code)` |
+| `protocol_version_unsupported` | `false` | `{}` (reserved; schema/decoder tested — MCP returns JSON-RPC `-32022`) | `implemented (read in code)` |
 | `document_not_found` | `false` | `{}` | `implemented and tested` |
 | `unknown_symbol` | `false` | `{}` | `implemented and tested` |
 | `unknown_item` | `false` | `{}` | `implemented and tested` |
@@ -133,7 +135,7 @@ decoder tests; codes tied to later milestones (`user_gesture_in_progress`, `canc
 | `stale_revision` | `true` | `{expected, actual}` | `implemented and tested` |
 | `preview_mismatch` | `false` | `{}` | `implemented and tested` |
 | `idempotency_conflict` | `false` | `{}` | `implemented and tested` |
-| `user_gesture_in_progress` | `true` | `{}` (reserved for app mode, A4.2; schema/service tested) | `implemented and tested` |
+| `user_gesture_in_progress` | `true` | `{}` (reserved for app mode, A4.2; checked in `service.rs`, unreachable headless) | `implemented (read in code)` |
 | `nothing_to_undo` | `false` | `{}` | `implemented and tested` |
 | `nothing_to_redo` | `false` | `{}` | `implemented and tested` |
 | `approval_required` | `true` | `{approval_id, tier, effect, effect_digest}` | `implemented and tested` |
@@ -142,8 +144,8 @@ decoder tests; codes tied to later milestones (`user_gesture_in_progress`, `canc
 | `file_exists` | `false` | `{}` | `implemented and tested` |
 | `io_error` | `true` | `{}` | `implemented and tested` |
 | `unsupported_file_version` | `false` | `{}` | `implemented and tested` |
-| `cancelled` | `false` | `{}` (reserved for jobs, A3.1; schema/decoder tested) | `implemented and tested` |
-| `job_not_found` | `false` | `{}` (reserved for jobs, A3.1; schema/decoder tested) | `implemented and tested` |
+| `cancelled` | `false` | `{}` (reserved for jobs, A3.1; schema/decoder tested) | `implemented (read in code)` |
+| `job_not_found` | `false` | `{}` (reserved for jobs, A3.1; schema/decoder tested) | `implemented (read in code)` |
 | `internal` | `false` | `{}` | `implemented and tested` |
 
 ### Transports, MCP resources and prompts
@@ -174,12 +176,12 @@ milestones and are **not** active in `omnia capabilities` or MCP `tools/list`:
 | Capability | Milestone | Evidence |
 | --- | --- | --- |
 | `omnia_route`, `omnia_snap`, `omnia_hit` | A2.1 | `planned` |
-| `invert_follow` field on `move` and `reorient` | A2.2 | `planned` |
-| `with_wires` field on `delete` | A2.3 | `planned` |
+| `invert_follow` field on move and reorient | A2.2 | `planned` |
+| `with_wires` field on delete | A2.3 | `planned` |
 | `omnia_render_svg` | A2.4 | `planned` |
 | `omnia_job_status`, `omnia_job_cancel`, `omnia://jobs/{job_id}`, progress notifications | A3.1–A3.3 | `planned` |
 | App-hosted `DocHost`, gesture gate, preview ghosts, approval dialog, local IPC bridge | A4.1–A4.4 | `planned` |
-| `omnia_context`, `omnia://doc/{doc_id}/context`, optional `circuit` delta on `preview`/`apply` | Context C2.1–C2.3 | `planned` |
+| `omnia_context`, `omnia://doc/{doc_id}/context`, optional `circuit` delta on preview and apply | Context C2.1–C2.3 | `planned` |
 | `set_param`, `list_parts`, `update_part_def` | Parts P2 adoption (`XD8`) | `planned` |
 | Network transport (Streamable HTTP) | A5 (gated by `HA3`) | `planned` |
 
@@ -187,8 +189,8 @@ milestones and are **not** active in `omnia capabilities` or MCP `tools/list`:
 
 1. **Test-sheet file format only (`AQ12`).** `omnia_open` and `omnia_save` read and write the
    RON v2 test-sheet format (`Doc::load` / `Doc::save`), with no product compatibility guarantee.
-2. **No simulation tools.** Circuit simulation (`ngspice` / `RIS-C`) is out of scope for A1;
-   simulation tools will build on the A3 job model once the simulation roadmap delivers them.
+2. **No simulation tools.** Circuit simulation is out of scope for A1; simulation tools will
+   build on the A3 job model once the simulation roadmap delivers them.
 3. **Headless mode only.** In A1, `omnia` runs against an in-process `HeadlessHost` confined to
    `--root DIR` directories (`AINV12`). App-hosted shared editing and in-app approval arrive in
    A4 (`AD13`).
@@ -230,7 +232,7 @@ Follow this loop for every schematic edit (`mcp-plan.md` section 13):
 2. **Orient.** Call `omnia_open` or `omnia_new`, then `omnia_inspect` to read the document's
    `revision`, summary, items and nets. *(From context C2, orient with `omnia_context`.)*
 3. **Preview.** Call `omnia_preview` with `expected_revision` and the edit batch. Inspect the
-   predicted `change`, `diff`, newly allocated ids, and returned `preview_id`.
+   predicted `change`, `diff`, predicted pins, newly allocated ids, and returned `preview_id`.
 4. **Commit.** Call `omnia_apply` with the exact `preview_id`, `expected_revision` and a fresh
    `idempotency_key`. On a lost reply, query `omnia_request_status` before retrying.
 5. **Verify connectivity.** Call `omnia_nets` to confirm every intended connection shares a

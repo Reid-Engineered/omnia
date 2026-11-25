@@ -1,8 +1,8 @@
-//! A1.9 contract drift checks (mcp-plan.md section 13, AINV11).
+//! A1.9 contract drift checks (mcp-plan.md section 13).
 //!
 //! Fails if any documented tool, operation, edit operation, error code, count, unit, limit,
-//! schema count, transcript fixture reference, or evidence-register entry disagrees with the
-//! live `Catalog::current()` (`omnia capabilities`) or the repository.
+//! orientation, text field, schema count, transcript fixture reference, or evidence-register entry
+//! disagrees with the live `Catalog::current()` (`omnia capabilities`) or the repository.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,6 +21,18 @@ const VALID_TIERS: [&str; 3] = [
     "implemented (read in code)",
     "planned",
 ];
+
+/// Expected MCP-published symbol schema count (`omnia://schema/symbols`, `omnia://schema/symbol`).
+const MCP_SYMBOL_SCHEMAS: usize = 2;
+
+/// Expected static MCP prompt count (`omnia_inspect_sheet`, `omnia_place_and_wire`,
+/// `omnia_safe_edit_loop`).
+const STATIC_MCP_PROMPTS: usize = 3;
+
+struct MarkdownTable {
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -57,9 +69,9 @@ fn split_markdown_row(row: &str) -> Vec<String> {
     cells
 }
 
-/// Extracts data rows (excluding header and separator) from the first markdown table under
-/// `heading` (matched as an exact trimmed line), stopping at the next heading.
-fn table_under(doc: &str, heading: &str) -> Result<Vec<Vec<String>>, String> {
+/// Extracts header and data rows from the first markdown table under `heading` (matched as an
+/// exact trimmed line), stopping at the next heading.
+fn table_under(doc: &str, heading: &str) -> Result<MarkdownTable, String> {
     let mut in_section = false;
     let mut table_lines = Vec::new();
     for line in doc.lines() {
@@ -84,10 +96,13 @@ fn table_under(doc: &str, heading: &str) -> Result<Vec<Vec<String>>, String> {
             "expected markdown table with header, separator and rows under `{heading}`"
         ));
     }
-    Ok(table_lines[2..]
-        .iter()
-        .map(|row| split_markdown_row(row))
-        .collect())
+    Ok(MarkdownTable {
+        headers: split_markdown_row(table_lines[0]),
+        rows: table_lines[2..]
+            .iter()
+            .map(|row| split_markdown_row(row))
+            .collect(),
+    })
 }
 
 fn strip_code(cell: &str) -> Result<&str, String> {
@@ -131,6 +146,24 @@ fn parse_bool(cell: &str) -> Result<bool, String> {
     }
 }
 
+/// Finds the single line starting with `prefix` and returns its backtick-wrapped tokens as a set
+/// (rejecting duplicates).
+fn line_token_set(doc: &str, prefix: &str) -> Result<BTreeSet<String>, String> {
+    let line = doc
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with(prefix))
+        .ok_or_else(|| format!("missing `{prefix}` line in contract"))?;
+    let body = &line[prefix.len()..];
+    let mut set = BTreeSet::new();
+    for token in extract_backtick_tokens(body) {
+        if !set.insert(token.to_owned()) {
+            return Err(format!("duplicate token `{token}` on `{prefix}` line"));
+        }
+    }
+    Ok(set)
+}
+
 fn check_contract_against_catalog(
     contract: &str,
     catalog: &Catalog,
@@ -138,7 +171,7 @@ fn check_contract_against_catalog(
     transcript_pair_count: usize,
 ) -> Result<(), String> {
     // 1. Operations and MCP tools table: symmetric equality + field parity.
-    let op_rows = table_under(contract, "### Operations and MCP tools")?;
+    let op_table = table_under(contract, "### Operations and MCP tools")?;
     let mut doc_ops = BTreeSet::new();
     let mut doc_tools = BTreeSet::new();
     let cat_by_op: BTreeMap<_, _> = catalog
@@ -146,7 +179,7 @@ fn check_contract_against_catalog(
         .iter()
         .map(|e| (e.name.as_str(), e))
         .collect();
-    for row in &op_rows {
+    for row in &op_table.rows {
         if row.len() != 9 {
             return Err(format!("unexpected operations row width: {row:?}"));
         }
@@ -220,14 +253,14 @@ fn check_contract_against_catalog(
     }
 
     // 2. Edit operations table: symmetric equality + Command parity.
-    let edit_rows = table_under(contract, "### Edit operations")?;
+    let edit_table = table_under(contract, "### Edit operations")?;
     let mut doc_edits = BTreeSet::new();
     let cat_edits_by_name: BTreeMap<_, _> = catalog
         .edit_operations
         .iter()
         .map(|e| (e.name.as_str(), e))
         .collect();
-    for row in &edit_rows {
+    for row in &edit_table.rows {
         if row.len() != 4 {
             return Err(format!("unexpected edit operations row width: {row:?}"));
         }
@@ -261,14 +294,14 @@ fn check_contract_against_catalog(
     }
 
     // 3. Error codes table: symmetric equality + retryable parity.
-    let err_rows = table_under(contract, "### Error codes")?;
+    let err_table = table_under(contract, "### Error codes")?;
     let mut doc_errs = BTreeSet::new();
     let cat_errs_by_code: BTreeMap<_, _> = catalog
         .error_codes
         .iter()
         .map(|e| (e.code.as_str(), e))
         .collect();
-    for row in &err_rows {
+    for row in &err_table.rows {
         if row.len() != 4 {
             return Err(format!("unexpected error codes row width: {row:?}"));
         }
@@ -301,9 +334,10 @@ fn check_contract_against_catalog(
         ));
     }
 
-    // 4. Planned capabilities table: every row must be marked `planned` and absent from catalog.
-    let planned_rows = table_under(contract, "### Planned capabilities")?;
-    for row in &planned_rows {
+    // 4. Planned capabilities table: every row must be marked `planned` and absent from active
+    //    MCP tools, operations, and edit operations.
+    let planned_table = table_under(contract, "### Planned capabilities")?;
+    for row in &planned_table.rows {
         if row.len() != 3 {
             return Err(format!("unexpected planned row width: {row:?}"));
         }
@@ -313,22 +347,27 @@ fn check_contract_against_catalog(
             ));
         }
         for token in extract_backtick_tokens(&row[0]) {
-            if cat_tools.contains(token) {
+            if cat_tools.contains(token) || cat_ops.contains(token) || cat_edits.contains(token) {
                 return Err(format!(
-                    "planned tool `{token}` is now active in the catalog; move it to active tables"
+                    "planned capability `{token}` is now active in the catalog; move it to active tables"
                 ));
             }
         }
     }
 
     // 5. Catalog counts table: verify every reported count matches live catalog / files.
-    let count_rows = table_under(contract, "## Catalog counts")?;
+    let count_table = table_under(contract, "## Catalog counts")?;
     let mut counts = BTreeMap::new();
-    for r in &count_rows {
+    for r in &count_table.rows {
         if r.len() < 2 {
             return Err(format!("unexpected count row: {r:?}"));
         }
-        counts.insert(r[0].clone(), strip_code(&r[1])?.to_owned());
+        if counts
+            .insert(r[0].clone(), strip_code(&r[1])?.to_owned())
+            .is_some()
+        {
+            return Err(format!("duplicate count row `{}`", r[0]));
+        }
     }
     let retryable_count = catalog.error_codes.iter().filter(|e| e.retryable).count();
     let expected_counts = [
@@ -351,6 +390,11 @@ fn check_contract_against_catalog(
         ("Text fields", TEXT_FIELD_NAMES.len().to_string()),
         ("Committed JSON Schema files", schema_count.to_string()),
         (
+            "MCP-published symbol schemas",
+            MCP_SYMBOL_SCHEMAS.to_string(),
+        ),
+        ("Static MCP prompts", STATIC_MCP_PROMPTS.to_string()),
+        (
             "Exact CI transcript fixture pairs",
             transcript_pair_count.to_string(),
         ),
@@ -367,9 +411,9 @@ fn check_contract_against_catalog(
     }
 
     // 6. Units and limits table + protocol revisions, orientations & text fields.
-    let unit_rows = table_under(contract, "## Units and limits")?;
+    let unit_table = table_under(contract, "## Units and limits")?;
     let mut units = BTreeMap::new();
-    for r in &unit_rows {
+    for r in &unit_table.rows {
         if r.len() < 3 {
             return Err(format!("unexpected unit/limit row: {r:?}"));
         }
@@ -377,7 +421,9 @@ fn check_contract_against_catalog(
         let val = strip_code(&r[2])?
             .parse::<u64>()
             .map_err(|e| format!("non-integer constant for `{key}`: {e}"))?;
-        units.insert(key, val);
+        if units.insert(key.clone(), val).is_some() {
+            return Err(format!("duplicate unit/limit key `{key}`"));
+        }
     }
     let expected_units = [
         ("units.grid_nm", u64::from(catalog.units.grid_nm)),
@@ -429,19 +475,25 @@ fn check_contract_against_catalog(
             return Err(format!("contract missing protocol revision `{rev}`"));
         }
     }
-    for orient in &catalog.orientations {
-        if !contract.contains(&format!("`{orient}`")) {
-            return Err(format!("contract missing orientation `{orient}`"));
-        }
+    let doc_orientations = line_token_set(contract, "Orientations (`AD12`):")?;
+    let cat_orientations: BTreeSet<String> = catalog.orientations.iter().cloned().collect();
+    if doc_orientations != cat_orientations {
+        return Err(format!(
+            "orientations disagree: doc={doc_orientations:?}, cat={cat_orientations:?}"
+        ));
     }
-    for field in &catalog.text_fields {
-        if !contract.contains(&format!("`{field}`")) {
-            return Err(format!("contract missing text field `{field}`"));
-        }
+    let doc_text_fields = line_token_set(contract, "Text fields:")?;
+    let cat_text_fields: BTreeSet<String> = catalog.text_fields.iter().cloned().collect();
+    if doc_text_fields != cat_text_fields {
+        return Err(format!(
+            "text fields disagree: doc={doc_text_fields:?}, cat={cat_text_fields:?}"
+        ));
     }
     Ok(())
 }
 
+/// Lists all `.in.jsonl` / `.out.jsonl` fixture stems under `crates/omnia-cli/tests/transcripts/`.
+/// Intentionally rejects non-transcript files so the directory stays strictly machine-verified.
 fn transcript_fixture_pairs() -> BTreeSet<String> {
     let dir = repo_root().join("crates/omnia-cli/tests/transcripts");
     let mut inputs = BTreeSet::new();
@@ -509,7 +561,6 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
     let pair_count = transcript_fixture_pairs().len();
     let contract = read_text("docs/agent/omnia-agent.md");
 
-    // Helper: drop one line matching `needle`.
     let drop_line = |needle: &str| -> String {
         contract
             .lines()
@@ -518,7 +569,7 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
             .join("\n")
     };
 
-    // 1. Missing documented operation/tool (in catalog, missing from contract).
+    // 1. Operations & MCP tools: missing, extra, mismatched tool, tiers, flag, schema name.
     assert!(
         check_contract_against_catalog(
             &drop_line("| `redo` |"),
@@ -529,7 +580,6 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
         .is_err(),
         "dropping a catalog operation/tool must fail"
     );
-    // 2. Extra documented operation/tool (in contract, missing from catalog).
     let extra_op = contract.replace(
         "| `request_status` |",
         "| `bogus_op` | `omnia_bogus_op` | `0` | `true` | `false` | `true` | `false` | `bogus_op.params`, `bogus_op.arguments`, `bogus_op.response` | `implemented and tested` |\n| `request_status` |",
@@ -538,13 +588,34 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
         check_contract_against_catalog(&extra_op, &catalog, schema_count, pair_count).is_err(),
         "adding a non-catalog operation/tool must fail"
     );
-    // 3. Mismatched MCP tool name.
     let bad_tool = contract.replace("| `omnia_nets` |", "| `omnia_wrong_nets` |");
     assert!(
         check_contract_against_catalog(&bad_tool, &catalog, schema_count, pair_count).is_err(),
         "mismatching a tool name must fail"
     );
-    // 4. Missing documented edit operation.
+    let bad_tier = contract.replace(
+        "| `save` | `omnia_save` | `2, 3` |",
+        "| `save` | `omnia_save` | `2` |",
+    );
+    assert!(
+        check_contract_against_catalog(&bad_tier, &catalog, schema_count, pair_count).is_err(),
+        "mismatching operation tiers must fail"
+    );
+    let bad_flag = contract.replace(
+        "| `apply` | `omnia_apply` | `1` | `false` |",
+        "| `apply` | `omnia_apply` | `1` | `true` |",
+    );
+    assert!(
+        check_contract_against_catalog(&bad_flag, &catalog, schema_count, pair_count).is_err(),
+        "mismatching read_only flag must fail"
+    );
+    let bad_schema = contract.replace("`apply.arguments`", "`apply.args`");
+    assert!(
+        check_contract_against_catalog(&bad_schema, &catalog, schema_count, pair_count).is_err(),
+        "mismatching schema name must fail"
+    );
+
+    // 2. Edit operations: missing, extra, wrong Command.
     assert!(
         check_contract_against_catalog(
             &drop_line("| `set_text` |"),
@@ -555,7 +626,6 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
         .is_err(),
         "dropping a catalog edit operation must fail"
     );
-    // 5. Extra documented edit operation.
     let extra_edit = contract.replace(
         "| `set_text` |",
         "| `bogus_edit` | `BogusEdit` | `items` | `implemented and tested` |\n| `set_text` |",
@@ -564,7 +634,13 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
         check_contract_against_catalog(&extra_edit, &catalog, schema_count, pair_count).is_err(),
         "adding a non-catalog edit operation must fail"
     );
-    // 6. Missing documented error code.
+    let bad_cmd = contract.replace("| `add_wires` | `AddWires` |", "| `add_wires` | `Wires` |");
+    assert!(
+        check_contract_against_catalog(&bad_cmd, &catalog, schema_count, pair_count).is_err(),
+        "mismatching edit Command must fail"
+    );
+
+    // 3. Error codes: missing, extra, wrong retryable flag.
     assert!(
         check_contract_against_catalog(
             &drop_line("| `internal` |"),
@@ -575,7 +651,6 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
         .is_err(),
         "dropping a catalog error code must fail"
     );
-    // 7. Extra documented error code.
     let extra_err = contract.replace(
         "| `internal` |",
         "| `bogus_error` | `false` | `{}` | `implemented and tested` |\n| `internal` |",
@@ -584,7 +659,6 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
         check_contract_against_catalog(&extra_err, &catalog, schema_count, pair_count).is_err(),
         "adding a non-catalog error code must fail"
     );
-    // 8. Wrong retryable flag on an error code.
     let wrong_retry = contract.replace(
         "| `stale_revision` | `true` |",
         "| `stale_revision` | `false` |",
@@ -593,7 +667,8 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
         check_contract_against_catalog(&wrong_retry, &catalog, schema_count, pair_count).is_err(),
         "mismatching retryable flag must fail"
     );
-    // 9. Stale documented count.
+
+    // 4. Counts, units/limits, orientations, text fields, planned overlap, missing heading.
     let wrong_count = contract.replace(
         "| Structured error codes | `33` |",
         "| Structured error codes | `32` |",
@@ -601,6 +676,49 @@ fn a1_9_contract_check_detects_missing_and_extra_entries() {
     assert!(
         check_contract_against_catalog(&wrong_count, &catalog, schema_count, pair_count).is_err(),
         "stale error code count must fail"
+    );
+    let dup_unit = contract.replace(
+        "| Grid (`K2`) | `units.grid_nm` | `2540000` |",
+        "| Grid (`K2`) | `units.grid_nm` | `2540000` |\n| Grid dup | `units.grid_nm` | `2540000` |",
+    );
+    assert!(
+        check_contract_against_catalog(&dup_unit, &catalog, schema_count, pair_count).is_err(),
+        "duplicate unit key must fail"
+    );
+    assert!(
+        check_contract_against_catalog(
+            &drop_line("Orientations (`AD12`):"),
+            &catalog,
+            schema_count,
+            pair_count
+        )
+        .is_err(),
+        "deleting the orientations line must fail"
+    );
+    assert!(
+        check_contract_against_catalog(
+            &drop_line("Text fields:"),
+            &catalog,
+            schema_count,
+            pair_count
+        )
+        .is_err(),
+        "deleting the text-fields line must fail"
+    );
+    let planned_overlap = contract.replace(
+        "| `set_param`, `list_parts`, `update_part_def` |",
+        "| `set_param`, `place_part`, `update_part_def` |",
+    );
+    assert!(
+        check_contract_against_catalog(&planned_overlap, &catalog, schema_count, pair_count)
+            .is_err(),
+        "planned capability overlapping an active edit operation must fail"
+    );
+    let missing_heading = contract.replace("### Error codes", "### Codes");
+    assert!(
+        check_contract_against_catalog(&missing_heading, &catalog, schema_count, pair_count)
+            .is_err(),
+        "missing expected section heading must fail"
     );
 }
 
@@ -641,6 +759,16 @@ fn a1_9_transcript_fixtures_are_complete_and_valid() {
     }
 }
 
+/// Checks whether `src` contains a non-comment function definition `fn <name>(`.
+fn defines_fn(src: &str, name: &str) -> bool {
+    let plain = format!("fn {name}(");
+    let public = format!("pub fn {name}(");
+    src.lines().any(|line| {
+        let trimmed = line.trim_start();
+        !trimmed.starts_with("//") && (trimmed.starts_with(&plain) || trimmed.starts_with(&public))
+    })
+}
+
 #[test]
 fn a1_9_evidence_register_paths_and_tests_exist() {
     let root = repo_root();
@@ -651,9 +779,19 @@ fn a1_9_evidence_register_paths_and_tests_exist() {
         "## Scenarios (`ATC-*`)",
         "## Prerequisites, transports and protocol eras",
     ] {
-        let rows = table_under(&evidence, heading).expect("evidence table");
-        for row in &rows {
-            let tier_col = if row.len() == 4 { 2 } else { 1 };
+        let table = table_under(&evidence, heading).expect("evidence table");
+        let tier_col = table
+            .headers
+            .iter()
+            .position(|h| h == "Evidence tier")
+            .unwrap_or_else(|| panic!("missing `Evidence tier` header in `{heading}`"));
+        let verify_col = table
+            .headers
+            .iter()
+            .position(|h| h == "Verification")
+            .unwrap_or_else(|| panic!("missing `Verification` header in `{heading}`"));
+
+        for row in &table.rows {
             let tier = strip_code(&row[tier_col]).expect("tier");
             assert!(
                 VALID_TIERS.contains(&tier),
@@ -662,7 +800,7 @@ fn a1_9_evidence_register_paths_and_tests_exist() {
             if tier == "planned" {
                 continue;
             }
-            let verification = row.last().expect("verification column");
+            let verification = &row[verify_col];
             // Each semicolon-separated segment has `<file>` optionally followed by (`test1`, `test2`).
             for segment in verification.split(';') {
                 let segment = segment.trim();
@@ -674,8 +812,7 @@ fn a1_9_evidence_register_paths_and_tests_exist() {
                 let mut current_file: Option<PathBuf> = None;
                 let mut current_src: Option<String> = None;
                 for token in tokens {
-                    let is_path = token.contains('/');
-                    if is_path {
+                    if token.contains('/') {
                         let path = root.join(token);
                         assert!(
                             path.is_file(),
@@ -690,16 +827,50 @@ fn a1_9_evidence_register_paths_and_tests_exist() {
                             current_src = None;
                             current_file = None;
                         }
-                    } else if let Some(src) = &current_src {
-                        let needle = format!("fn {token}(");
+                    } else {
+                        let src = current_src.as_deref().unwrap_or_else(|| {
+                            panic!(
+                                "evidence register cites test `{token}` with no preceding `.rs` file in `{segment}`"
+                            )
+                        });
                         assert!(
-                            src.contains(&needle),
-                            "evidence register cites missing test `{token}` in {}",
+                            defines_fn(src, token),
+                            "evidence register cites missing test `fn {token}(` in {}",
                             current_file.as_ref().expect("file").display()
                         );
                     }
                 }
             }
+        }
+    }
+
+    // Also check non-planned records in the performance measurements / milestone gates table.
+    let gate_table = table_under(&evidence, "## Performance measurements and milestone gates")
+        .expect("gates table");
+    let status_col = gate_table
+        .headers
+        .iter()
+        .position(|h| h == "Status")
+        .expect("Status column");
+    let record_col = gate_table
+        .headers
+        .iter()
+        .position(|h| h == "Record")
+        .expect("Record column");
+    for row in &gate_table.rows {
+        if row[status_col].contains("`planned`") {
+            continue;
+        }
+        let tokens = extract_backtick_tokens(&row[record_col]);
+        assert!(
+            !tokens.is_empty(),
+            "non-planned measurement row missing file path: {row:?}"
+        );
+        for token in tokens {
+            assert!(
+                root.join(token).is_file(),
+                "measurement gate cites missing file `{token}`"
+            );
         }
     }
 }

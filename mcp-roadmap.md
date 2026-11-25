@@ -195,7 +195,8 @@ own in turn.
 
 ### A1.9 Agent contract and evidence · done
 - Lane: agent · Depends: A1.8 · Read: mcp-plan.md section 13; AGENTS rule 1
-- Owns: `docs/agent/omnia-agent.md`, `docs/agent/evidence.md`, `docs/agent/CHANGES.md`
+- Owns: `docs/agent/omnia-agent.md`, `docs/agent/evidence.md`, `docs/agent/CHANGES.md`,
+  `crates/omnia-cli/tests/contract.rs`
 - Do: write the contract; point every example at a transcript fixture; take counts from the
   catalog.
 - Done when: a test fails if a documented tool, operation or error code is missing from the
@@ -773,3 +774,17 @@ test cited in `evidence.md`. Checks run locally on Windows and passing: `cargo f
 `cargo deny check`. Rule-1 scan clean across all new and changed files (no other companies or
 commercial products named; MCP named as an open standard per AQ8). No dependency added; nothing
 measured. Next: A1.10 (Milestone A1 gate and HA2).
+
+2026-11-25 A1.9 review fixes — addressed all PR #134 independent review findings (Opus 5.5):
+downgraded the 5 reserved/unreturned error codes (`unsupported_in_mode`,
+`protocol_version_unsupported`, `user_gesture_in_progress`, `cancelled`, `job_not_found`) to
+`implemented (read in code)` in `docs/agent/omnia-agent.md`; widened A1.9's **Owns** line to
+include `crates/omnia-cli/tests/contract.rs`; tightened the contract's opening CI-check claim,
+added predicted pins to safe-loop step 3, and removed engine names from limitation 2 for strict
+Rule 1; kept `AINV11` scoped to catalog/schemas in `evidence.md` (citing section 13 for the
+contract test) and added `files.rs`'s `staged_write_failure_halfway_keeps_old_file_and_cleans_temp`
+to `ATC-save-01`; hardened `contract.rs` to verify MCP prompt/symbol-schema counts, parse
+orientations and text fields as strict sets, check planned tokens against active ops/edit ops,
+reject duplicate count/unit keys and orphan/commented test citations, check non-planned gate
+records, and expand negative mutation coverage. Merged `origin/main` (PR #131). Nothing measured;
+Rule-1 scan clean.
