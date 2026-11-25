@@ -323,6 +323,8 @@ fn run_headless_drag_part(
         build_drag_plan(doc_entity.read(cx), &camera, viewport)
     })?;
     let doc_revision_start = window.update(|_, _, cx| doc_entity.read(cx).revision());
+    let sheet_paints_before_press =
+        window.update(|_, _, cx| overlay_entity.read(cx).sheet_paint_count(cx));
     window.update(|_, window, cx| {
         window.dispatch_event(mouse_left_down(plan.anchor_screen), cx);
     });
@@ -340,6 +342,7 @@ fn run_headless_drag_part(
     }
     let sheet_paints_before_lift =
         window.update(|_, _, cx| overlay_entity.read(cx).sheet_paint_count(cx));
+    let press_sheet_paints = sheet_paints_before_lift.saturating_sub(sheet_paints_before_press);
     let scale_factor = window.update(|_, window, _| window.scale_factor());
     let mut ours_per_frame = Vec::with_capacity(config.frames as usize);
     let mut peak_primitives = BTreeMap::<String, u64>::new();
@@ -449,6 +452,7 @@ fn run_headless_drag_part(
             "part_id": plan.part_id.0,
             "overlay_paints": overlay_paints,
             "sheet_paints": sheet_paints,
+            "press_sheet_paints": press_sheet_paints,
             "lift_sheet_paints": lift_sheet_paints,
             "transitions": drag_transitions,
             "mismatches": drag_mismatches,
@@ -457,7 +461,11 @@ fn run_headless_drag_part(
         },
         "metrics": {
             "sheet_paints": sheet_paints,
-            "allocs_per_frame": { "ours": Summary::from_samples(&mut ours_per_frame).unwrap().to_json() },
+            "allocs_per_frame": {
+                "ours": Summary::from_samples(&mut ours_per_frame)
+                    .ok_or("no allocation samples recorded")?
+                    .to_json()
+            },
             "primitives": {
                 "peak": peak_primitives,
                 "sweep": sweep_primitives,

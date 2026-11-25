@@ -5,10 +5,10 @@
 # Wayland session:
 #
 #     bash docs/measurements/T5.4/owner-run.sh --check   # preflight only; changes nothing
-#     bash docs/measurements/T5.4/owner-run.sh           # the campaign (about 50 minutes)
+#     bash docs/measurements/T5.4/owner-run.sh           # the campaign (about 55-60 minutes)
 #
-# Remote start (owner-approved pattern from T4.6), with the owner having confirmed the lid is open,
-# the panel on and unlocked, AC connected and nobody using the laptop. The run is detached from the
+# Remote start (requires fresh owner approval for T5.4, after confirming the lid is open, the
+# panel on and unlocked, AC connected and nobody using the laptop). The run is detached from the
 # SSH session into the user's service manager, which carries the desktop session's environment;
 # tailscaled stays up; the sudo password is read once from a user-only tmpfs file and deleted:
 #

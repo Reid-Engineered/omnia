@@ -320,6 +320,8 @@ struct DragDriver {
     draws_before_warmup: u64,
     baseline: Option<FrameDurationSnapshot>,
     doc_revision_start: u64,
+    sheet_paints_before_press: u64,
+    press_sheet_paints: u64,
     sheet_paints_before_lift: u64,
     lift_sheet_paints: u64,
     sheet_paints_start: u64,
@@ -363,6 +365,7 @@ impl DragDriver {
                 Err(error) => return self.fail(error, window),
             };
             self.doc_revision_start = self.doc.read(cx).revision();
+            self.sheet_paints_before_press = self.overlay.read(cx).sheet_paint_count(cx);
             window.dispatch_event(mouse_left_down(plan.anchor_screen), cx);
             let started_ok = matches!(
                 self.overlay.read(cx).tool_state(),
@@ -394,7 +397,10 @@ impl DragDriver {
                 .frame_duration_snapshot()
                 .draw_duration_histogram
                 .len();
-            self.sheet_paints_before_lift = self.overlay.read(cx).sheet_paint_count(cx);
+            let sheet_paints_now = self.overlay.read(cx).sheet_paint_count(cx);
+            self.press_sheet_paints =
+                sheet_paints_now.saturating_sub(self.sheet_paints_before_press);
+            self.sheet_paints_before_lift = sheet_paints_now;
         }
 
         if step == warmup {
@@ -471,9 +477,15 @@ impl DragDriver {
                 self.config.frames
             ));
         }
+        if self.press_sheet_paints != 0 {
+            extra_warnings.push(format!(
+                "INV11: SheetView painted {} times during drag press, expected 0",
+                self.press_sheet_paints
+            ));
+        }
         if self.lift_sheet_paints != 1 {
             extra_warnings.push(format!(
-                "SheetView painted {} times during warm-up lift-off, expected 1",
+                "D7: SheetView painted {} times during warm-up lift-off, expected 1",
                 self.lift_sheet_paints
             ));
         }
@@ -516,6 +528,7 @@ impl DragDriver {
             "part_id": plan.part_id.0,
             "overlay_paints": overlay_paints,
             "sheet_paints": sheet_paints,
+            "press_sheet_paints": self.press_sheet_paints,
             "lift_sheet_paints": self.lift_sheet_paints,
             "transitions": self.drag_transitions,
             "mismatches": self.drag_mismatches,
@@ -603,6 +616,8 @@ pub fn run_drag_part(config: RunConfig) -> Result<Value, String> {
                 draws_before_warmup: 0,
                 baseline: None,
                 doc_revision_start: 0,
+                sheet_paints_before_press: 0,
+                press_sheet_paints: 0,
                 sheet_paints_before_lift: 0,
                 lift_sheet_paints: 0,
                 sheet_paints_start: 0,
@@ -664,6 +679,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn drag_pointer_move_makes_zero_heap_allocations() {
+        let doc = generate(StressSheet::Parts1k, STRESS_SEED);
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(1536.0), px(864.0)));
+        let camera = SheetCamera::new(Pt::ZERO, 1.0, bounds);
+        let plan = build_drag_plan(&doc, &camera, bounds).expect("drag plan");
+        let mut machine = omnia_canvas::tool::ToolMachine::new();
+        let down = machine.pointer_down(
+            &doc,
+            1,
+            plan.anchor_world,
+            hit_tolerance_nm(&camera),
+            &[],
+            false,
+        );
+        assert!(down.capture);
+        let first = machine.pointer_move(plan.waypoints[0].world, true);
+        assert!(first.preview_changed);
+        let (_, allocs) = crate::count_allocs(|| {
+            for wp in plan.waypoints.iter().skip(1) {
+                let out = machine.pointer_move(wp.world, true);
+                assert!(out.preview_changed);
+            }
+        });
+        assert_eq!(
+            allocs, 0,
+            "ToolMachine::pointer_move must not allocate during drag"
+        );
+    }
+
     #[cfg(feature = "headless")]
     #[test]
     fn headless_drag_part_inv5_inv11_b10_on_100() {
@@ -678,6 +723,7 @@ mod tests {
         assert_eq!(report["config"]["script"], "drag-part");
         assert_eq!(report["metrics"]["sheet_paints"], 0);
         assert_eq!(report["metrics"]["allocs_per_frame"]["ours"]["max"], 0.0);
+        assert_eq!(report["drag"]["press_sheet_paints"], 0);
         assert_eq!(report["drag"]["lift_sheet_paints"], 1);
         assert_eq!(report["drag"]["sheet_paints"], 0);
         assert_eq!(report["drag"]["overlay_paints"], 30);

@@ -1,0 +1,3947 @@
+{
+  "schema": 1,
+  "kind": "run",
+  "config": {
+    "sheet": "1k",
+    "script": "drag-part",
+    "frames": 60,
+    "warmup": 60,
+    "window_logical": [
+      1536.0,
+      864.0
+    ],
+    "scene_counts": false,
+    "diagnostic_trace": true
+  },
+  "scene_details": {
+    "seed": 42,
+    "parts": 1000,
+    "wires": 2000
+  },
+  "spike": null,
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) UHD Graphics",
+      "driver_name": "Intel Corporation",
+      "driver_info": "32.0.101.7088"
+    },
+    "fullscreen": false,
+    "os": "windows",
+    "arch": "x86_64",
+    "logical_cpus": 24,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 60.0
+  },
+  "frames": {
+    "drawn": 60,
+    "on_time": 60,
+    "late": 0,
+    "unmeasured": 0,
+    "startup_draws": 3,
+    "wall_s": 2.0376
+  },
+  "warnings": [],
+  "metrics": {
+    "frame_ms": {
+      "mean": 0.3875,
+      "p50": 0.3205,
+      "p95": 0.7352,
+      "p99": 0.874,
+      "max": 0.874
+    },
+    "draw_ms": {
+      "mean": 0.3765,
+      "p50": 0.3105,
+      "p95": 0.7183,
+      "p99": 0.8607,
+      "max": 0.8607
+    },
+    "dirty_to_present_ms": {
+      "mean": 0.7992,
+      "p50": 0.6999,
+      "p95": 1.4479,
+      "p99": 1.5708,
+      "max": 1.5708
+    },
+    "present_interval_ms": {
+      "mean": 16.6702,
+      "p50": 16.7199,
+      "p95": 17.7275,
+      "p99": 18.4484,
+      "max": 18.4484
+    },
+    "paint_samples": 60,
+    "paint_sampling": "overlay-every-frame",
+    "allocs_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 47.0333,
+        "p50": 47.0,
+        "p95": 47.0,
+        "p99": 49.0,
+        "max": 49.0
+      }
+    },
+    "alloc_bytes_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 5448.5333,
+        "p50": 4800.0,
+        "p95": 4800.0,
+        "p99": 43712.0,
+        "max": 43712.0
+      }
+    },
+    "late_frames": 0,
+    "missed_refreshes": 0,
+    "present_intervals_over_2_5_refreshes": 0,
+    "max_present_interval_ms": 18.4484,
+    "work_missed_refreshes": 0,
+    "memory_mb": 93.8945,
+    "working_set_mb": 96.6875,
+    "heap_peak_mb": 22.0938,
+    "sheet_paints": 0
+  },
+  "diagnostic_trace": {
+    "units": "nanoseconds since trace creation",
+    "scope": "includes warmup; ends before reporting draw; diagnostic overhead enabled",
+    "events": [
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": null,
+        "dirty_ns": 0,
+        "signal_source": null,
+        "start_ns": 8400,
+        "end_ns": 9608900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 3076800,
+        "dirty_ns": 9705100,
+        "signal_source": "native",
+        "start_ns": 9893400,
+        "end_ns": 10720700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 10722700,
+        "end_ns": 11564800,
+        "animation_interval_ns": null
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 20051700,
+        "dirty_ns": 20141400,
+        "signal_source": "native",
+        "start_ns": 20152300,
+        "end_ns": 20416100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 20419300,
+        "end_ns": 20657200,
+        "animation_interval_ns": 9092400
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 36450800,
+        "dirty_ns": 36805500,
+        "signal_source": "native",
+        "start_ns": 36813900,
+        "end_ns": 37402000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 37404600,
+        "end_ns": 37784200,
+        "animation_interval_ns": 17127000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 53035300,
+        "dirty_ns": 53122900,
+        "signal_source": "native",
+        "start_ns": 53128500,
+        "end_ns": 53381500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 53384700,
+        "end_ns": 53736200,
+        "animation_interval_ns": 15952000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 70252100,
+        "dirty_ns": 70305300,
+        "signal_source": "native",
+        "start_ns": 70327500,
+        "end_ns": 70656200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 70659900,
+        "end_ns": 70905100,
+        "animation_interval_ns": 17168900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 86657500,
+        "dirty_ns": 86697200,
+        "signal_source": "native",
+        "start_ns": 86703700,
+        "end_ns": 86944200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 86946800,
+        "end_ns": 87174900,
+        "animation_interval_ns": 16269800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 103082400,
+        "dirty_ns": 103122800,
+        "signal_source": "native",
+        "start_ns": 103128000,
+        "end_ns": 103373700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 103376100,
+        "end_ns": 103619100,
+        "animation_interval_ns": 16444200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 119616400,
+        "dirty_ns": 119650700,
+        "signal_source": "native",
+        "start_ns": 119655600,
+        "end_ns": 119907100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 119909500,
+        "end_ns": 120174700,
+        "animation_interval_ns": 16555600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 136533300,
+        "dirty_ns": 136632500,
+        "signal_source": "native",
+        "start_ns": 136638100,
+        "end_ns": 136909100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 136912200,
+        "end_ns": 137326700,
+        "animation_interval_ns": 17152000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 153173500,
+        "dirty_ns": 153278800,
+        "signal_source": "native",
+        "start_ns": 153283000,
+        "end_ns": 153554000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 153556100,
+        "end_ns": 154011900,
+        "animation_interval_ns": 16685200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 171956100,
+        "dirty_ns": 172043300,
+        "signal_source": "native",
+        "start_ns": 172055300,
+        "end_ns": 172773800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 172779300,
+        "end_ns": 173447500,
+        "animation_interval_ns": 19435600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 187861700,
+        "dirty_ns": 187977500,
+        "signal_source": "native",
+        "start_ns": 187988000,
+        "end_ns": 188739200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 188745600,
+        "end_ns": 189300900,
+        "animation_interval_ns": 15853400
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 203233200,
+        "dirty_ns": 203271200,
+        "signal_source": "native",
+        "start_ns": 203276000,
+        "end_ns": 203563700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 203566200,
+        "end_ns": 203856100,
+        "animation_interval_ns": 14555200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 220223300,
+        "dirty_ns": 220259600,
+        "signal_source": "native",
+        "start_ns": 220264100,
+        "end_ns": 220549400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 220552100,
+        "end_ns": 220840100,
+        "animation_interval_ns": 16984000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 236955200,
+        "dirty_ns": 237090900,
+        "signal_source": "native",
+        "start_ns": 237095700,
+        "end_ns": 237376000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 237378600,
+        "end_ns": 237832600,
+        "animation_interval_ns": 16992500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 253163400,
+        "dirty_ns": 253208200,
+        "signal_source": "native",
+        "start_ns": 253213800,
+        "end_ns": 253489400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 253492700,
+        "end_ns": 253786200,
+        "animation_interval_ns": 15953600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 269538200,
+        "dirty_ns": 269621300,
+        "signal_source": "native",
+        "start_ns": 269630600,
+        "end_ns": 270169500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 270172800,
+        "end_ns": 270668500,
+        "animation_interval_ns": 16882300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 285677800,
+        "dirty_ns": 285716900,
+        "signal_source": "native",
+        "start_ns": 285721400,
+        "end_ns": 286001600
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 286004100,
+        "end_ns": 286389700,
+        "animation_interval_ns": 15721200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 302446700,
+        "dirty_ns": 302501000,
+        "signal_source": "native",
+        "start_ns": 302507700,
+        "end_ns": 302817700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 302820600,
+        "end_ns": 303242600,
+        "animation_interval_ns": 16852900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 319067800,
+        "dirty_ns": 319131400,
+        "signal_source": "native",
+        "start_ns": 319140700,
+        "end_ns": 319374100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 319375900,
+        "end_ns": 319662100,
+        "animation_interval_ns": 16419500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 335484600,
+        "dirty_ns": 335539400,
+        "signal_source": "native",
+        "start_ns": 335554900,
+        "end_ns": 335811500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 335813600,
+        "end_ns": 336110700,
+        "animation_interval_ns": 16448600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 352106000,
+        "dirty_ns": 352166400,
+        "signal_source": "native",
+        "start_ns": 352170700,
+        "end_ns": 352455900
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 352457900,
+        "end_ns": 352831000,
+        "animation_interval_ns": 16720300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 369329700,
+        "dirty_ns": 369422400,
+        "signal_source": "native",
+        "start_ns": 369433000,
+        "end_ns": 369901000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 369906300,
+        "end_ns": 370372200,
+        "animation_interval_ns": 17541200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 385596200,
+        "dirty_ns": 385639800,
+        "signal_source": "native",
+        "start_ns": 385645900,
+        "end_ns": 385900500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 385903400,
+        "end_ns": 386289200,
+        "animation_interval_ns": 15917000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 402805200,
+        "dirty_ns": 402873500,
+        "signal_source": "native",
+        "start_ns": 402884200,
+        "end_ns": 403688900
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 403692100,
+        "end_ns": 404070700,
+        "animation_interval_ns": 17781500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 418979100,
+        "dirty_ns": 419035500,
+        "signal_source": "native",
+        "start_ns": 419045600,
+        "end_ns": 419586800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 419589700,
+        "end_ns": 419942300,
+        "animation_interval_ns": 15871600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 436082000,
+        "dirty_ns": 436126000,
+        "signal_source": "native",
+        "start_ns": 436130800,
+        "end_ns": 436438500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 436440900,
+        "end_ns": 436805500,
+        "animation_interval_ns": 16863200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 452224800,
+        "dirty_ns": 452259800,
+        "signal_source": "native",
+        "start_ns": 452264900,
+        "end_ns": 452564800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 452567700,
+        "end_ns": 452801500,
+        "animation_interval_ns": 15996000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 468863500,
+        "dirty_ns": 468896000,
+        "signal_source": "native",
+        "start_ns": 468899900,
+        "end_ns": 469172700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 469174500,
+        "end_ns": 469541100,
+        "animation_interval_ns": 16739600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 485534800,
+        "dirty_ns": 485579300,
+        "signal_source": "native",
+        "start_ns": 485585000,
+        "end_ns": 485881800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 485884800,
+        "end_ns": 486308100,
+        "animation_interval_ns": 16767000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 502325100,
+        "dirty_ns": 502449400,
+        "signal_source": "native",
+        "start_ns": 502454800,
+        "end_ns": 502755300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 502759000,
+        "end_ns": 503260100,
+        "animation_interval_ns": 16952000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 518967400,
+        "dirty_ns": 519036000,
+        "signal_source": "native",
+        "start_ns": 519048400,
+        "end_ns": 519474000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 519479000,
+        "end_ns": 519902400,
+        "animation_interval_ns": 16642300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 535811700,
+        "dirty_ns": 535866600,
+        "signal_source": "native",
+        "start_ns": 535872400,
+        "end_ns": 536180100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 536183500,
+        "end_ns": 536676700,
+        "animation_interval_ns": 16774300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 552371600,
+        "dirty_ns": 552424500,
+        "signal_source": "native",
+        "start_ns": 552430700,
+        "end_ns": 552748800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 552752300,
+        "end_ns": 553251800,
+        "animation_interval_ns": 16575100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 569064500,
+        "dirty_ns": 569196900,
+        "signal_source": "native",
+        "start_ns": 569202100,
+        "end_ns": 569491900
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 569495200,
+        "end_ns": 569822100,
+        "animation_interval_ns": 16570300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 585795400,
+        "dirty_ns": 585849700,
+        "signal_source": "native",
+        "start_ns": 585856100,
+        "end_ns": 586188300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 586192200,
+        "end_ns": 586578900,
+        "animation_interval_ns": 16756800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 602333800,
+        "dirty_ns": 602387500,
+        "signal_source": "native",
+        "start_ns": 602393500,
+        "end_ns": 602698600
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 602702500,
+        "end_ns": 603014100,
+        "animation_interval_ns": 16435200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 619024700,
+        "dirty_ns": 619158700,
+        "signal_source": "native",
+        "start_ns": 619164500,
+        "end_ns": 619455700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 619458600,
+        "end_ns": 619786900,
+        "animation_interval_ns": 16772800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 635698400,
+        "dirty_ns": 635820900,
+        "signal_source": "native",
+        "start_ns": 635838600,
+        "end_ns": 636127100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 636130200,
+        "end_ns": 636575500,
+        "animation_interval_ns": 16788600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 652360100,
+        "dirty_ns": 652420200,
+        "signal_source": "native",
+        "start_ns": 652427100,
+        "end_ns": 652763800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 652767200,
+        "end_ns": 653129800,
+        "animation_interval_ns": 16554300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 669051000,
+        "dirty_ns": 669158200,
+        "signal_source": "native",
+        "start_ns": 669163300,
+        "end_ns": 669470000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 669472600,
+        "end_ns": 669851600,
+        "animation_interval_ns": 16721800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 685533400,
+        "dirty_ns": 685580700,
+        "signal_source": "native",
+        "start_ns": 685586100,
+        "end_ns": 685878600
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 685881200,
+        "end_ns": 686268100,
+        "animation_interval_ns": 16416500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 702218700,
+        "dirty_ns": 702261400,
+        "signal_source": "native",
+        "start_ns": 702269200,
+        "end_ns": 702543700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 702545800,
+        "end_ns": 702910400,
+        "animation_interval_ns": 16642300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 719098500,
+        "dirty_ns": 719154800,
+        "signal_source": "native",
+        "start_ns": 719160800,
+        "end_ns": 719455900
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 719459200,
+        "end_ns": 719918700,
+        "animation_interval_ns": 17008300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 735677900,
+        "dirty_ns": 735724400,
+        "signal_source": "native",
+        "start_ns": 735730300,
+        "end_ns": 736040400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 736043300,
+        "end_ns": 736342300,
+        "animation_interval_ns": 16423600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 752291400,
+        "dirty_ns": 752342900,
+        "signal_source": "native",
+        "start_ns": 752349500,
+        "end_ns": 752664500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 752667900,
+        "end_ns": 752937600,
+        "animation_interval_ns": 16595300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 768790900,
+        "dirty_ns": 768901000,
+        "signal_source": "native",
+        "start_ns": 768911100,
+        "end_ns": 769166300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 769168900,
+        "end_ns": 769446200,
+        "animation_interval_ns": 16508600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 785468300,
+        "dirty_ns": 785509800,
+        "signal_source": "native",
+        "start_ns": 785516000,
+        "end_ns": 785794400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 785797200,
+        "end_ns": 786050700,
+        "animation_interval_ns": 16604500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 802499600,
+        "dirty_ns": 802559900,
+        "signal_source": "native",
+        "start_ns": 802566000,
+        "end_ns": 802881700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 802884600,
+        "end_ns": 803176600,
+        "animation_interval_ns": 17125900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 818966700,
+        "dirty_ns": 819023700,
+        "signal_source": "native",
+        "start_ns": 819030300,
+        "end_ns": 819352300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 819355300,
+        "end_ns": 819697100,
+        "animation_interval_ns": 16520500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 835617200,
+        "dirty_ns": 835692300,
+        "signal_source": "native",
+        "start_ns": 835698300,
+        "end_ns": 836014200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 836017900,
+        "end_ns": 836479700,
+        "animation_interval_ns": 16782600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 852400500,
+        "dirty_ns": 852453300,
+        "signal_source": "native",
+        "start_ns": 852459400,
+        "end_ns": 852764600
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 852767500,
+        "end_ns": 853167800,
+        "animation_interval_ns": 16688100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 869015000,
+        "dirty_ns": 869065200,
+        "signal_source": "native",
+        "start_ns": 869071700,
+        "end_ns": 869360300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 869363600,
+        "end_ns": 869663400,
+        "animation_interval_ns": 16495600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 885665100,
+        "dirty_ns": 885727900,
+        "signal_source": "native",
+        "start_ns": 885733700,
+        "end_ns": 886054800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 886058300,
+        "end_ns": 886367100,
+        "animation_interval_ns": 16703700
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 902871900,
+        "dirty_ns": 902947100,
+        "signal_source": "native",
+        "start_ns": 902957000,
+        "end_ns": 903992800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 903996900,
+        "end_ns": 904502400,
+        "animation_interval_ns": 18135300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 919097300,
+        "dirty_ns": 919148700,
+        "signal_source": "native",
+        "start_ns": 919155500,
+        "end_ns": 919466200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 919469800,
+        "end_ns": 919810600,
+        "animation_interval_ns": 15308200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 936005400,
+        "dirty_ns": 936062600,
+        "signal_source": "native",
+        "start_ns": 936070000,
+        "end_ns": 936771800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 936777200,
+        "end_ns": 937130100,
+        "animation_interval_ns": 17319500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 952587300,
+        "dirty_ns": 952628300,
+        "signal_source": "native",
+        "start_ns": 952633700,
+        "end_ns": 952897000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 952899500,
+        "end_ns": 953148100,
+        "animation_interval_ns": 16018000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 968969400,
+        "dirty_ns": 969009600,
+        "signal_source": "native",
+        "start_ns": 969015700,
+        "end_ns": 969276400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 969279300,
+        "end_ns": 969532500,
+        "animation_interval_ns": 16384400
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 985449200,
+        "dirty_ns": 985513400,
+        "signal_source": "native",
+        "start_ns": 985525600,
+        "end_ns": 985841500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 985844400,
+        "end_ns": 986123800,
+        "animation_interval_ns": 16591300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1002025100,
+        "dirty_ns": 1002071500,
+        "signal_source": "native",
+        "start_ns": 1002077500,
+        "end_ns": 1002330200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1002332300,
+        "end_ns": 1002580900,
+        "animation_interval_ns": 16457100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1018788000,
+        "dirty_ns": 1018832600,
+        "signal_source": "native",
+        "start_ns": 1018839400,
+        "end_ns": 1019166700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1019170000,
+        "end_ns": 1019478100,
+        "animation_interval_ns": 16897200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1035499600,
+        "dirty_ns": 1035751700,
+        "signal_source": "native",
+        "start_ns": 1035759600,
+        "end_ns": 1036069100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1036071700,
+        "end_ns": 1036328700,
+        "animation_interval_ns": 16850600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1052183500,
+        "dirty_ns": 1052248600,
+        "signal_source": "native",
+        "start_ns": 1052255500,
+        "end_ns": 1052570000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1052575000,
+        "end_ns": 1052861300,
+        "animation_interval_ns": 16532600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1069114100,
+        "dirty_ns": 1069155000,
+        "signal_source": "native",
+        "start_ns": 1069160700,
+        "end_ns": 1069453000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1069455500,
+        "end_ns": 1069699500,
+        "animation_interval_ns": 16838200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1085464500,
+        "dirty_ns": 1085502200,
+        "signal_source": "native",
+        "start_ns": 1085508200,
+        "end_ns": 1085778500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1085781500,
+        "end_ns": 1086068400,
+        "animation_interval_ns": 16368900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1103072000,
+        "dirty_ns": 1103163400,
+        "signal_source": "native",
+        "start_ns": 1103176800,
+        "end_ns": 1103781600
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1103787600,
+        "end_ns": 1104513800,
+        "animation_interval_ns": 18445400
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1120128600,
+        "dirty_ns": 1120205700,
+        "signal_source": "native",
+        "start_ns": 1120218100,
+        "end_ns": 1120756300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1120762000,
+        "end_ns": 1121264800,
+        "animation_interval_ns": 16751000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1135893800,
+        "dirty_ns": 1135925400,
+        "signal_source": "native",
+        "start_ns": 1135930300,
+        "end_ns": 1136155500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1136157400,
+        "end_ns": 1136472400,
+        "animation_interval_ns": 15207600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1152345800,
+        "dirty_ns": 1152392500,
+        "signal_source": "native",
+        "start_ns": 1152398500,
+        "end_ns": 1152768500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1152772000,
+        "end_ns": 1153093100,
+        "animation_interval_ns": 16620700
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1169381100,
+        "dirty_ns": 1169466900,
+        "signal_source": "native",
+        "start_ns": 1169478900,
+        "end_ns": 1170050800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1170055700,
+        "end_ns": 1170747300,
+        "animation_interval_ns": 17654200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1186222500,
+        "dirty_ns": 1186284400,
+        "signal_source": "native",
+        "start_ns": 1186292900,
+        "end_ns": 1186675800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1186678500,
+        "end_ns": 1187042100,
+        "animation_interval_ns": 16294800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1202042200,
+        "dirty_ns": 1202081000,
+        "signal_source": "native",
+        "start_ns": 1202086400,
+        "end_ns": 1202376800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1202379200,
+        "end_ns": 1202614600,
+        "animation_interval_ns": 15572500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1218715700,
+        "dirty_ns": 1218778000,
+        "signal_source": "native",
+        "start_ns": 1218783900,
+        "end_ns": 1219070900
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1219073100,
+        "end_ns": 1219327200,
+        "animation_interval_ns": 16712600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1235594900,
+        "dirty_ns": 1235628900,
+        "signal_source": "native",
+        "start_ns": 1235633800,
+        "end_ns": 1235891800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1235894200,
+        "end_ns": 1236282000,
+        "animation_interval_ns": 16954800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1252233600,
+        "dirty_ns": 1252273700,
+        "signal_source": "native",
+        "start_ns": 1252280000,
+        "end_ns": 1252633300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1252636200,
+        "end_ns": 1252936900,
+        "animation_interval_ns": 16654900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1269524800,
+        "dirty_ns": 1269623800,
+        "signal_source": "native",
+        "start_ns": 1269628300,
+        "end_ns": 1269909500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1269911500,
+        "end_ns": 1270255800,
+        "animation_interval_ns": 17318900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1286069100,
+        "dirty_ns": 1286150100,
+        "signal_source": "native",
+        "start_ns": 1286157000,
+        "end_ns": 1286469800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1286473400,
+        "end_ns": 1286808100,
+        "animation_interval_ns": 16552300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1302695300,
+        "dirty_ns": 1302807300,
+        "signal_source": "native",
+        "start_ns": 1302817700,
+        "end_ns": 1303275800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1303279000,
+        "end_ns": 1303940300,
+        "animation_interval_ns": 17132200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1319821300,
+        "dirty_ns": 1319924900,
+        "signal_source": "native",
+        "start_ns": 1319939500,
+        "end_ns": 1320787200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1320794100,
+        "end_ns": 1321431100,
+        "animation_interval_ns": 17490800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1336946700,
+        "dirty_ns": 1337067200,
+        "signal_source": "native",
+        "start_ns": 1337082000,
+        "end_ns": 1337855500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1337861300,
+        "end_ns": 1338637200,
+        "animation_interval_ns": 17206100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1352507300,
+        "dirty_ns": 1352578200,
+        "signal_source": "native",
+        "start_ns": 1352586800,
+        "end_ns": 1353049500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1353053900,
+        "end_ns": 1353548300,
+        "animation_interval_ns": 14911100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1368954500,
+        "dirty_ns": 1368996800,
+        "signal_source": "native",
+        "start_ns": 1369002400,
+        "end_ns": 1369297700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1369300000,
+        "end_ns": 1369702300,
+        "animation_interval_ns": 16154000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1385946800,
+        "dirty_ns": 1386042000,
+        "signal_source": "native",
+        "start_ns": 1386051300,
+        "end_ns": 1386911700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1386915900,
+        "end_ns": 1387489400,
+        "animation_interval_ns": 17787100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1402170400,
+        "dirty_ns": 1402208800,
+        "signal_source": "native",
+        "start_ns": 1402221900,
+        "end_ns": 1402520100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1402522700,
+        "end_ns": 1402889000,
+        "animation_interval_ns": 15399600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1418746700,
+        "dirty_ns": 1418788300,
+        "signal_source": "native",
+        "start_ns": 1418793100,
+        "end_ns": 1419079400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1419081700,
+        "end_ns": 1419378900,
+        "animation_interval_ns": 16489900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1435442300,
+        "dirty_ns": 1435526000,
+        "signal_source": "native",
+        "start_ns": 1435530500,
+        "end_ns": 1435807500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1435809700,
+        "end_ns": 1436209100,
+        "animation_interval_ns": 16830200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1452025200,
+        "dirty_ns": 1452094900,
+        "signal_source": "native",
+        "start_ns": 1452102000,
+        "end_ns": 1452405100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1452407900,
+        "end_ns": 1452672600,
+        "animation_interval_ns": 16463500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1468601500,
+        "dirty_ns": 1468660100,
+        "signal_source": "native",
+        "start_ns": 1468664800,
+        "end_ns": 1468945800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1468947800,
+        "end_ns": 1469238800,
+        "animation_interval_ns": 16566200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1486070300,
+        "dirty_ns": 1486207400,
+        "signal_source": "native",
+        "start_ns": 1486213200,
+        "end_ns": 1486549100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1486551900,
+        "end_ns": 1486962200,
+        "animation_interval_ns": 17723400
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1502240800,
+        "dirty_ns": 1502279400,
+        "signal_source": "native",
+        "start_ns": 1502284400,
+        "end_ns": 1502528400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1502530900,
+        "end_ns": 1502823300,
+        "animation_interval_ns": 15861100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1519462800,
+        "dirty_ns": 1519567200,
+        "signal_source": "native",
+        "start_ns": 1519577400,
+        "end_ns": 1520189000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1520193900,
+        "end_ns": 1520579600,
+        "animation_interval_ns": 17756300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1535414100,
+        "dirty_ns": 1535455200,
+        "signal_source": "native",
+        "start_ns": 1535459500,
+        "end_ns": 1535737100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1535739800,
+        "end_ns": 1536044400,
+        "animation_interval_ns": 15464800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1552116800,
+        "dirty_ns": 1552167300,
+        "signal_source": "native",
+        "start_ns": 1552174000,
+        "end_ns": 1552491500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1552494500,
+        "end_ns": 1552905000,
+        "animation_interval_ns": 16860600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1568889700,
+        "dirty_ns": 1568925600,
+        "signal_source": "native",
+        "start_ns": 1568930300,
+        "end_ns": 1569393500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1569395400,
+        "end_ns": 1569798500,
+        "animation_interval_ns": 16893500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1585976600,
+        "dirty_ns": 1586013600,
+        "signal_source": "native",
+        "start_ns": 1586018100,
+        "end_ns": 1586290700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1586293100,
+        "end_ns": 1586559600,
+        "animation_interval_ns": 16761100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1602384600,
+        "dirty_ns": 1602428900,
+        "signal_source": "native",
+        "start_ns": 1602434800,
+        "end_ns": 1602824400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1602827100,
+        "end_ns": 1603337600,
+        "animation_interval_ns": 16778000
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1619299400,
+        "dirty_ns": 1619391400,
+        "signal_source": "native",
+        "start_ns": 1619402000,
+        "end_ns": 1619932700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1619936800,
+        "end_ns": 1620505800,
+        "animation_interval_ns": 17168200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1636006800,
+        "dirty_ns": 1636070000,
+        "signal_source": "native",
+        "start_ns": 1636075600,
+        "end_ns": 1636386800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1636389200,
+        "end_ns": 1636696000,
+        "animation_interval_ns": 16190200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1652255100,
+        "dirty_ns": 1652321800,
+        "signal_source": "native",
+        "start_ns": 1652328300,
+        "end_ns": 1652618000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1652621300,
+        "end_ns": 1652973100,
+        "animation_interval_ns": 16277100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1669498600,
+        "dirty_ns": 1669567100,
+        "signal_source": "native",
+        "start_ns": 1669576900,
+        "end_ns": 1670018600
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1670022900,
+        "end_ns": 1670520700,
+        "animation_interval_ns": 17547600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1685874100,
+        "dirty_ns": 1685953900,
+        "signal_source": "native",
+        "start_ns": 1685963400,
+        "end_ns": 1686512900
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1686516500,
+        "end_ns": 1686968300,
+        "animation_interval_ns": 16447600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1702055000,
+        "dirty_ns": 1702123300,
+        "signal_source": "native",
+        "start_ns": 1702135700,
+        "end_ns": 1702535300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1702538300,
+        "end_ns": 1702983900,
+        "animation_interval_ns": 16015600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1719085200,
+        "dirty_ns": 1719231300,
+        "signal_source": "native",
+        "start_ns": 1719237800,
+        "end_ns": 1719538100
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1719540600,
+        "end_ns": 1719924500,
+        "animation_interval_ns": 16940600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1735369800,
+        "dirty_ns": 1735409100,
+        "signal_source": "native",
+        "start_ns": 1735415200,
+        "end_ns": 1735718200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1735721400,
+        "end_ns": 1736075800,
+        "animation_interval_ns": 16151300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1752691300,
+        "dirty_ns": 1752739300,
+        "signal_source": "native",
+        "start_ns": 1752745700,
+        "end_ns": 1753079500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1753082700,
+        "end_ns": 1753431700,
+        "animation_interval_ns": 17355900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1769590700,
+        "dirty_ns": 1769668800,
+        "signal_source": "native",
+        "start_ns": 1769675800,
+        "end_ns": 1769996800
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1769999200,
+        "end_ns": 1770375400,
+        "animation_interval_ns": 16943700
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1786453200,
+        "dirty_ns": 1786563700,
+        "signal_source": "native",
+        "start_ns": 1786576100,
+        "end_ns": 1787294000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1787298900,
+        "end_ns": 1788022100,
+        "animation_interval_ns": 17646700
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1802284900,
+        "dirty_ns": 1802336200,
+        "signal_source": "native",
+        "start_ns": 1802343100,
+        "end_ns": 1802648900
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1802651700,
+        "end_ns": 1803035700,
+        "animation_interval_ns": 15013600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1818870700,
+        "dirty_ns": 1818918900,
+        "signal_source": "native",
+        "start_ns": 1818924800,
+        "end_ns": 1819224600
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1819227500,
+        "end_ns": 1819634200,
+        "animation_interval_ns": 16598500
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1835660900,
+        "dirty_ns": 1835747200,
+        "signal_source": "native",
+        "start_ns": 1835759900,
+        "end_ns": 1836180300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1836183900,
+        "end_ns": 1836672000,
+        "animation_interval_ns": 17037800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1852134500,
+        "dirty_ns": 1852187000,
+        "signal_source": "native",
+        "start_ns": 1852192900,
+        "end_ns": 1852456200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1852459000,
+        "end_ns": 1852908700,
+        "animation_interval_ns": 16236700
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1868557300,
+        "dirty_ns": 1868596500,
+        "signal_source": "native",
+        "start_ns": 1868602100,
+        "end_ns": 1868973000
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1868977000,
+        "end_ns": 1869278600,
+        "animation_interval_ns": 16369900
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1885423000,
+        "dirty_ns": 1885484700,
+        "signal_source": "native",
+        "start_ns": 1885490400,
+        "end_ns": 1885827400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1885830900,
+        "end_ns": 1886172400,
+        "animation_interval_ns": 16893800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1902016500,
+        "dirty_ns": 1902065000,
+        "signal_source": "native",
+        "start_ns": 1902072400,
+        "end_ns": 1902357500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1902360800,
+        "end_ns": 1903190200,
+        "animation_interval_ns": 17017800
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1918832100,
+        "dirty_ns": 1918881800,
+        "signal_source": "native",
+        "start_ns": 1918895600,
+        "end_ns": 1919199300
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1919202400,
+        "end_ns": 1919637800,
+        "animation_interval_ns": 16447600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1935382000,
+        "dirty_ns": 1935434400,
+        "signal_source": "native",
+        "start_ns": 1935441100,
+        "end_ns": 1935755700
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1935759100,
+        "end_ns": 1936186100,
+        "animation_interval_ns": 16548300
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1952044800,
+        "dirty_ns": 1952100200,
+        "signal_source": "native",
+        "start_ns": 1952107400,
+        "end_ns": 1952373200
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1952376900,
+        "end_ns": 1952715300,
+        "animation_interval_ns": 16529200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1968763300,
+        "dirty_ns": 1968823800,
+        "signal_source": "native",
+        "start_ns": 1968830500,
+        "end_ns": 1969122900
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1969126100,
+        "end_ns": 1969429400,
+        "animation_interval_ns": 16714100
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 1985497000,
+        "dirty_ns": 1985547400,
+        "signal_source": "native",
+        "start_ns": 1985553600,
+        "end_ns": 1985861500
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 1985864700,
+        "end_ns": 1986361000,
+        "animation_interval_ns": 16931600
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 2002255900,
+        "dirty_ns": 2002329300,
+        "signal_source": "native",
+        "start_ns": 2002336500,
+        "end_ns": 2002633900
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 2002637500,
+        "end_ns": 2002924200,
+        "animation_interval_ns": 16563200
+      },
+      {
+        "event": "draw",
+        "window": "WindowId(1v1)",
+        "signal_ns": 2018883000,
+        "dirty_ns": 2018937000,
+        "signal_source": "native",
+        "start_ns": 2018944000,
+        "end_ns": 2019254400
+      },
+      {
+        "event": "present",
+        "window": "WindowId(1v1)",
+        "start_ns": 2019257500,
+        "end_ns": 2019666300,
+        "animation_interval_ns": 16742100
+      }
+    ],
+    "foreground": [
+      {
+        "kind": "draw",
+        "start_ns": 8400,
+        "end_ns": 9608900
+      },
+      {
+        "kind": "small_polls",
+        "start_ns": 9689400,
+        "end_ns": 9723400
+      },
+      {
+        "kind": "task_poll",
+        "start_ns": 9723700,
+        "end_ns": 9868700
+      },
+      {
+        "kind": "draw",
+        "start_ns": 9893400,
+        "end_ns": 10720700
+      },
+      {
+        "kind": "present",
+        "start_ns": 10722700,
+        "end_ns": 11564800
+      },
+      {
+        "kind": "input",
+        "start_ns": 20128600,
+        "end_ns": 20146100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 20152300,
+        "end_ns": 20416100
+      },
+      {
+        "kind": "present",
+        "start_ns": 20419300,
+        "end_ns": 20657200
+      },
+      {
+        "kind": "input",
+        "start_ns": 36798200,
+        "end_ns": 36809200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 36813900,
+        "end_ns": 37402000
+      },
+      {
+        "kind": "present",
+        "start_ns": 37404600,
+        "end_ns": 37784200
+      },
+      {
+        "kind": "input",
+        "start_ns": 53114300,
+        "end_ns": 53125500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 53128500,
+        "end_ns": 53381500
+      },
+      {
+        "kind": "present",
+        "start_ns": 53384700,
+        "end_ns": 53736200
+      },
+      {
+        "kind": "input",
+        "start_ns": 70298100,
+        "end_ns": 70308200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 70327500,
+        "end_ns": 70656200
+      },
+      {
+        "kind": "present",
+        "start_ns": 70659900,
+        "end_ns": 70905100
+      },
+      {
+        "kind": "input",
+        "start_ns": 86691900,
+        "end_ns": 86700600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 86703700,
+        "end_ns": 86944200
+      },
+      {
+        "kind": "present",
+        "start_ns": 86946800,
+        "end_ns": 87174900
+      },
+      {
+        "kind": "input",
+        "start_ns": 103118100,
+        "end_ns": 103125200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 103128000,
+        "end_ns": 103373700
+      },
+      {
+        "kind": "present",
+        "start_ns": 103376100,
+        "end_ns": 103619100
+      },
+      {
+        "kind": "input",
+        "start_ns": 119645300,
+        "end_ns": 119653000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 119655600,
+        "end_ns": 119907100
+      },
+      {
+        "kind": "present",
+        "start_ns": 119909500,
+        "end_ns": 120174700
+      },
+      {
+        "kind": "input",
+        "start_ns": 136626100,
+        "end_ns": 136635100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 136638100,
+        "end_ns": 136909100
+      },
+      {
+        "kind": "present",
+        "start_ns": 136912200,
+        "end_ns": 137326700
+      },
+      {
+        "kind": "input",
+        "start_ns": 153273900,
+        "end_ns": 153280800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 153283000,
+        "end_ns": 153554000
+      },
+      {
+        "kind": "present",
+        "start_ns": 153556100,
+        "end_ns": 154011900
+      },
+      {
+        "kind": "input",
+        "start_ns": 172032200,
+        "end_ns": 172049200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 172055300,
+        "end_ns": 172773800
+      },
+      {
+        "kind": "present",
+        "start_ns": 172779300,
+        "end_ns": 173447500
+      },
+      {
+        "kind": "input",
+        "start_ns": 187965200,
+        "end_ns": 187982000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 187988000,
+        "end_ns": 188739200
+      },
+      {
+        "kind": "present",
+        "start_ns": 188745600,
+        "end_ns": 189300900
+      },
+      {
+        "kind": "input",
+        "start_ns": 203266300,
+        "end_ns": 203273500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 203276000,
+        "end_ns": 203563700
+      },
+      {
+        "kind": "present",
+        "start_ns": 203566200,
+        "end_ns": 203856100
+      },
+      {
+        "kind": "input",
+        "start_ns": 220254500,
+        "end_ns": 220261300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 220264100,
+        "end_ns": 220549400
+      },
+      {
+        "kind": "present",
+        "start_ns": 220552100,
+        "end_ns": 220840100
+      },
+      {
+        "kind": "input",
+        "start_ns": 237085000,
+        "end_ns": 237093000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 237095700,
+        "end_ns": 237376000
+      },
+      {
+        "kind": "present",
+        "start_ns": 237378600,
+        "end_ns": 237832600
+      },
+      {
+        "kind": "input",
+        "start_ns": 253201600,
+        "end_ns": 253210800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 253213800,
+        "end_ns": 253489400
+      },
+      {
+        "kind": "present",
+        "start_ns": 253492700,
+        "end_ns": 253786200
+      },
+      {
+        "kind": "input",
+        "start_ns": 269611000,
+        "end_ns": 269625600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 269630600,
+        "end_ns": 270169500
+      },
+      {
+        "kind": "present",
+        "start_ns": 270172800,
+        "end_ns": 270668500
+      },
+      {
+        "kind": "input",
+        "start_ns": 285711600,
+        "end_ns": 285718800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 285721400,
+        "end_ns": 286001600
+      },
+      {
+        "kind": "present",
+        "start_ns": 286004100,
+        "end_ns": 286389700
+      },
+      {
+        "kind": "input",
+        "start_ns": 302493500,
+        "end_ns": 302504200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 302507700,
+        "end_ns": 302817700
+      },
+      {
+        "kind": "present",
+        "start_ns": 302820600,
+        "end_ns": 303242600
+      },
+      {
+        "kind": "input",
+        "start_ns": 319123500,
+        "end_ns": 319135700
+      },
+      {
+        "kind": "draw",
+        "start_ns": 319140700,
+        "end_ns": 319374100
+      },
+      {
+        "kind": "present",
+        "start_ns": 319375900,
+        "end_ns": 319662100
+      },
+      {
+        "kind": "input",
+        "start_ns": 335531000,
+        "end_ns": 335543600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 335554900,
+        "end_ns": 335811500
+      },
+      {
+        "kind": "present",
+        "start_ns": 335813600,
+        "end_ns": 336110700
+      },
+      {
+        "kind": "input",
+        "start_ns": 352161100,
+        "end_ns": 352168300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 352170700,
+        "end_ns": 352455900
+      },
+      {
+        "kind": "present",
+        "start_ns": 352457900,
+        "end_ns": 352831000
+      },
+      {
+        "kind": "input",
+        "start_ns": 369410700,
+        "end_ns": 369427300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 369433000,
+        "end_ns": 369901000
+      },
+      {
+        "kind": "present",
+        "start_ns": 369906300,
+        "end_ns": 370372200
+      },
+      {
+        "kind": "input",
+        "start_ns": 385633300,
+        "end_ns": 385642300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 385645900,
+        "end_ns": 385900500
+      },
+      {
+        "kind": "present",
+        "start_ns": 385903400,
+        "end_ns": 386289200
+      },
+      {
+        "kind": "input",
+        "start_ns": 402859600,
+        "end_ns": 402878900
+      },
+      {
+        "kind": "draw",
+        "start_ns": 402884200,
+        "end_ns": 403688900
+      },
+      {
+        "kind": "present",
+        "start_ns": 403692100,
+        "end_ns": 404070700
+      },
+      {
+        "kind": "input",
+        "start_ns": 419025800,
+        "end_ns": 419040400
+      },
+      {
+        "kind": "draw",
+        "start_ns": 419045600,
+        "end_ns": 419586800
+      },
+      {
+        "kind": "present",
+        "start_ns": 419589700,
+        "end_ns": 419942300
+      },
+      {
+        "kind": "input",
+        "start_ns": 436113000,
+        "end_ns": 436128200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 436130800,
+        "end_ns": 436438500
+      },
+      {
+        "kind": "present",
+        "start_ns": 436440900,
+        "end_ns": 436805500
+      },
+      {
+        "kind": "input",
+        "start_ns": 452254700,
+        "end_ns": 452262000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 452264900,
+        "end_ns": 452564800
+      },
+      {
+        "kind": "present",
+        "start_ns": 452567700,
+        "end_ns": 452801500
+      },
+      {
+        "kind": "input",
+        "start_ns": 468891500,
+        "end_ns": 468897600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 468899900,
+        "end_ns": 469172700
+      },
+      {
+        "kind": "present",
+        "start_ns": 469174500,
+        "end_ns": 469541100
+      },
+      {
+        "kind": "input",
+        "start_ns": 485572500,
+        "end_ns": 485581900
+      },
+      {
+        "kind": "draw",
+        "start_ns": 485585000,
+        "end_ns": 485881800
+      },
+      {
+        "kind": "present",
+        "start_ns": 485884800,
+        "end_ns": 486308100
+      },
+      {
+        "kind": "input",
+        "start_ns": 502443200,
+        "end_ns": 502451800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 502454800,
+        "end_ns": 502755300
+      },
+      {
+        "kind": "present",
+        "start_ns": 502759000,
+        "end_ns": 503260100
+      },
+      {
+        "kind": "input",
+        "start_ns": 519027000,
+        "end_ns": 519039600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 519048400,
+        "end_ns": 519474000
+      },
+      {
+        "kind": "present",
+        "start_ns": 519479000,
+        "end_ns": 519902400
+      },
+      {
+        "kind": "input",
+        "start_ns": 535859500,
+        "end_ns": 535869000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 535872400,
+        "end_ns": 536180100
+      },
+      {
+        "kind": "present",
+        "start_ns": 536183500,
+        "end_ns": 536676700
+      },
+      {
+        "kind": "input",
+        "start_ns": 552416700,
+        "end_ns": 552427100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 552430700,
+        "end_ns": 552748800
+      },
+      {
+        "kind": "present",
+        "start_ns": 552752300,
+        "end_ns": 553251800
+      },
+      {
+        "kind": "input",
+        "start_ns": 569190500,
+        "end_ns": 569199100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 569202100,
+        "end_ns": 569491900
+      },
+      {
+        "kind": "present",
+        "start_ns": 569495200,
+        "end_ns": 569822100
+      },
+      {
+        "kind": "input",
+        "start_ns": 585842300,
+        "end_ns": 585852800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 585856100,
+        "end_ns": 586188300
+      },
+      {
+        "kind": "present",
+        "start_ns": 586192200,
+        "end_ns": 586578900
+      },
+      {
+        "kind": "input",
+        "start_ns": 602380600,
+        "end_ns": 602390100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 602393500,
+        "end_ns": 602698600
+      },
+      {
+        "kind": "present",
+        "start_ns": 602702500,
+        "end_ns": 603014100
+      },
+      {
+        "kind": "input",
+        "start_ns": 619151700,
+        "end_ns": 619161400
+      },
+      {
+        "kind": "draw",
+        "start_ns": 619164500,
+        "end_ns": 619455700
+      },
+      {
+        "kind": "present",
+        "start_ns": 619458600,
+        "end_ns": 619786900
+      },
+      {
+        "kind": "input",
+        "start_ns": 635799100,
+        "end_ns": 635828900
+      },
+      {
+        "kind": "draw",
+        "start_ns": 635838600,
+        "end_ns": 636127100
+      },
+      {
+        "kind": "present",
+        "start_ns": 636130200,
+        "end_ns": 636575500
+      },
+      {
+        "kind": "input",
+        "start_ns": 652412500,
+        "end_ns": 652423600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 652427100,
+        "end_ns": 652763800
+      },
+      {
+        "kind": "present",
+        "start_ns": 652767200,
+        "end_ns": 653129800
+      },
+      {
+        "kind": "input",
+        "start_ns": 669152100,
+        "end_ns": 669160600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 669163300,
+        "end_ns": 669470000
+      },
+      {
+        "kind": "present",
+        "start_ns": 669472600,
+        "end_ns": 669851600
+      },
+      {
+        "kind": "input",
+        "start_ns": 685574200,
+        "end_ns": 685583300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 685586100,
+        "end_ns": 685878600
+      },
+      {
+        "kind": "present",
+        "start_ns": 685881200,
+        "end_ns": 686268100
+      },
+      {
+        "kind": "input",
+        "start_ns": 702256400,
+        "end_ns": 702263600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 702269200,
+        "end_ns": 702543700
+      },
+      {
+        "kind": "present",
+        "start_ns": 702545800,
+        "end_ns": 702910400
+      },
+      {
+        "kind": "input",
+        "start_ns": 719147400,
+        "end_ns": 719157800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 719160800,
+        "end_ns": 719455900
+      },
+      {
+        "kind": "present",
+        "start_ns": 719459200,
+        "end_ns": 719918700
+      },
+      {
+        "kind": "input",
+        "start_ns": 735717600,
+        "end_ns": 735727300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 735730300,
+        "end_ns": 736040400
+      },
+      {
+        "kind": "present",
+        "start_ns": 736043300,
+        "end_ns": 736342300
+      },
+      {
+        "kind": "input",
+        "start_ns": 752335900,
+        "end_ns": 752345800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 752349500,
+        "end_ns": 752664500
+      },
+      {
+        "kind": "present",
+        "start_ns": 752667900,
+        "end_ns": 752937600
+      },
+      {
+        "kind": "input",
+        "start_ns": 768887000,
+        "end_ns": 768908300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 768911100,
+        "end_ns": 769166300
+      },
+      {
+        "kind": "present",
+        "start_ns": 769168900,
+        "end_ns": 769446200
+      },
+      {
+        "kind": "input",
+        "start_ns": 785503300,
+        "end_ns": 785512700
+      },
+      {
+        "kind": "draw",
+        "start_ns": 785516000,
+        "end_ns": 785794400
+      },
+      {
+        "kind": "present",
+        "start_ns": 785797200,
+        "end_ns": 786050700
+      },
+      {
+        "kind": "input",
+        "start_ns": 802552600,
+        "end_ns": 802562600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 802566000,
+        "end_ns": 802881700
+      },
+      {
+        "kind": "present",
+        "start_ns": 802884600,
+        "end_ns": 803176600
+      },
+      {
+        "kind": "input",
+        "start_ns": 819015700,
+        "end_ns": 819026700
+      },
+      {
+        "kind": "draw",
+        "start_ns": 819030300,
+        "end_ns": 819352300
+      },
+      {
+        "kind": "present",
+        "start_ns": 819355300,
+        "end_ns": 819697100
+      },
+      {
+        "kind": "input",
+        "start_ns": 835685400,
+        "end_ns": 835695000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 835698300,
+        "end_ns": 836014200
+      },
+      {
+        "kind": "present",
+        "start_ns": 836017900,
+        "end_ns": 836479700
+      },
+      {
+        "kind": "input",
+        "start_ns": 852446400,
+        "end_ns": 852456000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 852459400,
+        "end_ns": 852764600
+      },
+      {
+        "kind": "present",
+        "start_ns": 852767500,
+        "end_ns": 853167800
+      },
+      {
+        "kind": "input",
+        "start_ns": 869057800,
+        "end_ns": 869068100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 869071700,
+        "end_ns": 869360300
+      },
+      {
+        "kind": "present",
+        "start_ns": 869363600,
+        "end_ns": 869663400
+      },
+      {
+        "kind": "input",
+        "start_ns": 885721000,
+        "end_ns": 885730700
+      },
+      {
+        "kind": "draw",
+        "start_ns": 885733700,
+        "end_ns": 886054800
+      },
+      {
+        "kind": "present",
+        "start_ns": 886058300,
+        "end_ns": 886367100
+      },
+      {
+        "kind": "input",
+        "start_ns": 902935200,
+        "end_ns": 902951200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 902957000,
+        "end_ns": 903992800
+      },
+      {
+        "kind": "present",
+        "start_ns": 903996900,
+        "end_ns": 904502400
+      },
+      {
+        "kind": "input",
+        "start_ns": 919141000,
+        "end_ns": 919151600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 919155500,
+        "end_ns": 919466200
+      },
+      {
+        "kind": "present",
+        "start_ns": 919469800,
+        "end_ns": 919810600
+      },
+      {
+        "kind": "input",
+        "start_ns": 936053200,
+        "end_ns": 936065500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 936070000,
+        "end_ns": 936771800
+      },
+      {
+        "kind": "present",
+        "start_ns": 936777200,
+        "end_ns": 937130100
+      },
+      {
+        "kind": "input",
+        "start_ns": 952622500,
+        "end_ns": 952630600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 952633700,
+        "end_ns": 952897000
+      },
+      {
+        "kind": "present",
+        "start_ns": 952899500,
+        "end_ns": 953148100
+      },
+      {
+        "kind": "input",
+        "start_ns": 969003700,
+        "end_ns": 969012300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 969015700,
+        "end_ns": 969276400
+      },
+      {
+        "kind": "present",
+        "start_ns": 969279300,
+        "end_ns": 969532500
+      },
+      {
+        "kind": "input",
+        "start_ns": 985503200,
+        "end_ns": 985518200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 985525600,
+        "end_ns": 985841500
+      },
+      {
+        "kind": "present",
+        "start_ns": 985844400,
+        "end_ns": 986123800
+      },
+      {
+        "kind": "input",
+        "start_ns": 1002065600,
+        "end_ns": 1002074100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1002077500,
+        "end_ns": 1002330200
+      },
+      {
+        "kind": "present",
+        "start_ns": 1002332300,
+        "end_ns": 1002580900
+      },
+      {
+        "kind": "input",
+        "start_ns": 1018825300,
+        "end_ns": 1018835200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1018839400,
+        "end_ns": 1019166700
+      },
+      {
+        "kind": "present",
+        "start_ns": 1019170000,
+        "end_ns": 1019478100
+      },
+      {
+        "kind": "input",
+        "start_ns": 1035745600,
+        "end_ns": 1035754600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1035759600,
+        "end_ns": 1036069100
+      },
+      {
+        "kind": "present",
+        "start_ns": 1036071700,
+        "end_ns": 1036328700
+      },
+      {
+        "kind": "input",
+        "start_ns": 1052243000,
+        "end_ns": 1052251500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1052255500,
+        "end_ns": 1052570000
+      },
+      {
+        "kind": "present",
+        "start_ns": 1052575000,
+        "end_ns": 1052861300
+      },
+      {
+        "kind": "input",
+        "start_ns": 1069150100,
+        "end_ns": 1069157300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1069160700,
+        "end_ns": 1069453000
+      },
+      {
+        "kind": "present",
+        "start_ns": 1069455500,
+        "end_ns": 1069699500
+      },
+      {
+        "kind": "input",
+        "start_ns": 1085497900,
+        "end_ns": 1085504600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1085508200,
+        "end_ns": 1085778500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1085781500,
+        "end_ns": 1086068400
+      },
+      {
+        "kind": "input",
+        "start_ns": 1103154000,
+        "end_ns": 1103168600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1103176800,
+        "end_ns": 1103781600
+      },
+      {
+        "kind": "present",
+        "start_ns": 1103787600,
+        "end_ns": 1104513800
+      },
+      {
+        "kind": "input",
+        "start_ns": 1120196900,
+        "end_ns": 1120211000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1120218100,
+        "end_ns": 1120756300
+      },
+      {
+        "kind": "present",
+        "start_ns": 1120762000,
+        "end_ns": 1121264800
+      },
+      {
+        "kind": "input",
+        "start_ns": 1135921400,
+        "end_ns": 1135927300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1135930300,
+        "end_ns": 1136155500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1136157400,
+        "end_ns": 1136472400
+      },
+      {
+        "kind": "input",
+        "start_ns": 1152387200,
+        "end_ns": 1152395000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1152398500,
+        "end_ns": 1152768500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1152772000,
+        "end_ns": 1153093100
+      },
+      {
+        "kind": "input",
+        "start_ns": 1169457700,
+        "end_ns": 1169471800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1169478900,
+        "end_ns": 1170050800
+      },
+      {
+        "kind": "present",
+        "start_ns": 1170055700,
+        "end_ns": 1170747300
+      },
+      {
+        "kind": "input",
+        "start_ns": 1186277100,
+        "end_ns": 1186287900
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1186292900,
+        "end_ns": 1186675800
+      },
+      {
+        "kind": "present",
+        "start_ns": 1186678500,
+        "end_ns": 1187042100
+      },
+      {
+        "kind": "input",
+        "start_ns": 1202076000,
+        "end_ns": 1202083500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1202086400,
+        "end_ns": 1202376800
+      },
+      {
+        "kind": "present",
+        "start_ns": 1202379200,
+        "end_ns": 1202614600
+      },
+      {
+        "kind": "input",
+        "start_ns": 1218766200,
+        "end_ns": 1218780400
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1218783900,
+        "end_ns": 1219070900
+      },
+      {
+        "kind": "present",
+        "start_ns": 1219073100,
+        "end_ns": 1219327200
+      },
+      {
+        "kind": "input",
+        "start_ns": 1235623900,
+        "end_ns": 1235631000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1235633800,
+        "end_ns": 1235891800
+      },
+      {
+        "kind": "present",
+        "start_ns": 1235894200,
+        "end_ns": 1236282000
+      },
+      {
+        "kind": "input",
+        "start_ns": 1252268400,
+        "end_ns": 1252276600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1252280000,
+        "end_ns": 1252633300
+      },
+      {
+        "kind": "present",
+        "start_ns": 1252636200,
+        "end_ns": 1252936900
+      },
+      {
+        "kind": "input",
+        "start_ns": 1269619800,
+        "end_ns": 1269625600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1269628300,
+        "end_ns": 1269909500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1269911500,
+        "end_ns": 1270255800
+      },
+      {
+        "kind": "input",
+        "start_ns": 1286145400,
+        "end_ns": 1286153200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1286157000,
+        "end_ns": 1286469800
+      },
+      {
+        "kind": "present",
+        "start_ns": 1286473400,
+        "end_ns": 1286808100
+      },
+      {
+        "kind": "input",
+        "start_ns": 1302798900,
+        "end_ns": 1302811500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1302817700,
+        "end_ns": 1303275800
+      },
+      {
+        "kind": "present",
+        "start_ns": 1303279000,
+        "end_ns": 1303940300
+      },
+      {
+        "kind": "input",
+        "start_ns": 1319913200,
+        "end_ns": 1319931100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1319939500,
+        "end_ns": 1320787200
+      },
+      {
+        "kind": "present",
+        "start_ns": 1320794100,
+        "end_ns": 1321431100
+      },
+      {
+        "kind": "input",
+        "start_ns": 1337055400,
+        "end_ns": 1337073500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1337082000,
+        "end_ns": 1337855500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1337861300,
+        "end_ns": 1338637200
+      },
+      {
+        "kind": "input",
+        "start_ns": 1352570900,
+        "end_ns": 1352581700
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1352586800,
+        "end_ns": 1353049500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1353053900,
+        "end_ns": 1353548300
+      },
+      {
+        "kind": "input",
+        "start_ns": 1368991800,
+        "end_ns": 1368998900
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1369002400,
+        "end_ns": 1369297700
+      },
+      {
+        "kind": "present",
+        "start_ns": 1369300000,
+        "end_ns": 1369702300
+      },
+      {
+        "kind": "input",
+        "start_ns": 1386033800,
+        "end_ns": 1386046100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1386051300,
+        "end_ns": 1386911700
+      },
+      {
+        "kind": "present",
+        "start_ns": 1386915900,
+        "end_ns": 1387489400
+      },
+      {
+        "kind": "input",
+        "start_ns": 1402203800,
+        "end_ns": 1402218200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1402221900,
+        "end_ns": 1402520100
+      },
+      {
+        "kind": "present",
+        "start_ns": 1402522700,
+        "end_ns": 1402889000
+      },
+      {
+        "kind": "input",
+        "start_ns": 1418783600,
+        "end_ns": 1418790500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1418793100,
+        "end_ns": 1419079400
+      },
+      {
+        "kind": "present",
+        "start_ns": 1419081700,
+        "end_ns": 1419378900
+      },
+      {
+        "kind": "input",
+        "start_ns": 1435521800,
+        "end_ns": 1435527900
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1435530500,
+        "end_ns": 1435807500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1435809700,
+        "end_ns": 1436209100
+      },
+      {
+        "kind": "input",
+        "start_ns": 1452089000,
+        "end_ns": 1452098000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1452102000,
+        "end_ns": 1452405100
+      },
+      {
+        "kind": "present",
+        "start_ns": 1452407900,
+        "end_ns": 1452672600
+      },
+      {
+        "kind": "input",
+        "start_ns": 1468655600,
+        "end_ns": 1468661700
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1468664800,
+        "end_ns": 1468945800
+      },
+      {
+        "kind": "present",
+        "start_ns": 1468947800,
+        "end_ns": 1469238800
+      },
+      {
+        "kind": "input",
+        "start_ns": 1486201800,
+        "end_ns": 1486209700
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1486213200,
+        "end_ns": 1486549100
+      },
+      {
+        "kind": "present",
+        "start_ns": 1486551900,
+        "end_ns": 1486962200
+      },
+      {
+        "kind": "input",
+        "start_ns": 1502275000,
+        "end_ns": 1502281400
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1502284400,
+        "end_ns": 1502528400
+      },
+      {
+        "kind": "present",
+        "start_ns": 1502530900,
+        "end_ns": 1502823300
+      },
+      {
+        "kind": "input",
+        "start_ns": 1519559000,
+        "end_ns": 1519571400
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1519577400,
+        "end_ns": 1520189000
+      },
+      {
+        "kind": "present",
+        "start_ns": 1520193900,
+        "end_ns": 1520579600
+      },
+      {
+        "kind": "input",
+        "start_ns": 1535451900,
+        "end_ns": 1535457000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1535459500,
+        "end_ns": 1535737100
+      },
+      {
+        "kind": "present",
+        "start_ns": 1535739800,
+        "end_ns": 1536044400
+      },
+      {
+        "kind": "input",
+        "start_ns": 1552161500,
+        "end_ns": 1552170000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1552174000,
+        "end_ns": 1552491500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1552494500,
+        "end_ns": 1552905000
+      },
+      {
+        "kind": "input",
+        "start_ns": 1568920200,
+        "end_ns": 1568927300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1568930300,
+        "end_ns": 1569393500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1569395400,
+        "end_ns": 1569798500
+      },
+      {
+        "kind": "input",
+        "start_ns": 1586009300,
+        "end_ns": 1586015500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1586018100,
+        "end_ns": 1586290700
+      },
+      {
+        "kind": "present",
+        "start_ns": 1586293100,
+        "end_ns": 1586559600
+      },
+      {
+        "kind": "input",
+        "start_ns": 1602424000,
+        "end_ns": 1602431400
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1602434800,
+        "end_ns": 1602824400
+      },
+      {
+        "kind": "present",
+        "start_ns": 1602827100,
+        "end_ns": 1603337600
+      },
+      {
+        "kind": "input",
+        "start_ns": 1619382300,
+        "end_ns": 1619395800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1619402000,
+        "end_ns": 1619932700
+      },
+      {
+        "kind": "present",
+        "start_ns": 1619936800,
+        "end_ns": 1620505800
+      },
+      {
+        "kind": "input",
+        "start_ns": 1636065000,
+        "end_ns": 1636072500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1636075600,
+        "end_ns": 1636386800
+      },
+      {
+        "kind": "present",
+        "start_ns": 1636389200,
+        "end_ns": 1636696000
+      },
+      {
+        "kind": "input",
+        "start_ns": 1652315200,
+        "end_ns": 1652324400
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1652328300,
+        "end_ns": 1652618000
+      },
+      {
+        "kind": "present",
+        "start_ns": 1652621300,
+        "end_ns": 1652973100
+      },
+      {
+        "kind": "input",
+        "start_ns": 1669559200,
+        "end_ns": 1669571000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1669576900,
+        "end_ns": 1670018600
+      },
+      {
+        "kind": "present",
+        "start_ns": 1670022900,
+        "end_ns": 1670520700
+      },
+      {
+        "kind": "input",
+        "start_ns": 1685945800,
+        "end_ns": 1685957700
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1685963400,
+        "end_ns": 1686512900
+      },
+      {
+        "kind": "present",
+        "start_ns": 1686516500,
+        "end_ns": 1686968300
+      },
+      {
+        "kind": "input",
+        "start_ns": 1702114900,
+        "end_ns": 1702128200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1702135700,
+        "end_ns": 1702535300
+      },
+      {
+        "kind": "present",
+        "start_ns": 1702538300,
+        "end_ns": 1702983900
+      },
+      {
+        "kind": "input",
+        "start_ns": 1719225300,
+        "end_ns": 1719234200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1719237800,
+        "end_ns": 1719538100
+      },
+      {
+        "kind": "present",
+        "start_ns": 1719540600,
+        "end_ns": 1719924500
+      },
+      {
+        "kind": "input",
+        "start_ns": 1735404300,
+        "end_ns": 1735411800
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1735415200,
+        "end_ns": 1735718200
+      },
+      {
+        "kind": "present",
+        "start_ns": 1735721400,
+        "end_ns": 1736075800
+      },
+      {
+        "kind": "input",
+        "start_ns": 1752733600,
+        "end_ns": 1752742200
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1752745700,
+        "end_ns": 1753079500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1753082700,
+        "end_ns": 1753431700
+      },
+      {
+        "kind": "input",
+        "start_ns": 1769662000,
+        "end_ns": 1769672000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1769675800,
+        "end_ns": 1769996800
+      },
+      {
+        "kind": "present",
+        "start_ns": 1769999200,
+        "end_ns": 1770375400
+      },
+      {
+        "kind": "input",
+        "start_ns": 1786553300,
+        "end_ns": 1786568900
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1786576100,
+        "end_ns": 1787294000
+      },
+      {
+        "kind": "present",
+        "start_ns": 1787298900,
+        "end_ns": 1788022100
+      },
+      {
+        "kind": "input",
+        "start_ns": 1802330100,
+        "end_ns": 1802339500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1802343100,
+        "end_ns": 1802648900
+      },
+      {
+        "kind": "present",
+        "start_ns": 1802651700,
+        "end_ns": 1803035700
+      },
+      {
+        "kind": "input",
+        "start_ns": 1818913000,
+        "end_ns": 1818921300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1818924800,
+        "end_ns": 1819224600
+      },
+      {
+        "kind": "present",
+        "start_ns": 1819227500,
+        "end_ns": 1819634200
+      },
+      {
+        "kind": "input",
+        "start_ns": 1835737400,
+        "end_ns": 1835753000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1835759900,
+        "end_ns": 1836180300
+      },
+      {
+        "kind": "present",
+        "start_ns": 1836183900,
+        "end_ns": 1836672000
+      },
+      {
+        "kind": "input",
+        "start_ns": 1852181600,
+        "end_ns": 1852189400
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1852192900,
+        "end_ns": 1852456200
+      },
+      {
+        "kind": "present",
+        "start_ns": 1852459000,
+        "end_ns": 1852908700
+      },
+      {
+        "kind": "input",
+        "start_ns": 1868591500,
+        "end_ns": 1868599000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1868602100,
+        "end_ns": 1868973000
+      },
+      {
+        "kind": "present",
+        "start_ns": 1868977000,
+        "end_ns": 1869278600
+      },
+      {
+        "kind": "input",
+        "start_ns": 1885478700,
+        "end_ns": 1885487100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1885490400,
+        "end_ns": 1885827400
+      },
+      {
+        "kind": "present",
+        "start_ns": 1885830900,
+        "end_ns": 1886172400
+      },
+      {
+        "kind": "input",
+        "start_ns": 1902058100,
+        "end_ns": 1902068400
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1902072400,
+        "end_ns": 1902357500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1902360800,
+        "end_ns": 1903190200
+      },
+      {
+        "kind": "input",
+        "start_ns": 1918876400,
+        "end_ns": 1918884300
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1918895600,
+        "end_ns": 1919199300
+      },
+      {
+        "kind": "present",
+        "start_ns": 1919202400,
+        "end_ns": 1919637800
+      },
+      {
+        "kind": "input",
+        "start_ns": 1935428500,
+        "end_ns": 1935437000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1935441100,
+        "end_ns": 1935755700
+      },
+      {
+        "kind": "present",
+        "start_ns": 1935759100,
+        "end_ns": 1936186100
+      },
+      {
+        "kind": "input",
+        "start_ns": 1952094400,
+        "end_ns": 1952103500
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1952107400,
+        "end_ns": 1952373200
+      },
+      {
+        "kind": "present",
+        "start_ns": 1952376900,
+        "end_ns": 1952715300
+      },
+      {
+        "kind": "input",
+        "start_ns": 1968818100,
+        "end_ns": 1968826600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1968830500,
+        "end_ns": 1969122900
+      },
+      {
+        "kind": "present",
+        "start_ns": 1969126100,
+        "end_ns": 1969429400
+      },
+      {
+        "kind": "input",
+        "start_ns": 1985541700,
+        "end_ns": 1985550000
+      },
+      {
+        "kind": "draw",
+        "start_ns": 1985553600,
+        "end_ns": 1985861500
+      },
+      {
+        "kind": "present",
+        "start_ns": 1985864700,
+        "end_ns": 1986361000
+      },
+      {
+        "kind": "input",
+        "start_ns": 2002323100,
+        "end_ns": 2002332600
+      },
+      {
+        "kind": "draw",
+        "start_ns": 2002336500,
+        "end_ns": 2002633900
+      },
+      {
+        "kind": "present",
+        "start_ns": 2002637500,
+        "end_ns": 2002924200
+      },
+      {
+        "kind": "input",
+        "start_ns": 2018931100,
+        "end_ns": 2018940100
+      },
+      {
+        "kind": "draw",
+        "start_ns": 2018944000,
+        "end_ns": 2019254400
+      },
+      {
+        "kind": "present",
+        "start_ns": 2019257500,
+        "end_ns": 2019666300
+      }
+    ],
+    "journal_lost": 0
+  },
+  "drag": {
+    "part_id": 528,
+    "overlay_paints": 60,
+    "sheet_paints": 0,
+    "press_sheet_paints": 0,
+    "lift_sheet_paints": 1,
+    "transitions": 60,
+    "mismatches": 0,
+    "revision_changes": 0,
+    "waypoints": 22
+  }
+}

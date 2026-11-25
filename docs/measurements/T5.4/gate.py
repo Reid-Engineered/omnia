@@ -45,6 +45,34 @@ def schedule():
     return order
 
 
+def args_for(case, size):
+    """Build bench CLI arguments (excluding `--json`) and whether tracing is enabled."""
+    if case in STARTS:
+        return [
+            "start",
+            "--sheet",
+            case.split("-", 1)[1],
+            "--runs",
+            str(START_SAMPLES),
+            "--size",
+            size,
+        ], False
+    sheet, script = case.split("-", 1)
+    return [
+        "run",
+        "--sheet",
+        sheet,
+        "--script",
+        script,
+        "--warmup",
+        str(FRAMES),
+        "--frames",
+        str(FRAMES),
+        "--size",
+        size,
+    ], True
+
+
 def load(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -137,33 +165,8 @@ def collect(binary, output):
                 stem = output / tag / f"{case}-{repetition}"
                 size = f"{viewport[0]}x{viewport[1]}"
                 path = stem.with_suffix(".json")
-                run_env = env
-                if case in STARTS:
-                    args = [
-                        "start",
-                        "--sheet",
-                        case.split("-", 1)[1],
-                        "--runs",
-                        str(START_SAMPLES),
-                        "--size",
-                        size,
-                    ]
-                else:
-                    sheet, script = case.split("-", 1)
-                    args = [
-                        "run",
-                        "--sheet",
-                        sheet,
-                        "--script",
-                        script,
-                        "--warmup",
-                        str(FRAMES),
-                        "--frames",
-                        str(FRAMES),
-                        "--size",
-                        size,
-                    ]
-                    run_env = {**env, "OMNIA_BENCH_TRACE": "1"}
+                args, traced_run = args_for(case, size)
+                run_env = {**env, "OMNIA_BENCH_TRACE": "1"} if traced_run else env
                 print(f"{tag} {repetition}/{REPETITIONS} {case}", flush=True)
                 identity = [tag, repetition, case]
                 before = capture()
@@ -196,6 +199,12 @@ def write_record(journal, case, phase, conditions, exit_code):
 def metric(value):
     if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
         raise ValueError(f"invalid metric: {value!r}")
+    return value
+
+
+def integer_count(value):
+    if type(value) is not int or value < 0:
+        raise ValueError(f"invalid count: {value!r}")
     return value
 
 
@@ -241,11 +250,55 @@ def motion(report, sheet, script, scale, viewport):
         raise ValueError(
             f"expected the reference viewport, refresh and Vulkan adapter: {environment}"
         )
+
+    refresh_ms = 1000.0 / environment["refresh_hz"]
     frames = report["frames"]
     metrics = report["metrics"]
     expected_sampling = "overlay-every-frame" if script == "drag-part" else "every-frame"
+
+    sheet_paints = None
+    press_sheet_paints = None
+    lift_sheet_paints = None
+    revision_changes = None
+    d2p_p99 = None
+    allowed_warnings = set()
+    if script == "drag-part":
+        sheet_paints = metric(metrics["sheet_paints"])
+        drag = report.get("drag") or {}
+        press_sheet_paints = integer_count(drag.get("press_sheet_paints"))
+        lift_sheet_paints = integer_count(drag.get("lift_sheet_paints"))
+        revision_changes = integer_count(drag.get("revision_changes"))
+        if (
+            drag.get("overlay_paints") != FRAMES
+            or drag.get("sheet_paints") != sheet_paints
+            or drag.get("transitions") != FRAMES
+            or drag.get("mismatches") != 0
+            or drag.get("waypoints", 0) < 4
+        ):
+            raise ValueError(f"incomplete drag-part exercise: {drag}")
+        # Invariant violations emit matching bench warnings; allow only those exact warnings here
+        # so summarize() reports them as explicit INV5/INV11/D7 FAIL verdicts instead of incomplete.
+        if press_sheet_paints != 0:
+            allowed_warnings.add(
+                f"INV11: SheetView painted {press_sheet_paints} times during drag press, expected 0"
+            )
+        if lift_sheet_paints != 1:
+            allowed_warnings.add(
+                f"D7: SheetView painted {lift_sheet_paints} times during warm-up lift-off, expected 1"
+            )
+        if revision_changes > 0:
+            allowed_warnings.add(
+                f"INV5: document revision changed on {revision_changes} measured frames during drag"
+            )
+        d2p = metrics.get("dirty_to_present_ms") or {}
+        d2p_p99 = metric(d2p["p99"])
+        d2p_max = metric(d2p["max"])
+        if not 0 < d2p_p99 <= d2p_max:
+            raise ValueError(f"invalid dirty-to-present p99 or maximum: {d2p_p99}, {d2p_max}")
+
+    unexpected_warnings = [w for w in report["warnings"] if w not in allowed_warnings]
     if (
-        report["warnings"] != []
+        unexpected_warnings
         or frames["drawn"] != FRAMES
         or frames["unmeasured"] != 0
         or frames["on_time"] + frames["late"] != FRAMES
@@ -253,28 +306,6 @@ def motion(report, sheet, script, scale, viewport):
         or metrics["paint_samples"] != FRAMES
     ):
         raise ValueError(f"incomplete frame sampling: {frames}, warnings {report['warnings']}")
-
-    refresh_ms = 1000.0 / environment["refresh_hz"]
-    sheet_paints = None
-    d2p_p99 = None
-    if script == "drag-part":
-        sheet_paints = metric(metrics["sheet_paints"])
-        drag = report.get("drag") or {}
-        if (
-            drag.get("overlay_paints") != FRAMES
-            or drag.get("sheet_paints") != sheet_paints
-            or drag.get("lift_sheet_paints") != 1
-            or drag.get("transitions") != FRAMES
-            or drag.get("mismatches") != 0
-            or drag.get("revision_changes") != 0
-            or drag.get("waypoints", 0) < 4
-        ):
-            raise ValueError(f"incomplete drag-part exercise: {drag}")
-        d2p = metrics.get("dirty_to_present_ms") or {}
-        d2p_p99 = metric(d2p["p99"])
-        d2p_max = metric(d2p["max"])
-        if not 0 < d2p_p99 <= d2p_max:
-            raise ValueError(f"invalid dirty-to-present p99 or maximum: {d2p_p99}, {d2p_max}")
 
     p99 = metric(metrics["frame_ms"]["p99"])
     maximum = metric(metrics["frame_ms"]["max"])
@@ -288,7 +319,19 @@ def motion(report, sheet, script, scale, viewport):
             raise ValueError("expected positive private memory")
     limit = 1.5 if sheet == "1k" else 2.5
     traced = attribute(report, limit)
-    return p99, maximum, d2p_p99, refresh_ms, ours, memory, sheet_paints, traced
+    return (
+        p99,
+        maximum,
+        d2p_p99,
+        refresh_ms,
+        ours,
+        memory,
+        sheet_paints,
+        press_sheet_paints,
+        lift_sheet_paints,
+        revision_changes,
+        traced,
+    )
 
 
 def med_range(values):
@@ -391,9 +434,19 @@ def summarize(output):
                 budget, p99_limit, max_limit = "B3", 16.7, 33.3
             else:
                 budget, p99_limit, max_limit = "B4", 33.3, 50
-            p99s, maxes, d2p_p99s, refresh_ms_vals, allocs, memory, sheet_paints, traced = zip(
-                *runs[tag, case], strict=True
-            )
+            (
+                p99s,
+                maxes,
+                d2p_p99s,
+                refresh_ms_vals,
+                allocs,
+                memory,
+                sheet_paints,
+                press_paints,
+                lift_paints,
+                rev_changes,
+                traced,
+            ) = zip(*runs[tag, case], strict=True)
             if script == "drag-part":
                 refresh_limit = min(refresh_ms_vals)
                 verdict(
@@ -416,8 +469,20 @@ def summarize(output):
             )
             if script == "drag-part":
                 verdict(
+                    max(rev_changes) == 0,
+                    f"INV5 {case} max revision changes {max(rev_changes):g} (= 0)",
+                )
+                verdict(
                     max(sheet_paints) == 0,
                     f"INV11 {case} max SheetView paints {max(sheet_paints):g} (= 0)",
+                )
+                verdict(
+                    max(press_paints) == 0,
+                    f"INV11 {case} max press SheetView paints {max(press_paints):g} (= 0)",
+                )
+                verdict(
+                    all(p == 1 for p in lift_paints),
+                    f"D7 {case} lift SheetView paints [{min(lift_paints)}, {max(lift_paints)}] (all = 1)",
                 )
             verdict(
                 max(allocs) == 0,

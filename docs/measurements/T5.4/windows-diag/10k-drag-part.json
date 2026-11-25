@@ -46,37 +46,37 @@
     "late": 0,
     "unmeasured": 0,
     "startup_draws": 3,
-    "wall_s": 20.05
+    "wall_s": 20.0481
   },
   "warnings": [],
   "metrics": {
     "frame_ms": {
-      "mean": 0.3775,
-      "p50": 0.3581,
-      "p95": 0.5164,
-      "p99": 0.7163,
-      "max": 1.2503
+      "mean": 0.4271,
+      "p50": 0.3287,
+      "p95": 0.8545,
+      "p99": 0.9585,
+      "max": 1.1868
     },
     "draw_ms": {
-      "mean": 0.3664,
-      "p50": 0.3482,
-      "p95": 0.5012,
-      "p99": 0.6932,
-      "max": 1.1991
+      "mean": 0.4155,
+      "p50": 0.3192,
+      "p95": 0.8243,
+      "p99": 0.9395,
+      "max": 1.1756
     },
     "dirty_to_present_ms": {
-      "mean": 0.7697,
-      "p50": 0.7316,
-      "p95": 1.026,
-      "p99": 1.3568,
-      "max": 5.0012
+      "mean": 0.8681,
+      "p50": 0.7132,
+      "p95": 1.6579,
+      "p99": 1.9866,
+      "max": 2.1996
     },
     "present_interval_ms": {
-      "mean": 16.6637,
-      "p50": 16.6543,
-      "p95": 17.2687,
-      "p99": 17.8258,
-      "max": 20.7913
+      "mean": 16.6636,
+      "p50": 16.6871,
+      "p95": 17.7439,
+      "p99": 18.4156,
+      "max": 18.9071
     },
     "paint_samples": 600,
     "paint_sampling": "overlay-every-frame",
@@ -115,11 +115,11 @@
     "late_frames": 0,
     "missed_refreshes": 0,
     "present_intervals_over_2_5_refreshes": 0,
-    "max_present_interval_ms": 20.7913,
+    "max_present_interval_ms": 18.9071,
     "work_missed_refreshes": 0,
-    "memory_mb": 168.4219,
-    "working_set_mb": 169.3789,
-    "heap_peak_mb": 95.0423,
+    "memory_mb": 168.4375,
+    "working_set_mb": 169.3828,
+    "heap_peak_mb": 95.0188,
     "sheet_paints": 0
   },
   "diagnostic_trace": null,
@@ -127,6 +127,7 @@
     "part_id": 4950,
     "overlay_paints": 600,
     "sheet_paints": 0,
+    "press_sheet_paints": 0,
     "lift_sheet_paints": 1,
     "transitions": 600,
     "mismatches": 0,
