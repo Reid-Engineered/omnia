@@ -1895,6 +1895,257 @@ mod tests {
         assert!(a.content_eq(&c));
     }
 
+    /// T5.5 review P2: guaranteed-success mixed selection (part + wire + label) with a
+    /// one-ended attached run, asserting both follow and detach results explicitly.
+    #[test]
+    fn t5_5_mixed_selection_follow_and_detach_with_one_ended_run() {
+        for follow in [true, false] {
+            let mut doc = Doc::new();
+            let part_item = del_part(&mut doc, del_point(0, 0));
+            let anchor_item = del_part(&mut doc, del_point(-6, -4));
+            let run_w0 = doc
+                .apply(Command::AddWires(vec![del_wire(
+                    del_point(0, 0),
+                    del_point(0, -4),
+                )]))
+                .unwrap()
+                .added[0];
+            let run_w1 = doc
+                .apply(Command::AddWires(vec![del_wire(
+                    del_point(0, -4),
+                    del_point(-6, -4),
+                )]))
+                .unwrap()
+                .added[0];
+            let wire_item = doc
+                .apply(Command::AddWires(vec![del_wire(
+                    del_point(4, 0),
+                    del_point(4, 2),
+                )]))
+                .unwrap()
+                .added[0];
+            let label_item = doc
+                .apply(Command::AddLabel(Label {
+                    at: del_point(4, 0),
+                    text: "SIG".into(),
+                }))
+                .unwrap()
+                .added[0];
+
+            let delta = del_point(2, 2);
+            let pivot = del_point(0, 0);
+            let by = Orient::ROT_90;
+            let transform = Isometry::Transform { delta, pivot, by };
+            let selection = vec![part_item, wire_item, label_item];
+            let change = follow_roundtrip(
+                &mut doc,
+                Command::Transform {
+                    items: selection,
+                    delta,
+                    pivot,
+                    by,
+                    follow: follow_policy(follow),
+                },
+            )
+            .expect("unobstructed mixed selection transform must succeed");
+            assert!(change.dirty.is_some());
+            doc.assert_normal_form();
+
+            let ItemId::Part(pid) = part_item else {
+                unreachable!()
+            };
+            let ItemId::Part(aid) = anchor_item else {
+                unreachable!()
+            };
+            let ItemId::Label(lid) = label_item else {
+                unreachable!()
+            };
+            let new_pin = transform.apply(del_point(0, 0)).unwrap();
+            assert_eq!(doc.part(pid).unwrap().at, new_pin);
+            assert_eq!(doc.part(pid).unwrap().orient, Orient::ROT_90);
+            assert_eq!(doc.pins(pid).unwrap(), &[new_pin]);
+            assert_eq!(
+                doc.label(lid).unwrap().at,
+                transform.apply(del_point(4, 0)).unwrap()
+            );
+            assert!(wire_covered_by_doc(
+                &doc,
+                Wire {
+                    a: transform.apply(del_point(4, 0)).unwrap(),
+                    b: transform.apply(del_point(4, 2)).unwrap(),
+                }
+            ));
+
+            let anchor_pin = doc.pins(aid).unwrap()[0];
+            let (ItemId::Wire(rw0), ItemId::Wire(rw1)) = (run_w0, run_w1) else {
+                unreachable!()
+            };
+            if follow {
+                // WINV1: the one-ended run reroutes so the moved part stays connected to anchor.
+                assert_eq!(doc.net_at(new_pin), doc.net_at(anchor_pin));
+                assert!(doc.wire(rw0).is_none() || doc.wire(rw1).is_none());
+            } else {
+                // WINV2: detach leaves the original one-ended run untouched and disconnects part.
+                assert_ne!(doc.net_at(new_pin), doc.net_at(anchor_pin));
+                assert_eq!(
+                    doc.wire(rw0),
+                    Some(&del_wire(del_point(0, 0), del_point(0, -4)))
+                );
+                assert_eq!(
+                    doc.wire(rw1),
+                    Some(&del_wire(del_point(0, -4), del_point(-6, -4)))
+                );
+            }
+        }
+    }
+
+    /// T5.5 review P2: non-degenerate Transform `Change` contract (`dirty`, `added`, `removed`,
+    /// `nets_changed`) through apply, undo, redo, second undo/redo, and `Command::Batch` rollback.
+    #[test]
+    fn t5_5_transform_change_contract_and_batch_rollback() {
+        // Case A: pinless-part-only non-degenerate Transform preserves empty added/removed and
+        // `nets_changed == false` across apply, undo, and redo.
+        let mut pinless = Doc::new();
+        let pinless_item = pinless
+            .apply(Command::PlacePart {
+                part: make_part(del_point(0, 0), Orient::IDENTITY, "M1", ""),
+                local_pins: Vec::new(),
+                local_bounds: rect(-1_270_000, -1_270_000, 1_270_000, 1_270_000),
+            })
+            .unwrap()
+            .added[0];
+        let old_bounds = pinless.part_body(PartId(0)).unwrap();
+        let apply_c = pinless
+            .apply(Command::Transform {
+                items: vec![pinless_item],
+                delta: del_point(2, 2),
+                pivot: del_point(0, 0),
+                by: Orient::ROT_90,
+                follow: follow_policy(true),
+            })
+            .unwrap();
+        let new_bounds = pinless.part_body(PartId(0)).unwrap();
+        let expected_dirty = Some(old_bounds.union(new_bounds));
+        for change in [
+            apply_c,
+            pinless.undo().unwrap(),
+            pinless.redo().unwrap(),
+            pinless.undo().unwrap(),
+            pinless.redo().unwrap(),
+        ] {
+            assert_eq!(change.dirty, expected_dirty);
+            assert!(change.added.is_empty());
+            assert!(change.removed.is_empty());
+            assert!(!change.nets_changed);
+            assert_doc_consistent(&pinless);
+        }
+
+        // Case B: non-degenerate Transform on mixed selection causing BOTH a collinear wire merge
+        // (removing WireId(2)) AND a landed-pin wire split (adding WireId(3)).
+        let mut doc = Doc::new();
+        let w_merge = doc
+            .apply(Command::AddWires(vec![del_wire(
+                del_point(0, 0),
+                del_point(2, 0),
+            )]))
+            .unwrap()
+            .added[0];
+        let w_split = doc
+            .apply(Command::AddWires(vec![del_wire(
+                del_point(8, -2),
+                del_point(8, 6),
+            )]))
+            .unwrap()
+            .added[0];
+        let w_sel = doc
+            .apply(Command::AddWires(vec![del_wire(
+                del_point(2, 2),
+                del_point(4, 2),
+            )]))
+            .unwrap()
+            .added[0];
+        let p_sel = del_part(&mut doc, del_point(-2, 0));
+        let l_sel = doc
+            .apply(Command::AddLabel(Label {
+                at: del_point(1, 4),
+                text: "N1".into(),
+            }))
+            .unwrap()
+            .added[0];
+        assert_eq!(w_merge, ItemId::Wire(WireId(0)));
+        assert_eq!(w_split, ItemId::Wire(WireId(1)));
+        assert_eq!(w_sel, ItemId::Wire(WireId(2)));
+
+        let transform_cmd = Command::Transform {
+            items: vec![p_sel, w_sel, l_sel],
+            delta: del_point(0, -2),
+            pivot: del_point(3, 2),
+            by: Orient::ROT_180,
+            follow: follow_policy(true),
+        };
+        let before = del_snapshot(&doc);
+        let before_bytes = doc.save_to_vec_for_test();
+
+        // Case C: same non-degenerate split+merge Transform inside a failing Batch rolls back
+        // completely (WINV4), including arena slot counts, revision, and redo stack.
+        let batch_err = doc.apply(Command::Batch(vec![
+            transform_cmd.clone(),
+            Command::AddWires(vec![Wire {
+                a: Pt::ZERO,
+                b: Pt::ZERO,
+            }]),
+        ]));
+        assert_eq!(batch_err, Err(CommandError::InvalidWire));
+        assert_eq!(doc.save_to_vec_for_test(), before_bytes);
+        assert!(doc.content_eq(&before));
+        assert_doc_consistent(&doc);
+
+        // Now apply the split+merge Transform itself and check Change through apply/undo/redo/undo/redo.
+        let split_piece = ItemId::Wire(WireId(3));
+        let c_apply = doc.apply(transform_cmd).unwrap();
+        let after = del_snapshot(&doc);
+        doc.assert_normal_form();
+        assert_doc_consistent(&doc);
+        let assert_dirty_covers_all = |dirty: Option<Rect>| {
+            let dirty = dirty.expect("effective transform has dirty rect");
+            for pt in [
+                del_point(-2, 0),
+                del_point(0, 0),
+                del_point(4, 0),
+                del_point(2, 2),
+                del_point(4, 2),
+                del_point(8, -2),
+                del_point(8, 6),
+                del_point(1, 4),
+                del_point(5, -2),
+            ] {
+                assert!(dirty.contains(pt), "dirty {dirty:?} missing {pt:?}");
+            }
+        };
+        assert_dirty_covers_all(c_apply.dirty);
+        assert_eq!(c_apply.added, vec![split_piece]);
+        assert_eq!(c_apply.removed, vec![w_sel]);
+        assert!(c_apply.nets_changed);
+
+        for _ in 0..2 {
+            let c_undo = doc.undo().unwrap();
+            assert_dirty_covers_all(c_undo.dirty);
+            assert_eq!(c_undo.added, vec![w_sel]);
+            assert_eq!(c_undo.removed, vec![split_piece]);
+            assert!(c_undo.nets_changed);
+            assert!(doc.content_eq(&before));
+            assert_doc_consistent(&doc);
+
+            let c_redo = doc.redo().unwrap();
+            assert_dirty_covers_all(c_redo.dirty);
+            assert_eq!(c_redo.added, vec![split_piece]);
+            assert_eq!(c_redo.removed, vec![w_sel]);
+            assert!(c_redo.nets_changed);
+            assert!(doc.content_eq(&after));
+            assert_doc_consistent(&doc);
+        }
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(96))]
         /// T5.5 Done-when: combined Transform matches expected final geometry, keeps normal form
@@ -2023,6 +2274,15 @@ mod tests {
 
             for follow in [false, true] {
                 let mut doc = del_snapshot(&base);
+                let mut preview = FollowPlan::default();
+                let plan_ok = crate::plan_follow(
+                    &base,
+                    &selection,
+                    transform,
+                    follow_policy(follow),
+                    &mut preview,
+                )
+                .is_ok();
                 let result = follow_roundtrip(
                     &mut doc,
                     Command::Transform {
@@ -2036,6 +2296,9 @@ mod tests {
                 if transform.is_identity() {
                     prop_assert!(result.is_ok() && doc.content_eq(&base));
                     continue;
+                }
+                if parts_only {
+                    prop_assert_eq!(result.is_ok(), plan_ok, "{:?}", result);
                 }
                 if result.is_ok() {
                     doc.assert_normal_form();
@@ -3631,6 +3894,15 @@ mod tests {
             orient: u8,
             dup: bool,
         },
+        Transform {
+            pick: usize,
+            dx: i32,
+            dy: i32,
+            px: i32,
+            py: i32,
+            orient: u8,
+            dup: bool,
+        },
         Delete {
             pick: usize,
             count: usize,
@@ -3669,6 +3941,24 @@ mod tests {
             3 => (0usize..32, -4i32..=4, -4i32..=4, 0u8..8, prop::bool::weighted(0.1)).prop_map(
                 |(pick, px, py, orient, dup)| GenStep::Reorient { pick, px, py, orient, dup }
             ),
+            3 => (
+                0usize..32,
+                -5i32..=5,
+                -5i32..=5,
+                -4i32..=4,
+                -4i32..=4,
+                0u8..8,
+                prop::bool::weighted(0.1),
+            )
+                .prop_map(|(pick, dx, dy, px, py, orient, dup)| GenStep::Transform {
+                    pick,
+                    dx,
+                    dy,
+                    px,
+                    py,
+                    orient,
+                    dup,
+                }),
             3 => (0usize..32, 1usize..4, prop::bool::weighted(0.1), prop::bool::weighted(0.1)).prop_map(
                 |(pick, count, dup, missing)| GenStep::Delete { pick, count, dup, missing }
             ),
@@ -3795,6 +4085,23 @@ mod tests {
                                 }
                                 Command::Reorient { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
                                     items,
+                                    pivot: Pt { x: px, y: py },
+                                    by: Orient::ALL[orient as usize],
+                                }
+                            }
+                            GenStep::Transform { pick, dx, dy, px, py, orient, dup } => {
+                                let mut items = if live.is_empty() {
+                                    Vec::new()
+                                } else {
+                                    vec![live[pick % live.len()]]
+                                };
+                                if dup && !items.is_empty() {
+                                    items.push(items[0]);
+                                }
+                                Command::Transform {
+                                    follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
+                                    items,
+                                    delta: Pt { x: dx, y: dy },
                                     pivot: Pt { x: px, y: py },
                                     by: Orient::ALL[orient as usize],
                                 }

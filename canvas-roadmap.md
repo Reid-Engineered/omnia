@@ -2283,11 +2283,14 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        in one pass and undo/redo via `UndoOp::Batch([DeleteRestore,
                        DeleteRemove])` with exact ids and no intermediate bounds (staying
                        within T5.5's owned files). Plans updated: `canvas-plan.md` section 9,
-                       `wiring-plan.md` WD2 and section 10. Tests: `Isometry::Transform`
+                       `wiring-plan.md` WD2, WINV1 and section 10. Tests: `Isometry::Transform`
                        equivalences and K1-edge tests, `view_tests` extended to all three
                        `Isometry` variants, `t5_5_winv6_winv8_rigid_transform_and_labels`
                        proptest, PR #125 review regression case (`(0,0)-(2,0)` stationary,
                        `(2,2)-(4,2)` dragged down 2 grid steps and rotated/mirrored),
-                       validation/OOB/capture/off-lattice edge tests, and
-                       `t5_5_transform_geometry_follow_inv4_inv10` proptest. Standard checks
-                       run locally on Windows (certifies nothing; no budget gate).
+                       validation/OOB/capture/off-lattice edge tests,
+                       `t5_5_mixed_selection_follow_and_detach_with_one_ended_run`,
+                       `t5_5_transform_change_contract_and_batch_rollback`,
+                       `t5_5_transform_geometry_follow_inv4_inv10` proptest, and
+                       `GenStep::Transform` in the INV4/INV10 sequence proptest. Standard
+                       checks run locally on Windows (certifies nothing; no budget gate).

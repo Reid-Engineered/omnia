@@ -391,7 +391,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 
 | ID | Rule |
 | --- | --- |
-| WINV1 | Follow keeps connections: any two pins connected before a follow-mode `Move` or `Reorient` are connected after it, direct pin-to-pin contacts excepted (WQ6). New connections arise only where a moved pin or moved wire end lands on an existing end, pin or body. [W2.2] |
+| WINV1 | Follow keeps connections: any two pins connected before a follow-mode `Move`, `Reorient` or `Transform` are connected after it, direct pin-to-pin contacts excepted (WQ6). New connections arise only where a moved pin or moved wire end lands on an existing end, pin or body. [W2.2, T5.5] |
 | WINV2 | Detach changes only what it must: unselected wires are identical before and after, except for splits under landed pins and ends (TC-move-14) and merges at points the moved items vacated (WD3, owner decision 2026-11-17); the pins that lose a wire are exactly the boundary pins of detached runs. [W2.2] |
 | WINV3 | Normal form after every wiring command: INV1 and INV2 hold; every end is on the wire lattice; no two collinear segments meet at a point that holds nothing else and no label; no two segments share a stretch. [W1.4] |
 | WINV4 | A refused command leaves the document equal to the original, ids and revision included. `apply` then `undo` of any wiring command does too (extends INV4). [W2.2, W3.2] |
