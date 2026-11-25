@@ -32,7 +32,7 @@ rotating and mirroring parts; orthogonal wiring with pin snapping; junctions; ne
 selection by click, shift-click and rubber band; hover; net highlighting; copy and paste;
 undo and redo; the document model under all of it; a minimal save and load for test sheets.
 
-Out of scope: the simulator, instrument internals, the libraries UI, real file formats.
+Out of scope: the simulator, instrument internals, the libraries UI, real file formats, the application shell: see [ui-plan.md](ui-plan.md).
 Floating instrument windows are in scope only as "views above the sheet that must not hurt
 its frame time".
 
@@ -391,12 +391,12 @@ Each has a test; the roadmap task that adds it is in brackets.
 | INV3 | A junction dot exists exactly where three or more ends or pins meet. Dots are never stored. [T2.1] |
 | INV4 | The document changes only through `Doc::apply`, `undo`, `redo`. `apply(c)` then `undo()` restores `content_eq` with the original, exact live ids included; `undo` then `redo` likewise. Revision advances monotonically and issued ids remain reserved (D2/D8); persistent-state equality remains stricter. [T5.1] |
 | INV5 | During a gesture the document revision does not change. A committed gesture is exactly one undo step. Esc leaves the revision unchanged. [T5.2] |
-| INV6 | `omnia-canvas` contains no colour literal; colours come from `omnia-theme`. [T1.2] |
+| INV6 | `omnia-canvas` and `omnia-app` ([ui-plan.md](ui-plan.md) UINV1) contain no colour literal; colours come from `omnia-theme`. [T1.2, U1.1] |
 | INV7 | `SheetView`'s paint calls neither `paint_path` nor `canvas()` and makes no heap allocation once warm. [T2.5] |
 | INV8 | No `f32` holds a world coordinate. World to screen subtracts the camera centre in integers first. [T1.3] |
 | INV9 | Grid snapping is idempotent: `snap_to(snap_to(p, s), s) == snap_to(p, s)`. Priority snapping keeps a snapped point: with `r = snap(p)` and `q = r.at()`, `snap(q) == r` unless a target of a higher WD5 class than `r` lies within the snap radius of `q`; then `snap(q)` is of a higher class. A pin result is therefore always kept. Owner decision 2026-11-16, "radius wins": `snap` never returns a pin, end, junction or body target farther than the radius from `p`, so the earlier `snap(snap(p)) == snap(p)`, which off-grid geometry met only by settling past the radius, no longer applies to `snap` (wiring-plan.md WD5, WINV7). [T1.1, T4.2, W1.3] |
 | INV10 | After any command sequence, incremental connectivity equals a from-scratch rebuild. [T4.1] |
-| INV11 | A hover, selection or drag-move change does not notify `SheetView`. [T4.3] |
+| INV11 | A hover, selection or drag-move change, or any shell-only change ([ui-plan.md](ui-plan.md) UINV2), does not notify `SheetView`. [T4.3] |
 | INV12 | `omnia-doc` and `omnia-symbols` do not depend on GPUI. [T0.1] |
 | INV13 | The GPUI revision changes only through the upgrade routine in section 10. |
 
@@ -465,7 +465,7 @@ omnia/
     omnia-theme/        colour tokens generated from omnia.figcraft plus canvas-tokens.toml
     omnia-canvas/       camera, SheetView, OverlayView, tools
     omnia-bench/        the bench binary: generators, counting allocator, spike scenes
-    omnia-app/          window shell: menus, toolbars, status bar
+    omnia-app/          window shell; see ui-plan.md section 10
   xtask/                `cargo xtask tokens | symbols | golden [--update]`
   tests/golden/         golden PNGs
   docs/                 spike-results.md, measurements/
@@ -666,7 +666,7 @@ impl Camera {
     pub fn scale(&self) -> f64;
     pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
-pub enum Tool { Select, Wire, Place(SymbolId), Label }      // T5.2 (tool.rs); ZoomArea (ui-plan.md) not yet
+pub enum Tool { Select, Wire, Place(SymbolId), Label, ZoomArea } // T5.2 (tool.rs); ZoomArea owned by T5.6 (T4.5 follow-up, not yet in code)
 // T5.2 (tool.rs): pure tool state machine. One gesture owner, OverlayView, holds it; the owner
 // applies a gesture's one Command only to the document and revision it was planned on (INV5).
 pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture), Placing(PlaceGesture),
@@ -876,6 +876,11 @@ impl SheetCanvas {
     // defaults to SymbolLibrary::place_command when None.
     pub fn set_place_provider(&mut self, provider: Option<PlaceProvider>, cx: &mut Context<Self>); // T5.3
     pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.3 (ui-plan §14)
+    pub fn select_all(&mut self, cx: &mut Context<Self>); // T5.6 (T4.3 follow-up, ui-plan §14; OverlayView has it)
+    pub fn cut(&mut self, cx: &mut Context<Self>);        // T7.1 (ui-plan §14)
+    pub fn copy(&self, cx: &mut Context<Self>);           // T7.1 (ui-plan §14)
+    pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>); // T7.1 (ui-plan §14)
+    pub fn set_wiring_prefs(&mut self, prefs: WiringPrefs, cx: &mut Context<Self>); // W2.3 (WD12, ui-plan §14)
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);
@@ -1029,7 +1034,7 @@ Each has a default. Build to the default; the owner's answer replaces it here.
 | ID | Question | Default until answered |
 | --- | --- | --- |
 | Q1 | Stroke weight across zoom: scale with zoom, or constant on screen? | Scale with zoom, floor of one device pixel (K5). |
-| Q2 | Canvas colours are not tokens. Only `stage/paper` is; `build-omnia.mjs` hard-codes the rest. Will tokens be added to the `Theme` collection? | Keep them in `canvas-tokens.toml`, same value in both themes: `stage/ink` `#1D1D1F`, `stage/ink-secondary` `#6B6B70`, `stage/grid` `#00000022`, `stage/select` `#2F6FEB`, `stage/select-halo` `#9DBDFF`, `stage/hover` = select-halo, `stage/net-highlight` = select, `stage/snap` = `accent/mint`, `stage/tag-bg` `#111112`, `stage/tag-text` `#F2F2F2`, `stage/instrument-body` `#FBFAF6`, `probe/a` = select, `probe/b` `#7A5AF8`. A token that later appears in `omnia.figcraft` wins. |
+| Q2 | Canvas colours are not tokens. Only `stage/paper` is; `build-omnia.mjs` hard-codes the rest. Will tokens be added to the `Theme` collection? | Keep them in `canvas-tokens.toml`, same value in both themes: `stage/ink` `#1D1D1F`, `stage/ink-secondary` `#6B6B70`, `stage/grid` `#00000022`, `stage/select` `#2F6FEB`, `stage/select-halo` `#9DBDFF`, `stage/hover` = select-halo, `stage/net-highlight` = select, `stage/snap` = `accent/mint`, `stage/tag-bg` `#111112`, `stage/tag-text` `#F2F2F2`, `stage/instrument-body` `#FBFAF6`, `probe/a` = select, `probe/b` `#7A5AF8`. A token that later appears in `omnia.figcraft` wins. Shell overlay tokens ([ui-plan.md](ui-plan.md) UQ6: `brand/tile`, `brand/mark`, `instrument/screen`, `focus/ring`) live in the same `canvas-tokens.toml` file. |
 | Q3 | Label font: the brief says Source Code Pro for designators and values; the mockup uses Inter SemiBold. | Follow the mockup (K8). |
 | Q4 | Which laptop is the reference machine (model, GPU, panel refresh rate)? Can it run gates as a self-hosted CI runner? | **Answered 2026-11-15:** the Orion laptop (Lenovo ThinkPad T470, i5-7300U, Intel HD 620, Arch Linux on Wayland, Vulkan, native 1920x1080 at 60 Hz, 100% and 125%), under the protocol in section 2.1. Self-hosted CI runner: not decided; frame-time gates run by hand on it until then. |
 | Q5 | Does B10 cover GPUI's internal allocations? | No: our code only. Total is reported, not gated. |

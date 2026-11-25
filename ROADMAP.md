@@ -34,7 +34,7 @@ Connect component selection, placement, selection, movement, rotation, deletion,
 
 **Ready when:** a user can build an agreed example circuit without developer commands, edit it with predictable wire behavior, undo mistakes, and reopen it with its circuit data intact. File errors and unsaved changes have defined behavior.
 
-**Detailed work:** editing and final integration in the [canvas roadmap](canvas-roadmap.md), wire behavior in the [wiring roadmap](wiring-roadmap.md), and component definitions, `.opart`/`.olib` containers and deduplicated `.omnia` part embedding in the [parts plan](parts-plan.md) and [parts roadmap](parts-roadmap.md). Product file flows and full library browsing build on top of that schema.
+**Detailed work:** editing and final integration in the [canvas roadmap](canvas-roadmap.md), wire behavior in the [wiring roadmap](wiring-roadmap.md), component definitions, `.opart`/`.olib` containers and deduplicated `.omnia` part embedding in the [parts plan](parts-plan.md) and [parts roadmap](parts-roadmap.md), and workspace shell, menus, file lifecycle, and edit integration in the [UI plan](ui-plan.md) and [UI roadmap](ui-roadmap.md). Product file flows and full library browsing build on top of that schema.
 
 ## 3. Complete the simulation workflow
 
@@ -54,7 +54,7 @@ Integrate Home and first-boot screens, project/file navigation, settings, keyboa
 
 **Ready when:** a new user can complete the first-release workflow from launch; loading, empty, error, and recovery states are covered; keyboard access and readability are checked.
 
-**Planning needed:** application UI and file lifecycle plans. This work can proceed alongside editor and simulation development.
+**Detailed work:** application UI, Home, first-boot, file lifecycle, preferences, theme switching, recovery, and accessibility in the [UI plan](ui-plan.md) and [UI roadmap](ui-roadmap.md). This work can proceed alongside editor and simulation development.
 
 ## 5. Prepare and validate a release
 
@@ -74,7 +74,9 @@ Use feedback from the first complete workflow to prioritize broader component/mo
 
 - Which operating systems are supported at launch?
 - Does the initial file experience use standalone documents or a project container?
+  *(Default kept at UH0, 2026-11-23, in [ui-plan.md](ui-plan.md) `UQ3`: standalone `.omnia` files, one sheet each; Home's "Projects" are folders.)*
 - What autosave, crash recovery, and file compatibility guarantees are required?
+  *(Default kept at UH0, 2026-11-23, in [ui-plan.md](ui-plan.md) `UQ5`, `UD8`, `UD9`: autosave recovery copies are on by default every 60 s, and there is no file compatibility promise before stage 5.)*
 
 *(Answered 2026-11-23 in [sim-plan.md](sim-plan.md) `SD1`–`SD4`: both `ngspice` and `RIS-C` build in parallel from S1; v1 covers `OP`, `TRAN`, `AC`, `DC`, analog core passives/sources/semiconductors/op-amp, and Oscilloscope, Multimeter, Bode Plotter, and Results panel; finer defaults `SQ1`–`SQ10` await `HS1`.)*
 

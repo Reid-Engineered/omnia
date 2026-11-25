@@ -54,7 +54,7 @@ In scope:
 - An optional maze router, only if a measurement asks for it (section 9).
 
 Out of scope: simulation, netlists, external file formats, buses, hierarchical connectors, a
-preferences window, persistence of preferences, label position locking, and every rendering
+preferences window and persistence of preferences (provided by [ui-plan.md](ui-plan.md) UD14), label position locking, and every rendering
 choice the canvas plan already made. Stroke weight (Q1, K5) and junction dots (D2, K6) are
 unchanged: section 4 records the related design considerations and adds no rendering work.
 
@@ -374,7 +374,9 @@ label is never merged away.
 ### WD12 Preferences. DECIDED
 
 - `WiringPrefs` is a plain struct in `schematic-doc` with the WK10 defaults. `SheetCanvas` owns
-  one. Nothing is persisted and there is no settings window; both are out of scope.
+  one. Persistence and a settings surface are out of scope here and are provided by
+  [ui-plan.md](ui-plan.md) UD14. `WiringPrefs` is unchanged; the shell builds it through the
+  checked constructor and applies it with `SheetCanvas::set_wiring_prefs`.
 - A command carries the policy it was built with (`FollowPolicy`), so redo replays the same
   decision even if a preference changed in between.
 - W1.1 clarification (2026-11-16): `Default` follows WK10 as answered at HW1 (W0.2):
