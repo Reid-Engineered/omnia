@@ -655,3 +655,89 @@ fn empty_doc_and_zero_pin_part() {
     assert_eq!(c.part_pin_rows(row).len(), 0);
     assert_eq!(c.net_of_pin(p, 0), None);
 }
+
+/// CD18 / CK1 / CK13: two unnumbered pins on a legacy part tie at the pin-number step so world
+/// geometry decides the anchor before stored pin index.
+#[test]
+fn unnumbered_pins_order_by_geometry_before_stored_index() {
+    let symbols = SymbolLibrary::builtin();
+    let mut doc = Doc::new();
+    // Place a resistor with 4 stored pins: pins 2 and 3 have no library pin metadata (resistor
+    // has only 2 pins in the library). Put stored index 3 to the left of stored index 2 and join
+    // them with a wire.
+    let sym = symbols.by_name("Resistor-IEEE-Standard").unwrap();
+    let p2_pos = Pt { x: 4 * STEP, y: 0 };
+    let p3_pos = Pt { x: 2 * STEP, y: 0 };
+    let change = doc
+        .apply(Command::PlacePart {
+            part: Part {
+                symbol: sym,
+                at: Pt::ZERO,
+                orient: Orient::IDENTITY,
+                designator: Arc::from("U9"),
+                value: Arc::from("legacy"),
+            },
+            local_pins: vec![Pt { x: -2 * STEP, y: 0 }, Pt { x: 0, y: 0 }, p2_pos, p3_pos],
+            local_bounds: Rect::new(
+                Pt {
+                    x: -2 * STEP,
+                    y: -STEP,
+                },
+                Pt {
+                    x: 4 * STEP,
+                    y: STEP,
+                },
+            )
+            .unwrap(),
+        })
+        .unwrap();
+    let [ItemId::Part(part)] = change.added[..] else {
+        panic!()
+    };
+    add_wire(&mut doc, p2_pos, p3_pos);
+
+    let circuit = Circuit::build(&doc, &symbols);
+    let net_row = circuit.net_of_pin(part, 2).expect("pin 2 net").row();
+    assert_eq!(
+        circuit.net_of_pin(part, 3).expect("pin 3 net").row(),
+        net_row
+    );
+    // Pin index 3 is at x = 2*STEP, left of pin index 2 at x = 4*STEP, so index 3 is anchor.
+    assert_eq!(circuit.net_pins(net_row), &[(part, 3), (part, 2)]);
+    assert_eq!(circuit.net_key(net_row), &CircuitKey::Pin { part, pin: 3 });
+    assert_eq!(circuit.net_display_name(net_row), "N(U9#3)");
+}
+
+/// Section 12: out-of-range pin indices (including `u32::MAX` on a part with nonzero pin offset)
+/// return `None` without overflowing or panicking.
+#[test]
+fn out_of_range_pin_queries_do_not_overflow_or_panic() {
+    let symbols = SymbolLibrary::builtin();
+    let mut doc = Doc::new();
+    let _r1 = place_symbol(
+        &mut doc,
+        &symbols,
+        "Resistor-IEEE-Standard",
+        Pt { x: 0, y: 0 },
+        Orient::IDENTITY,
+        "R1",
+        "1k",
+    );
+    let r2 = place_symbol(
+        &mut doc,
+        &symbols,
+        "Resistor-IEEE-Standard",
+        Pt { x: 6 * STEP, y: 0 },
+        Orient::IDENTITY,
+        "R2",
+        "1k",
+    );
+
+    let circuit = Circuit::build(&doc, &symbols);
+    // r2 has a nonzero pin range start (pins 2..4); u32::MAX would overflow range.start + pin_index
+    // if evaluated eagerly.
+    assert_eq!(circuit.pin_row(r2, 2), None);
+    assert_eq!(circuit.pin_row(r2, u32::MAX), None);
+    assert_eq!(circuit.net_of_pin(r2, 2), None);
+    assert_eq!(circuit.net_of_pin(r2, u32::MAX), None);
+}

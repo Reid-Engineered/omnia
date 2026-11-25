@@ -164,14 +164,7 @@ pub(crate) struct PinSortKey<'a> {
 impl PinSortKey<'_> {
     pub(crate) fn cmp_cd18(&self, other: &Self) -> Ordering {
         cmp_natural(self.designator, other.designator)
-            .then_with(|| {
-                cmp_pin_number(
-                    self.pin_number,
-                    self.pin_index,
-                    other.pin_number,
-                    other.pin_index,
-                )
-            })
+            .then_with(|| cmp_pin_number(self.pin_number, other.pin_number))
             .then_with(|| (self.at.x, self.at.y).cmp(&(other.at.x, other.at.y)))
             .then_with(|| self.symbol.raw().cmp(&other.symbol.raw()))
             .then_with(|| self.value.as_bytes().cmp(other.value.as_bytes()))
@@ -195,15 +188,15 @@ impl PinSortKey<'_> {
     }
 }
 
-/// Compares pin numbers in natural order, with a deterministic fallback when a legacy part lacks
-/// library pin metadata (CK13).
+/// Compares pin numbers in natural order (CD18). Two pins without library pin metadata tie at the
+/// pin-number step so geometry and the remaining CD18 tie-breakers decide before stored pin index.
 #[inline]
-fn cmp_pin_number(a_num: Option<&str>, a_idx: u32, b_num: Option<&str>, b_idx: u32) -> Ordering {
+fn cmp_pin_number(a_num: Option<&str>, b_num: Option<&str>) -> Ordering {
     match (a_num, b_num) {
         (Some(a), Some(b)) => cmp_natural(a, b),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
-        (None, None) => a_idx.cmp(&b_idx),
+        (None, None) => Ordering::Equal,
     }
 }
 
@@ -280,13 +273,22 @@ pub(crate) fn format_wire_net_name(wire: WireId, out: &mut String) {
     let _ = write!(out, "N(wire:{})", wire.0);
 }
 
+/// Returns `true` if `s` is one of the fixed `lines/1` record tags (section 9.2).
+#[inline]
+fn is_line_record_tag(s: &str) -> bool {
+    matches!(
+        s,
+        "#" | "=" | "P" | "N" | "A" | "M" | "E" | "F" | "S" | "+" | "."
+    )
+}
+
 /// Returns `true` if `s` can be written bare as a CK9 compound-field string component
-/// (`[A-Za-z0-9_+-]{1,64}` and not the continuation tag `+`).
+/// (`[A-Za-z0-9_+-]{1,64}` and not a section 9.2 record tag).
 #[inline]
 pub(crate) fn is_ck9_bare_component(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 64
-        && s != "+"
+        && !is_line_record_tag(s)
         && s.bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'+' | b'-'))
 }
@@ -376,13 +378,25 @@ mod tests {
         assert_eq!(buf, r#"N("A.B".C)"#);
 
         format_pin_net_name("A", Some("B.C"), 0, &mut buf);
-        assert_eq!(buf, r#"N(A."B.C")"#);
+        // "A" is a section 9.2 record tag (Alias), so CK9 quotes it too.
+        assert_eq!(buf, r#"N("A"."B.C")"#);
+
+        format_pin_net_name("X", Some("B.C"), 0, &mut buf);
+        assert_eq!(buf, r#"N(X."B.C")"#);
 
         format_pin_net_name("R3", None, 1, &mut buf);
         assert_eq!(buf, "N(R3#1)");
 
         format_pin_net_name("", Some("1"), 0, &mut buf);
         assert_eq!(buf, r#"N("".1)"#);
+
+        // CK9 / section 9.2: every reserved record tag must be quoted in both components.
+        for tag in ["#", "=", "P", "N", "A", "M", "E", "F", "S", "+", "."] {
+            format_pin_net_name(tag, Some("1"), 0, &mut buf);
+            assert_eq!(buf, format!(r#"N("{tag}".1)"#));
+            format_pin_net_name("R1", Some(tag), 0, &mut buf);
+            assert_eq!(buf, format!(r#"N(R1."{tag}")"#));
+        }
 
         format_wire_net_name(WireId(7), &mut buf);
         assert_eq!(buf, "N(wire:7)");

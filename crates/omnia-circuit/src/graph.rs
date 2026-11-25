@@ -740,7 +740,7 @@ impl Circuit {
     pub fn pin_row(&self, part: PartId, pin_index: u32) -> Option<PinRow> {
         let part_row = self.part_row(part)?;
         let range = self.part_pin_ranges[part_row.index()];
-        (pin_index < range.len).then_some(PinRow(range.start + pin_index))
+        (pin_index < range.len).then(|| PinRow(range.start + pin_index))
     }
 
     #[inline]

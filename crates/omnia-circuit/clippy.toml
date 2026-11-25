@@ -19,6 +19,7 @@ disallowed-methods = [
     { path = "std::collections::HashSet::symmetric_difference", reason = "CINV10: hash-set iteration order is non-deterministic" },
     { path = "std::collections::HashSet::intersection", reason = "CINV10: hash-set iteration order is non-deterministic" },
     { path = "std::collections::HashSet::union", reason = "CINV10: hash-set iteration order is non-deterministic" },
+    { path = "std::iter::IntoIterator::into_iter", reason = "CINV10: prevents HashMap/HashSet::into_iter() (for-loops over deterministic collections remain allowed)" },
 ]
 
 disallowed-types = [

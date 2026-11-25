@@ -361,7 +361,7 @@ as their stored text (PD6's `raw`) and never emit floating-point numbers.
 
 - Document ids map to dense `u32` rows; columns are stored separately (struct of arrays).
 - Net membership is compressed sparse rows: an offset array and one flat pin array, each net's
-  slice sorted by (part id, pin index). A lookup is two loads and a contiguous slice, and output
+  slice sorted in CD18 pin order. A lookup is two loads and a contiguous slice, and output
   order is deterministic by construction. Slices an edit grows move to the end behind a
   free list; compaction runs at idle, never inside `update`, once free space passes a quarter
   of the array.
@@ -938,7 +938,7 @@ impl Circuit {
     pub fn build(doc: &Doc, symbols: &SymbolLibrary) -> Circuit;                 // CB2
     pub fn update(&mut self, doc: &Doc, symbols: &SymbolLibrary, change: &Change); // CB1
     pub fn revision(&self) -> u64;
-    pub fn net_of_pin(&self, part: PartId, pin: u32) -> NetRef;                   // CB3
+    pub fn net_of_pin(&self, part: PartId, pin: u32) -> Option<NetRef>;           // CB3
     pub fn resolve(&self, handle: &str, allowed: Kinds) -> Resolution<'_>;        // CB3, CK13
                                          // Resolution::{One(Entity), Many(&[Entity]), None(near)}
     pub fn render(&self, req: &ViewRequest, budget: usize, format: Format,

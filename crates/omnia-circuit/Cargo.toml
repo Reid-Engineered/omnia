@@ -16,3 +16,9 @@ smallvec = "1"
 
 [dev-dependencies]
 proptest = "1"
+
+[lints.clippy]
+# CD7 / CINV10: reject all hash-map and hash-set iteration paths, including `for` loops.
+iter_over_hash_type = "deny"
+disallowed_methods = "deny"
+disallowed_types = "deny"

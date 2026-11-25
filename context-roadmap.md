@@ -156,7 +156,8 @@ HC2 + (A3.1 or A4.1) -> C5.1          HC2 + measured split tails (CQ7) -> C5.2
 ### C1.2 Crate and circuit graph · done
 - Lane: circuit · Depends: C0.2 · Read: CD1, CD7, CK1 to CK4, CINV1, CINV10; section 11.2
 - Owns: `crates/omnia-circuit/` (`Cargo.toml`, `clippy.toml`, `src/lib.rs`, `src/graph.rs`,
-  `src/keys.rs`, `src/intern.rs`); the crate-list line of the INV12 test in `xtask/src/main.rs`
+  `src/keys.rs`, `src/intern.rs`, `tests/graph.rs`, `tests/invariants.rs`); the crate-list line of
+  the INV12 test in `xtask/src/main.rs`
 - Do: `Circuit::build`: rows, CSR membership, interner, net keys and display names, roles from
   the symbol library (`unspecified` until C3.1).
 - Done when: CINV1 and CINV10 pass; keys and names match CK1 and CK2 on CTC-key-01 and
@@ -529,3 +530,15 @@ evidence (CK4), contiguous-buffer string interner (`StrId` intentionally non-`Or
 key form, CD18 tie-breakers, CK3/CK4/CK7, and `cmp_natural` total-order proptests. Minor API
 note: `Circuit::net_of_pin` returns `Option<NetRef>` instead of panicking on unknown ids.
 Nothing measured; rule-1 scan clean.
+
+2026-11-25 C1.2 review fixes — addressed all PR #128 independent review findings: denied
+`clippy::iter_over_hash_type` in `Cargo.toml` and `std::iter::IntoIterator::into_iter` in
+`clippy.toml` with a `clippy-driver` negative-control test covering `iter()`, `for`, and
+`into_iter()` on `HashMap`/`HashSet` (CINV10); quoted all section 9.2 record tags in CK9
+compound-field components; fixed `cmp_pin_number` so two unnumbered pins tie at the pin-number
+step before geometry and stored index (CD18, CK13); replaced eager `then_some` addition in
+`Circuit::pin_row` with lazy `then` to prevent `u32::MAX` overflow panics; updated
+`context-plan.md` CD7 (CD18 pin order in CSR) and section 12 (`net_of_pin -> Option<NetRef>`);
+expanded `tests/invariants.rs` to randomized insertion permutations with explicit id remapping
+and duplicate designators (CINV3, CINV10); listed `tests/graph.rs` and `tests/invariants.rs` in
+C1.2's **Owns**. Nothing measured; rule-1 scan clean.
