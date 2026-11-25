@@ -224,6 +224,9 @@ Lane separation (AGENTS.md) stays strict:
 
 - A multi-part library pack is `<name>.olib`, a ZIP archive with `manifest.toml` at its root
   plus `parts/<category>/<id>.toml` and `models/...` — mirroring `library/` directly.
+- The v1 `manifest.toml` requires `schema = 1`, a `PK2` pack `id`, and the strings `name`
+  and `version`. It permits optional strings `description` (up to `PK7`'s description cap)
+  and `license`. Unknown fields are refused. This is the manifest shape used in `PS1`.
 - One internal `LibrarySource` trait reads both unpacked directories and ZIP archives, so built-in
   parts, local user folders, `.opart` files and `.olib` packs go through the exact same parser,
   validator and hasher.
@@ -425,6 +428,10 @@ Rules enforced by the schema parser (`#[serde(deny_unknown_fields)]`):
 
 - Supported parameter kinds: `real` (with optional `unit`, `min`, `max`), `int` (`i64`), `bool`,
   `enum` (closed list of string variants), `text` (bounded by `PK7`).
+- In TOML every parameter supplies a `default`. Real defaults and bounds are strings parsed
+  with `PK4`. Integer defaults and bounds are TOML integers. Boolean defaults are TOML
+  booleans. Text and enum defaults are strings, and an enum's `variants` lists its allowed
+  strings. A numeric default must lie within its declared bounds.
 - **Finite reals with defined equality** (amended 2026-11-23, owner-delegated, review of #85):
   a real is stored as `ParamValue::Real { raw: Arc<str>, value: FiniteF64 }`. `raw` is the user's
   text as entered; `value` is the `PK4` parse. `FiniteF64` can only be built from a finite
