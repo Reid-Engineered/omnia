@@ -264,7 +264,10 @@ when input switches between mouse and keyboard (UG17). The owner accepted that r
 
 - Every user command is a GPUI action. Shell actions are declared in `omnia-app`
   (`actions.rs`); canvas tool actions are declared by T5.2 in `omnia-canvas` (`keymap.rs`) and
-  re-used, never redeclared.
+  re-used, never redeclared: `ACTIONS` names `omnia_canvas::keymap::{Rotate, MirrorHorizontal,
+  MirrorVertical, PlaceWire}` as its action types, and `default_bindings()` generates their R,
+  X, Y and W bindings once from `ACTIONS`. The shell registers nothing from `keymap.rs`;
+  `standalone_bindings()` there is for a canvas without the shell only.
 - One static table, `ACTIONS: &[ActionSpec]`, describes every action once: id, label, icon,
   menu placement, default bindings with their key context, and two functions of `CommandState`,
   `enabled` and `checked`. Menus, toolbar buttons, tooltips ("Save (Ctrl+S)") and the Help >
@@ -282,8 +285,8 @@ when input switches between mouse and keyboard (UG17). The owner accepted that r
   - `Shell` and `Workspace` bind every modifier shortcut: Ctrl+N, O, S, Shift+S, W, Q, Z, Y,
     Shift+Z, X, C, V, A, comma, =, -, 0, 1, 2, 3, Tab, Shift+Tab, F1, F10, F11, and Delete.
   - `Sheet` binds the single-key canvas tools from T5.2 (R, X, Y, W, and Space as T1.5 and
-    T6.2 use it), so typing in a text field can never rotate a part. Esc is not bound in `Sheet`
-    (UQ14): the shell's `NavCancel` handler calls `SheetCanvas::cancel` (T5.2) when the sheet is
+    T6.2 use it), each once, from `ACTIONS`, so typing in a text field can never rotate a
+    part. Esc is not bound in `Sheet` (UQ14): the shell's `NavCancel` handler calls `SheetCanvas::cancel` (T5.2) when the sheet is
     the key target.
   - The focused `TextField` handles its editing keystrokes before keymap dispatch (Ctrl+A,
     Ctrl+C, Ctrl+V, Ctrl+X, arrows, Backspace, Delete). It consumes document undo and redo
@@ -779,7 +782,10 @@ pub struct CanvasEdits { pub undo: bool, pub delete: bool, pub clipboard: bool, 
 pub enum SimState { Unavailable, Idle, Running, Paused, Failed }
 
 // ---- keymap.rs ----
-pub fn default_bindings() -> Vec<gpui::KeyBinding>;        // shell + omnia_canvas::keymap::bindings()
+pub fn default_bindings() -> Vec<gpui::KeyBinding>;        // each ACTIONS binding once, the canvas tool
+                                                           // actions' R, X, Y, W included (UD3), plus the
+                                                           // Nav* and FocusMenuBar bindings UD3 keeps beside
+                                                           // them; nothing from omnia_canvas::keymap
 pub fn conflicts(bindings: &[gpui::KeyBinding]) -> Vec<(String, String, String)>; // UINV4
 
 // ---- document.rs ----
@@ -859,9 +865,27 @@ impl Doc {
     pub fn net_count(&self) -> usize;         // Connectivity::net_count
 }
 // omnia-canvas
-pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged,
-                       History { can_undo: bool, can_redo: bool, cursor: u64 } } // History: new
+pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged }
+// T5.2 delivered history as its own event type, so existing exhaustive `CanvasEvent` matches build.
+// The gesture owner (OverlayView) and SheetCanvas emit history sealed in opaque CanvasHistoryEvent
+// (no public fields, no accessors, opaque Debug); subscribe only through SheetCanvas::subscribe_history
+// (canvas-plan.md section 9 contract C1–C4):
+//   C1: An OverlayView belongs to one window and stays mounted there while attached to SheetCanvas;
+//       remounting it in another window is unsupported.
+//   C2: Outside omnia-canvas, history reaches a subscriber only through subscribe_history, which
+//       delivers only if the canvas still shows the event's document at delivery time.
+//   C3: A SheetCanvas does not subscribe to its own history (subscribe_history also avoids
+//       re-borrowing the canvas so it never double-borrow panics).
+//   C4: Every gesture commits once to its stamped document/revision while holding capture, or ends
+//       with no edit, releasing its capture in the window it took it in and never a newer capture.
+pub struct CanvasHistory { pub doc: u64, pub can_undo: bool, pub can_redo: bool, pub cursor: u64 } // new;
+// doc: the source document's key (omnia_canvas::tool::doc_key).
 impl SheetCanvas {
+    pub fn subscribe_history<T: 'static>(canvas: &Entity<Self>, cx: &mut Context<T>,
+        on_history: impl FnMut(&mut T, &CanvasHistory, &mut Context<T>) + 'static) -> Subscription; // T5.2
+    pub fn is_current_history(&self, history: &CanvasHistory) -> bool;              // T5.2
+    pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>); // T5.2: gesture owner
+    pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;  // T5.2
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>);            // T5.2
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>);            // T5.2
     pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.3
@@ -946,7 +970,7 @@ wiring files stay authoritative for their ids.
 | canvas-plan.md section 1 | Out of scope "the libraries UI" stays; add "the application shell: see ui-plan.md". |
 | canvas-plan.md section 9, crate list | `omnia-app` line: "window shell; see ui-plan.md section 10". |
 | canvas-plan.md section 9, `Doc` | Add `history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count` (UD6, UD18). |
-| canvas-plan.md section 9, `SheetCanvas` | Add `undo`, `redo`, `delete_selection`, `select_all`, `cut`, `copy`, `paste`, `zoom_step`, `set_wiring_prefs`, `focus_handle`; `Tool::ZoomArea`; `CanvasEvent::History`. |
+| canvas-plan.md section 9, `SheetCanvas` | Add `undo`, `redo`, `delete_selection`, `select_all`, `cut`, `copy`, `paste`, `zoom_step`, `set_wiring_prefs`, `focus_handle`; `Tool::ZoomArea`; the event type `CanvasHistory`. |
 | canvas-plan.md INV6 | "and `omnia-app` (ui-plan.md UINV1)". |
 | canvas-plan.md INV11 | "A hover, selection or drag-move change, or any shell-only change (ui-plan.md UINV2), does not notify `SheetView`." |
 | canvas-plan.md Q2 | Note UQ6's shell overlay tokens in the same file. |
@@ -955,7 +979,7 @@ wiring files stay authoritative for their ids.
 | canvas-roadmap.md T4.3 | Also provide `select_all` (Ctrl+A is bound by the shell, UD3). |
 | canvas-roadmap.md T4.5 | Also provide `zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation), used by View and the toolbar. |
 | canvas-roadmap.md T5.1 | Follow-up for doc lane task U2.1: `history_cursor`, `can_undo`, `can_redo`. |
-| canvas-roadmap.md T5.2 | Bind R, X, Y, W (and T1.5/T6.2's Space) in key context `Sheet`; provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and `CanvasEvent::History`. The keymap conflict test (UINV4) covers T5.2's bindings. |
+| canvas-roadmap.md T5.2 | Declare the R, X, Y and W actions, resolved in key context `Sheet`; the shell's `ACTIONS` table reuses those types and generates each binding once (UD3). Provide `SheetCanvas::cancel`, which the shell's Esc (`NavCancel`, UD3, UQ14) calls. Ctrl+Z, Ctrl+Y and Del are bound by the shell (UD3), whose handlers call `SheetCanvas::undo`, `redo` and (T5.3) `delete_selection`; T5.2 provides `undo`, `redo` and the event type `CanvasHistory`, emitted sealed in opaque `CanvasHistoryEvent` after every effective edit, a drag's commit included, by the one gesture owner (`OverlayView`) that `SheetCanvas` delegates to while both show one document. Shell preconditions follow canvas-plan.md section 9 contract C1–C4: an `OverlayView` belongs to one window and is not remounted in another (C1); the shell subscribes only through `SheetCanvas::subscribe_history`, which drops an event for a document the canvas no longer shows at delivery (C2); a `SheetCanvas` does not subscribe to its own history (C3); and every gesture either commits once to its stamped document/revision while holding capture or ends with no edit and releases its capture in the window it took it in (C4). The keymap conflict test (UINV4) covers the combined shell keymap. |
 | canvas-roadmap.md T5.3 | Provide `delete_selection`. |
 | canvas-roadmap.md T7.1 | Ctrl+C, Ctrl+X, Ctrl+V are bound by the shell; T7.1 provides `cut`, `copy`, `paste`. |
 | canvas-roadmap.md T7.3 | The floating frame, drag, stacking and focus come from ui-roadmap.md U4.1. T7.3 supplies the animated stub content inside that frame, keeps `bench run --script pan --instrument` and its done-when; `instrument_host.rs` holds the content only. |

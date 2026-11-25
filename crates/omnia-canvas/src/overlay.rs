@@ -26,16 +26,17 @@ use crate::{
         zoom_to_selection_camera,
     },
     input::wheel_factor,
-    selection::{RubberBand, SelectionState, SelectionUpdate},
+    selection::{RubberBand, SelectionState, SelectionUpdate, hit_tolerance_nm, item_exists},
     sheet::{SheetDocument, SheetView},
     snap_px::{centered_square, device_rect, round_device, stroke_device_px, to_device},
+    tool::{self, ToolHost, ToolMachine, ToolRequest},
 };
 use gpui::{
-    App, AppContext, Bounds, ContentMask, Context, DispatchPhase, Edges, Element, ElementId,
-    Entity, EventEmitter, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
-    InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style, StyleRefinement,
-    Styled, WeakEntity, Window, div, fill, point, px, relative,
+    AnyWindowHandle, App, AppContext, Bounds, ContentMask, Context, DispatchPhase, Edges, Element,
+    ElementId, Entity, EventEmitter, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior,
+    HitboxId, Hsla, InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style,
+    StyleRefinement, Styled, Subscription, WeakEntity, Window, div, fill, point, px, relative,
 };
 use omnia_doc::{
     Change, Doc, ItemId, NetId, Pt, Rect, Wire, WireId,
@@ -244,16 +245,52 @@ pub(super) fn paint_quad_scoped(
     run_gpui(scope, || window.paint_quad(quad));
 }
 
+/// T5.2: pointer capture taken by an [`OverlayView`] gesture (contract C4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CaptureRecord {
+    window: AnyWindowHandle,
+    hitbox: HitboxId,
+    generation: u64,
+}
+
+/// T5.2: every path that ends a drag, rubber band, or pending press routes through
+/// [`OverlayView::end_gesture`] with one of these reasons (contract C4).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum GestureEndReason<'a> {
+    Release {
+        event: &'a MouseUpEvent,
+        owns_capture: bool,
+    },
+    Cancel,
+    FreshPress,
+    LostCapture,
+    MoveOffSheet,
+    ToolChange(tool::Tool),
+    WindowDeactivated,
+    DocumentSwitch,
+    Attach,
+    Detach,
+    Drop,
+    CancelRubberBand,
+    HistoryStep,
+}
+
 /// Transient interactive overlay above a `.cached()` [`SheetView`] (D7, INV11).
 ///
 /// Owns hover, selection, net-highlight, and rubber-band state, registers one sheet-wide hitbox
 /// for pointer picking and rubber-band drags, and repaints only itself on transient updates.
+///
+/// Precondition (contract C1): an `OverlayView` belongs to exactly one window and is mounted in
+/// that window for as long as it is attached to a [`crate::SheetCanvas`]. Remounting it in
+/// another window is unsupported.
 pub struct OverlayView {
     doc: Entity<Doc>,
     sheet: Entity<CachedSheet>,
     camera: Camera,
     theme: &'static Theme,
     state: SelectionState,
+    /// T5.2: the tool state machine; it sees the pointer before selection does.
+    tools: ToolMachine,
     net_highlight: NetHighlight,
     focus: FocusHandle,
     viewport: Bounds<Pixels>,
@@ -261,6 +298,15 @@ pub struct OverlayView {
     renders: u64,
     paints: Rc<Cell<u64>>,
     scope: Option<Rc<dyn OverlayPaintScope>>,
+    /// T5.2: the capture record set when a gesture takes capture, cleared only in `end_gesture`.
+    capture: Rc<Cell<Option<CaptureRecord>>>,
+    /// T5.2: counts the gestures that took a capture. GPUI reuses a hitbox id within a frame,
+    /// so a deferred release compares this, not the id, to know no newer gesture captured.
+    capture_gen: Rc<Cell<u64>>,
+    /// T5.2: ends a pointer-held gesture when the window deactivates (set at first render).
+    activation: Option<Subscription>,
+    /// T5.2: the one window this overlay belongs to (contract C1), recorded at first render.
+    window_handle: Option<AnyWindowHandle>,
 }
 
 impl EventEmitter<OverlayEvent> for OverlayView {}
@@ -291,6 +337,7 @@ impl OverlayView {
             camera,
             theme,
             state: SelectionState::from_prefs(prefs),
+            tools: ToolMachine::with_prefs(*prefs),
             net_highlight: NetHighlight::new(),
             focus: cx.focus_handle(),
             viewport: Bounds::default(),
@@ -298,6 +345,10 @@ impl OverlayView {
             renders: 0,
             paints: Rc::new(Cell::new(0)),
             scope: None,
+            capture: Rc::new(Cell::new(None)),
+            capture_gen: Rc::new(Cell::new(0)),
+            activation: None,
+            window_handle: None,
         }
     }
 
@@ -399,6 +450,7 @@ impl OverlayView {
 
     /// Applies wiring preferences (`select_mode`) to the overlay (WD8, WD12; never notifies `SheetView`).
     pub fn apply_prefs(&mut self, prefs: &WiringPrefs, cx: &mut Context<Self>) {
+        self.tools.set_prefs(*prefs);
         if self.state.apply_prefs(prefs) {
             cx.notify();
         }
@@ -454,14 +506,13 @@ impl OverlayView {
 
     /// Cancels an active rubber-band drag (never notifies `SheetView`).
     pub fn cancel_rubber_band(&mut self, cx: &mut Context<Self>) {
-        if self.state.cancel_rubber_band() {
-            cx.notify();
-        }
+        self.end_gesture(GestureEndReason::CancelRubberBand, None, Some(cx));
     }
 
     /// Sets a visible rubber band directly in world coordinates for golden rendering or
     /// programmatic preview (never notifies `SheetView`, keeps `select_mode()` unchanged, and
-    /// does not capture the pointer).
+    /// does not capture the pointer). If a pointer-driven rubber band is currently live, it is
+    /// ended through [`Self::end_gesture`] first so its capture is released (C4).
     pub fn set_rubber_band_preview(
         &mut self,
         anchor: Pt,
@@ -469,6 +520,9 @@ impl OverlayView {
         mode: SelectMode,
         cx: &mut Context<Self>,
     ) {
+        if self.state.is_rubber_banding() {
+            self.end_gesture(GestureEndReason::CancelRubberBand, None, Some(cx));
+        }
         if self.state.set_rubber_band_preview(anchor, current, mode) {
             cx.notify();
         }
@@ -559,6 +613,9 @@ impl OverlayView {
     /// Replaces the displayed document, clearing transient state and invalidating both views.
     pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>) {
         self.anim = None;
+        // T5.2: no gesture survives a document swap; end_gesture releases its capture (C4).
+        self.end_gesture(GestureEndReason::DocumentSwitch, None, Some(cx));
+        debug_assert!(self.state.rubber_band().is_none());
         let document = SheetDocument::new(doc.clone());
         self.doc = doc;
         let had_selection = !self.state.selection().is_empty();
@@ -605,18 +662,270 @@ impl OverlayView {
         }
     }
 
+    fn take_capture(&self, hitbox: HitboxId, window: &mut Window) {
+        if let Some(recorded) = self.window_handle
+            && recorded != window.window_handle()
+        {
+            debug_assert_eq!(
+                recorded,
+                window.window_handle(),
+                "C1: OverlayView captured in a window other than its recorded one"
+            );
+            return;
+        }
+        let generation = self.capture_gen.get() + 1;
+        self.capture_gen.set(generation);
+        window.capture_pointer(hitbox);
+        self.capture.set(Some(CaptureRecord {
+            window: window.window_handle(),
+            hitbox,
+            generation,
+        }));
+    }
+
+    /// T5.2: the single gesture-end and capture-release path (contract C4).
+    ///
+    /// Every path that ends a drag, rubber band, or pending press routes here; no other code
+    /// clears those fields or releases capture. Releases immediately when `window` is the
+    /// capture's window, or otherwise via a deferred update against the recorded window handle
+    /// guarded by the capture generation so a newer capture is never released.
+    pub(crate) fn end_gesture(
+        &mut self,
+        reason: GestureEndReason<'_>,
+        window: Option<&mut Window>,
+        mut cx: Option<&mut Context<Self>>,
+    ) -> bool {
+        let handled = match reason {
+            GestureEndReason::Release {
+                event,
+                owns_capture,
+            } => {
+                if self.tools.routes_pointer() {
+                    let world = self.camera.screen_to_world(to_f64(event.position));
+                    let outcome = if self.tools.is_dragging() && !owns_capture {
+                        self.tools.pointer_lost()
+                    } else {
+                        self.tools.pointer_up(world, event.modifiers.alt)
+                    };
+                    let release = outcome.release;
+                    if let Some(cx) = cx.as_deref_mut() {
+                        tool::finish(self, outcome, cx);
+                    }
+                    release
+                } else if self.state.is_rubber_banding() {
+                    if owns_capture {
+                        if let Some(cx) = cx.as_deref_mut() {
+                            let update =
+                                self.state.mouse_up(self.doc.read(cx), &self.camera, event);
+                            self.apply_update(update, cx);
+                        } else {
+                            self.state.cancel_rubber_band();
+                        }
+                    } else {
+                        let was_visible = self.state.cancel_rubber_band();
+                        if was_visible && let Some(cx) = cx.as_deref_mut() {
+                            cx.notify();
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            GestureEndReason::Cancel => {
+                let mut outcome = self.tools.cancel();
+                if !outcome.handled {
+                    let had_band = self.state.is_rubber_banding();
+                    let was_visible = self.state.cancel_rubber_band();
+                    if had_band || was_visible {
+                        outcome.handled = true;
+                        outcome.preview_changed = true;
+                    }
+                }
+                let handled = outcome.handled;
+                if let Some(cx) = cx.as_deref_mut() {
+                    tool::finish(self, outcome, cx);
+                }
+                handled
+            }
+            GestureEndReason::CancelRubberBand => {
+                let held = self.state.is_rubber_banding();
+                let was_visible = self.state.cancel_rubber_band();
+                if (was_visible || held)
+                    && let Some(cx) = cx.as_deref_mut()
+                {
+                    cx.notify();
+                }
+                was_visible || held
+            }
+            GestureEndReason::FreshPress => {
+                let had_band = self.state.is_rubber_banding();
+                let band_vis = if had_band {
+                    self.state.cancel_rubber_band()
+                } else {
+                    false
+                };
+                let outcome = self.tools.pointer_lost();
+                if (outcome.preview_changed || band_vis || had_band)
+                    && let Some(cx) = cx.as_deref_mut()
+                {
+                    cx.notify();
+                }
+                outcome.handled || had_band || band_vis
+            }
+            GestureEndReason::LostCapture
+            | GestureEndReason::MoveOffSheet
+            | GestureEndReason::WindowDeactivated => {
+                let had_band = self.state.is_rubber_banding();
+                let band_vis = if had_band {
+                    self.state.cancel_rubber_band()
+                } else {
+                    false
+                };
+                let mut outcome = self.tools.pointer_lost();
+                outcome.preview_changed |= band_vis;
+                let handled = outcome.handled || had_band || band_vis;
+                if let Some(cx) = cx.as_deref_mut() {
+                    tool::finish(self, outcome, cx);
+                }
+                handled
+            }
+            GestureEndReason::ToolChange(tool) => {
+                let had_band = self.state.is_rubber_banding();
+                let band_vis = self.state.cancel_rubber_band();
+                let mut outcome = self.tools.set_tool(tool);
+                outcome.preview_changed |= band_vis || had_band;
+                let handled = outcome.handled;
+                if let Some(cx) = cx.as_deref_mut() {
+                    tool::finish(self, outcome, cx);
+                }
+                handled
+            }
+            GestureEndReason::DocumentSwitch
+            | GestureEndReason::Attach
+            | GestureEndReason::Detach => {
+                let had_band = self.state.is_rubber_banding();
+                let band_vis = self.state.cancel_rubber_band();
+                let mut outcome = self.tools.document_replaced();
+                outcome.preview_changed |= band_vis || had_band;
+                let handled = outcome.handled || had_band || band_vis;
+                if let Some(cx) = cx.as_deref_mut() {
+                    tool::finish(self, outcome, cx);
+                }
+                handled
+            }
+            GestureEndReason::Drop => {
+                self.state.cancel_rubber_band();
+                self.tools.document_replaced();
+                true
+            }
+            GestureEndReason::HistoryStep => {
+                let had_band = self.state.is_rubber_banding();
+                let band_vis = if had_band {
+                    self.state.cancel_rubber_band()
+                } else {
+                    false
+                };
+                let mut outcome = self.tools.cancel();
+                outcome.preview_changed |= band_vis || had_band;
+                let handled = outcome.handled || had_band || band_vis;
+                if let Some(cx) = cx.as_deref_mut() {
+                    tool::finish(self, outcome, cx);
+                }
+                handled
+            }
+        };
+
+        if !self.tools.is_dragging()
+            && !self.state.is_rubber_banding()
+            && let Some(record) = self.capture.take()
+        {
+            match window {
+                Some(window) if window.window_handle() == record.window => {
+                    if window.captured_hitbox() == Some(record.hitbox) {
+                        window.release_pointer();
+                    }
+                }
+                _ => {
+                    if let Some(cx) = cx {
+                        let capture_gen = self.capture_gen.clone();
+                        cx.defer(move |cx| {
+                            if capture_gen.get() != record.generation {
+                                return;
+                            }
+                            record
+                                .window
+                                .update(cx, |_, window, _| {
+                                    if window.captured_hitbox() == Some(record.hitbox) {
+                                        window.release_pointer();
+                                    }
+                                })
+                                .ok();
+                        });
+                    }
+                }
+            }
+        }
+
+        handled
+    }
+
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
         bounds: Bounds<Pixels>,
+        hitbox: HitboxId,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         self.viewport = bounds;
         self.camera.set_viewport(bounds);
+        // T5.2: a drag, band or pending press still live at a fresh press lost its release.
+        // End it immediately through `end_gesture` so its capture is released before the press
+        // runs (including a Shift-click while a band is live).
+        if self.tools.is_dragging()
+            || self.state.is_rubber_banding()
+            || matches!(self.tools.state(), tool::ToolState::Placing(p) if p.pressed)
+        {
+            self.end_gesture(GestureEndReason::FreshPress, Some(window), Some(cx));
+        }
+        // T5.2: the tool sees the press first; a press it leaves goes to selection.
+        let world = self.camera.screen_to_world(to_f64(event.position));
+        let outcome = self.tools.pointer_down(
+            self.doc.read(cx),
+            tool::doc_key(&self.doc),
+            world,
+            hit_tolerance_nm(&self.camera),
+            self.state.selection(),
+            event.modifiers.shift,
+        );
+        if outcome.handled {
+            if let tool::ToolState::Dragging(drag) = self.tools.state() {
+                // A press on an unselected item selects it; the drag then moves it alone.
+                let pressed = drag.pressed;
+                let mut update = SelectionUpdate {
+                    visual_changed: self.state.set_hovered(Some(pressed)),
+                    ..SelectionUpdate::default()
+                };
+                if !self.state.is_selected(pressed) && self.state.set_selection([pressed]) {
+                    update.selection_changed = true;
+                    update.visual_changed = true;
+                }
+                self.apply_update(update, cx);
+            }
+            let capture = tool::finish(self, outcome, cx).capture;
+            if capture {
+                self.take_capture(hitbox, window);
+            }
+            return capture;
+        }
         let update = self
             .state
             .mouse_down(self.doc.read(cx), &self.camera, event);
         self.apply_update(update, cx);
+        if update.started_drag {
+            self.take_capture(hitbox, window);
+        }
         update.started_drag
     }
 
@@ -624,9 +933,63 @@ impl OverlayView {
         &mut self,
         event: &MouseMoveEvent,
         bounds: Bounds<Pixels>,
+        owns_capture: bool,
+        hovered: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) {
         let scope = self.scope.clone();
+        if self.tools.routes_pointer() {
+            // T5.2: a gesture holds the pointer; hover and selection wait for it to end.
+            self.viewport = bounds;
+            self.camera.set_viewport(bounds);
+            let world = self.camera.screen_to_world(to_f64(event.position));
+            let left_held = event.pressed_button == Some(MouseButton::Left);
+            if self.tools.is_dragging() && (!owns_capture || !left_held) {
+                let reason = if hovered {
+                    GestureEndReason::LostCapture
+                } else {
+                    GestureEndReason::MoveOffSheet
+                };
+                run_gpui(scope.as_deref(), || {
+                    self.end_gesture(reason, Some(window), Some(cx));
+                });
+                return;
+            }
+            if !left_held && matches!(self.tools.state(), tool::ToolState::Placing(p) if p.pressed)
+            {
+                let reason = if hovered {
+                    GestureEndReason::LostCapture
+                } else {
+                    GestureEndReason::MoveOffSheet
+                };
+                run_gpui(scope.as_deref(), || {
+                    self.end_gesture(reason, Some(window), Some(cx));
+                });
+                if !hovered {
+                    return;
+                }
+            }
+            let outcome = self.tools.pointer_move(world, left_held);
+            run_gpui(scope.as_deref(), || {
+                tool::finish(self, outcome, cx);
+            });
+            return;
+        }
+        if self.state.is_rubber_banding() {
+            let left_held = event.pressed_button == Some(MouseButton::Left);
+            if !owns_capture || !left_held {
+                let reason = if hovered {
+                    GestureEndReason::LostCapture
+                } else {
+                    GestureEndReason::MoveOffSheet
+                };
+                run_gpui(scope.as_deref(), || {
+                    self.end_gesture(reason, Some(window), Some(cx));
+                });
+                return;
+            }
+        }
         let update = run_omnia(scope.as_deref(), || {
             self.viewport = bounds;
             self.camera.set_viewport(bounds);
@@ -636,14 +999,19 @@ impl OverlayView {
                 self.net_highlight
                     .sync(doc, self.state.hovered(), self.state.selection());
             }
+            // Allocation-free: the tool mirrors hover as Idle/Hovering (T5.2).
+            self.tools.hover(self.state.hovered());
             update
         });
         run_gpui(scope.as_deref(), || self.emit_and_notify(update, cx));
-        update.ended_drag
     }
 
     fn on_mouse_leave(&mut self, cx: &mut Context<Self>) {
+        if self.tools.routes_pointer() {
+            return;
+        }
         let update = self.state.mouse_leave();
+        self.tools.hover(self.state.hovered());
         self.apply_update(update, cx);
     }
 
@@ -651,18 +1019,94 @@ impl OverlayView {
         &mut self,
         event: &MouseUpEvent,
         bounds: Bounds<Pixels>,
+        owns_capture: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> bool {
+    ) {
         self.viewport = bounds;
         self.camera.set_viewport(bounds);
-        let update = self.state.mouse_up(self.doc.read(cx), &self.camera, event);
-        self.apply_update(update, cx);
-        update.ended_drag
+        self.end_gesture(
+            GestureEndReason::Release {
+                event,
+                owns_capture,
+            },
+            Some(window),
+            Some(cx),
+        );
     }
+}
+
+/// T5.2: the tool machine's view of the overlay (`tool::sheet_key_context`).
+impl ToolHost for OverlayView {
+    fn tools(&self) -> &ToolMachine {
+        &self.tools
+    }
+
+    fn tools_mut(&mut self) -> &mut ToolMachine {
+        &mut self.tools
+    }
+
+    fn tool_doc(&self) -> Entity<Doc> {
+        self.doc.clone()
+    }
+
+    fn preview_changed(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+    }
+
+    fn doc_changed(&mut self, change: &Change, cx: &mut Context<Self>) {
+        self.on_doc_change(change, cx);
+        // T5.2: each event names the document it came from, checked at delivery (C2).
+        let key = tool::doc_key(&self.doc);
+        let history = tool::CanvasHistory::of(key, self.doc.read(cx));
+        cx.emit(tool::CanvasHistoryEvent(history));
+        cx.emit(tool::CanvasEdit {
+            doc: key,
+            dirty: change.dirty,
+        });
+    }
+
+    fn request(&mut self, request: ToolRequest, cx: &mut Context<Self>) {
+        // T5.2: a click selects its item only on the document it was made on, and only if
+        // the item still exists there (another command may have deleted it mid-press).
+        if let ToolRequest::Click { item, base } = request
+            && tool::doc_key(&self.doc) == base.key
+            && item_exists(self.doc.read(cx), item)
+        {
+            self.set_selection([item], cx);
+        }
+    }
+}
+
+fn to_f64(p: gpui::Point<Pixels>) -> gpui::Point<f64> {
+    point(f64::from(p.x), f64::from(p.y))
 }
 
 impl Render for OverlayView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let current_window = window.window_handle();
+        if let Some(recorded) = self.window_handle {
+            if recorded != current_window {
+                debug_assert_eq!(
+                    recorded, current_window,
+                    "C1: OverlayView belongs to one window; remounting in another window is unsupported"
+                );
+                return div();
+            }
+        } else {
+            self.window_handle = Some(current_window);
+            // T5.2: a deactivated window may never deliver the release; end the gesture (C4).
+            self.activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.end_gesture(GestureEndReason::WindowDeactivated, Some(window), Some(cx));
+                }
+            }));
+            // T5.2: a dropped overlay releases the capture it still holds (C4).
+            cx.on_release_in(window, |this, window, _| {
+                this.end_gesture(GestureEndReason::Drop, Some(window), None);
+            })
+            .detach();
+        }
         self.renders += 1;
         if let Some(anim) = &self.anim {
             let (next_cam, finished) = anim.step(self.viewport, cx);
@@ -686,7 +1130,7 @@ impl Render for OverlayView {
                 });
             }
         }
-        div()
+        tool::sheet_key_context(div(), cx)
             .relative()
             .size_full()
             .track_focus(&self.focus)
@@ -701,9 +1145,11 @@ impl Render for OverlayView {
                 camera: self.camera.clone(),
                 theme: self.theme,
                 focus: self.focus.clone(),
-                dragging: self.state.is_rubber_banding(),
+                dragging: self.state.is_rubber_banding() || self.tools.is_dragging(),
                 paints: self.paints.clone(),
                 scope: self.scope.clone(),
+                capture: self.capture.clone(),
+                window_handle: current_window,
             })
     }
 }
@@ -719,6 +1165,8 @@ struct OverlayLayer {
     dragging: bool,
     paints: Rc<Cell<u64>>,
     scope: Option<Rc<dyn OverlayPaintScope>>,
+    capture: Rc<Cell<Option<CaptureRecord>>>,
+    window_handle: AnyWindowHandle,
 }
 
 impl Element for OverlayLayer {
@@ -779,6 +1227,14 @@ impl Element for OverlayLayer {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if window.window_handle() != self.window_handle {
+            debug_assert_eq!(
+                window.window_handle(),
+                self.window_handle,
+                "C1: OverlayView painted in a window other than its recorded one"
+            );
+            return;
+        }
         self.paints.set(self.paints.get() + 1);
 
         if let Some(overlay) = self.overlay.upgrade() {
@@ -801,8 +1257,18 @@ impl Element for OverlayLayer {
             });
         }
 
-        if self.dragging {
+        if self.dragging
+            && let Some(record) = self.capture.get()
+            && record.window == window.window_handle()
+            && window.captured_hitbox() == Some(record.hitbox)
+        {
+            // T5.2: move a capture this overlay still holds to the new hitbox. A capture GPUI
+            // dropped (any mouse-up clears it) is not reclaimed; the next event ends the gesture.
             window.capture_pointer(hitbox.id);
+            self.capture.set(Some(CaptureRecord {
+                hitbox: hitbox.id,
+                ..record
+            }));
         }
 
         let (overlay, hit, focus) = (self.overlay.clone(), hitbox.clone(), self.focus.clone());
@@ -818,26 +1284,45 @@ impl Element for OverlayLayer {
             // bubble listener (`elements/div.rs`). When already focused this is a no-op.
             window.focus(&focus, cx);
             let started = overlay
-                .update(cx, |overlay, cx| overlay.on_mouse_down(event, bounds, cx))
+                .update(cx, |overlay, cx| {
+                    overlay.on_mouse_down(event, bounds, hit.id, window, cx)
+                })
                 .unwrap_or(false);
             if started {
-                window.capture_pointer(hit.id);
                 cx.stop_propagation();
             }
         });
 
         let (overlay, hit) = (self.overlay.clone(), hitbox.clone());
+        let capture = self.capture.clone();
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble {
                 return;
             }
-            if hit.is_hovered(window) {
-                let ended = overlay
-                    .update(cx, |overlay, cx| overlay.on_mouse_move(event, bounds, cx))
-                    .unwrap_or(false);
-                if ended && window.captured_hitbox() == Some(hit.id) {
-                    window.release_pointer();
-                }
+            let owns = capture.get().is_some_and(|rec| {
+                rec.window == window.window_handle() && window.captured_hitbox() == Some(rec.hitbox)
+            });
+            let hovered = hit.is_hovered(window);
+            let left_held = event.pressed_button == Some(MouseButton::Left);
+            // T5.2: a drag or band that lost its capture, or a pending Place press whose release
+            // was lost, ends wherever the pointer is, before hover routing could treat it as
+            // leaving the sheet.
+            let lost = overlay
+                .read_with(cx, |overlay, _| {
+                    (!owns && (overlay.tools.is_dragging() || overlay.state.is_rubber_banding()))
+                        || (!left_held
+                            && matches!(
+                                overlay.tools.state(),
+                                tool::ToolState::Placing(p) if p.pressed
+                            ))
+                })
+                .unwrap_or(false);
+            if hovered || lost {
+                overlay
+                    .update(cx, |overlay, cx| {
+                        overlay.on_mouse_move(event, bounds, owns, hovered, window, cx);
+                    })
+                    .ok();
             } else {
                 overlay
                     .update(cx, |overlay, cx| overlay.on_mouse_leave(cx))
@@ -845,17 +1330,21 @@ impl Element for OverlayLayer {
             }
         });
 
-        let (overlay, hit) = (self.overlay.clone(), hitbox.clone());
+        let overlay = self.overlay.clone();
+        let capture = self.capture.clone();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                 return;
             }
-            let ended = overlay
-                .update(cx, |overlay, cx| overlay.on_mouse_up(event, bounds, cx))
-                .unwrap_or(false);
-            if ended && window.captured_hitbox() == Some(hit.id) {
-                window.release_pointer();
-            }
+            // GPUI clears the capture only after the listeners run, so ownership is current.
+            let owns = capture.get().is_some_and(|rec| {
+                rec.window == window.window_handle() && window.captured_hitbox() == Some(rec.hitbox)
+            });
+            overlay
+                .update(cx, |overlay, cx| {
+                    overlay.on_mouse_up(event, bounds, owns, window, cx);
+                })
+                .ok();
         });
     }
 }

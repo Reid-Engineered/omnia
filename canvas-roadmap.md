@@ -526,9 +526,24 @@ of the `canvas` lane.
 - Note (W0.3): T5.1's code is merged without `follow: FollowPolicy`; [wiring-roadmap.md](wiring-roadmap.md)
   W2.2 adds `FollowPolicy` to `Move` and `Reorient` (WD3; until W2.2, every run detaches).
 
-### T5.2 Tools and keys · todo
+### T5.5 Combined move and reorient command · todo
+- Lane: doc · Depends: T5.1 · Read: D2, INV4, INV10, wiring-plan.md WD3
+- Owns: `crates/omnia-doc/src/command.rs` and `follow.rs` (`Isometry`, its `apply`, and the
+  follow-planner and command handling of the composed variant only)
+- Do: one command (an `Isometry` that composes a translation with a reorientation, for
+  example `Transform { delta, pivot, by }`) planned once against the original sheet, with wire
+  follow per `FollowPolicy` and normalisation run once, so a move plus R, X or Y commits as one
+  well-formed edit.
+- Done when: property tests show the combined command equals the expected final geometry,
+  round-trips under undo with ids (INV4) and keeps INV10; the PR #125 review case (stationary
+  wire (0,0)–(2,0), selected wire (2,2)–(4,2) dragged down two grid steps and rotated) commits
+  and undoes exactly.
+
+### T5.2 Tools and keys · done
 - Lane: canvas · Depends: T4.6, T5.1 · Read: plan section 5, INV5
-- Owns: `crates/omnia-canvas/src/tool.rs`, `keymap.rs`
+- Owns: `crates/omnia-canvas/src/tool.rs`, `keymap.rs`; `crates/omnia-canvas/src/overlay.rs`
+  and `input.rs` (tool routing, key context, gesture-owner and history hooks only; widened by
+  the coordinator 2026-11-24, review finding 7)
 - Do: the tool state machine with states idle, hovering, dragging, placing, wiring; GPUI
   actions and key bindings for R, X, Y, W, Esc, Del, Ctrl+Z, Ctrl+Y. Check how actions and
   key contexts work in `crates/gpui/docs/key_dispatch.md` at the pinned revision.
@@ -536,7 +551,7 @@ of the `canvas` lane.
   mouse-up, one undo reverts the whole drag, and Esc mid-drag leaves the revision unchanged.
 
 ### T5.3 Place, move, rotate, mirror, delete · todo
-- Lane: canvas · Depends: T5.2 · Read: D7, K2; parts-plan.md §14 (placement provider)
+- Lane: canvas · Depends: T5.2, T5.5 · Read: D7, K2; parts-plan.md §14 (placement provider)
 - Owns: `crates/omnia-canvas/src/tool/place.rs`, `tool/move_.rs`, `overlay/ghosts.rs`; the
   placement-provider setter on `SheetCanvas` in `crates/omnia-canvas/src/input.rs`
 - Do: place a part from `Tool::Place`; drag-move a selection with ghosts in the overlay and
@@ -2178,3 +2193,77 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `docs/measurements/T4.6/orion-2026-11-24-remote/`. Follow-up for the
                        file owner: a Linux-only unused-variable warning in
                        `crates/omnia-bench/src/spike/shell_cache.rs:1657`.
+
+2026-11-24 T5.2 done — `tool.rs`: a pure `ToolMachine` over `Tool { Select, Wire, Place, Label }`
+                       with the states idle, hovering, dragging, placing and wiring. In Select
+                       a left press on an item drags the selection, or that item alone. The
+                       drag holds preview state only. On release it commits one `Move` by the
+                       grid-snapped delta, with Alt at release choosing the follow policy
+                       (WK3). The commit is stamped with its document (`DocStamp`: entity key
+                       and revision at the press) and applies only there; so is a zero-delta
+                       `Click`, which also requires the item to still exist. Placing needs a
+                       press and release in the Place tool; wiring records cursor and start
+                       for T6.2. `keymap.rs`: actions `canvas::{Rotate, MirrorHorizontal,
+                       MirrorVertical, PlaceWire, Cancel, Delete, Undo, Redo}` in key context
+                       `Sheet`. The shell reuses the first four in its `ACTIONS` table and
+                       generates R, X, Y and W once from it. `standalone_bindings()` (those
+                       four plus Esc, Del, Ctrl+Z, Ctrl+Y) is for a canvas without the shell.
+                       One gesture owner: `OverlayView` holds the only machine. `SheetCanvas`
+                       delegates tool, cancel, undo and redo to the overlay attached with
+                       `set_overlay`, only while both show one document; `set_doc` and
+                       `set_overlay` keep them aligned. History is emitted as the opaque event
+                       type `CanvasHistoryEvent` (not a `CanvasEvent` variant, which would break
+                       exhaustive matches in omnia-app and omnia-bench), carrying a `CanvasHistory`
+                       payload with the source `doc` key after every effective edit, delivered to
+                       subscribers only through `SheetCanvas::subscribe_history`. Supported-use
+                       contract (canvas-plan section 9, mirrored in ui-plan §10/§14; INV5 and
+                       INV11 remain primary): (C1) an `OverlayView` belongs to one window and
+                       stays mounted there while attached to `SheetCanvas` — remounting it in a
+                       second window is unsupported by contract (`debug_assert!` in debug, no-op
+                       in release on paint or capture); (C2) outside `omnia-canvas`, history
+                       reaches subscribers only through `SheetCanvas::subscribe_history`, which
+                       drops events for a document no longer shown at delivery, and both
+                       `OverlayView` and `SheetCanvas` emit history sealed in opaque
+                       `CanvasHistoryEvent` (no public fields, no accessors, opaque `Debug`);
+                       (C3) a `SheetCanvas` does not subscribe to its own history, and
+                       `subscribe_history` reads the canvas's current document key from a shared
+                       `Rc<Cell<Option<u64>>>` so self-subscription never triggers a GPUI
+                       double-borrow panic; (C4) every gesture (drag, rubber band, pending
+                       place/wire press) either commits once to its own document at its stamped
+                       revision while holding capture or ends with no edit, releasing its capture
+                       in the window it took it in and never a newer capture. Structural change:
+                       `OverlayView` records `{ window, hitbox, generation }` at capture time and
+                       routes every gesture-end path (release, Esc/cancel, fresh press, lost
+                       capture, pointer move off the sheet, tool change, window deactivation,
+                       `set_doc(Some)` and `set_doc(None)`, attach, replace, detach and drop of
+                       the overlay, Shift-click while a band is live, `cancel_rubber_band`,
+                       `set_rubber_band_preview`, and undo/redo) through one
+                       `OverlayView::end_gesture` function — the only code that clears drag, band,
+                       pending-press or capture state or calls `window.release_pointer()`
+                       (synchronously when given the capture's window, else via a
+                       generation-guarded deferred update against the recorded window handle).
+                       INV5 tests pass, pure and through simulated GPUI input: the revision holds
+                       until mouse-up, one undo reverts the drag, and Esc commits nothing. INV11:
+                       the zero-paint `cancel()` case, plus a real-Esc case bounding sheet paints
+                       by observed modality switches at the Esc (UQ15, UG17), with zero paints on
+                       the release. 125 canvas unit tests + 2 `compile_fail` doctests (including
+                       raw-subscription opacity, self-subscription, Shift-click with live band,
+                       `set_doc(Some)` + unmount, `set_rubber_band_preview` over a live band,
+                       deferred-release generation guard, and a 47-case table-driven C4 test
+                       covering every end path).
+                       Deviations: the coordinator widened Owns on 2026-11-24 (review finding
+                       7) to the tool-routing, key-context, gesture-owner and history hooks of
+                       `overlay.rs` and `input.rs`. R, X and Y during a drag are ignored until
+                       T5.5, which the coordinator added on 2026-11-24 (owner-delegated
+                       sign-off) because a `Move` then `Reorient` `Batch` normalises in between
+                       and can refuse a valid result. `SheetCanvas::tool` and `tool_state`
+                       take `&App`. `Tool::ZoomArea` is not added. Plans updated: canvas-plan
+                       section 9 and G17 (now a cross-reference to UG17 and UQ15), wiring-plan
+                       at `Isometry`, ui-plan UD3 and sections 10 and 14, ui-roadmap U5.1.
+                       omnia-app code is unchanged. For T5.3: `ToolRequest::{Place,
+                       ReorientSelection, DeleteSelection}` reach the overlay's
+                       `ToolHost::request` and are ignored for now. For U5.1: replace the
+                       placeholder action types, subscribe via `subscribe_history`, and run
+                       UINV4 over the combined shell keymap. Checks run locally on Windows:
+                       `cargo fmt --all --check`, both clippy commands, `cargo test
+                       --workspace` and `cargo deny check`.

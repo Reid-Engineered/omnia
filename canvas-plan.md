@@ -206,6 +206,7 @@ longer matches the source, stop and record it in the roadmap log.
 | G14 | Glyph atlas entries are keyed by font, glyph, font size, scale factor and one of 4 horizontal subpixel offsets. `paint_glyph` always uses a unit transform. | `window.rs` `paint_glyph`; `text_system.rs` `SUBPIXEL_VARIANTS_X` | Bucket font sizes (K11). Text cannot be rotated. |
 | G15 | `text_system.shape_line(text, font_size, runs, force_width) -> ShapedLine`; `ShapedLine::paint(origin, line_height, align, align_width, window, cx)`. Both Linux (`cosmic_text` `Hinting::Disabled`) and Windows (`DirectWrite` natural measuring) produce size-linear glyph offsets. | `text_system.rs`; `text_system/line.rs` | Cache one base-size `ShapedLine` per label (K8) and scale linearly to the active K11 bucket on direct glyph emission (D6). |
 | G16 | Apps start with `gpui_platform::application().run(..)`; `gpui_platform::headless()` also exists. `window.request_animation_frame()` notifies the current view on the next frame. | `gpui_platform/src/gpui_platform.rs`; `window.rs` | Entry point and animation tick. |
+| G17 | See ui-plan.md UG17 (input-modality refresh) and UQ15's answer: at most one `SheetView` paint per switch between pointer and keyboard input, counted apart from canvas-caused paints. | ui-plan.md UG17 | Tests that press a key after pointer input bound those paints by the switches (T5.2). |
 
 Not settled by reading, so measured in the spike: whether the sprite atlas ever evicts,
 whether a mirrored sprite matrix renders correctly, what `ShapedLine::paint` allocates, and
@@ -504,6 +505,8 @@ pub enum Command {
     AddLabel(Label),
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
     Reorient { items: Vec<ItemId>, pivot: Pt, by: Orient, follow: FollowPolicy }, // follow added in W2.2 (WD3)
+    // T5.5 adds a combined move-and-reorient command (a composed `Isometry`, wiring-plan.md),
+    // planned once, so a drag with R, X or Y commits as one edit.
     DragSegment { wire: WireId, offset: i32 }, // wiring-plan.md WD7 (W3.2); nm, signed
     Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false)
     SetText { item: ItemId, field: TextField, text: Arc<str> },
@@ -664,7 +667,67 @@ impl Camera {
     pub fn scale(&self) -> f64;
     pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
-pub enum Tool { Select, Wire, Place(SymbolId), Label }
+pub enum Tool { Select, Wire, Place(SymbolId), Label }      // T5.2 (tool.rs); ZoomArea (ui-plan.md) not yet
+// T5.2 (tool.rs): pure tool state machine. One gesture owner, OverlayView, holds it; the owner
+// applies a gesture's one Command only to the document and revision it was planned on (INV5).
+pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture), Placing(PlaceGesture),
+                     Wiring(WireGesture) }
+pub struct DocStamp { pub key: u64, pub revision: u64 }   // key: doc_key(&Entity<Doc>)
+pub fn doc_key(doc: &Entity<Doc>) -> u64;
+pub struct DragGesture { pub items: Vec<ItemId>, pub pressed: ItemId, pub anchor: Pt,
+                         pub current: Pt, pub base: DocStamp }
+impl DragGesture {
+    pub fn delta(&self) -> Pt;                           // snapped to GRID_NM (T5.3: anchor pin)
+    pub fn command(&self, follow: FollowPolicy) -> Option<Command>; // one Move, or None
+}
+// R, X and Y during a drag are ignored until T5.5's combined move-and-reorient command: Move
+// then Reorient in a Batch normalises in between and can refuse a valid result.
+pub struct PlaceGesture { pub symbol: SymbolId, pub at: Option<Pt>, pub orient: Orient,
+                          pub pressed: bool }    // only a press made in Place places
+pub struct WireGesture { pub start: Option<Pt>, pub cursor: Option<Pt> } // T6.2 extends
+pub enum ToolRequest { Click { item: ItemId, base: DocStamp }, Place { symbol: SymbolId, at: Pt, orient: Orient },
+                       ReorientSelection(Orient), DeleteSelection } // carried out by T5.3
+pub struct Commit { pub command: Command, pub base: DocStamp }
+pub struct ToolOutcome { pub handled: bool, pub preview_changed: bool, pub capture: bool,
+                         pub release: bool, pub commit: Option<Commit>,
+                         pub request: Option<ToolRequest> }
+pub struct ToolMachine { /* tool, state, WiringPrefs, hit scratch */ }
+impl ToolMachine {
+    pub fn with_prefs(prefs: WiringPrefs) -> Self;
+    pub fn tool(&self) -> Tool;
+    pub fn state(&self) -> &ToolState;
+    pub fn set_tool(&mut self, tool: Tool) -> ToolOutcome;  // cancels any gesture first
+    pub fn document_replaced(&mut self) -> ToolOutcome;     // drops every gesture, keeps the tool
+    pub fn pointer_lost(&mut self) -> ToolOutcome;          // window deactivated
+    pub fn hover(&mut self, item: Option<ItemId>) -> ToolOutcome;
+    pub fn pointer_down(&mut self, doc: &Doc, doc_key: u64, at: Pt, tolerance: i32,
+                        selection: &[ItemId], shift: bool) -> ToolOutcome; // ends a stale drag
+    pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome;
+    pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome; // alt: WK3 at commit
+    pub fn cancel(&mut self) -> ToolOutcome;              // Esc; never a commit
+    pub fn reorient(&mut self, by: Orient) -> ToolOutcome; // R, X, Y
+    pub fn delete(&mut self) -> ToolOutcome;              // Del
+}
+// T5.2: history emitted by the gesture owner (OverlayView) after every effective edit (commit,
+// undo, redo; later placement and delete) and re-emitted by SheetCanvas while both show one
+// document. A separate event type rather than a `CanvasEvent` variant, so existing exhaustive
+// matches build.
+pub struct CanvasHistory { pub doc: u64, pub can_undo: bool, pub can_redo: bool, pub cursor: u64 }
+pub struct CanvasEdit { pub doc: u64, pub dirty: Option<Rect> } // OverlayView -> SheetCanvas repaint (D7)
+// doc: the source document's doc_key. Events queued in one GPUI update arrive after any
+// document switch in it, so SheetCanvas delivers or re-emits one only if doc is the document
+// it shows at delivery, through the owner still attached and showing it. Both OverlayView and
+// SheetCanvas emit history sealed in `CanvasHistoryEvent` (opaque outside omnia-canvas: no
+// public fields, no accessors, opaque Debug); `SheetCanvas::subscribe_history` is the only way
+// outside omnia-canvas to receive a `CanvasHistory` (contract C2):
+pub struct CanvasHistoryEvent(/* opaque */);              // readable only via subscribe_history
+// T5.2 (keymap.rs): actions in namespace `canvas`, resolved in key context "Sheet" (UD3). The
+// shell reuses Rotate, MirrorHorizontal, MirrorVertical and PlaceWire in its ACTIONS table and
+// generates their R, X, Y and W bindings once from it; it registers nothing from keymap.rs.
+pub const SHEET_CONTEXT: &str;                            // "Sheet"
+actions!(canvas, [Rotate, MirrorHorizontal, MirrorVertical, PlaceWire, Cancel, Delete, Undo, Redo]);
+pub fn standalone_bindings() -> Vec<KeyBinding>;          // r, x, y, w, escape, delete, ctrl-z,
+                                                          // ctrl-y; for a canvas without the shell
 pub struct CanvasStatus { pub cursor: Option<Pt>, pub grid: i32, pub zoom: f32 } // None: pointer not yet
                                                      // over the sheet; grid: drawn K10 step (T1.5)
 pub enum CanvasEvent { Status(CanvasStatus), SelectionChanged }
@@ -743,6 +806,15 @@ impl OverlayView {
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
     pub fn zoom_step(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>);
+    // T5.2 (tool.rs): the gesture owner. The `Sheet` key context on the focus root; the tool sees
+    // the pointer first; set_document and window deactivation drop gestures; emits CanvasHistory
+    // and CanvasEdit after every effective edit.
+    pub fn tool(&self) -> Tool;
+    pub fn tool_state(&self) -> &ToolState;
+    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>); // cancels gesture and band
+    pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool; // tool, then band
+    pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
+    pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
 }
 // T4.5 (camera_anim.rs): 150 ms ease-out view animations driven by `request_animation_frame` (K13, G16).
 pub const VIEW_ANIM_DURATION: Duration;                    // 150 ms (K13)
@@ -773,7 +845,24 @@ impl SheetCanvas {
     pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>);
     pub fn fit_doc(&mut self, doc: &Doc, cx: &mut Context<Self>);
     pub fn zoom_to_selection_in(&mut self, doc: &Doc, selection: &[ItemId], cx: &mut Context<Self>) -> bool;
-    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);
+    // T5.2 (tool.rs): tool calls delegate to the attached gesture owner only while it shows this
+    // canvas's document; set_doc and set_overlay keep the two aligned (set_doc(None) detaches),
+    // and a detached or replaced owner drops its gestures and releases its capture.
+    // Without an owner there are no tools, and undo/redo act on the canvas's own document.
+    // Emits CanvasHistory.
+    pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>);
+    pub fn overlay(&self) -> Option<Entity<OverlayView>>;
+    pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);   // T5.2
+    pub fn tool(&self, cx: &App) -> Tool;                             // T5.2
+    pub fn tool_state(&self, cx: &App) -> ToolState;                  // T5.2
+    pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool; // T5.2: Esc (UQ14)
+    pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.2: emits CanvasHistory
+    pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.2: emits CanvasHistory
+    pub fn focus_handle(&self) -> &FocusHandle;                       // T5.2 (UINV12)
+    pub fn subscribe_history<T: 'static>(canvas: &Entity<Self>, cx: &mut Context<T>,
+        on_history: impl FnMut(&mut T, &CanvasHistory, &mut Context<T>) + 'static)
+        -> Subscription;              // T5.2: drops an event for a document no longer shown
+    pub fn is_current_history(&self, history: &CanvasHistory) -> bool; // T5.2
     // T5.3: a shell-supplied placement provider (see parts-plan.md section 14) builds the
     // Command used at Tool::Place(symbol) commit for the snapped point and chosen orientation.
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
@@ -784,6 +873,7 @@ impl SheetCanvas {
 }
 impl Render for SheetCanvas { /* ... */ }
 impl EventEmitter<CanvasEvent> for SheetCanvas {}
+impl EventEmitter<CanvasHistoryEvent> for SheetCanvas {}
 
 // ---- omnia-bench ----
 pub struct CountingAlloc;                                  // #[global_allocator]
@@ -797,6 +887,27 @@ pub fn generate(sheet: StressSheet, seed: u64) -> Doc;
 // All built-in symbols/orientations, K2 pin-lattice placements; unit-lattice wire segments
 // extend from pins in rays (no end on a segment interior, INV2).
 ```
+
+### Supported-use contract (`OverlayView` and `SheetCanvas`, T5.2)
+
+Preconditions of the public canvas API. INV5 and INV11 remain the primary invariants.
+
+- **C1.** An `OverlayView` belongs to exactly one window. It is mounted in that window for as
+  long as it is attached to a `SheetCanvas`. Remounting it in another window is unsupported
+  (`debug_assert!` in debug builds, no-op in release on paint or capture).
+- **C2.** Outside `omnia-canvas`, history reaches a subscriber only through
+  `SheetCanvas::subscribe_history`. That helper delivers an event only if the canvas still
+  shows the event's document at delivery time. `CanvasHistoryEvent` is opaque outside the
+  crate (no public fields, no accessors, opaque `Debug`); a raw subscription yields nothing
+  usable.
+- **C3.** A `SheetCanvas` does not subscribe to its own history. (`subscribe_history` reads the
+  canvas's current document key from a shared `Rc<Cell<Option<u64>>>` rather than re-borrowing
+  the emitting entity, so self-subscription never triggers a GPUI double-borrow panic.)
+- **C4.** Every gesture (drag, rubber band, pending place/wire press) ends by exactly one of:
+  commit to its own document at its stamped revision while it still holds capture, or end with
+  no edit. Either way it releases the capture it took, in the window it took it in, and never
+  a newer capture. Enforced structurally by a `{ window, hitbox, generation }` capture record
+  and a single `OverlayView::end_gesture` path.
 
 Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 

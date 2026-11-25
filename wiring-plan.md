@@ -570,6 +570,7 @@ pub fn plan_segment_drag(doc: &Doc, wire: WireId, offset: i32,
 
 // ---- follow.rs ----
 pub enum Isometry { Translate(Pt), Reorient { pivot: Pt, by: Orient } }
+// canvas-roadmap.md T5.5 adds a variant composing a translation with a reorientation.
 pub enum RunFate { Translated, Rerouted, Detached }
 pub struct FollowPlan { pub remove: Vec<WireId>, pub add: Vec<Wire>,
                         pub labels: Vec<(LabelId, Pt)>, pub fates: Vec<(Pt, RunFate)> }

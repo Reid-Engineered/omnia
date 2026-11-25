@@ -3,10 +3,12 @@
 pub mod camera;
 pub mod camera_anim;
 pub mod input;
+pub mod keymap;
 pub mod overlay;
 pub mod selection;
 pub mod sheet;
 pub mod snap_px;
+pub mod tool;
 
 pub use camera::Camera;
 pub use camera_anim::{
