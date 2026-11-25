@@ -742,9 +742,10 @@ envelope parser preserving raw `params.arguments` so valid JSON like `1e400` rea
 `notifications/initialized` readiness in the handshake era (allowing only `ping` beforehand);
 update `omnia_inspect_sheet` prompt (and re-bless `prompt-inspect-sheet.out.jsonl`) to use item
 geometry for free wire ends and report all single-pin nets; defer `Era::Stateless` commitment
-until opening method validation succeeds (and validate `capabilities`/`clientInfo` on `initialize`
-before committing `Era::Handshake`), return `-32602` on opening `server/discover` without `_meta`
-while staying undecided, make `skip_json_value` fully iterative (safe on 10,000-deep lines) and
-bound `has_duplicate_keys` recursion depth, and publish `omnia://schema/symbols` and
-`omnia://schema/symbol` (section 9.3); corrected test count note (25 total in `omnia-cli`: 10 in
-`main.rs`, 15 in `mcp.rs`). Nothing measured; rule-1 scan clean.
+until opening method and `CallToolRequestParams` wire-shape validation succeeds (keeping the
+`-32022` era-lock exception strictly for `server/discover`), require `capabilities` and
+`clientInfo` on `initialize` before committing `Era::Handshake`, return `-32602` on opening
+`server/discover` without `_meta` while staying undecided, make `skip_json_value` fully iterative
+(safe on 10,000-deep lines) and bound `has_duplicate_keys` recursion depth, and publish
+`omnia://schema/symbols` and `omnia://schema/symbol` (section 9.3); corrected test count note (25
+total in `omnia-cli`: 10 in `main.rs`, 15 in `mcp.rs`). Nothing measured; rule-1 scan clean.

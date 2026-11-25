@@ -531,9 +531,13 @@ impl<'a> Server<'a> {
                     return out;
                 }
                 if version != STATELESS_VERSION {
-                    // Section 10.5: a well-formed probe with an unsupported revision selects
-                    // the stateless era so the client stays in it and retries with 2026-07-28.
-                    self.era = Era::Stateless;
+                    // Section 10.5: a well-formed `server/discover` probe with an unsupported
+                    // revision selects the stateless era so the client stays in it and retries
+                    // with 2026-07-28; other methods do not commit the era before method
+                    // validation.
+                    if method == "server/discover" {
+                        self.era = Era::Stateless;
+                    }
                     out.push(format_error(
                         Some(id),
                         &RpcError::unsupported_protocol_version(version),
@@ -716,25 +720,25 @@ impl<'a> Server<'a> {
                 ));
             }
         };
-        if let Some(caps) = params.get("capabilities")
-            && !caps.is_object()
-        {
-            return Err(RpcError::invalid_params("`capabilities` must be an object"));
+        if !params.get("capabilities").is_some_and(Value::is_object) {
+            return Err(RpcError::invalid_params(
+                "missing or non-object `capabilities`",
+            ));
         }
-        if let Some(client_info) = params.get("clientInfo") {
-            let Some(ci) = client_info.as_object() else {
-                return Err(RpcError::invalid_params("`clientInfo` must be an object"));
-            };
-            if !ci.get("name").is_some_and(Value::is_string) {
-                return Err(RpcError::invalid_params(
-                    "`clientInfo.name` must be a string",
-                ));
-            }
-            if !ci.get("version").is_some_and(Value::is_string) {
-                return Err(RpcError::invalid_params(
-                    "`clientInfo.version` must be a string",
-                ));
-            }
+        let Some(ci) = params.get("clientInfo").and_then(Value::as_object) else {
+            return Err(RpcError::invalid_params(
+                "missing or non-object `clientInfo`",
+            ));
+        };
+        if !ci.get("name").is_some_and(Value::is_string) {
+            return Err(RpcError::invalid_params(
+                "`clientInfo.name` must be a string",
+            ));
+        }
+        if !ci.get("version").is_some_and(Value::is_string) {
+            return Err(RpcError::invalid_params(
+                "`clientInfo.version` must be a string",
+            ));
         }
 
         let mut res = JsonObj::new();
@@ -835,15 +839,31 @@ impl<'a> Server<'a> {
             return;
         };
 
-        // Tool name is valid and recognized: if this is the opening stateless request, commit
-        // the stateless era now before invoking the service and emitting notifications.
+        // MCP CallToolRequestParams requires `arguments`, when present, to be a JSON object.
+        // Check the raw slice (not `params.get("arguments")`, which the overflow-number fallback
+        // may have masked to `null`) before committing the stateless era.
+        let raw_args = match extract_arguments_slice(raw_line) {
+            Some(slice) => {
+                if slice.iter().find(|&&b| !is_json_space(b)) != Some(&b'{') {
+                    out.push(format_error(
+                        Some(id),
+                        &RpcError::invalid_params("`arguments` must be a JSON object"),
+                    ));
+                    return;
+                }
+                slice
+            }
+            None => b"{}",
+        };
+
+        // Tool name and CallToolRequestParams wire shape are valid: if this is the opening
+        // stateless request, commit the stateless era now before invoking the service.
         if commit_stateless {
             self.era = Era::Stateless;
         }
 
         // Decode tool arguments strictly from their exact raw JSON slice so duplicate keys,
         // floats and AK2/AK3/AK4 match `omnia call` and `omnia serve` byte for byte (AD1).
-        let raw_args = extract_arguments_slice(raw_line).unwrap_or(b"{}");
         let decoded = Request::from_arguments(op, raw_args);
 
         // Snapshot open document revisions before the call to detect state changes for
@@ -2889,12 +2909,16 @@ mod tests {
             assert_eq!(replies[1]["result"], json!({}));
         }
 
-        // Missing protocolVersion on initialize also negotiates 2025-11-25 (section 10.5).
+        // Missing protocolVersion on initialize also negotiates 2025-11-25 (section 10.5) when
+        // required capabilities and clientInfo are supplied.
         let replies = run_mcp_lines(&[json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": {}
+            "params": {
+                "capabilities": {},
+                "clientInfo": { "name": "omnia-test", "version": "1.0.0" }
+            }
         })]);
         assert_eq!(replies[0]["result"]["protocolVersion"], json!("2025-11-25"));
     }
@@ -3050,7 +3074,7 @@ mod tests {
         // Duplicate key and float inside tool arguments must fail as structured tool errors
         // (isError: true, code: invalid_request), matching `Request::from_arguments`.
         let input = concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"omnia-test\",\"version\":\"1.0.0\"}}}\n",
             "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"omnia_new\"}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"omnia_inspect\",\"arguments\":{\"doc_id\":\"d1\",\"doc_id\":\"d1\",\"include\":[\"summary\"]}}}\n",
@@ -3547,7 +3571,7 @@ mod tests {
     #[test]
     fn a1_8_ad1_outer_parser_preserves_raw_arguments_for_overflow_numbers_and_inspect_prompt() {
         let input = concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"omnia-test\",\"version\":\"1.0.0\"}}}\n",
             "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"omnia_new\",\"arguments\":{}}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"omnia_nets\",\"arguments\":{\"doc_id\":\"d1\",\"at\":[1e400,0]}}}\n",
@@ -3583,21 +3607,62 @@ mod tests {
 
     #[test]
     fn a1_8_method_and_handshake_validation_precede_era_selection_and_deep_nesting_is_safe() {
-        // Opening stateless `subscriptions/listen` with valid `_meta` but missing `notifications`
-        // returns -32602 without locking Era::Stateless; malformed `initialize` (`capabilities`
-        // non-object or `clientInfo` missing `version`) returns -32602 without locking
-        // Era::Handshake; a subsequent valid `initialize` succeeds.
+        // Invalid opening stateless requests (missing `notifications` on supported or unsupported
+        // revision; non-object `arguments` on `tools/call`) and invalid `initialize` requests
+        // (missing or malformed `capabilities` / `clientInfo`) must all leave the process era
+        // undecided so a subsequent valid `initialize` still succeeds.
         let replies = run_mcp_lines(&[
             stateless_req(1, "subscriptions/listen", json!({})),
             json!({
                 "jsonrpc": "2.0",
                 "id": 2,
+                "method": "subscriptions/listen",
+                "params": {
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2099-01-01",
+                        "io.modelcontextprotocol/clientCapabilities": {}
+                    }
+                }
+            }),
+            stateless_req(
+                3,
+                "tools/call",
+                json!({ "name": "omnia_new", "arguments": [1, 2] }),
+            ),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 4,
                 "method": "initialize",
-                "params": { "protocolVersion": "2025-11-25", "capabilities": 42 }
+                "params": { "protocolVersion": "2025-11-25" }
             }),
             json!({
                 "jsonrpc": "2.0",
-                "id": 3,
+                "id": 5,
+                "method": "initialize",
+                "params": { "protocolVersion": "2025-11-25", "capabilities": {} }
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "clientInfo": { "name": "omnia-test", "version": "1.0.0" }
+                }
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": 42,
+                    "clientInfo": { "name": "omnia-test", "version": "1.0.0" }
+                }
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 8,
                 "method": "initialize",
                 "params": {
                     "protocolVersion": "2025-11-25",
@@ -3607,18 +3672,23 @@ mod tests {
             }),
             handshake_init("2025-11-25"),
             initialized_notif(),
-            json!({ "jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": { "uri": "omnia://schema/symbols" } }),
-            json!({ "jsonrpc": "2.0", "id": 5, "method": "resources/read", "params": { "uri": "omnia://schema/symbol" } }),
+            json!({ "jsonrpc": "2.0", "id": 9, "method": "resources/read", "params": { "uri": "omnia://schema/symbols" } }),
+            json!({ "jsonrpc": "2.0", "id": 10, "method": "resources/read", "params": { "uri": "omnia://schema/symbol" } }),
         ]);
 
         assert_eq!(replies[0]["error"]["code"], json!(-32602));
-        assert_eq!(replies[1]["error"]["code"], json!(-32602));
+        assert_eq!(replies[1]["error"]["code"], json!(-32022));
         assert_eq!(replies[2]["error"]["code"], json!(-32602));
-        assert_eq!(replies[3]["result"]["protocolVersion"], json!("2025-11-25"));
+        assert_eq!(replies[3]["error"]["code"], json!(-32602));
+        assert_eq!(replies[4]["error"]["code"], json!(-32602));
+        assert_eq!(replies[5]["error"]["code"], json!(-32602));
+        assert_eq!(replies[6]["error"]["code"], json!(-32602));
+        assert_eq!(replies[7]["error"]["code"], json!(-32602));
+        assert_eq!(replies[8]["result"]["protocolVersion"], json!("2025-11-25"));
 
         // Verify published `omnia://schema/symbols` and `omnia://schema/symbol` schemas (§9.3).
         let symbols_schema: Value = serde_json::from_str(
-            replies[4]["result"]["contents"][0]["text"]
+            replies[9]["result"]["contents"][0]["text"]
                 .as_str()
                 .unwrap(),
         )
@@ -3634,7 +3704,7 @@ mod tests {
         );
 
         let symbol_schema: Value = serde_json::from_str(
-            replies[5]["result"]["contents"][0]["text"]
+            replies[10]["result"]["contents"][0]["text"]
                 .as_str()
                 .unwrap(),
         )
@@ -3645,12 +3715,13 @@ mod tests {
         );
         assert_eq!(symbol_schema["title"], json!("symbol"));
 
-        // Deeply nested valid JSON inside `tools/call` `params.arguments` must not overflow the
-        // stack during `skip_json_value` / fallback parsing (AD1, AK2).
+        // Deeply nested valid JSON object inside `tools/call` `params.arguments` must not overflow
+        // the stack during `skip_json_value` / fallback parsing and must return a structured
+        // `isError: true` response with the original request id (AD1, AK2).
         let depth = 10_000usize;
-        let deep_array = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+        let deep_obj = format!("{{\"nested\":{}0{}}}", "[".repeat(depth), "]".repeat(depth));
         let input = format!(
-            "{}\n{}\n{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{{\"name\":\"omnia_new\",\"arguments\":{deep_array}}}}}\n",
+            "{}\n{}\n{{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{{\"name\":\"omnia_new\",\"arguments\":{deep_obj}}}}}\n",
             handshake_init("2025-11-25"),
             initialized_notif(),
         );
@@ -3662,7 +3733,7 @@ mod tests {
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
         assert_eq!(deep_replies.len(), 2);
-        assert_eq!(deep_replies[1]["id"], json!(9));
+        assert_eq!(deep_replies[1]["id"], json!(11));
         assert_eq!(deep_replies[1]["result"]["isError"], json!(true));
     }
 }
