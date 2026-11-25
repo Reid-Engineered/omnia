@@ -141,11 +141,36 @@ pub(super) fn is_hidden(hidden: &[ItemId], item: ItemId) -> bool {
 }
 
 /// Returns `true` when `items` is sorted in canonical [`crate::selection::item_sort_key`] order.
-#[cfg(debug_assertions)]
 pub(crate) fn is_canonically_sorted(items: &[ItemId]) -> bool {
     items
         .windows(2)
         .all(|w| crate::selection::item_sort_key(w[0]) <= crate::selection::item_sort_key(w[1]))
+}
+
+/// Zero-allocation check whether any hidden item (wire endpoint or part pin) touches `at`
+/// (T5.3, D7, B10). Lets `DocumentCache::draw` skip scanning all visible items for junctions
+/// untouched by the current drag selection.
+fn hidden_touches_point(doc: &Doc, hidden: &[ItemId], at: Pt) -> bool {
+    for &item in hidden {
+        match item {
+            ItemId::Wire(id) => {
+                if let Some(wire) = doc.wire(id)
+                    && (wire.a == at || wire.b == at)
+                {
+                    return true;
+                }
+            }
+            ItemId::Part(id) => {
+                if let Some(pins) = doc.pins(id)
+                    && pins.contains(&at)
+                {
+                    return true;
+                }
+            }
+            ItemId::Label(_) => {}
+        }
+    }
+    false
 }
 
 /// Zero-allocation check that at least 3 visible ends (wire endpoints + part pins, INV3) still
@@ -358,7 +383,10 @@ impl DocumentCache {
                 if !hidden.is_empty() {
                     let visible_parts = &items[..parts_end];
                     let visible_wires = &items[parts_end..wires_end];
-                    junctions.retain(|&p| visible_junction(doc, visible_parts, visible_wires, p));
+                    junctions.retain(|&p| {
+                        !hidden_touches_point(doc, hidden, p)
+                            || visible_junction(doc, visible_parts, visible_wires, p)
+                    });
                 }
                 junctions.sort_unstable_by_key(|p| (p.x, p.y));
                 let side = stroke_device_px(diameter, sf);
@@ -1252,18 +1280,31 @@ mod tests {
             }]))
             .unwrap()
             .added[0];
-        // Add a vertical branch at (0, 0) to form a 3-way T-junction (splits w0 into 2 + branch).
+        // Add a vertical branch at (0, 0) to form a 3-way T-junction (splits w0 into 2 + branch),
+        // plus a vertical wire at R2's left pin (2G, 0) to form a 2-wire + 1-pin junction.
         let _branch = doc
-            .apply(Command::AddWires(vec![Wire {
-                a: Pt::ZERO,
-                b: Pt {
-                    x: 0,
-                    y: 3 * GRID_NM,
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: Pt::ZERO,
+                    b: Pt {
+                        x: 0,
+                        y: 3 * GRID_NM,
+                    },
                 },
-            }]))
+                Wire {
+                    a: Pt {
+                        x: 2 * GRID_NM,
+                        y: 0,
+                    },
+                    b: Pt {
+                        x: 2 * GRID_NM,
+                        y: 3 * GRID_NM,
+                    },
+                },
+            ]))
             .unwrap();
         let all_wires: Vec<ItemId> = doc.wires().map(|(id, _)| ItemId::Wire(id)).collect();
-        assert_eq!(all_wires.len(), 3, "T-junction has 3 wire segments");
+        assert_eq!(all_wires.len(), 4, "T-junction + pin-junction wires");
         let _ = w0;
 
         let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
@@ -1277,15 +1318,25 @@ mod tests {
             count
         };
 
-        // 2 parts + 3 wire segments + 1 junction dot = 6 marks when nothing is hidden.
-        assert_eq!(count_marks(&[]), 6);
-        // Hiding p0 and one branch wire drops p0, that wire, AND the junction dot (only 2 ends
-        // remain at the origin), leaving 1 part + 2 wires = 3 marks.
-        let mut hidden_partial = vec![p0, all_wires[0]];
+        // 2 parts + 4 wire segments + 2 junction dots ((0,0) and R2's left pin (2G,0)) = 8 marks.
+        assert_eq!(count_marks(&[]), 8);
+        // Hiding p1 (R2) drops R2 AND its 2-wire+1-pin junction dot (pin-counting branch), while
+        // the untouched (0,0) T-junction dot stays -> 1 part + 4 wires + 1 dot = 6 marks.
+        assert_eq!(count_marks(&[p1]), 6);
+        // Hiding p0 (touches neither junction) drops only p0 -> 1 part + 4 wires + 2 dots = 7 marks.
+        assert_eq!(count_marks(&[p0]), 7);
+        // Hiding p0 and one T-junction branch wire drops p0, that wire, AND the (0,0) dot (only 2
+        // ends remain there), while the pin junction stays -> 1 part + 3 wires + 1 dot = 5 marks.
+        let t_wire = all_wires
+            .iter()
+            .copied()
+            .find(|&id| matches!(id, ItemId::Wire(w) if doc.wire(w).is_some_and(|w| w.a == Pt::ZERO && w.b.y == 3 * GRID_NM)))
+            .expect("vertical branch at origin");
+        let mut hidden_partial = vec![p0, t_wire];
         hidden_partial.sort_unstable_by_key(|&id| crate::selection::item_sort_key(id));
-        assert_eq!(count_marks(&hidden_partial), 3);
+        assert_eq!(count_marks(&hidden_partial), 5);
 
-        // Hiding all parts and wires leaves 0 marks (no orphaned junction dot).
+        // Hiding all parts and wires leaves 0 marks (no orphaned junction dots).
         let mut hidden_all = vec![p0, p1];
         hidden_all.extend_from_slice(&all_wires);
         hidden_all.sort_unstable_by_key(|&id| crate::selection::item_sort_key(id));
@@ -1294,7 +1345,8 @@ mod tests {
         // Warm-path allocation check (B10 / INV7): filtering hidden items and junctions allocates nothing.
         ALLOCS.set(Some(0));
         for _ in 0..40 {
-            assert_eq!(count_marks(&hidden_partial), 3);
+            assert_eq!(count_marks(&hidden_partial), 5);
+            assert_eq!(count_marks(&[p1]), 6);
         }
         assert_eq!(ALLOCS.replace(None), Some(0));
     }

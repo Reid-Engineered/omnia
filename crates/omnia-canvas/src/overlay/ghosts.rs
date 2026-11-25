@@ -1321,8 +1321,8 @@ mod tests {
         }
     }
 
-    /// B10: proves the warm ghost paint path performs zero heap allocations in omnia code for
-    /// both `Place` and `Drag` previews (normal and far-zoom LOD).
+    /// B10: proves the warm ghost paint layers perform zero heap allocations in `omnia` work for
+    /// both `Place` and `Drag` previews at normal zoom and far-zoom LOD.
     #[gpui::test]
     fn t5_3_paint_ghosts_warm_path_makes_zero_omnia_allocations(cx: &mut TestAppContext) {
         let lib = SymbolLibrary::builtin();
@@ -1532,6 +1532,51 @@ mod tests {
             alloc_scope.omnia_allocs.get(),
             0,
             "B10: warm Drag ghost paint must not allocate in omnia code"
+        );
+
+        // Far-zoom LOD box path for both Drag and Place.
+        view.update(cx, |v, cx| {
+            v.camera = Camera::new(Pt::ZERO, 0.05, viewport);
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        alloc_scope.omnia_allocs.set(0);
+        alloc_scope.omnia_calls.set(0);
+        alloc_scope.counting.set(true);
+        for step in 1..=3 {
+            view.update(cx, |v, cx| {
+                v.preview = OwnedPreview::Drag {
+                    items: drag_items.clone(),
+                    transform: Isometry::Translate(Pt {
+                        x: step * GRID_NM,
+                        y: 0,
+                    }),
+                };
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        for step in 1..=3 {
+            view.update(cx, |v, cx| {
+                v.preview = OwnedPreview::Place {
+                    symbol: res,
+                    at: Pt {
+                        x: step * GRID_NM,
+                        y: 0,
+                    },
+                    orient: Orient::IDENTITY,
+                };
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        alloc_scope.counting.set(false);
+        assert!(alloc_scope.omnia_calls.get() >= 12);
+        assert_eq!(
+            alloc_scope.omnia_allocs.get(),
+            0,
+            "B10: far-zoom LOD ghost paint must not allocate in omnia code"
         );
     }
 }

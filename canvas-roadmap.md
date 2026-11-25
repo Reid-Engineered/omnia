@@ -2325,8 +2325,9 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        nothing; no budget gate). Review follow-up (Claude Opus 5.5): require
                        half-grid raw movement before anchor-pin snapping so 1 px click jitter on
                        off-grid parts stays a click (0 `SheetView` paints); forward
-                       `place_provider` directly to the attached overlay and across
-                       `sync_overlay_doc`; filter hidden-wire junction dots in `sheet.rs` with 0
-                       warm allocs; add warm `paint_ghosts` allocation-counting test (B10),
-                       `debug_assert!` on sorted hidden slices, plain-drag redo check, and
-                       restored nominal `Owns` line.
+                       `place_provider` directly to the attached overlay; filter
+                       hidden-wire/pin junction dots in `sheet.rs` with a hidden-touch fast path
+                       and 0 warm allocs (future `omnia-doc` follow-up: public point-ends
+                       query); add warm `paint_ghosts` allocation-counting test (normal and
+                       far-zoom LOD, B10), release-clean `debug_assert!` on sorted hidden
+                       slices, plain-drag redo check, and restored nominal `Owns` line.

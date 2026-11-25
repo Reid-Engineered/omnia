@@ -422,13 +422,7 @@ impl SheetCanvas {
         match self.doc.clone() {
             Some(doc) => {
                 if overlay.read(cx).doc() != &doc {
-                    let provider = self.place_provider.clone();
-                    overlay.update(cx, |o, cx| {
-                        o.set_document(doc, cx);
-                        if provider.is_some() {
-                            o.set_place_provider(provider);
-                        }
-                    });
+                    overlay.update(cx, |o, cx| o.set_document(doc, cx));
                 }
             }
             None => {
