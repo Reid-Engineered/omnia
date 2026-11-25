@@ -15,13 +15,56 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Isometry {
     Translate(Pt),
-    Reorient { pivot: Pt, by: Orient },
+    Reorient {
+        pivot: Pt,
+        by: Orient,
+    },
+    /// T5.5: reorients about `pivot` by `by`, then translates by `delta`:
+    /// `pivot + by(p - pivot) + delta` (equivalently: translates by `delta`,
+    /// then reorients about `pivot + delta` by `by`).
+    Transform {
+        delta: Pt,
+        pivot: Pt,
+        by: Orient,
+    },
 }
 impl Isometry {
     pub fn apply(self, p: Pt) -> Result<Pt, crate::GeomError> {
         match self {
             Self::Translate(d) => p.checked_add(d),
             Self::Reorient { pivot, by } => by.checked_apply_around(p, pivot),
+            Self::Transform { delta, pivot, by } => {
+                let dx = i64::from(p.x) - i64::from(pivot.x);
+                let dy = i64::from(p.y) - i64::from(pivot.y);
+                let (rx, ry) = match by.to_raw() {
+                    0 => (dx, dy),
+                    1 => (-dy, dx),
+                    2 => (-dx, -dy),
+                    3 => (dy, -dx),
+                    4 => (-dx, dy),
+                    5 => (-dy, -dx),
+                    6 => (dx, -dy),
+                    _ => (dy, dx),
+                };
+                let x = i64::from(pivot.x) + rx + i64::from(delta.x);
+                let y = i64::from(pivot.y) + ry + i64::from(delta.y);
+                let x = i32::try_from(x).map_err(|_| crate::GeomError::Overflow)?;
+                let y = i32::try_from(y).map_err(|_| crate::GeomError::Overflow)?;
+                Pt::new(x, y)
+            }
+        }
+    }
+    pub(crate) fn orient(self) -> Orient {
+        match self {
+            Self::Translate(_) => Orient::IDENTITY,
+            Self::Reorient { by, .. } | Self::Transform { by, .. } => by,
+        }
+    }
+    pub(crate) fn is_identity(self) -> bool {
+        match self {
+            Self::Translate(d) => d == Pt::ZERO,
+            Self::Reorient { by, .. } => by == Orient::IDENTITY,
+            Self::Transform { delta, by, .. } => delta == Pt::ZERO && by == Orient::IDENTITY,
         }
     }
     fn wire(self, w: Wire) -> Result<Wire, crate::GeomError> {
@@ -216,10 +259,7 @@ impl<'a> View<'a> {
         for id in ids {
             let stored = doc.parts.get(id.0).expect("live selected part");
             let at = t.apply(stored.part.at).map_err(|_| Blocker::Sheet)?;
-            let orient = match t {
-                Isometry::Reorient { by, .. } => stored.part.orient.then(by),
-                Isometry::Translate(_) => stored.part.orient,
-            };
+            let orient = stored.part.orient.then(t.orient());
             let first = pins.len();
             for &p in &stored.pins {
                 pins.push(t.apply(p).map_err(|_| Blocker::Sheet)?);
@@ -1217,8 +1257,135 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn t5_5_isometry_transform_apply_and_equivalences() {
+        let pt = Pt {
+            x: 3 * GRID_NM,
+            y: -2 * GRID_NM,
+        };
+        let pivot = Pt {
+            x: GRID_NM,
+            y: GRID_NM,
+        };
+        let delta = Pt {
+            x: -4 * GRID_NM,
+            y: 5 * GRID_NM,
+        };
+        for by in Orient::ALL {
+            let t = Isometry::Transform { delta, pivot, by };
+            // Equivalent to reorient around pivot, then translate by delta.
+            let expected = by
+                .checked_apply_around(pt, pivot)
+                .unwrap()
+                .checked_add(delta)
+                .unwrap();
+            assert_eq!(t.apply(pt), Ok(expected));
+            // Pivot maps to pivot + delta regardless of orientation.
+            assert_eq!(t.apply(pivot), Ok(pivot + delta));
+            // Equivalent to translate by delta, then reorient around pivot + delta.
+            let moved_pivot = pivot + delta;
+            let alt = by.checked_apply_around(pt + delta, moved_pivot).unwrap();
+            assert_eq!(t.apply(pt), Ok(alt));
+            // Zero delta matches Reorient.
+            assert_eq!(
+                Isometry::Transform {
+                    delta: Pt::ZERO,
+                    pivot,
+                    by
+                }
+                .apply(pt),
+                Isometry::Reorient { pivot, by }.apply(pt)
+            );
+        }
+        // Identity orient matches Translate.
+        assert_eq!(
+            Isometry::Transform {
+                delta,
+                pivot,
+                by: Orient::IDENTITY
+            }
+            .apply(pt),
+            Isometry::Translate(delta).apply(pt)
+        );
+        // Intermediate pivot + by(p - pivot) exceeds SHEET_LIMIT_NM (1.5e9),
+        // but final point after delta is within K1 and must succeed.
+        let edge_pt = Pt {
+            x: 500_000_000,
+            y: 0,
+        };
+        let edge_pivot = Pt {
+            x: 1_000_000_000,
+            y: 500_000_000,
+        };
+        let edge_delta = Pt {
+            x: -600_000_000,
+            y: 0,
+        };
+        assert!(
+            Orient::ROT_90
+                .checked_apply_around(edge_pt, edge_pivot)
+                .is_err()
+        );
+        assert_eq!(
+            Isometry::Transform {
+                delta: edge_delta,
+                pivot: edge_pivot,
+                by: Orient::ROT_90,
+            }
+            .apply(edge_pt),
+            Ok(Pt {
+                x: 900_000_000,
+                y: 0
+            })
+        );
+        // Final point outside K1 is rejected.
+        assert!(
+            Isometry::Transform {
+                delta: Pt {
+                    x: 1_000_000_000,
+                    y: 0
+                },
+                pivot: Pt::ZERO,
+                by: Orient::ROT_90,
+            }
+            .apply(Pt {
+                x: 0,
+                y: -500_000_000
+            })
+            .is_err()
+        );
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
+        #[test]
+        fn t5_5_winv6_winv8_rigid_transform_and_labels(
+            orientation in 0usize..8,
+            px in -8i32..9, py in -8i32..9,
+            dx in -4i32..5, dy in -4i32..5,
+            invert in any::<bool>()
+        ) {
+            let (mut d, mut items) = bent();
+            let label = d.insert_label(Label { at: p(0, 2), text: "net".into() }).unwrap();
+            let t = Isometry::Transform {
+                delta: p(dx, dy),
+                pivot: p(px, py),
+                by: Orient::ALL[orientation],
+            };
+            let expected = plan(&d, &items, t, policy(invert));
+            prop_assert_eq!(&expected.fates, &vec![(p(0, 0), RunFate::Translated)]);
+            prop_assert_eq!(&expected.labels, &vec![(label, t.apply(p(0, 2)).unwrap())]);
+            prop_assert_eq!(expected.remove.len(), 3);
+            prop_assert_eq!(
+                &expected.add,
+                &d.wires().map(|(_, w)| t.wire(*w).unwrap()).collect::<Vec<_>>()
+            );
+            items.reverse();
+            let wires: Vec<_> = d.wires().map(|(id, w)| (id, *w)).collect();
+            for &(id, _) in &wires { d.remove_wire_raw(id).unwrap(); }
+            for &(id, w) in wires.iter().rev() { d.restore_wire_raw(id, w).unwrap(); }
+            prop_assert_eq!(&expected, &plan(&d, &items, t, policy(!invert)));
+        }
         #[test]
         fn winv6_winv8_rigid_reorientation_and_labels(
             orientation in 0usize..8, x in -8i32..9, y in -8i32..9,
@@ -1311,9 +1478,7 @@ mod view_tests {
                 let mut s = s.clone();
                 if items.contains(&ItemId::Part(PartId(i as u32))) {
                     s.part.at = t.apply(s.part.at).map_err(|_| Blocker::Sheet)?;
-                    if let Isometry::Reorient { by, .. } = t {
-                        s.part.orient = s.part.orient.then(by);
-                    }
+                    s.part.orient = s.part.orient.then(t.orient());
                     for p in &mut s.pins {
                         *p = t.apply(*p).map_err(|_| Blocker::Sheet)?;
                     }
@@ -1403,7 +1568,7 @@ mod view_tests {
             labels in prop::collection::vec((-14i32..14, -14i32..14), 0..4),
             holes in prop::collection::vec(any::<u16>(), 0..4),
             pick in prop::collection::vec(any::<u16>(), 1..5),
-            rotate in any::<bool>(),
+            kind in 0u8..3,
             orientation in 0usize..8,
             shift in (-3i32..4, -3i32..4),
             pivot in (-6i32..7, -6i32..7),
@@ -1441,10 +1606,14 @@ mod view_tests {
             all.extend(d.wires().map(|(id, _)| ItemId::Wire(id)));
             all.extend(d.labels().map(|(id, _)| ItemId::Label(id)));
             let items: Vec<ItemId> = pick.iter().map(|&i| all[i as usize % all.len()]).collect();
-            let t = if rotate {
-                Isometry::Reorient { pivot: g(pivot.0, pivot.1), by: Orient::ALL[orientation] }
-            } else {
-                Isometry::Translate(g(shift.0, shift.1))
+            let t = match kind {
+                0 => Isometry::Translate(g(shift.0, shift.1)),
+                1 => Isometry::Reorient { pivot: g(pivot.0, pivot.1), by: Orient::ALL[orientation] },
+                _ => Isometry::Transform {
+                    delta: g(shift.0, shift.1),
+                    pivot: g(pivot.0, pivot.1),
+                    by: Orient::ALL[orientation],
+                },
             };
             let mut boundary = Boundary::default();
             d.boundary_points(&items, &mut boundary);
