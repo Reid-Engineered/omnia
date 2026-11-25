@@ -1,0 +1,1 @@
+.Model Diode_Schottky D(IS=1u RS=0.2 N=1.05 CJO=50p M=0.5 EG=0.69 XTI=2 BV=40 IBV=1m)

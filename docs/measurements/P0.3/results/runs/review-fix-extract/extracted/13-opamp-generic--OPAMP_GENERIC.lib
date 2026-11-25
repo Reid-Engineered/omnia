@@ -1,0 +1,19 @@
+.subckt OPAMP_GENERIC inp inn vcc vee out
++ PARAMS: AOL=200k GBW=1Meg ROUT=75 VSAT=1.5
+* input stage and dominant pole
+RIN inp inn 10Meg
+EGAIN g 0 inp inn {AOL}
+RP g p {AOL/(6.2832*GBW)}
+CP p 0 1
+* output stage with rail clamps
+XOUT p out vcc vee OUTSTAGE PARAMS: ROUT={ROUT} VSAT={VSAT}
+.subckt OUTSTAGE in out vp vn PARAMS: ROUT=75 VSAT=1.5
+EBUF b 0 in 0 1
+RO b out {ROUT}
+DHI out h DCLAMP
+VHI vp h {VSAT}
+DLO l out DCLAMP
+VLO l vn {VSAT}
+.model DCLAMP D(IS=1e-15 N=0.1)
+.ends OUTSTAGE
+.ends OPAMP_GENERIC

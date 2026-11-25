@@ -1,0 +1,5 @@
+* 04-led-generic.lib - generic red indicator LED (tab separated, spaced equals)
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.model	LED_RED	D	IS = 93.2e-21	N = 1.8	RS = 2.4
++	BV = 5	IBV = 10u	CJO = 30p	EG = 1.9	XTI = 3

@@ -1,0 +1,21 @@
+* 19-opto-nested-shadow.lib - optocoupler with three nesting levels and a shadowed model name
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.model DLED D(IS=1e-20 N=1.9 RS=3)      ; top-level emitter model
+.subckt OPTO_GENERIC A K C E
+DIN A K1 DLED
+VSENSE K1 K 0
+XDET C E SENSE DETECTOR
+FSENSE 0 SENSE VSENSE 1
+RSENSE SENSE 0 1k
+.subckt DETECTOR c e drive
+XPHOTO c e drive PHOTO_Q
+DCLAMP e c DLED
+.subckt PHOTO_Q c e d
+Q1 c b e QPHOTO
+GPH c b d 0 0.5m
+.model QPHOTO NPN(IS=1e-14 BF=400 CJC=8p)
+.ends PHOTO_Q
+.model DLED D(IS=1e-12)   ; local model that shadows the top-level one
+.ends DETECTOR
+.ends OPTO_GENERIC

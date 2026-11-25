@@ -1,0 +1,242 @@
+[
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 1,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 1,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 2,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 2,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 3,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 3,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 4,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 4,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 5,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 5,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 6,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 6,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 7,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 7,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 8,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 8,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 9,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 9,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 10,
+    "hz": 60,
+    "frames": 120,
+    "warmup": 60
+  },
+  {
+    "scale_tag": "windows",
+    "scale": null,
+    "size": [
+      1536,
+      864
+    ],
+    "repetition": 10,
+    "hz": 30,
+    "frames": 120,
+    "warmup": 60
+  }
+]

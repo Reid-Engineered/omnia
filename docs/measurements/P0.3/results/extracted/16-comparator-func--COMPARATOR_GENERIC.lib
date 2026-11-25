@@ -1,0 +1,7 @@
+.func clampv(x,lo,hi) {min(max(x,lo),hi)}
+.subckt COMPARATOR_GENERIC inp inn vcc vee out PARAMS: VOH=4.9 VOL=0.1 TD=50n
+BCMP raw 0 V = V(inp) > V(inn) ? VOH : VOL
+EOUT lim 0 VALUE = { clampv(V(raw), V(vee), V(vcc)) }
+RD lim out 100
+CD out 0 {TD/100}
+.ends COMPARATOR_GENERIC

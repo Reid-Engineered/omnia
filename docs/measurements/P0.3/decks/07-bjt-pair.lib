@@ -1,0 +1,12 @@
+* 07-bjt-pair.lib - matched NPN pair with emitter degeneration
+* SPDX-License-Identifier: CC0-1.0
+* Written for the Omnia P0.3 spike. Generic parameters, no vendor data.
+.model NPN_PAIR_Q NPN(IS=10f BF=200 VAF=100 CJE=2p CJC=1.5p TF=400p)
+.model NPN_UNUSED NPN(IS=1f BF=50)
+*
+.subckt NPN_PAIR C1 B1 C2 B2 E
+Q1 C1 B1 E1 NPN_PAIR_Q
+Q2 C2 B2 E2 NPN_PAIR_Q
+RE1 E1 E 10
+RE2 E2 E 10
+.ends

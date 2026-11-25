@@ -1,0 +1,23 @@
+# P0.3 spike PS1: throwaway prototype, not a workspace member.
+#
+# The empty [workspace] table keeps this package out of the Omnia workspace, so the standard
+# checks never build it. Its dependencies are the crates parts-plan.md section 11 already
+# approves (`toml` 1, `zip` 9 with `deflate-flate2-zlib-rs` only, `sha2`, `serde`), pinned to
+# the versions in the workspace Cargo.lock. Nothing here is product code: P1.2 and P1.3 write
+# the real `spice.rs` and `container.rs` in `crates/omnia-parts`.
+[package]
+name = "omnia-p03-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+toml = "1"
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+[profile.release]
+debug = false

@@ -27,6 +27,7 @@ usage: bench <command> [options]
   spike   s7 [--seconds 60] [--out FILE] | s7 --summarise FILE
   spike   chrome [--seconds 60] [--png FILE]
   spike   shell-cache [--hover-frames 300] [--pan-frames 600] [--warmup 60] [--size 1440x900] [--json FILE]
+  spike   sim-scope [--hz 30|60] [--frames 600] [--warmup 600] [--size 1536x864] [--json FILE]
 
 Sheets: empty, t01, placeholder, 100, 1k, 10k, dense, text.
 Headless runs report deterministic costs for real sheets (requires --features headless).
@@ -372,6 +373,25 @@ fn cmd_spike(args: impl Iterator<Item = String>) -> Result<(), Failure> {
             SpikeError::Usage(message) => Failure::Usage(message),
             SpikeError::Run(message) => Failure::Run(message),
         });
+    }
+    if args.first().is_some_and(|scene| scene == "sim-scope") {
+        let args = usage(Args::parse(
+            args.into_iter().skip(1),
+            &["hz", "frames", "warmup", "size", "json"],
+        ))?;
+        usage(args.no_positionals())?;
+        let hz = usage(args.number("hz", 30))?;
+        if !matches!(hz, 30 | 60) {
+            return Err(Failure::Usage("--hz must be 30 or 60".into()));
+        }
+        let report = omnia_bench::spike::sim_scope::run(
+            hz,
+            positive("frames", usage(args.number("frames", 600))?)?,
+            positive("warmup", usage(args.number("warmup", 600))?)?,
+            usage(parse_size(args.get("size").unwrap_or("1536x864")))?,
+        )
+        .map_err(Failure::Run)?;
+        return finish(&report, args.get("json"));
     }
     let args = usage(Args::parse(
         args,

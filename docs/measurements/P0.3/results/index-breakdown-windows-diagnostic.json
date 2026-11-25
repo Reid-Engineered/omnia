@@ -1,0 +1,12 @@
+{
+  "diagnostic": true,
+  "reps": 5,
+  "iters": 50,
+  "phases": [
+    {"phase": "zip-open", "p50_ms": 0.1354, "p99_ms": 0.2639, "samples": 250},
+    {"phase": "zip-inflate-parts", "p50_ms": 2.3823, "p99_ms": 3.6743, "samples": 250},
+    {"phase": "toml-parse", "p50_ms": 6.5628, "p99_ms": 9.7685, "samples": 250},
+    {"phase": "folder-read", "p50_ms": 22.8673, "p99_ms": 28.9660, "samples": 250},
+    {"phase": "folder-open-only", "p50_ms": 13.4509, "p99_ms": 17.8664, "samples": 250}
+  ]
+}
