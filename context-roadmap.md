@@ -533,11 +533,13 @@ Nothing measured; rule-1 scan clean.
 
 2026-11-25 C1.2 review fixes — addressed all PR #128 independent review findings: replaced
 internal `FxHashMap` fields with a non-iterable `LookupMap` (`rustc_hash::FxHasher`, no
-`IntoIterator` or iterator methods), disallowed `std::collections::HashMap` and `HashSet` in
-`clippy.toml` (closing generic `IntoIterator` and `std::iter::zip` bypasses while keeping
-`.into_iter()` available for `Vec`/`BTreeMap`/`BTreeSet`) and denied `clippy::iter_over_hash_type`,
-`disallowed_methods`, and `disallowed_types` in `Cargo.toml`, verified by positive and negative
-`clippy-driver` controls asserting exact lint diagnostics under Cargo's lint flags (CINV10);
+`IntoIterator` or iterator methods; probes before growing so hits never rehash), disallowed
+`std::collections::{HashMap, HashSet}` and `rustc_hash::{FxHashMap, FxHashSet}` in `clippy.toml`
+(closing generic `IntoIterator` and `std::iter::zip` bypasses for both std and alias types while
+keeping `.into_iter()` available for `Vec`/`BTreeMap`/`BTreeSet`) and denied
+`clippy::iter_over_hash_type`, `disallowed_methods`, and `disallowed_types` in `Cargo.toml`,
+verified by positive and negative `clippy-driver` controls (including `FxHashMap`/`FxHashSet`)
+asserting exact lint diagnostics under Cargo's lint flags (CINV10);
 quoted all section 9.2 record tags in CK9 compound-field components; fixed `cmp_pin_number` so two
 unnumbered pins tie at the pin-number step before geometry and stored index (CD18, CK13); replaced
 eager `then_some` addition in `Circuit::pin_row` with lazy `then` to prevent `u32::MAX` overflow

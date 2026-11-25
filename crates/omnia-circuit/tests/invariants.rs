@@ -151,6 +151,8 @@ fn cinv10_clippy_rejects_all_hash_iteration_paths() {
         "disallowed-types",
         "std::collections::HashMap\"",
         "std::collections::HashSet\"",
+        "rustc_hash::FxHashMap\"",
+        "rustc_hash::FxHashSet\"",
         "std::collections::HashMap::iter",
         "std::collections::HashMap::keys",
         "std::collections::HashMap::values",
@@ -175,6 +177,22 @@ fn cinv10_clippy_rejects_all_hash_iteration_paths() {
         );
     }
 
+    let deps_dir = std::env::current_exe()
+        .expect("locate test binary")
+        .parent()
+        .expect("deps directory")
+        .to_path_buf();
+    let rustc_hash_rlib = std::fs::read_dir(&deps_dir)
+        .expect("read deps directory")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("librustc_hash-") && n.ends_with(".rlib"))
+        })
+        .unwrap_or_else(|| panic!("librustc_hash-*.rlib not found in {}", deps_dir.display()));
+
     let driver = clippy_driver_path();
     let pid = std::process::id();
     let tmp_dir = std::env::temp_dir().join(format!("omnia-circuit-cinv10-{pid}"));
@@ -188,6 +206,10 @@ fn cinv10_clippy_rejects_all_hash_iteration_paths() {
             .current_dir(manifest_dir)
             .args(["--crate-type", "lib", "--edition", "2024", "-D", "warnings"])
             .args(&deny_flags)
+            .arg("-L")
+            .arg(format!("dependency={}", deps_dir.display()))
+            .arg("--extern")
+            .arg(format!("rustc_hash={}", rustc_hash_rlib.display()))
             .arg("-o")
             .arg(&rlib)
             .arg(&src)
@@ -264,6 +286,30 @@ fn cinv10_clippy_rejects_all_hash_iteration_paths() {
         (
             "set_zip",
             "use std::collections::HashSet; pub fn f(s: HashSet<u32>) -> Vec<(u32, usize)> { std::iter::zip(s, 0usize..).collect() }\n",
+            "disallowed_types",
+        ),
+        (
+            "fx_map_zip",
+            "use rustc_hash::FxHashMap; pub fn f(m: FxHashMap<u32, u32>) -> Vec<((u32, u32), usize)> { std::iter::zip(m, 0usize..).collect() }\n",
+            "disallowed_types",
+        ),
+        (
+            "fx_map_generic_into_iter",
+            "use rustc_hash::FxHashMap;\n\
+             fn consume<I: IntoIterator>(it: I) -> usize { let mut n = 0; for _ in it { n += 1; } n }\n\
+             pub fn f(m: FxHashMap<u32, u32>) -> usize { consume(m) }\n",
+            "disallowed_types",
+        ),
+        (
+            "fx_set_zip",
+            "use rustc_hash::FxHashSet; pub fn f(s: FxHashSet<u32>) -> Vec<(u32, usize)> { std::iter::zip(s, 0usize..).collect() }\n",
+            "disallowed_types",
+        ),
+        (
+            "fx_set_generic_into_iter",
+            "use rustc_hash::FxHashSet;\n\
+             fn consume<I: IntoIterator>(it: I) -> usize { let mut n = 0; for _ in it { n += 1; } n }\n\
+             pub fn f(s: FxHashSet<u32>) -> usize { consume(s) }\n",
             "disallowed_types",
         ),
     ];

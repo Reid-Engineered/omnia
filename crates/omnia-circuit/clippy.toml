@@ -25,6 +25,8 @@ disallowed-methods = [
 disallowed-types = [
     { path = "std::collections::HashMap", reason = "CINV10: use non-iterable LookupMap (or BTreeMap) so unordered traversal is impossible" },
     { path = "std::collections::HashSet", reason = "CINV10: use BTreeSet or sorted Vec so unordered traversal is impossible" },
+    { path = "rustc_hash::FxHashMap", reason = "CINV10: use non-iterable LookupMap (or BTreeMap) so unordered traversal is impossible" },
+    { path = "rustc_hash::FxHashSet", reason = "CINV10: use BTreeSet or sorted Vec so unordered traversal is impossible" },
     { path = "std::collections::hash_map::Iter", reason = "CINV10: hash-map iteration order is non-deterministic" },
     { path = "std::collections::hash_map::IterMut", reason = "CINV10: hash-map iteration order is non-deterministic" },
     { path = "std::collections::hash_map::IntoIter", reason = "CINV10: hash-map iteration order is non-deterministic" },

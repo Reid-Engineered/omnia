@@ -108,38 +108,51 @@ impl<K: Eq + Hash, V> LookupMap<K, V> {
         }
     }
 
-    pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
-        self.ensure_capacity_for_insert();
-        let mask = self.slots.len() - 1;
-        let mut idx = Self::hash_key(&key) & mask;
+    #[inline]
+    fn find_slot(&self, key: &K) -> Option<usize> {
+        let cap = self.slots.len();
+        if cap == 0 {
+            return None;
+        }
+        let mask = cap - 1;
+        let mut idx = Self::hash_key(key) & mask;
         loop {
-            match &mut self.slots[idx] {
-                Some((k, v)) if *k == key => return Some(std::mem::replace(v, value)),
+            match &self.slots[idx] {
+                Some((k, _)) if k == key => return Some(idx),
                 Some(_) => idx = (idx + 1) & mask,
-                slot @ None => {
-                    *slot = Some((key, value));
-                    self.len += 1;
-                    return None;
-                }
+                None => return None,
             }
         }
     }
 
-    pub(crate) fn get_or_insert_with(&mut self, key: K, make: impl FnOnce() -> V) -> &mut V {
+    pub(crate) fn insert(&mut self, key: K, value: V) -> Option<V> {
+        if let Some(idx) = self.find_slot(&key) {
+            let slot = self.slots[idx].as_mut().expect("matched slot populated");
+            return Some(std::mem::replace(&mut slot.1, value));
+        }
         self.ensure_capacity_for_insert();
         let mask = self.slots.len() - 1;
         let mut idx = Self::hash_key(&key) & mask;
-        loop {
-            match &self.slots[idx] {
-                Some((k, _)) if *k == key => break,
-                Some(_) => idx = (idx + 1) & mask,
-                None => {
-                    self.slots[idx] = Some((key, make()));
-                    self.len += 1;
-                    break;
-                }
-            }
+        while self.slots[idx].is_some() {
+            idx = (idx + 1) & mask;
         }
+        self.slots[idx] = Some((key, value));
+        self.len += 1;
+        None
+    }
+
+    pub(crate) fn get_or_insert_with(&mut self, key: K, make: impl FnOnce() -> V) -> &mut V {
+        if let Some(idx) = self.find_slot(&key) {
+            return &mut self.slots[idx].as_mut().expect("matched slot populated").1;
+        }
+        self.ensure_capacity_for_insert();
+        let mask = self.slots.len() - 1;
+        let mut idx = Self::hash_key(&key) & mask;
+        while self.slots[idx].is_some() {
+            idx = (idx + 1) & mask;
+        }
+        self.slots[idx] = Some((key, make()));
+        self.len += 1;
         &mut self.slots[idx].as_mut().expect("slot populated").1
     }
 
@@ -304,5 +317,21 @@ mod tests {
         assert_eq!(interner.intern("alpha"), first);
         assert_eq!(interner.resolve(first), "alpha");
         assert_eq!(interner.resolve(second), "beta");
+    }
+
+    #[test]
+    fn lookup_map_hits_do_not_rehash_at_load_threshold() {
+        let mut map: LookupMap<u32, u32> = LookupMap::with_capacity(5);
+        assert_eq!(map.slots.len(), 8);
+        for k in 0..5 {
+            assert_eq!(map.insert(k, k * 10), None);
+        }
+        assert_eq!(map.slots.len(), 8);
+        // Updating or querying existing keys at the 5/8 load threshold must not rehash.
+        for k in 0..5 {
+            assert_eq!(map.insert(k, k * 20), Some(k * 10));
+            assert_eq!(*map.get_or_insert_with(k, || 999), k * 20);
+        }
+        assert_eq!(map.slots.len(), 8);
     }
 }
