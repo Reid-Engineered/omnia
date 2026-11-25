@@ -2390,3 +2390,22 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        frames), with `frames.startup_draws` recording the measured pre-warmup draw
                        count for `T1.6/attribute.py`. Documented aborted attempt and harness fix in
                        `docs/measurements/T5.4.md`; next Orion campaign runs on the rebuilt binary.
+2026-11-25  T5.4  needs-human  Full Orion remote campaign on `a022e6a` (`owner-run.sh --remote`,
+                       owner-approved, `22:10:50–22:54:24Z`, binary SHA-256 `598170c1…`, 160/160
+                       runs) exited `1` (`fail`) on a single check: `s100/10k-drag-part-3` recorded
+                       `sheet_paints = 16` across consecutive frames `234–249` (`0.244 s`), matching
+                       `dbus-:1.1-org.kde.powerdevil.backlighthelper@5.service` (`pid 5962`, only
+                       occurrence in all 320 `runs.jsonl` snapshots) firing KDE PowerDevil's 250 ms
+                       idle-dim fade after a remote `kscreen-doctor --dpms on` wake without
+                       `SimulateUserActivity`. Every other check passed at both 100% and 125%:
+                       `39/40` drag runs had `sheet_paints = 0`, `B2` `39.76`/`45.22 ms`, `B6`
+                       `1k`/`10k` d2p p99 `1.87`/`1.85 ms` (100%) and `1.43`/`1.43 ms` (125%),
+                       `B3`/`B4` drag frame p99 `0.99`/`1.00 ms` (100%) and `0.76`/`0.76 ms` (125%),
+                       `120/120` missed-refresh attributions passed, `B9` `147.7–170.8 MB`, `B10 = 0`,
+                       `INV5 = 0`, press `INV11 = 0`, `D7 lift = 1`. Orion invariant tests on
+                       `a022e6a`: `inv4` 10/10, `inv10` 13/13, `inv5` 2/2, `inv11` 2/2. Archived
+                       evidence in `docs/measurements/T5.4/orion-2026-11-25-remote/` (replay 0 diff
+                       lines), updated `docs/measurements/T5.4.md`, and updated `owner-run.sh` to
+                       call `ScreenSaver.SimulateUserActivity` before `kde-inhibit --power
+                       --screenSaver --colorCorrect --notifications` and record `PolicyAgent`
+                       inhibition flags and panel dimming for the next certifying Orion campaign.

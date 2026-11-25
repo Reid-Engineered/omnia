@@ -1,0 +1,21 @@
+mode: remote: tailscaled and the starting SSH link kept running
+commit a022e6a8f33a39c7f01390965ae7fc8b66ae314e
+governors before: /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor:powersave /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor:powersave /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor:powersave /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor:powersave 
+tailscaled before: kept running (active)
+kernel 7.2.7-arch1-1; started 2026-11-25T22:09:17Z
+baloo before:
+Baloo File Indexer is running
+Indexer state: Idle
+Total files indexed: 82819
+Files waiting for content indexing: 0
+Files failed to index: 0
+Current size of index is 2.23 GiB
+finished 2026-11-25T22:54:29Z, gate exit 1
+aggregate suspend inhibition 6 s into the inhibitor: true
+baloo after:
+Baloo File Indexer is running
+Indexer state: Idle
+Total files indexed: 82820
+Files waiting for content indexing: 0
+Files failed to index: 0
+Current size of index is 2.23 GiB
