@@ -168,8 +168,9 @@ foreign wire (WD4).
 
 ### WD2 What a move command carries. DECIDED
 
-- `Move` and `Reorient` apply one isometry `T` (a translation, or a rotation or mirror about
-  a pivot) to the selected items `S`.
+- `Move`, `Reorient` and `Transform` apply one isometry `T` (a translation, a rotation or
+  mirror about a pivot, or a reorientation about `pivot` followed by a translation by `delta`,
+  `pivot + by(p - pivot) + delta`, added by canvas-roadmap.md T5.5) to the selected items `S`.
 - A **boundary point** is a point where a pin of a part in `S`, or an end of a wire in `S`,
   meets an end of a wire outside `S`.
 - The **affected runs** are the runs of unselected segments that start at a boundary point.
@@ -390,7 +391,7 @@ Each has a test; the roadmap task that adds it is in brackets.
 
 | ID | Rule |
 | --- | --- |
-| WINV1 | Follow keeps connections: any two pins connected before a follow-mode `Move` or `Reorient` are connected after it, direct pin-to-pin contacts excepted (WQ6). New connections arise only where a moved pin or moved wire end lands on an existing end, pin or body. [W2.2] |
+| WINV1 | Follow keeps connections: any two pins connected before a follow-mode `Move`, `Reorient` or `Transform` are connected after it, direct pin-to-pin contacts excepted (WQ6). New connections arise only where a moved pin or moved wire end lands on an existing end, pin or body. [W2.2, T5.5] |
 | WINV2 | Detach changes only what it must: unselected wires are identical before and after, except for splits under landed pins and ends (TC-move-14) and merges at points the moved items vacated (WD3, owner decision 2026-11-17); the pins that lose a wire are exactly the boundary pins of detached runs. [W2.2] |
 | WINV3 | Normal form after every wiring command: INV1 and INV2 hold; every end is on the wire lattice; no two collinear segments meet at a point that holds nothing else and no label; no two segments share a stretch. [W1.4] |
 | WINV4 | A refused command leaves the document equal to the original, ids and revision included. `apply` then `undo` of any wiring command does too (extends INV4). [W2.2, W3.2] |
@@ -569,8 +570,8 @@ pub fn plan_segment_drag(doc: &Doc, wire: WireId, offset: i32,
                          plan: &mut SegmentDragPlan) -> Result<(), Blocker>;
 
 // ---- follow.rs ----
-pub enum Isometry { Translate(Pt), Reorient { pivot: Pt, by: Orient } }
-// canvas-roadmap.md T5.5 adds a variant composing a translation with a reorientation.
+pub enum Isometry { Translate(Pt), Reorient { pivot: Pt, by: Orient },
+                    Transform { delta: Pt, pivot: Pt, by: Orient } } // T5.5: pivot + by(p - pivot) + delta
 pub enum RunFate { Translated, Rerouted, Detached }
 pub struct FollowPlan { pub remove: Vec<WireId>, pub add: Vec<Wire>,
                         pub labels: Vec<(LabelId, Pt)>, pub fates: Vec<(Pt, RunFate)> }
@@ -582,6 +583,7 @@ pub fn plan_follow(doc: &Doc, items: &[ItemId], t: Isometry, policy: FollowPolic
 pub enum Command {
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy },
     Reorient { items: Vec<ItemId>, pivot: Pt, by: Orient, follow: FollowPolicy },
+    Transform { items: Vec<ItemId>, delta: Pt, pivot: Pt, by: Orient, follow: FollowPolicy }, // T5.5
     DragSegment { wire: WireId, offset: i32 },                        // WD7; nm, signed
     Delete { items: Vec<ItemId>, with_wires: bool },                  // WD10
     /* the rest as in canvas-plan.md section 9 */

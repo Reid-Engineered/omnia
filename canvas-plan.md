@@ -505,8 +505,7 @@ pub enum Command {
     AddLabel(Label),
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
     Reorient { items: Vec<ItemId>, pivot: Pt, by: Orient, follow: FollowPolicy }, // follow added in W2.2 (WD3)
-    // T5.5 adds a combined move-and-reorient command (a composed `Isometry`, wiring-plan.md),
-    // planned once, so a drag with R, X or Y commits as one edit.
+    Transform { items: Vec<ItemId>, delta: Pt, pivot: Pt, by: Orient, follow: FollowPolicy }, // T5.5: pivot + by(p - pivot) + delta, planned and normalised once
     DragSegment { wire: WireId, offset: i32 }, // wiring-plan.md WD7 (W3.2); nm, signed
     Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false)
     SetText { item: ItemId, field: TextField, text: Arc<str> },
