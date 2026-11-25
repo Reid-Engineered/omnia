@@ -567,6 +567,9 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
     if config.script == Script::Hover {
         return crate::hover::run_hover(config);
     }
+    if config.script == Script::DragPart {
+        return crate::drag_part::run_drag_part(config);
+    }
     let tracing = std::env::var_os("OMNIA_BENCH_TRACE").is_some();
     let enabled_trace = tracing && gpui::set_trace_enabled(true);
     // Generous: 600 frames take 10 s at 60 Hz.

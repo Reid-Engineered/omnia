@@ -563,7 +563,7 @@ of the `canvas` lane.
 - Done when: simulated-input tests cover place, move, rotate during drag, mirror, delete
   and undo of each, and a stub provider's command is what placement commits; `SheetView` paints exactly twice per drag (start and end).
 
-### T5.4 Gate: milestone 5 · todo
+### T5.4 Gate: milestone 5 · needs-human
 - Lane: bench · Depends: T5.3
 - Do: add the `drag-part` script. `bench run --sheet 1k --script drag-part` and
   `--sheet 10k`: dirty-to-present p99 ≤ one refresh interval (B6) and frame p99 within B3
@@ -2331,3 +2331,47 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        query); add warm `paint_ghosts` allocation-counting test (normal and
                        far-zoom LOD, B10), release-clean `debug_assert!` on sorted hidden
                        slices, plain-drag redo check, and restored nominal `Owns` line.
+
+2026-11-25 T5.4 needs-human — implemented `--script drag-part` (native and `--headless`) in
+                       `crates/omnia-bench/src/drag_part.rs` (wired in `driver.rs`, `harness.rs`,
+                       `lib.rs`, `main.rs`, `scripts.rs`; public APIs only) and prepared the frozen
+                       Orion Milestone 5 gate (`docs/measurements/T5.4/{gate.py,test_gate.py,owner-run.sh}`)
+                       plus non-reference Windows diagnostics in `docs/measurements/T5.4.md`
+                       (`B2`–`B6`, `B9`, `B10`, `INV4`, `INV5`, `INV10`, `INV11`, `D7`, `K2`, `Q4`, `Q5`).
+                       `drag-part` mounts a focused `OverlayView` with `BenchOverlayScope` over a
+                       generated stress sheet (`seed = 42`), presses on the verified hit-testable
+                       part nearest the viewport centre in a pre-warmup phase (`frames.startup_draws`,
+                       `press_sheet_paints == 0`), lifts it off `SheetView` during warm-up
+                       (`lift_sheet_paints == 1`), and drags its overlay ghost across 22 verified
+                       grid-step waypoints so every measured frame changes `drag_delta` with
+                       `sheet_paints == 0` (`INV11`), `revision_changes == 0` (`INV5`), and
+                       `allocs_per_frame.ours == 0` (`B10`). Non-reference Windows diagnostics
+                       (Core i7-14650HX, Intel UHD Graphics `32.0.101.7088`, Win 11 `10.0.26200`,
+                       `1536x864` logical / `1920x1080` device at 125% scaling, 60 Hz, AC / Silent
+                       scheme; certifies nothing): `1k-drag-part` dirty-to-present p99 `2.051 ms`
+                       (max `2.572 ms`), frame p99 `1.070 ms` (max `1.476 ms`), `press_sheet_paints = 0`,
+                       `lift_sheet_paints = 1`, `sheet_paints = 0`, `ours = 0`; `10k-drag-part`
+                       dirty-to-present p99 `1.987 ms` (max `2.200 ms`), frame p99 `0.959 ms`
+                       (max `1.187 ms`), `press_sheet_paints = 0`, `lift_sheet_paints = 1`,
+                       `sheet_paints = 0`, `ours = 0`, private mem `168.44 MB`; `start-1k - start-empty
+                       = +13.629 ms`; `1k-pan` p99 `2.010 ms`, `1k-zoom` `2.374 ms`, `10k-pan`
+                       `2.605 ms`, `10k-zoom` `5.493 ms` (`361.37 MB` Windows UHD driver overhead,
+                       matching T3.4/T4.6). Traced `OMNIA_BENCH_TRACE=1` `1k-drag-part` committed as
+                       `docs/measurements/T5.4/windows-diag/1k-drag-part-traced.json` and passed
+                       `T1.6/attribute.py` (exit 0, `startup_draws = 3`, 0 warnings). Deviations:
+                       `T5.4` has no explicit Owns line (follows `T4.6` precedent); `gate.py` also
+                       enforces `1.5R`/`2.5R` attribution, `B5`, `B9`, `B10`, `INV5`, `INV11` (press
+                       and steady-state), `D7` lift, and exercise completeness on `drag-part`.
+                       Follow-up for W2.3/W2.4: wrap `self.tools.pointer_move` in
+                       `OverlayView::on_mouse_move` with `OverlayPaintScope::omnia` once W2.3 adds
+                       live `plan_follow` (T5.3's `ToolMachine::pointer_move` is verified 0 allocs by
+                       `drag_pointer_move_makes_zero_heap_allocations`). Review follow-up (Claude Opus
+                       5.5, 0 P0/P1, 6 P2 + nits): emit explicit `INV5`/`INV11`/`D7` `FAIL` verdicts
+                       in `gate.py` (instead of `incomplete`), track `press_sheet_paints` across
+                       `MouseDown`, commit `1k-drag-part-traced.json`, prove `pointer_move` zero
+                       allocs via `count_allocs`, clarify B6 `on_next_frame` timing semantics in
+                       `T5.4.md`, factor `args_for` and expand `test_gate.py` to 14/14 tests. Checks
+                       run locally on Windows: `cargo fmt --all --check`, both `clippy` commands +
+                       `--features headless`, `cargo test --workspace`, `cargo test -p omnia-bench
+                       --features headless`, `cargo deny check`, and `test_gate.py` (14/14). Waiting
+                       on Orion reference run (`owner-run.sh`) to certify budgets and mark `done`.

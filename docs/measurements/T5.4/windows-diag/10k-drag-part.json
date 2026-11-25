@@ -1,0 +1,137 @@
+{
+  "schema": 1,
+  "kind": "run",
+  "config": {
+    "sheet": "10k",
+    "script": "drag-part",
+    "frames": 600,
+    "warmup": 600,
+    "window_logical": [
+      1536.0,
+      864.0
+    ],
+    "scene_counts": false
+  },
+  "scene_details": {
+    "seed": 42,
+    "parts": 10000,
+    "wires": 20000
+  },
+  "spike": null,
+  "environment": {
+    "gpu": {
+      "is_software_emulated": false,
+      "device_name": "Intel(R) UHD Graphics",
+      "driver_name": "Intel Corporation",
+      "driver_info": "32.0.101.7088"
+    },
+    "fullscreen": false,
+    "os": "windows",
+    "arch": "x86_64",
+    "logical_cpus": 24,
+    "scale_factor": 1.25,
+    "viewport_logical": [
+      1536.0,
+      864.0
+    ],
+    "viewport_device": [
+      1920.0,
+      1080.0
+    ],
+    "refresh_hz": 60.0
+  },
+  "frames": {
+    "drawn": 600,
+    "on_time": 600,
+    "late": 0,
+    "unmeasured": 0,
+    "startup_draws": 3,
+    "wall_s": 20.0481
+  },
+  "warnings": [],
+  "metrics": {
+    "frame_ms": {
+      "mean": 0.4271,
+      "p50": 0.3287,
+      "p95": 0.8545,
+      "p99": 0.9585,
+      "max": 1.1868
+    },
+    "draw_ms": {
+      "mean": 0.4155,
+      "p50": 0.3192,
+      "p95": 0.8243,
+      "p99": 0.9395,
+      "max": 1.1756
+    },
+    "dirty_to_present_ms": {
+      "mean": 0.8681,
+      "p50": 0.7132,
+      "p95": 1.6579,
+      "p99": 1.9866,
+      "max": 2.1996
+    },
+    "present_interval_ms": {
+      "mean": 16.6636,
+      "p50": 16.6871,
+      "p95": 17.7439,
+      "p99": 18.4156,
+      "max": 18.9071
+    },
+    "paint_samples": 600,
+    "paint_sampling": "overlay-every-frame",
+    "allocs_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 47.0,
+        "p50": 47.0,
+        "p95": 47.0,
+        "p99": 47.0,
+        "max": 47.0
+      }
+    },
+    "alloc_bytes_per_frame": {
+      "ours": {
+        "mean": 0.0,
+        "p50": 0.0,
+        "p95": 0.0,
+        "p99": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "mean": 4800.0,
+        "p50": 4800.0,
+        "p95": 4800.0,
+        "p99": 4800.0,
+        "max": 4800.0
+      }
+    },
+    "late_frames": 0,
+    "missed_refreshes": 0,
+    "present_intervals_over_2_5_refreshes": 0,
+    "max_present_interval_ms": 18.9071,
+    "work_missed_refreshes": 0,
+    "memory_mb": 168.4375,
+    "working_set_mb": 169.3828,
+    "heap_peak_mb": 95.0188,
+    "sheet_paints": 0
+  },
+  "diagnostic_trace": null,
+  "drag": {
+    "part_id": 4950,
+    "overlay_paints": 600,
+    "sheet_paints": 0,
+    "press_sheet_paints": 0,
+    "lift_sheet_paints": 1,
+    "transitions": 600,
+    "mismatches": 0,
+    "revision_changes": 0,
+    "waypoints": 22
+  }
+}
