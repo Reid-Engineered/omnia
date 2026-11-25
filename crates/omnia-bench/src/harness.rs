@@ -73,6 +73,12 @@ fn content(
     }
 }
 
+/// True when Linux reference runs request an undecorated fullscreen window via
+/// `OMNIA_BENCH_FULLSCREEN`.
+pub(crate) fn fullscreen_requested() -> bool {
+    cfg!(target_os = "linux") && std::env::var_os("OMNIA_BENCH_FULLSCREEN").is_some()
+}
+
 pub(crate) fn window_options(
     size_logical: (f32, f32),
     cx: &App,
@@ -86,8 +92,7 @@ pub(crate) fn window_options(
     };
     // Linux reference runs use the panel's exact logical size, without desktop decorations.
     // WindowBounds::Fullscreen is verified at the pinned GPUI platform.rs:2802.
-    #[cfg(target_os = "linux")]
-    if std::env::var_os("OMNIA_BENCH_FULLSCREEN").is_some() {
+    if fullscreen_requested() {
         options.window_bounds = Some(WindowBounds::Fullscreen(bounds));
         options.window_min_size = None;
     }

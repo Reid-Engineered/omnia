@@ -8,8 +8,8 @@
 use crate::alloc::AllocCounts;
 use crate::driver::Script;
 use crate::harness::{
-    RunConfig, RunReportInput, build_run_report, register_sheet_fonts, run_app, watchdog,
-    window_options,
+    RunConfig, RunReportInput, build_run_report, fullscreen_requested, register_sheet_fonts,
+    run_app, watchdog, window_options,
 };
 use crate::hover::BenchOverlayScope;
 use crate::scene::{STRESS_SEED, Sheet};
@@ -35,6 +35,15 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 const VIEWPORT_MARGIN_PX: f64 = 16.0;
+/// Post-ready frames drawn before `MouseDown` so initial compositor configure/activation settles
+/// before the drag begins. On Linux fullscreen (`OMNIA_BENCH_FULLSCREEN`), `Settle` first waits
+/// for both `is_fullscreen()` and `is_window_hovered()` (which GPUI's Wayland `wl_pointer::Enter`
+/// handler sets right before synthesizing `MouseMove { pressed_button: None }`). Non-fullscreen
+/// Linux runs are best-effort (they still draw `SETTLE_FRAMES` frames, since the cursor may lie
+/// outside a windowed surface).
+const SETTLE_FRAMES: u32 = 8;
+/// Cap on frames waited for Linux fullscreen + pointer entry before failing fast.
+const FULLSCREEN_WAIT_CAP: u32 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DragWaypoint {
@@ -305,12 +314,47 @@ pub(crate) fn mouse_left_drag(position: Point<Pixels>) -> PlatformInput {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DragPhase {
+    Settle { waited: u32, ready: u32 },
     Press,
     Move,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettleStep {
+    Wait { waited: u32, ready: u32 },
+    Press,
+}
+
+fn advance_settle(
+    waited: u32,
+    ready: u32,
+    expect_fullscreen: bool,
+    is_fullscreen: bool,
+    is_hovered: bool,
+) -> Result<SettleStep, String> {
+    if expect_fullscreen && !(is_fullscreen && is_hovered) {
+        if waited >= FULLSCREEN_WAIT_CAP {
+            return Err(format!(
+                "drag-part window did not settle into hovered fullscreen before drag start (fullscreen: {is_fullscreen}, hovered: {is_hovered})"
+            ));
+        }
+        return Ok(SettleStep::Wait {
+            waited: waited + 1,
+            ready: 0,
+        });
+    }
+    if ready < SETTLE_FRAMES {
+        return Ok(SettleStep::Wait {
+            waited,
+            ready: ready + 1,
+        });
+    }
+    Ok(SettleStep::Press)
+}
+
 struct DragDriver {
     config: RunConfig,
+    expect_fullscreen: bool,
     doc: Entity<Doc>,
     overlay: Entity<OverlayView>,
     scene_details: Value,
@@ -357,6 +401,26 @@ impl DragDriver {
     }
 
     fn step(&mut self, window: &mut Window, cx: &mut App) -> bool {
+        if let DragPhase::Settle { waited, ready } = self.phase {
+            match advance_settle(
+                waited,
+                ready,
+                self.expect_fullscreen,
+                window.is_fullscreen(),
+                window.is_window_hovered(),
+            ) {
+                Ok(SettleStep::Wait { waited, ready }) => {
+                    self.phase = DragPhase::Settle { waited, ready };
+                    window.refresh();
+                    return true;
+                }
+                Ok(SettleStep::Press) => {
+                    self.phase = DragPhase::Press;
+                }
+                Err(error) => return self.fail(error, window),
+            }
+        }
+
         if self.phase == DragPhase::Press {
             let camera = self.overlay.read(cx).camera().clone();
             let viewport = self.overlay.read(cx).viewport();
@@ -413,7 +477,13 @@ impl DragDriver {
             self.last_delta = active_drag_delta(view, plan.part_id);
             if self.last_delta.is_none() {
                 return self.fail(
-                    "drag-part left lifted Dragging state before measured frames began".into(),
+                    format!(
+                        "drag-part left lifted Dragging state before measured frames began (state: {:?}, fullscreen: {}, hovered: {}, active: {})",
+                        view.tool_state(),
+                        window.is_fullscreen(),
+                        window.is_window_hovered(),
+                        window.is_window_active(),
+                    ),
                     window,
                 );
             }
@@ -605,12 +675,17 @@ pub fn run_drag_part(config: RunConfig) -> Result<Value, String> {
             let focus = overlay.read(cx).focus_handle().clone();
             window.focus(&focus, cx);
             let trace = tracing.then(|| FrameTrace::new(cx));
+            let expect_fullscreen = fullscreen_requested();
             let driver = Rc::new(RefCell::new(DragDriver {
                 config,
+                expect_fullscreen,
                 doc,
                 overlay: overlay.clone(),
                 scene_details,
-                phase: DragPhase::Press,
+                phase: DragPhase::Settle {
+                    waited: 0,
+                    ready: 0,
+                },
                 plan: None,
                 step: 0,
                 draws_before_warmup: 0,
@@ -706,6 +781,85 @@ mod tests {
         assert_eq!(
             allocs, 0,
             "ToolMachine::pointer_move must not allocate during drag"
+        );
+    }
+
+    #[test]
+    fn settle_waits_for_hovered_fullscreen_then_counts_post_ready_frames() {
+        // Fullscreen mode waits for both fullscreen configure and pointer Enter (`hovered`).
+        assert_eq!(
+            advance_settle(0, 0, true, false, false).unwrap(),
+            SettleStep::Wait {
+                waited: 1,
+                ready: 0,
+            }
+        );
+        assert_eq!(
+            advance_settle(1, 0, true, true, false).unwrap(),
+            SettleStep::Wait {
+                waited: 2,
+                ready: 0,
+            }
+        );
+        // Dropping fullscreen or hover resets the post-ready counter without losing waited count.
+        assert_eq!(
+            advance_settle(2, 3, true, true, false).unwrap(),
+            SettleStep::Wait {
+                waited: 3,
+                ready: 0,
+            }
+        );
+        // Once both hold, `ready` counts SETTLE_FRAMES without incrementing `waited`.
+        let mut step = SettleStep::Wait {
+            waited: 3,
+            ready: 0,
+        };
+        for expected_ready in 1..=SETTLE_FRAMES {
+            let SettleStep::Wait { waited, ready } = step else {
+                panic!("expected Wait");
+            };
+            step = advance_settle(waited, ready, true, true, true).unwrap();
+            assert_eq!(
+                step,
+                SettleStep::Wait {
+                    waited: 3,
+                    ready: expected_ready,
+                }
+            );
+        }
+        let SettleStep::Wait { waited, ready } = step else {
+            panic!("expected Wait before Press");
+        };
+        assert_eq!(
+            advance_settle(waited, ready, true, true, true).unwrap(),
+            SettleStep::Press
+        );
+        assert!(advance_settle(FULLSCREEN_WAIT_CAP, 0, true, true, false).is_err());
+
+        // Non-fullscreen path (Windows / windowed Linux) counts SETTLE_FRAMES and presses.
+        let mut non_fs = SettleStep::Wait {
+            waited: 0,
+            ready: 0,
+        };
+        for expected_ready in 1..=SETTLE_FRAMES {
+            let SettleStep::Wait { waited, ready } = non_fs else {
+                panic!("expected Wait");
+            };
+            non_fs = advance_settle(waited, ready, false, false, false).unwrap();
+            assert_eq!(
+                non_fs,
+                SettleStep::Wait {
+                    waited: 0,
+                    ready: expected_ready,
+                }
+            );
+        }
+        let SettleStep::Wait { waited, ready } = non_fs else {
+            panic!("expected Wait before Press");
+        };
+        assert_eq!(
+            advance_settle(waited, ready, false, false, false).unwrap(),
+            SettleStep::Press
         );
     }
 
