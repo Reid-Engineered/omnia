@@ -716,9 +716,9 @@ true` on domain/argument errors; `-32602` on unknown tool names). All section 10
 `omnia_place_and_wire`, `omnia_safe_edit_loop`) are implemented without ever splicing document text
 into descriptions, prompts, errors or logs (AD14). JSON serialization uses explicit field ordering
 so transcripts are byte-identical regardless of `serde_json` features (AD8, AINV5). Note for A1.9
-and future tasks: `omnia://schema/{name}` serves the committed `omnia-agent` schemas; no separate
-`symbols` schema was committed under `crates/omnia-agent/schema/` since that directory is outside
-A1.8's **Owns**. Tests (20 in `omnia-cli`: 10 in `main.rs`, 10 in `mcp.rs`): exact byte-for-byte transcript
+and future tasks: `omnia://schema/{name}` serves the committed `omnia-agent` schemas plus the
+`symbols` and `symbol` JSON Schema 2020-12 documents published beside `omnia://symbols` in `mcp.rs`
+(section 9.3). Tests (20 in `omnia-cli`: 10 in `main.rs`, 10 in `mcp.rs`): exact byte-for-byte transcript
 verification for all 6 fixtures (ATC-mcp-01, ATC-mcp-02, stateless era, and all 3 prompts),
 handshake version negotiation and AQ15 assertions, stateless discovery and `-32022`/`-32602`,
 one-era-per-process and no-guessing, AINV11 `tools/list` vs catalog/schemas, AD1 strict
@@ -741,5 +741,10 @@ envelope parser preserving raw `params.arguments` so valid JSON like `1e400` rea
 (AD1, section 10.1); require the `notifications` filter object on `subscriptions/listen`; enforce
 `notifications/initialized` readiness in the handshake era (allowing only `ping` beforehand);
 update `omnia_inspect_sheet` prompt (and re-bless `prompt-inspect-sheet.out.jsonl`) to use item
-geometry for free wire ends and report all single-pin nets; corrected test count note (24 total in
-`omnia-cli`: 10 in `main.rs`, 14 in `mcp.rs`). Nothing measured; rule-1 scan clean.
+geometry for free wire ends and report all single-pin nets; defer `Era::Stateless` commitment
+until opening method validation succeeds (and validate `capabilities`/`clientInfo` on `initialize`
+before committing `Era::Handshake`), return `-32602` on opening `server/discover` without `_meta`
+while staying undecided, make `skip_json_value` fully iterative (safe on 10,000-deep lines) and
+bound `has_duplicate_keys` recursion depth, and publish `omnia://schema/symbols` and
+`omnia://schema/symbol` (section 9.3); corrected test count note (25 total in `omnia-cli`: 10 in
+`main.rs`, 15 in `mcp.rs`). Nothing measured; rule-1 scan clean.

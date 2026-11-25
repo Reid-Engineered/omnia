@@ -189,6 +189,14 @@ struct OpenDoc {
     saved_revision: u64,
 }
 
+/// Per-request era and logging context passed from `handle_request` to `handle_tools_call`.
+#[derive(Debug, Clone, Copy)]
+struct DispatchMode {
+    stateless: bool,
+    commit_stateless: bool,
+    log_level: Option<LogLevel>,
+}
+
 /// An active `subscriptions/listen` stream in the stateless era (2026-07-28).
 #[derive(Debug, Clone)]
 struct ListenStream {
@@ -369,7 +377,7 @@ impl<'a> Server<'a> {
             )];
         };
 
-        if has_duplicate_keys(&line.bytes, 0) {
+        if has_duplicate_keys(&line.bytes, 0, 0) {
             return vec![format_error(
                 None,
                 &RpcError::invalid_request("duplicate key in JSON-RPC message"),
@@ -463,7 +471,7 @@ impl<'a> Server<'a> {
 
         // Step 1: One-era-per-process selection on the first valid request (section 10.5),
         // plus Step 2: per-request metadata validation for the stateless era.
-        let request_log_level = match self.era {
+        let (stateless, commit_stateless, request_log_level) = match self.era {
             Era::Undecided => {
                 if method == "initialize" {
                     if has_stateless_meta_version {
@@ -488,14 +496,18 @@ impl<'a> Server<'a> {
                     return out;
                 }
                 if !has_stateless_meta_version {
-                    out.push(format_error(
-                        Some(id),
-                        &RpcError::invalid_request(
+                    let err = if is_stateless_only_method(method) {
+                        RpcError::invalid_params(
+                            "missing required `_meta` object for stateless protocol request",
+                        )
+                    } else {
+                        RpcError::invalid_request(
                             "protocol era not selected: send `initialize` (handshake era) or a \
                              request with `_meta[\"io.modelcontextprotocol/protocolVersion\"]` \
                              (stateless era)",
-                        ),
-                    ));
+                        )
+                    };
+                    out.push(format_error(Some(id), &err));
                     return out;
                 }
                 if is_handshake_only_method(method) {
@@ -528,8 +540,9 @@ impl<'a> Server<'a> {
                     ));
                     return out;
                 }
-                self.era = Era::Stateless;
-                level
+                // Defer committing `self.era = Era::Stateless` until method-level validation
+                // passes (AK1, section 10.5).
+                (true, true, level)
             }
             Era::Handshake { initialized, .. } => {
                 if method == "initialize" {
@@ -562,7 +575,7 @@ impl<'a> Server<'a> {
                     ));
                     return out;
                 }
-                self.handshake_log_level
+                (false, false, self.handshake_log_level)
             }
             Era::Stateless => {
                 if is_handshake_only_method(method) {
@@ -575,7 +588,7 @@ impl<'a> Server<'a> {
                     return out;
                 }
                 match validate_stateless_meta(params) {
-                    Ok(level) => level,
+                    Ok(level) => (true, false, level),
                     Err(e) => {
                         out.push(format_error(Some(id), &e));
                         return out;
@@ -584,32 +597,59 @@ impl<'a> Server<'a> {
             }
         };
 
-        // Step 3: Dispatch by method.
-        let stateless = self.era == Era::Stateless;
+        let mode = DispatchMode {
+            stateless,
+            commit_stateless,
+            log_level: request_log_level,
+        };
+
+        // Step 3: Dispatch by method. When `commit_stateless` is true, `self.era` transitions to
+        // `Era::Stateless` only once method validation succeeds.
         match method {
             "ping" => {
                 out.push(format_result(id, "{}"));
             }
             "server/discover" => {
+                if commit_stateless {
+                    self.era = Era::Stateless;
+                }
                 out.push(format_result(id, &self.server_discover()));
             }
             "tools/list" => match self.tools_list(params, stateless) {
-                Ok(result) => out.push(format_result(id, &result)),
+                Ok(result) => {
+                    if commit_stateless {
+                        self.era = Era::Stateless;
+                    }
+                    out.push(format_result(id, &result));
+                }
                 Err(e) => out.push(format_error(Some(id), &e)),
             },
-            "tools/call" => {
-                self.handle_tools_call(id, params, raw_line, stateless, request_log_level, &mut out)
-            }
+            "tools/call" => self.handle_tools_call(id, params, raw_line, mode, &mut out),
             "resources/list" => match self.resources_list(params, stateless) {
-                Ok(result) => out.push(format_result(id, &result)),
+                Ok(result) => {
+                    if commit_stateless {
+                        self.era = Era::Stateless;
+                    }
+                    out.push(format_result(id, &result));
+                }
                 Err(e) => out.push(format_error(Some(id), &e)),
             },
             "resources/templates/list" => match self.resources_templates_list(params, stateless) {
-                Ok(result) => out.push(format_result(id, &result)),
+                Ok(result) => {
+                    if commit_stateless {
+                        self.era = Era::Stateless;
+                    }
+                    out.push(format_result(id, &result));
+                }
                 Err(e) => out.push(format_error(Some(id), &e)),
             },
             "resources/read" => match self.resources_read(params, stateless) {
-                Ok(result) => out.push(format_result(id, &result)),
+                Ok(result) => {
+                    if commit_stateless {
+                        self.era = Era::Stateless;
+                    }
+                    out.push(format_result(id, &result));
+                }
                 Err(e) => out.push(format_error(Some(id), &e)),
             },
             "resources/subscribe" => match self.resources_subscribe(params) {
@@ -621,15 +661,30 @@ impl<'a> Server<'a> {
                 Err(e) => out.push(format_error(Some(id), &e)),
             },
             "subscriptions/listen" => match self.subscriptions_listen(id, params) {
-                Ok(ack) => out.push(ack),
+                Ok(ack) => {
+                    if commit_stateless {
+                        self.era = Era::Stateless;
+                    }
+                    out.push(ack);
+                }
                 Err(e) => out.push(format_error(Some(id), &e)),
             },
             "prompts/list" => match self.prompts_list(params, stateless) {
-                Ok(result) => out.push(format_result(id, &result)),
+                Ok(result) => {
+                    if commit_stateless {
+                        self.era = Era::Stateless;
+                    }
+                    out.push(format_result(id, &result));
+                }
                 Err(e) => out.push(format_error(Some(id), &e)),
             },
             "prompts/get" => match self.prompts_get(params, stateless) {
-                Ok(result) => out.push(format_result(id, &result)),
+                Ok(result) => {
+                    if commit_stateless {
+                        self.era = Era::Stateless;
+                    }
+                    out.push(format_result(id, &result));
+                }
                 Err(e) => out.push(format_error(Some(id), &e)),
             },
             "logging/setLevel" => match self.logging_set_level(params) {
@@ -661,6 +716,26 @@ impl<'a> Server<'a> {
                 ));
             }
         };
+        if let Some(caps) = params.get("capabilities")
+            && !caps.is_object()
+        {
+            return Err(RpcError::invalid_params("`capabilities` must be an object"));
+        }
+        if let Some(client_info) = params.get("clientInfo") {
+            let Some(ci) = client_info.as_object() else {
+                return Err(RpcError::invalid_params("`clientInfo` must be an object"));
+            };
+            if !ci.get("name").is_some_and(Value::is_string) {
+                return Err(RpcError::invalid_params(
+                    "`clientInfo.name` must be a string",
+                ));
+            }
+            if !ci.get("version").is_some_and(Value::is_string) {
+                return Err(RpcError::invalid_params(
+                    "`clientInfo.version` must be a string",
+                ));
+            }
+        }
 
         let mut res = JsonObj::new();
         res.str("protocolVersion", negotiated);
@@ -728,10 +803,14 @@ impl<'a> Server<'a> {
         id: &RequestId,
         params: &Map<String, Value>,
         raw_line: &[u8],
-        stateless: bool,
-        log_level: Option<LogLevel>,
+        mode: DispatchMode,
         out: &mut Vec<String>,
     ) {
+        let DispatchMode {
+            stateless,
+            commit_stateless,
+            log_level,
+        } = mode;
         let Some(name) = params.get("name").and_then(Value::as_str) else {
             out.push(format_error(
                 Some(id),
@@ -755,6 +834,12 @@ impl<'a> Server<'a> {
             ));
             return;
         };
+
+        // Tool name is valid and recognized: if this is the opening stateless request, commit
+        // the stateless era now before invoking the service and emitting notifications.
+        if commit_stateless {
+            self.era = Era::Stateless;
+        }
 
         // Decode tool arguments strictly from their exact raw JSON slice so duplicate keys,
         // floats and AK2/AK3/AK4 match `omnia call` and `omnia serve` byte for byte (AD1).
@@ -1150,7 +1235,7 @@ impl<'a> Server<'a> {
             ),
             ResourceUri::Schema(name) => {
                 let stem = name.strip_suffix(".json").unwrap_or(&name);
-                let Some(schema) = schema_text(stem) else {
+                let Some(schema) = mcp_schema_text(stem) else {
                     return Err(RpcError::resource_not_found(uri, stateless));
                 };
                 ("application/schema+json", schema, CacheHints::STATIC)
@@ -2058,10 +2143,161 @@ fn read_line_bounded(reader: &mut dyn BufRead) -> io::Result<Option<LineFrame>> 
     }))
 }
 
+/// Resolves an `omnia://schema/{name}` resource: delegates to `omnia-agent`'s committed schemas
+/// and also publishes the symbol catalog schemas (`symbols`, `symbol`) beside `omnia://symbols`
+/// per mcp-plan.md section 9.3.
+fn mcp_schema_text(stem: &str) -> Option<String> {
+    match stem {
+        "symbols" => Some(SYMBOLS_RESOURCE_SCHEMA.to_owned()),
+        "symbol" => Some(SYMBOL_RESOURCE_SCHEMA.to_owned()),
+        other => schema_text(other),
+    }
+}
+
+/// JSON Schema 2020-12 for `omnia://symbols` (`{"symbols": [SymbolInfo, ...]}`), matching
+/// `omnia_agent::read::SymbolInfo` (mcp-plan.md sections 9.3 and 10.2).
+const SYMBOLS_RESOURCE_SCHEMA: &str = r##"{
+  "$defs": {
+    "Bounds": {
+      "additionalProperties": false,
+      "description": "Local symbol bounds inside K1 sheet limits, with min <= max on both axes.",
+      "properties": {
+        "max": { "$ref": "#/$defs/SheetPoint" },
+        "min": { "$ref": "#/$defs/SheetPoint" }
+      },
+      "required": ["min", "max"],
+      "type": "object"
+    },
+    "Point": {
+      "description": "[x, y] in integer nanometres (AK8).",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        { "maximum": 2147483647, "minimum": -2147483648, "type": "integer" },
+        { "maximum": 2147483647, "minimum": -2147483648, "type": "integer" }
+      ],
+      "type": "array"
+    },
+    "SheetPoint": {
+      "description": "[x, y] in integer nanometres inside the K1 sheet limits.",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        { "maximum": 1000000000, "minimum": -1000000000, "type": "integer" },
+        { "maximum": 1000000000, "minimum": -1000000000, "type": "integer" }
+      ],
+      "type": "array"
+    },
+    "SymbolInfo": {
+      "additionalProperties": false,
+      "description": "Symbol definition: local bounds, placed size (K7) and pins in PinRef index order.",
+      "properties": {
+        "bounds": { "$ref": "#/$defs/Bounds" },
+        "height": { "maximum": 4294967295, "minimum": 0, "type": "integer" },
+        "name": { "type": "string" },
+        "pins": {
+          "items": { "$ref": "#/$defs/SymbolPin" },
+          "type": "array"
+        },
+        "width": { "maximum": 4294967295, "minimum": 0, "type": "integer" }
+      },
+      "required": ["name", "bounds", "width", "height", "pins"],
+      "type": "object"
+    },
+    "SymbolPin": {
+      "additionalProperties": false,
+      "properties": {
+        "at": { "$ref": "#/$defs/Point" },
+        "number": { "type": "string" }
+      },
+      "required": ["number", "at"],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "symbols": {
+      "items": { "$ref": "#/$defs/SymbolInfo" },
+      "type": "array"
+    }
+  },
+  "required": ["symbols"],
+  "title": "symbols",
+  "type": "object"
+}
+"##;
+
+/// JSON Schema 2020-12 for `omnia://symbols/{name}` (`SymbolInfo`, mcp-plan.md sections 9.3, 10.2).
+const SYMBOL_RESOURCE_SCHEMA: &str = r##"{
+  "$defs": {
+    "Bounds": {
+      "additionalProperties": false,
+      "description": "Local symbol bounds inside K1 sheet limits, with min <= max on both axes.",
+      "properties": {
+        "max": { "$ref": "#/$defs/SheetPoint" },
+        "min": { "$ref": "#/$defs/SheetPoint" }
+      },
+      "required": ["min", "max"],
+      "type": "object"
+    },
+    "Point": {
+      "description": "[x, y] in integer nanometres (AK8).",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        { "maximum": 2147483647, "minimum": -2147483648, "type": "integer" },
+        { "maximum": 2147483647, "minimum": -2147483648, "type": "integer" }
+      ],
+      "type": "array"
+    },
+    "SheetPoint": {
+      "description": "[x, y] in integer nanometres inside the K1 sheet limits.",
+      "items": false,
+      "maxItems": 2,
+      "minItems": 2,
+      "prefixItems": [
+        { "maximum": 1000000000, "minimum": -1000000000, "type": "integer" },
+        { "maximum": 1000000000, "minimum": -1000000000, "type": "integer" }
+      ],
+      "type": "array"
+    },
+    "SymbolPin": {
+      "additionalProperties": false,
+      "properties": {
+        "at": { "$ref": "#/$defs/Point" },
+        "number": { "type": "string" }
+      },
+      "required": ["number", "at"],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Single symbol definition: local bounds, placed size (K7) and pins in PinRef index order.",
+  "properties": {
+    "bounds": { "$ref": "#/$defs/Bounds" },
+    "height": { "maximum": 4294967295, "minimum": 0, "type": "integer" },
+    "name": { "type": "string" },
+    "pins": {
+      "items": { "$ref": "#/$defs/SymbolPin" },
+      "type": "array"
+    },
+    "width": { "maximum": 4294967295, "minimum": 0, "type": "integer" }
+  },
+  "required": ["name", "bounds", "width", "height", "pins"],
+  "title": "symbol",
+  "type": "object"
+}
+"##;
+
 /// Checks whether the JSON object starting at `start` (in already-validated JSON) has any
-/// duplicate keys on itself or its `params` object (excluding `params.arguments`, which
-/// `Request::from_arguments` checks strictly so it produces a structured tool error).
-fn has_duplicate_keys(bytes: &[u8], start: usize) -> bool {
+/// duplicate keys on itself (`depth == 0`), its `params` object (`depth == 1`), or `params._meta`
+/// (`depth == 2`), excluding `params.arguments` which `Request::from_arguments` checks strictly.
+fn has_duplicate_keys(bytes: &[u8], start: usize, depth: u8) -> bool {
     let i = skip_ws(bytes, start);
     if bytes.get(i) != Some(&b'{') {
         return false;
@@ -2083,9 +2319,9 @@ fn has_duplicate_keys(bytes: &[u8], start: usize) -> bool {
             return false;
         }
         let val_start = skip_ws(bytes, pos + 1);
-        if (start == 0 && key == "params" || start > 0 && key == "_meta")
+        if ((depth == 0 && key == "params") || (depth == 1 && key == "_meta"))
             && bytes.get(val_start) == Some(&b'{')
-            && has_duplicate_keys(bytes, val_start)
+            && has_duplicate_keys(bytes, val_start, depth + 1)
         {
             return true;
         }
@@ -2397,56 +2633,78 @@ fn skip_json_string(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// Iterative JSON value scanner (zero call-stack recursion, safe on deeply nested lines up to AK2).
 fn skip_json_value(bytes: &[u8], start: usize) -> Option<usize> {
-    let i = skip_ws(bytes, start);
-    match *bytes.get(i)? {
-        b'"' => skip_json_string(bytes, i),
-        b'{' => {
-            let mut pos = skip_ws(bytes, i + 1);
-            if bytes.get(pos) == Some(&b'}') {
-                return Some(pos + 1);
-            }
-            while pos < bytes.len() {
+    let mut stack: Vec<u8> = Vec::new();
+    let mut pos = skip_ws(bytes, start);
+
+    loop {
+        match *bytes.get(pos)? {
+            b'"' => {
                 pos = skip_json_string(bytes, pos)?;
-                pos = skip_ws(bytes, pos);
-                if bytes.get(pos) != Some(&b':') {
+            }
+            b'{' => {
+                pos = skip_ws(bytes, pos + 1);
+                if bytes.get(pos) == Some(&b'}') {
+                    pos += 1;
+                } else {
+                    pos = skip_json_string(bytes, pos)?;
+                    pos = skip_ws(bytes, pos);
+                    if bytes.get(pos) != Some(&b':') {
+                        return None;
+                    }
+                    pos = skip_ws(bytes, pos + 1);
+                    stack.push(b'}');
+                    continue;
+                }
+            }
+            b'[' => {
+                pos = skip_ws(bytes, pos + 1);
+                if bytes.get(pos) == Some(&b']') {
+                    pos += 1;
+                } else {
+                    stack.push(b']');
+                    continue;
+                }
+            }
+            _ => {
+                let scalar_start = pos;
+                while pos < bytes.len()
+                    && !is_json_space(bytes[pos])
+                    && !matches!(bytes[pos], b',' | b'}' | b']')
+                {
+                    pos += 1;
+                }
+                if pos == scalar_start {
                     return None;
                 }
-                pos = skip_json_value(bytes, pos + 1)?;
-                pos = skip_ws(bytes, pos);
-                match bytes.get(pos) {
-                    Some(&b',') => pos = skip_ws(bytes, pos + 1),
-                    Some(&b'}') => return Some(pos + 1),
-                    _ => return None,
-                }
             }
-            None
         }
-        b'[' => {
-            let mut pos = skip_ws(bytes, i + 1);
-            if bytes.get(pos) == Some(&b']') {
-                return Some(pos + 1);
-            }
-            while pos < bytes.len() {
-                pos = skip_json_value(bytes, pos)?;
-                pos = skip_ws(bytes, pos);
-                match bytes.get(pos) {
-                    Some(&b',') => pos = skip_ws(bytes, pos + 1),
-                    Some(&b']') => return Some(pos + 1),
-                    _ => return None,
+
+        loop {
+            let Some(&close) = stack.last() else {
+                return Some(pos);
+            };
+            pos = skip_ws(bytes, pos);
+            match bytes.get(pos) {
+                Some(&b',') => {
+                    pos = skip_ws(bytes, pos + 1);
+                    if close == b'}' {
+                        pos = skip_json_string(bytes, pos)?;
+                        pos = skip_ws(bytes, pos);
+                        if bytes.get(pos) != Some(&b':') {
+                            return None;
+                        }
+                        pos = skip_ws(bytes, pos + 1);
+                    }
+                    break;
                 }
+                Some(&b) if b == close => {
+                    pos += 1;
+                    stack.pop();
+                }
+                _ => return None,
             }
-            None
-        }
-        _ => {
-            let mut pos = i;
-            while pos < bytes.len()
-                && !is_json_space(bytes[pos])
-                && !matches!(bytes[pos], b',' | b'}' | b']')
-            {
-                pos += 1;
-            }
-            (pos > i).then_some(pos)
         }
     }
 }
@@ -2723,7 +2981,9 @@ mod tests {
             handshake_init("2025-11-25"),
         ]);
         assert_eq!(replies[0]["error"]["code"], json!(-32600));
-        assert_eq!(replies[1]["error"]["code"], json!(-32600));
+        // Stateless-only `server/discover` without `_meta` is -32602 (missing required metadata)
+        // while leaving the process era undecided so `initialize` still succeeds.
+        assert_eq!(replies[1]["error"]["code"], json!(-32602));
         assert!(replies[2].get("result").is_some());
         assert_eq!(replies[3]["error"]["code"], json!(-32600));
         assert_eq!(replies[4]["error"]["code"], json!(-32600));
@@ -3319,5 +3579,90 @@ mod tests {
             .unwrap();
         assert!(prompt_text.contains("item geometry"));
         assert!(prompt_text.contains("whether labelled or unlabelled"));
+    }
+
+    #[test]
+    fn a1_8_method_and_handshake_validation_precede_era_selection_and_deep_nesting_is_safe() {
+        // Opening stateless `subscriptions/listen` with valid `_meta` but missing `notifications`
+        // returns -32602 without locking Era::Stateless; malformed `initialize` (`capabilities`
+        // non-object or `clientInfo` missing `version`) returns -32602 without locking
+        // Era::Handshake; a subsequent valid `initialize` succeeds.
+        let replies = run_mcp_lines(&[
+            stateless_req(1, "subscriptions/listen", json!({})),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": { "protocolVersion": "2025-11-25", "capabilities": 42 }
+            }),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": { "name": "omnia-test" }
+                }
+            }),
+            handshake_init("2025-11-25"),
+            initialized_notif(),
+            json!({ "jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": { "uri": "omnia://schema/symbols" } }),
+            json!({ "jsonrpc": "2.0", "id": 5, "method": "resources/read", "params": { "uri": "omnia://schema/symbol" } }),
+        ]);
+
+        assert_eq!(replies[0]["error"]["code"], json!(-32602));
+        assert_eq!(replies[1]["error"]["code"], json!(-32602));
+        assert_eq!(replies[2]["error"]["code"], json!(-32602));
+        assert_eq!(replies[3]["result"]["protocolVersion"], json!("2025-11-25"));
+
+        // Verify published `omnia://schema/symbols` and `omnia://schema/symbol` schemas (§9.3).
+        let symbols_schema: Value = serde_json::from_str(
+            replies[4]["result"]["contents"][0]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .expect("valid JSON Schema for symbols");
+        assert_eq!(
+            symbols_schema["$schema"],
+            json!("https://json-schema.org/draft/2020-12/schema")
+        );
+        assert_eq!(symbols_schema["title"], json!("symbols"));
+        assert_eq!(
+            symbols_schema["$defs"]["SymbolInfo"]["required"],
+            json!(["name", "bounds", "width", "height", "pins"])
+        );
+
+        let symbol_schema: Value = serde_json::from_str(
+            replies[5]["result"]["contents"][0]["text"]
+                .as_str()
+                .unwrap(),
+        )
+        .expect("valid JSON Schema for symbol");
+        assert_eq!(
+            symbol_schema["$schema"],
+            json!("https://json-schema.org/draft/2020-12/schema")
+        );
+        assert_eq!(symbol_schema["title"], json!("symbol"));
+
+        // Deeply nested valid JSON inside `tools/call` `params.arguments` must not overflow the
+        // stack during `skip_json_value` / fallback parsing (AD1, AK2).
+        let depth = 10_000usize;
+        let deep_array = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
+        let input = format!(
+            "{}\n{}\n{{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{{\"name\":\"omnia_new\",\"arguments\":{deep_array}}}}}\n",
+            handshake_init("2025-11-25"),
+            initialized_notif(),
+        );
+        let (code, stdout, stderr) = run_mcp(input.as_bytes());
+        assert_eq!(code, EXIT_OK);
+        assert!(stderr.is_empty());
+        let deep_replies: Vec<Value> = stdout
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(deep_replies.len(), 2);
+        assert_eq!(deep_replies[1]["id"], json!(9));
+        assert_eq!(deep_replies[1]["result"]["isError"], json!(true));
     }
 }
