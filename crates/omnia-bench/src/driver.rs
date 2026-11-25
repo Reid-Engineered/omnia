@@ -1,8 +1,8 @@
 //! Scripted camera and pointer drivers. Every frame differs from the one before, so every
 //! frame repaints and no frame is skipped as identical.
 //!
-//! `drag-part` and `drag-wire` arrive in milestones 5 and 6; `hover` drives `OverlayView` over
-//! real sheets in `hover.rs` (T4.6).
+//! `drag-part` drives `OverlayView` in `drag_part.rs` (T5.4); `drag-wire` arrives in milestone 6;
+//! `hover` drives `OverlayView` over real sheets in `hover.rs` (T4.6).
 
 /// K4: the zoom range the `zoom` script sweeps (5% to 3200%).
 pub use omnia_canvas::camera::{MAX_ZOOM, MIN_ZOOM};
@@ -45,6 +45,9 @@ pub enum Script {
     /// Sweeps the pointer across visible parts, wires, labels (when present), and empty space
     /// over a focused `OverlayView` (T4.6, INV11).
     Hover,
+    /// Drags a visible part's ghost across grid-step waypoints over a focused `OverlayView`
+    /// (T5.4, B6, INV5, INV11).
+    DragPart,
 }
 
 impl Script {
@@ -53,11 +56,10 @@ impl Script {
             "pan" => Ok(Self::Pan),
             "zoom" => Ok(Self::Zoom),
             "hover" => Ok(Self::Hover),
-            "drag-part" | "drag-wire" => Err(format!(
-                "script `{name}` arrives in milestones 5 and 6 (T5.4 / T6.4)"
-            )),
+            "drag-part" => Ok(Self::DragPart),
+            "drag-wire" => Err(format!("script `{name}` arrives in milestone 6 (T6.4)")),
             _ => Err(format!(
-                "unknown script `{name}` (available: pan, zoom, hover)"
+                "unknown script `{name}` (available: pan, zoom, hover, drag-part)"
             )),
         }
     }
@@ -67,6 +69,7 @@ impl Script {
             Self::Pan => "pan",
             Self::Zoom => "zoom",
             Self::Hover => "hover",
+            Self::DragPart => "drag-part",
         }
     }
 
@@ -81,7 +84,7 @@ impl Script {
                 zoom: zoom_at(frame),
                 ..Camera::default()
             },
-            Self::Hover => Camera::default(),
+            Self::Hover | Self::DragPart => Camera::default(),
         }
     }
 }
@@ -139,7 +142,8 @@ mod tests {
         assert_eq!(Script::parse("pan"), Ok(Script::Pan));
         assert_eq!(Script::parse("zoom"), Ok(Script::Zoom));
         assert_eq!(Script::parse("hover"), Ok(Script::Hover));
-        assert!(Script::parse("drag-part").unwrap_err().contains("T5.4"));
+        assert_eq!(Script::parse("drag-part"), Ok(Script::DragPart));
+        assert!(Script::parse("drag-wire").unwrap_err().contains("T6.4"));
         assert!(Script::parse("spin").is_err());
     }
 }

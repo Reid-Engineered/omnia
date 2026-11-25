@@ -7,6 +7,7 @@
 
 pub mod alloc;
 pub mod compare;
+pub mod drag_part;
 pub mod driver;
 pub mod generate;
 pub mod harness;
