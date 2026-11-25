@@ -35,6 +35,12 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 const VIEWPORT_MARGIN_PX: f64 = 16.0;
+/// Post-configure frames drawn before `MouseDown` so the compositor finishes initial
+/// `xdg_toplevel::configure` and `wl_pointer::Event::Enter` (which synthesizes a `MouseMove`
+/// with `pressed_button: None` on Wayland) before the drag begins.
+const SETTLE_FRAMES: u32 = 8;
+/// Cap on frames waited for Linux fullscreen configure before failing fast.
+const FULLSCREEN_WAIT_CAP: u32 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DragWaypoint {
@@ -305,12 +311,38 @@ pub(crate) fn mouse_left_drag(position: Point<Pixels>) -> PlatformInput {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DragPhase {
+    Settle { waited: u32, ready: u32 },
     Press,
     Move,
 }
 
+fn advance_settle(
+    waited: u32,
+    ready: u32,
+    expect_fullscreen: bool,
+    is_fullscreen: bool,
+) -> Result<DragPhase, String> {
+    if expect_fullscreen && !is_fullscreen {
+        if waited >= FULLSCREEN_WAIT_CAP {
+            return Err("drag-part window did not enter fullscreen before drag start".into());
+        }
+        return Ok(DragPhase::Settle {
+            waited: waited + 1,
+            ready: 0,
+        });
+    }
+    if ready < SETTLE_FRAMES {
+        return Ok(DragPhase::Settle {
+            waited: waited + 1,
+            ready: ready + 1,
+        });
+    }
+    Ok(DragPhase::Press)
+}
+
 struct DragDriver {
     config: RunConfig,
+    expect_fullscreen: bool,
     doc: Entity<Doc>,
     overlay: Entity<OverlayView>,
     scene_details: Value,
@@ -357,6 +389,26 @@ impl DragDriver {
     }
 
     fn step(&mut self, window: &mut Window, cx: &mut App) -> bool {
+        if let DragPhase::Settle { waited, ready } = self.phase {
+            match advance_settle(
+                waited,
+                ready,
+                self.expect_fullscreen,
+                window.is_fullscreen(),
+            ) {
+                Ok(next @ DragPhase::Settle { .. }) => {
+                    self.phase = next;
+                    window.refresh();
+                    return true;
+                }
+                Ok(DragPhase::Press) => {
+                    self.phase = DragPhase::Press;
+                }
+                Ok(DragPhase::Move) => unreachable!("advance_settle never jumps to Move"),
+                Err(error) => return self.fail(error, window),
+            }
+        }
+
         if self.phase == DragPhase::Press {
             let camera = self.overlay.read(cx).camera().clone();
             let viewport = self.overlay.read(cx).viewport();
@@ -413,7 +465,12 @@ impl DragDriver {
             self.last_delta = active_drag_delta(view, plan.part_id);
             if self.last_delta.is_none() {
                 return self.fail(
-                    "drag-part left lifted Dragging state before measured frames began".into(),
+                    format!(
+                        "drag-part left lifted Dragging state before measured frames began (state: {:?}, fullscreen: {}, active: {})",
+                        view.tool_state(),
+                        window.is_fullscreen(),
+                        window.is_window_active(),
+                    ),
                     window,
                 );
             }
@@ -605,12 +662,18 @@ pub fn run_drag_part(config: RunConfig) -> Result<Value, String> {
             let focus = overlay.read(cx).focus_handle().clone();
             window.focus(&focus, cx);
             let trace = tracing.then(|| FrameTrace::new(cx));
+            let expect_fullscreen =
+                cfg!(target_os = "linux") && std::env::var_os("OMNIA_BENCH_FULLSCREEN").is_some();
             let driver = Rc::new(RefCell::new(DragDriver {
                 config,
+                expect_fullscreen,
                 doc,
                 overlay: overlay.clone(),
                 scene_details,
-                phase: DragPhase::Press,
+                phase: DragPhase::Settle {
+                    waited: 0,
+                    ready: 0,
+                },
                 plan: None,
                 step: 0,
                 draws_before_warmup: 0,
@@ -707,6 +770,48 @@ mod tests {
             allocs, 0,
             "ToolMachine::pointer_move must not allocate during drag"
         );
+    }
+
+    #[test]
+    fn settle_waits_for_fullscreen_then_counts_post_configure_frames() {
+        let mut phase = DragPhase::Settle {
+            waited: 0,
+            ready: 0,
+        };
+        for expected_waited in 1..=3 {
+            let DragPhase::Settle { waited, ready } = phase else {
+                panic!("expected Settle");
+            };
+            phase = advance_settle(waited, ready, true, false).expect("still waiting");
+            assert_eq!(
+                phase,
+                DragPhase::Settle {
+                    waited: expected_waited,
+                    ready: 0,
+                }
+            );
+        }
+        for expected_ready in 1..=SETTLE_FRAMES {
+            let DragPhase::Settle { waited, ready } = phase else {
+                panic!("expected Settle");
+            };
+            phase = advance_settle(waited, ready, true, true).expect("counting ready frames");
+            assert_eq!(
+                phase,
+                DragPhase::Settle {
+                    waited: 3 + expected_ready,
+                    ready: expected_ready,
+                }
+            );
+        }
+        let DragPhase::Settle { waited, ready } = phase else {
+            panic!("expected Settle before Press");
+        };
+        assert_eq!(
+            advance_settle(waited, ready, true, true).expect("ready to press"),
+            DragPhase::Press
+        );
+        assert!(advance_settle(FULLSCREEN_WAIT_CAP, 0, true, false).is_err());
     }
 
     #[cfg(feature = "headless")]
