@@ -2375,3 +2375,18 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `--features headless`, `cargo test --workspace`, `cargo test -p omnia-bench
                        --features headless`, `cargo deny check`, and `test_gate.py` (14/14). Waiting
                        on Orion reference run (`owner-run.sh`) to certify budgets and mark `done`.
+2026-11-25  T5.4  needs-human  First Orion remote campaign on `343a331` (`owner-run.sh --remote`,
+                       owner-approved) aborted `incomplete` (gate exit 2) on `s100/1k-drag-part-1`
+                       (`exit 3: bench: drag-part left lifted Dragging state before measured frames
+                       began`; zero timed motion runs completed; governors restored cleanly). Cause:
+                       on Wayland (`OMNIA_BENCH_FULLSCREEN=1`), `DragPhase::Press` ran before KWin
+                       finished `xdg_toplevel::configure` and `wl_pointer::Event::Enter`, so GPUI's
+                       Wayland client (`client.rs:2408-2415`) synthesized `MouseMove { pressed_button:
+                       None }` on `Enter` right after the first fullscreen present and cancelled the
+                       drag during warm-up. Fixed in `crates/omnia-bench/src/drag_part.rs` (plus
+                       shared `harness::fullscreen_requested()`): `DragPhase::Settle` waits for
+                       `is_fullscreen() && is_window_hovered()` (cap 60 frames) plus 8 post-ready
+                       settle frames before `Press` (non-fullscreen runs draw 8 best-effort settle
+                       frames), with `frames.startup_draws` recording the measured pre-warmup draw
+                       count for `T1.6/attribute.py`. Documented aborted attempt and harness fix in
+                       `docs/measurements/T5.4.md`; next Orion campaign runs on the rebuilt binary.
