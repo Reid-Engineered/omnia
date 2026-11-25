@@ -718,7 +718,7 @@ into descriptions, prompts, errors or logs (AD14). JSON serialization uses expli
 so transcripts are byte-identical regardless of `serde_json` features (AD8, AINV5). Note for A1.9
 and future tasks: `omnia://schema/{name}` serves the committed `omnia-agent` schemas; no separate
 `symbols` schema was committed under `crates/omnia-agent/schema/` since that directory is outside
-A1.8's **Owns**. Tests (20 in `omnia-cli`, 11 new in `mcp.rs`): exact byte-for-byte transcript
+A1.8's **Owns**. Tests (20 in `omnia-cli`: 10 in `main.rs`, 10 in `mcp.rs`): exact byte-for-byte transcript
 verification for all 6 fixtures (ATC-mcp-01, ATC-mcp-02, stateless era, and all 3 prompts),
 handshake version negotiation and AQ15 assertions, stateless discovery and `-32022`/`-32602`,
 one-era-per-process and no-guessing, AINV11 `tools/list` vs catalog/schemas, AD1 strict
@@ -729,3 +729,17 @@ on Windows and passing: `cargo fmt --all --check`, `cargo clippy --workspace --a
 warnings`, `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D
 warnings`, `cargo test --workspace`, `cargo deny check`. Rule-1 scan done on changed files.
 Nothing measured.
+
+2026-11-25 A1.8 review fixes — addressed all PR #129 independent review findings: validate
+opening stateless requests (`_meta` structure, non-handshake method, known stateless method)
+before locking `Era::Stateless` while preserving the `-32022` probe exception (AK1, section 10.5);
+return `-32602` instead of retired `-32002` for missing resources in the 2026-07-28 stateless era;
+check `Operation::RequestStatus` before keyed `Save` dispatch so idempotent replays cannot roll
+back `omnia://docs` path tracking (AINV7, section 11.2); add an iterative RFC 8259 fallback
+envelope parser preserving raw `params.arguments` so valid JSON like `1e400` reaches
+`Request::from_arguments` and returns a structured `isError: true` response with the request id
+(AD1, section 10.1); require the `notifications` filter object on `subscriptions/listen`; enforce
+`notifications/initialized` readiness in the handshake era (allowing only `ping` beforehand);
+update `omnia_inspect_sheet` prompt (and re-bless `prompt-inspect-sheet.out.jsonl`) to use item
+geometry for free wire ends and report all single-pin nets; corrected test count note (24 total in
+`omnia-cli`: 10 in `main.rs`, 14 in `mcp.rs`). Nothing measured; rule-1 scan clean.
