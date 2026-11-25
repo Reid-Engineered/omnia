@@ -180,7 +180,7 @@ own in turn.
 - Done when: transcript tests show the same request gives byte-identical results through
   `call` and `serve`.
 
-### A1.8 MCP over stdio · todo
+### A1.8 MCP over stdio · done
 - Lane: agent · Depends: A1.7 · Read: mcp-plan.md section 10; AK1; AQ1
 - Owns: `crates/omnia-cli/src/mcp.rs`, `crates/omnia-cli/tests/transcripts/`
 - Do: both protocol eras per mcp-plan.md section 10.5 (amended at A0.2): Omnia's one-era-per-
@@ -686,3 +686,46 @@ before a request that starts with `-`; a test checks that `call -1` is a usage e
 `call -- -1` is answered like `serve` answers `-1`; section 14's A1.7 note mentions `--`.
 Checks rerun locally on Windows, all passing: fmt, workspace clippy, omnia-bench clippy with
 `scene-counts,readback`, `cargo test --workspace`, `cargo deny check`. Nothing measured.
+
+2026-11-25 A1.8 done — new `crates/omnia-cli/src/mcp.rs` (wired into `crates/omnia-cli/src/main.rs`
+as `omnia mcp [--root DIR]...`) and 6 exact transcript fixture pairs under
+`crates/omnia-cli/tests/transcripts/` (`atc-mcp-01`, `atc-mcp-02`, `stateless-era`,
+`prompt-inspect-sheet`, `prompt-place-and-wire`, `prompt-safe-edit-loop`). Hand-written JSON-RPC
+2.0 over newline-delimited stdio with no new dependencies and no async runtime (AQ1, AINV8). Both
+AK1 protocol eras are served by one binary with one-era-per-process selection on the first valid
+request (section 10.5): `initialize` locks the handshake era (`2025-11-25`, `2025-06-18`; unknown
+or missing version answers `2025-11-25`), with `notifications/initialized`, `ping`,
+`resources/subscribe`/`unsubscribe`, and `logging/setLevel`; any non-`initialize` request carrying
+`_meta["io.modelcontextprotocol/protocolVersion"]` locks the stateless era (`2026-07-28`), with
+required per-request `_meta` (`protocolVersion` and `clientCapabilities`; missing is `-32602`),
+`server/discover`, `UnsupportedProtocolVersionError` (`-32022`, `data: {supported, requested}`),
+`resultType: "complete"`, caching hints (`ttlMs`, `cacheScope`) on discovery, list and read
+results, `subscriptions/listen` with `notifications/subscriptions/acknowledged` and
+`notifications/cancelled` teardown, and optional per-request `io.modelcontextprotocol/logLevel`.
+Cross-era messages and pre-selection non-`initialize` requests without `_meta` are refused
+(`-32600`, no era guessing). Tasks are never advertised in any revision (AQ15). `tools/list` is
+built from `Catalog::current()` with compact canonical `inputSchema`/`outputSchema` and
+`ToolAnnotations` (AINV11); `tools/call` extracts the raw JSON slice of `params.arguments` so
+`Request::from_arguments` enforces strict duplicate-key, integer-spelling and AK2–AK4 rules
+identically to `omnia call`/`serve` (AD1), dispatching via `AgentService::handle_in(...,
+Form::Arguments)` and returning `structuredContent` + a text block with identical JSON (`isError:
+true` on domain/argument errors; `-32602` on unknown tool names). All section 10.2 A1 resources
+(`omnia://capabilities`, `omnia://schema/{name}`, `omnia://docs`, `omnia://doc/{doc_id}`,
+`omnia://doc/{doc_id}/items{?cursor}`, `omnia://doc/{doc_id}/nets`, `omnia://symbols`,
+`omnia://symbols/{name}`) and all three static section 10.3 prompts (`omnia_inspect_sheet`,
+`omnia_place_and_wire`, `omnia_safe_edit_loop`) are implemented without ever splicing document text
+into descriptions, prompts, errors or logs (AD14). JSON serialization uses explicit field ordering
+so transcripts are byte-identical regardless of `serde_json` features (AD8, AINV5). Note for A1.9
+and future tasks: `omnia://schema/{name}` serves the committed `omnia-agent` schemas; no separate
+`symbols` schema was committed under `crates/omnia-agent/schema/` since that directory is outside
+A1.8's **Owns**. Tests (20 in `omnia-cli`, 11 new in `mcp.rs`): exact byte-for-byte transcript
+verification for all 6 fixtures (ATC-mcp-01, ATC-mcp-02, stateless era, and all 3 prompts),
+handshake version negotiation and AQ15 assertions, stateless discovery and `-32022`/`-32602`,
+one-era-per-process and no-guessing, AINV11 `tools/list` vs catalog/schemas, AD1 strict
+`tools/call` arguments, all resource URIs and handshake subscriptions, logging level filtering and
+AD14 hostile-text check, AK2 oversized line recovery, and `--root` save/close tracking. Verified
+the compiled `omnia mcp` binary directly on stdin/stdout transcripts on Windows. Checks run locally
+on Windows and passing: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D
+warnings`, `cargo test --workspace`, `cargo deny check`. Rule-1 scan done on changed files.
+Nothing measured.

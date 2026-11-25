@@ -10,14 +10,16 @@
 //!   standard input (`call.rs`).
 //! - `omnia serve [--root DIR]...` is a JSON-lines session on standard input and output
 //!   (`jsonl.rs`).
+//! - `omnia mcp [--root DIR]...` is an MCP server over standard input and output (`mcp.rs`).
 //!
 //! Exit codes (section 14): 0 success; 1 a tool error (the response on stdout is an error), or
-//! an I/O failure reading the input or writing the output; 2 a usage error. `serve` exits 0 at
-//! the end of its input. Standard output carries only results; usage errors and diagnostics go
-//! to standard error.
+//! an I/O failure reading the input or writing the output; 2 a usage error. `serve` and `mcp`
+//! exit 0 at the end of their input. Standard output carries only results; usage errors and
+//! diagnostics go to standard error.
 
 mod call;
 mod jsonl;
+mod mcp;
 
 use std::{
     ffi::{OsStr, OsString},
@@ -49,6 +51,7 @@ commands:
                                   to read it from standard input; put -- before a REQUEST
                                   that starts with -
   serve [--root DIR]...           JSON-lines session on standard input and output
+  mcp [--root DIR]...             MCP server on standard input and output
   help                            print this text
 
 exit codes: 0 success, 1 tool error, 2 usage error
@@ -76,6 +79,9 @@ enum Command {
         source: call::Source,
     },
     Serve {
+        roots: Vec<PathBuf>,
+    },
+    Mcp {
         roots: Vec<PathBuf>,
     },
 }
@@ -114,6 +120,10 @@ fn run(
         },
         Command::Serve { roots } => match service(&roots) {
             Ok(mut service) => jsonl::serve(&mut service, stdin, stdout).map(|()| EXIT_OK),
+            Err(message) => return usage_error(stderr, &message),
+        },
+        Command::Mcp { roots } => match service(&roots) {
+            Ok(mut service) => mcp::serve(&mut service, stdin, stdout, stderr).map(|()| EXIT_OK),
             Err(message) => return usage_error(stderr, &message),
         },
     };
@@ -172,6 +182,17 @@ fn parse(args: &[OsString]) -> Result<Command, String> {
                 Ok(Command::Serve { roots })
             } else {
                 Err("`serve` takes no request; it reads them from standard input".to_owned())
+            }
+        }
+        "mcp" => {
+            let (roots, positional) = options(rest)?;
+            if positional.is_empty() {
+                Ok(Command::Mcp { roots })
+            } else {
+                Err(
+                    "`mcp` takes no arguments; it serves MCP over standard input and output"
+                        .to_owned(),
+                )
             }
         }
         _ => Err(format!(
@@ -951,7 +972,8 @@ mod tests {
         let cases: Vec<Vec<OsString>> = vec![
             args(&[]),
             args(&["frobnicate"]),
-            args(&["mcp"]),
+            args(&["mcp", "extra"]),
+            args(&["mcp", "--root", m]),
             args(&["capabilities", "extra"]),
             args(&["help", "extra"]),
             args(&["schema", "no.such.schema"]),
