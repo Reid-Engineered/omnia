@@ -510,6 +510,7 @@ impl BenchScene for Scene {
 mod chrome;
 pub mod s7;
 pub mod shell_cache;
+pub mod sim_scope;
 
 /// Why a spike command failed: bad arguments (exit 2) or a failed run (exit 3).
 #[derive(Debug)]

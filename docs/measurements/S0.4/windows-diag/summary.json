@@ -1,0 +1,62 @@
+[
+  {
+    "scale_tag": "windows",
+    "hz": 30,
+    "runs": 10,
+    "frame_p99_median_ms": 0.8397,
+    "frame_p99_range_ms": [
+      0.5704,
+      0.9805
+    ],
+    "max_frame_ms": 1.4746,
+    "total_raw_misses": 0,
+    "b3_counted_misses": 0,
+    "unusable_traces": [],
+    "max_sheet_paints": 0,
+    "max_ours_allocs_per_frame": 0.0,
+    "median_total_allocs_per_frame": 20.5333,
+    "max_memory_mib": 99.1016,
+    "max_working_set_mib": 101.6094,
+    "stream_hz_range": [
+      29.9535,
+      30.0851
+    ],
+    "sample_rate_range": [
+      99459.4338,
+      100307.5377
+    ],
+    "total_dropped_pairs": 0,
+    "total_empty_updates": 0,
+    "unexpected_scope_paint_runs": 0
+  },
+  {
+    "scale_tag": "windows",
+    "hz": 60,
+    "runs": 10,
+    "frame_p99_median_ms": 0.81355,
+    "frame_p99_range_ms": [
+      0.7404,
+      1.003
+    ],
+    "max_frame_ms": 1.279,
+    "total_raw_misses": 0,
+    "b3_counted_misses": 0,
+    "unusable_traces": [],
+    "max_sheet_paints": 0,
+    "max_ours_allocs_per_frame": 0.0,
+    "median_total_allocs_per_frame": 21.0333,
+    "max_memory_mib": 99.1055,
+    "max_working_set_mib": 101.6367,
+    "stream_hz_range": [
+      60.0485,
+      60.1789
+    ],
+    "sample_rate_range": [
+      99449.604,
+      100345.5893
+    ],
+    "total_dropped_pairs": 0,
+    "total_empty_updates": 55,
+    "unexpected_scope_paint_runs": 0
+  }
+]
