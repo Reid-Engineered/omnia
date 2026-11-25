@@ -2787,19 +2787,50 @@ mod tests {
         assert!(!captured(cx));
     }
 
+    /// Contract C4 (review P1): replacing a live pointer-driven rubber band with a programmatic
+    /// preview ends the live band through `end_gesture` and releases its capture before any
+    /// further pointer event.
+    #[gpui::test]
+    fn t5_2_set_rubber_band_preview_ends_live_band_and_releases_capture(cx: &mut TestAppContext) {
+        let (overlay, _doc, cx) = open_overlay(cx);
+        down(&overlay, cx, pt(0, -8));
+        drag_to(&overlay, cx, pt(4, -4));
+        assert!(captured(cx));
+        cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                o.set_rubber_band_preview(
+                    pt(-2, -2),
+                    pt(2, 2),
+                    omnia_doc::prefs::SelectMode::Enclosed,
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        assert!(
+            !captured(cx),
+            "replacing a live band with a preview releases capture before any further pointer event"
+        );
+        let band = cx
+            .update(|_, cx| overlay.read(cx).rubber_band())
+            .expect("programmatic preview installed");
+        assert!(!band.is_pointer_drag());
+    }
+
     /// Contract C4 table-driven test: walks every gesture end path listed in canvas-plan /
-    /// T5.2 section 3 across drag, rubber band, and pending place press, asserting at most
-    /// one command, to the stamped document only, clean gesture state, and capture released.
+    /// T5.2 section 3 (plus undo/redo and `set_rubber_band_preview`) across drag, rubber band,
+    /// and pending place press, asserting at most one command, to the stamped document only,
+    /// clean gesture state, and capture released.
     #[gpui::test]
     fn t5_2_every_gesture_end_path_satisfies_c4(cx: &mut TestAppContext) {
-        #[derive(Clone, Copy, Debug)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum GestureKind {
             Drag,
             Band,
             PendingPlace,
         }
 
-        #[derive(Clone, Copy, Debug)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         enum EndPath {
             Release,
             EscCancel,
@@ -2816,6 +2847,9 @@ mod tests {
             DropOverlay,
             ShiftClickWithBand,
             CancelRubberBand,
+            SetRubberBandPreview,
+            Undo,
+            Redo,
         }
 
         let cases: &[(GestureKind, EndPath, u64)] = &[
@@ -2833,6 +2867,8 @@ mod tests {
             (GestureKind::Drag, EndPath::Replace, 0),
             (GestureKind::Drag, EndPath::Detach, 0),
             (GestureKind::Drag, EndPath::DropOverlay, 0),
+            (GestureKind::Drag, EndPath::Undo, 1),
+            (GestureKind::Drag, EndPath::Redo, 1),
             // Rubber-band paths
             (GestureKind::Band, EndPath::Release, 0),
             (GestureKind::Band, EndPath::EscCancel, 0),
@@ -2849,10 +2885,14 @@ mod tests {
             (GestureKind::Band, EndPath::DropOverlay, 0),
             (GestureKind::Band, EndPath::ShiftClickWithBand, 0),
             (GestureKind::Band, EndPath::CancelRubberBand, 0),
+            (GestureKind::Band, EndPath::SetRubberBandPreview, 0),
+            (GestureKind::Band, EndPath::Undo, 1),
+            (GestureKind::Band, EndPath::Redo, 1),
             // Pending place-press paths
             (GestureKind::PendingPlace, EndPath::Release, 0),
             (GestureKind::PendingPlace, EndPath::EscCancel, 0),
             (GestureKind::PendingPlace, EndPath::LostCapture, 0),
+            (GestureKind::PendingPlace, EndPath::MoveOffSheet, 0),
             (GestureKind::PendingPlace, EndPath::ToolChange, 0),
             (GestureKind::PendingPlace, EndPath::WindowDeactivated, 0),
             (GestureKind::PendingPlace, EndPath::SetDocSome, 0),
@@ -2861,15 +2901,41 @@ mod tests {
             (GestureKind::PendingPlace, EndPath::Replace, 0),
             (GestureKind::PendingPlace, EndPath::Detach, 0),
             (GestureKind::PendingPlace, EndPath::DropOverlay, 0),
+            (GestureKind::PendingPlace, EndPath::Undo, 1),
+            (GestureKind::PendingPlace, EndPath::Redo, 1),
         ];
 
         for &(kind, path, expected_edits) in cases {
             cx.update(|cx| cx.bind_keys(standalone_bindings()));
             let (host, overlay, doc_a, vcx) = open_hosted(cx);
             let doc_b = vcx.update(|_, cx| cx.new(|_| test_doc()));
-            let (a0, b0) = vcx.update(|_, cx| (snapshot(doc_a.read(cx)), snapshot(doc_b.read(cx))));
-            let rev_a0 = revision(&doc_a, vcx);
+            let b0 = vcx.update(|_, cx| snapshot(doc_b.read(cx)));
             let rev_b0 = revision(&doc_b, vcx);
+
+            // Seed reversible history for Undo/Redo cases so the step actually runs and can be
+            // distinguished from any stale drag commit (R1 stays at (-6, 0) while C1 moves).
+            let expected_a = match path {
+                EndPath::Undo => {
+                    let before = vcx.update(|_, cx| snapshot(doc_a.read(cx)));
+                    nudge(&doc_a, vcx);
+                    Some(before)
+                }
+                EndPath::Redo => {
+                    nudge(&doc_a, vcx);
+                    let nudged = vcx.update(|_, cx| snapshot(doc_a.read(cx)));
+                    vcx.update(|_, cx| {
+                        doc_a.update(cx, |doc, _| {
+                            assert!(doc.undo().is_some());
+                        });
+                    });
+                    Some(nudged)
+                }
+                _ => {
+                    let initial = vcx.update(|_, cx| snapshot(doc_a.read(cx)));
+                    (expected_edits == 0).then_some(initial)
+                }
+            };
+            let rev_a0 = revision(&doc_a, vcx);
 
             let canvas = match path {
                 EndPath::Attach => Some(canvas_for(vcx, Some(doc_a.clone()), None)),
@@ -2928,9 +2994,13 @@ mod tests {
                         overlay.update(cx, |o, cx| o.cancel(window, cx));
                     });
                 }
-                EndPath::FreshPress | EndPath::ShiftClickWithBand => {
-                    // Shift-click on an item ends a live drag or band without taking a new
-                    // capture, so we can assert capture is released right away.
+                EndPath::FreshPress => {
+                    // Plain fresh press on C1 ends the stale drag or band with no edit and
+                    // takes a brand-new capture for C1 (distinct from ShiftClickWithBand).
+                    down(&overlay, vcx, pt(6, 0));
+                }
+                EndPath::ShiftClickWithBand => {
+                    // Shift-click on R1 ends a live band without taking a new capture.
                     let at = screen(&overlay, vcx, pt(-6, 0));
                     vcx.simulate_mouse_down(at, MouseButton::Left, Modifiers::shift());
                 }
@@ -2946,10 +3016,16 @@ mod tests {
                 }
                 EndPath::MoveOffSheet => {
                     let at = screen(&overlay, vcx, pt(-4, 2));
-                    vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
-                    vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+                    let button = match kind {
+                        GestureKind::PendingPlace => None,
+                        _ => {
+                            vcx.simulate_mouse_down(at, MouseButton::Right, Modifiers::none());
+                            vcx.simulate_mouse_up(at, MouseButton::Right, Modifiers::none());
+                            Some(MouseButton::Left)
+                        }
+                    };
                     let outside = gpui::point(gpui::px(-400.0), gpui::px(-400.0));
-                    vcx.simulate_mouse_move(outside, MouseButton::Left, Modifiers::none());
+                    vcx.simulate_mouse_move(outside, button, Modifiers::none());
                 }
                 EndPath::ToolChange => {
                     vcx.update(|_, cx| overlay.update(cx, |o, cx| o.set_tool(Tool::Wire, cx)));
@@ -2998,8 +3074,55 @@ mod tests {
                 EndPath::CancelRubberBand => {
                     vcx.update(|_, cx| overlay.update(cx, |o, cx| o.cancel_rubber_band(cx)));
                 }
+                EndPath::SetRubberBandPreview => {
+                    vcx.update(|_, cx| {
+                        overlay.update(cx, |o, cx| {
+                            o.set_rubber_band_preview(
+                                pt(-2, -2),
+                                pt(2, 2),
+                                omnia_doc::prefs::SelectMode::Enclosed,
+                                cx,
+                            );
+                        });
+                    });
+                }
+                EndPath::Undo => {
+                    vcx.update(|window, cx| {
+                        assert!(overlay.update(cx, |o, cx| o.undo(window, cx)));
+                    });
+                }
+                EndPath::Redo => {
+                    vcx.update(|window, cx| {
+                        assert!(overlay.update(cx, |o, cx| o.redo(window, cx)));
+                    });
+                }
             }
             vcx.run_until_parked();
+
+            // FreshPress starts a brand-new capture on C1 after ending the stale gesture; verify
+            // the stale gesture is gone and then cancel the fresh drag to confirm clean release.
+            if path == EndPath::FreshPress {
+                let live = weak.upgrade().unwrap();
+                assert!(
+                    captured(vcx),
+                    "C4 ({kind:?}/FreshPress): fresh press on C1 takes its own capture"
+                );
+                assert!(
+                    vcx.update(|_, cx| matches!(
+                        live.read(cx).tool_state(),
+                        ToolState::Dragging(d) if d.pressed == C1
+                    )),
+                    "C4 ({kind:?}/FreshPress): fresh drag is on C1, not the stale gesture"
+                );
+                assert!(
+                    vcx.update(|_, cx| live.read(cx).rubber_band().is_none()),
+                    "C4 ({kind:?}/FreshPress): stale rubber band cleared"
+                );
+                vcx.update(|window, cx| {
+                    live.update(cx, |o, cx| o.cancel(window, cx));
+                });
+                vcx.run_until_parked();
+            }
 
             // Assert C4: capture released, at most one command to stamped doc_a, doc_b untouched.
             assert!(
@@ -3024,10 +3147,15 @@ mod tests {
                 vcx.update(|_, cx| doc_b.read(cx).content_eq(&b0)),
                 "C4 failed ({kind:?}/{path:?}): doc B content changed"
             );
-            if expected_edits == 0 {
+            if let Some(expected) = &expected_a {
                 assert!(
-                    vcx.update(|_, cx| doc_a.read(cx).content_eq(&a0)),
-                    "C4 failed ({kind:?}/{path:?}): doc A changed on a no-edit end path"
+                    vcx.update(|_, cx| doc_a.read(cx).content_eq(expected)),
+                    "C4 failed ({kind:?}/{path:?}): doc A content does not match expected state"
+                );
+                assert_eq!(
+                    part_at(&doc_a, vcx, 0),
+                    pt(-6, 0),
+                    "C4 failed ({kind:?}/{path:?}): stale R1 drag must not commit"
                 );
             }
             if dropped {
@@ -3042,10 +3170,20 @@ mod tests {
                     ToolPhase::Dragging,
                     "C4 failed ({kind:?}/{path:?}): drag state not cleared"
                 );
-                assert!(
-                    vcx.update(|_, cx| live.read(cx).rubber_band().is_none()),
-                    "C4 failed ({kind:?}/{path:?}): rubber band not cleared"
-                );
+                if path != EndPath::SetRubberBandPreview {
+                    assert!(
+                        vcx.update(|_, cx| live.read(cx).rubber_band().is_none()),
+                        "C4 failed ({kind:?}/{path:?}): rubber band not cleared"
+                    );
+                } else {
+                    assert!(
+                        vcx.update(|_, cx| live
+                            .read(cx)
+                            .rubber_band()
+                            .is_some_and(|b| !b.is_pointer_drag())),
+                        "C4 failed ({kind:?}/{path:?}): preview should be non-capturing"
+                    );
+                }
                 assert!(
                     vcx.update(|_, cx| !matches!(
                         live.read(cx).tool_state(),

@@ -2211,42 +2211,45 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        One gesture owner: `OverlayView` holds the only machine. `SheetCanvas`
                        delegates tool, cancel, undo and redo to the overlay attached with
                        `set_overlay`, only while both show one document; `set_doc` and
-                       `set_overlay` keep them aligned. History is the event type `CanvasHistory`
-                       (not a `CanvasEvent` variant, which would break exhaustive matches in
-                       omnia-app and omnia-bench). It carries the source `doc` key and is emitted
-                       after every effective edit. Supported-use contract (canvas-plan section 9,
-                       mirrored in ui-plan §10/§14; INV5 and INV11 remain primary): (C1) an
-                       `OverlayView` belongs to one window and stays mounted there while attached
-                       to `SheetCanvas` — remounting it in a second window is unsupported by
-                       contract (`debug_assert!` in debug, no-op in release on paint or capture);
-                       (C2) outside `omnia-canvas`, history reaches subscribers only through
-                       `SheetCanvas::subscribe_history`, which drops events for a document no
-                       longer shown at delivery, and both `OverlayView` and `SheetCanvas` emit
-                       history sealed in opaque `CanvasHistoryEvent` (no public fields, no
-                       accessors, opaque `Debug`); (C3) a `SheetCanvas` does not subscribe to its
-                       own history, and `subscribe_history` reads the canvas's current document
-                       key from a shared `Rc<Cell<Option<u64>>>` so self-subscription never
-                       triggers a GPUI double-borrow panic; (C4) every gesture (drag, rubber
-                       band, pending place/wire press) either commits once to its own document at
-                       its stamped revision while holding capture or ends with no edit, releasing
-                       its capture in the window it took it in and never a newer capture.
-                       Structural change: `OverlayView` records `{ window, hitbox, generation }`
-                       at capture time and routes every gesture-end path (release, Esc/cancel,
-                       fresh press, lost capture, pointer move off the sheet, tool change, window
-                       deactivation, `set_doc(Some)` and `set_doc(None)`, attach, replace, detach
-                       and drop of the overlay, Shift-click while a band is live,
-                       `cancel_rubber_band`, and undo/redo) through one `OverlayView::end_gesture`
-                       function — the only code that clears drag, band, pending-press or capture
-                       state or calls `window.release_pointer()` (synchronously when given the
-                       capture's window, else via a generation-guarded deferred update against
-                       the recorded window handle). INV5 tests pass, pure and through simulated
-                       GPUI input: the revision holds until mouse-up, one undo reverts the drag,
-                       and Esc commits nothing. INV11: the zero-paint `cancel()` case, plus a
-                       real-Esc case bounding sheet paints by observed modality switches at the
-                       Esc (UQ15, UG17), with zero paints on the release. 124 canvas unit tests
-                       + 2 `compile_fail` doctests (including raw-subscription opacity,
-                       self-subscription, Shift-click with live band, `set_doc(Some)` + unmount,
-                       deferred-release generation guard, and a 39-case table-driven C4 test
+                       `set_overlay` keep them aligned. History is emitted as the opaque event
+                       type `CanvasHistoryEvent` (not a `CanvasEvent` variant, which would break
+                       exhaustive matches in omnia-app and omnia-bench), carrying a `CanvasHistory`
+                       payload with the source `doc` key after every effective edit, delivered to
+                       subscribers only through `SheetCanvas::subscribe_history`. Supported-use
+                       contract (canvas-plan section 9, mirrored in ui-plan §10/§14; INV5 and
+                       INV11 remain primary): (C1) an `OverlayView` belongs to one window and
+                       stays mounted there while attached to `SheetCanvas` — remounting it in a
+                       second window is unsupported by contract (`debug_assert!` in debug, no-op
+                       in release on paint or capture); (C2) outside `omnia-canvas`, history
+                       reaches subscribers only through `SheetCanvas::subscribe_history`, which
+                       drops events for a document no longer shown at delivery, and both
+                       `OverlayView` and `SheetCanvas` emit history sealed in opaque
+                       `CanvasHistoryEvent` (no public fields, no accessors, opaque `Debug`);
+                       (C3) a `SheetCanvas` does not subscribe to its own history, and
+                       `subscribe_history` reads the canvas's current document key from a shared
+                       `Rc<Cell<Option<u64>>>` so self-subscription never triggers a GPUI
+                       double-borrow panic; (C4) every gesture (drag, rubber band, pending
+                       place/wire press) either commits once to its own document at its stamped
+                       revision while holding capture or ends with no edit, releasing its capture
+                       in the window it took it in and never a newer capture. Structural change:
+                       `OverlayView` records `{ window, hitbox, generation }` at capture time and
+                       routes every gesture-end path (release, Esc/cancel, fresh press, lost
+                       capture, pointer move off the sheet, tool change, window deactivation,
+                       `set_doc(Some)` and `set_doc(None)`, attach, replace, detach and drop of
+                       the overlay, Shift-click while a band is live, `cancel_rubber_band`,
+                       `set_rubber_band_preview`, and undo/redo) through one
+                       `OverlayView::end_gesture` function — the only code that clears drag, band,
+                       pending-press or capture state or calls `window.release_pointer()`
+                       (synchronously when given the capture's window, else via a
+                       generation-guarded deferred update against the recorded window handle).
+                       INV5 tests pass, pure and through simulated GPUI input: the revision holds
+                       until mouse-up, one undo reverts the drag, and Esc commits nothing. INV11:
+                       the zero-paint `cancel()` case, plus a real-Esc case bounding sheet paints
+                       by observed modality switches at the Esc (UQ15, UG17), with zero paints on
+                       the release. 125 canvas unit tests + 2 `compile_fail` doctests (including
+                       raw-subscription opacity, self-subscription, Shift-click with live band,
+                       `set_doc(Some)` + unmount, `set_rubber_band_preview` over a live band,
+                       deferred-release generation guard, and a 47-case table-driven C4 test
                        covering every end path).
                        Deviations: the coordinator widened Owns on 2026-11-24 (review finding
                        7) to the tool-routing, key-context, gesture-owner and history hooks of

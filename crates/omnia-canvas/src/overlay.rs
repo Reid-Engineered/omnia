@@ -511,7 +511,8 @@ impl OverlayView {
 
     /// Sets a visible rubber band directly in world coordinates for golden rendering or
     /// programmatic preview (never notifies `SheetView`, keeps `select_mode()` unchanged, and
-    /// does not capture the pointer).
+    /// does not capture the pointer). If a pointer-driven rubber band is currently live, it is
+    /// ended through [`Self::end_gesture`] first so its capture is released (C4).
     pub fn set_rubber_band_preview(
         &mut self,
         anchor: Pt,
@@ -519,6 +520,9 @@ impl OverlayView {
         mode: SelectMode,
         cx: &mut Context<Self>,
     ) {
+        if self.state.is_rubber_banding() {
+            self.end_gesture(GestureEndReason::CancelRubberBand, None, Some(cx));
+        }
         if self.state.set_rubber_band_preview(anchor, current, mode) {
             cx.notify();
         }
@@ -954,9 +958,17 @@ impl OverlayView {
             }
             if !left_held && matches!(self.tools.state(), tool::ToolState::Placing(p) if p.pressed)
             {
+                let reason = if hovered {
+                    GestureEndReason::LostCapture
+                } else {
+                    GestureEndReason::MoveOffSheet
+                };
                 run_gpui(scope.as_deref(), || {
-                    self.end_gesture(GestureEndReason::LostCapture, Some(window), Some(cx));
+                    self.end_gesture(reason, Some(window), Some(cx));
                 });
+                if !hovered {
+                    return;
+                }
             }
             let outcome = self.tools.pointer_move(world, left_held);
             run_gpui(scope.as_deref(), || {
@@ -1291,14 +1303,20 @@ impl Element for OverlayLayer {
                 rec.window == window.window_handle() && window.captured_hitbox() == Some(rec.hitbox)
             });
             let hovered = hit.is_hovered(window);
-            // T5.2: a drag or band that lost its capture ends wherever the pointer is, before
-            // hover routing could treat it as leaving the sheet.
-            let lost = !owns
-                && overlay
-                    .read_with(cx, |overlay, _| {
-                        overlay.tools.is_dragging() || overlay.state.is_rubber_banding()
-                    })
-                    .unwrap_or(false);
+            let left_held = event.pressed_button == Some(MouseButton::Left);
+            // T5.2: a drag or band that lost its capture, or a pending Place press whose release
+            // was lost, ends wherever the pointer is, before hover routing could treat it as
+            // leaving the sheet.
+            let lost = overlay
+                .read_with(cx, |overlay, _| {
+                    (!owns && (overlay.tools.is_dragging() || overlay.state.is_rubber_banding()))
+                        || (!left_held
+                            && matches!(
+                                overlay.tools.state(),
+                                tool::ToolState::Placing(p) if p.pressed
+                            ))
+                })
+                .unwrap_or(false);
             if hovered || lost {
                 overlay
                     .update(cx, |overlay, cx| {
