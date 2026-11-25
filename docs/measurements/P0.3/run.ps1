@@ -16,10 +16,26 @@ $ErrorActionPreference = "Stop"
 $Parts = 500; $Reps = 10; $Iters = 200; $Warmup = 20
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-# The run directory is claimed atomically: New-Item without -Force fails if it already exists.
-New-Item -ItemType Directory -Force (Join-Path $here "results/runs") | Out-Null
-$results = Join-Path $here ("results/runs/{0}-{1}" -f $Label, (Get-Date -Format "yyyyMMddTHHmmss"))
-New-Item -ItemType Directory $results -ErrorAction Stop | Out-Null
+# Claims a run directory atomically. Creating the directory is idempotent on Windows, so the
+# claim is an exclusive `.claim` file: FileMode.CreateNew fails with "file exists" if another
+# launch already holds the directory, before this run writes anything there.
+function New-RunDirectory([string]$Path) {
+    [System.IO.Directory]::CreateDirectory($Path) | Out-Null
+    $claim = [System.IO.File]::Open((Join-Path $Path ".claim"), [System.IO.FileMode]::CreateNew)
+    $claim.Dispose()
+}
+if ($env:P03_CLAIM_SELFTEST) {
+    # Self-test: claiming the same path twice must fail the second time.
+    $probe = Join-Path ([System.IO.Path]::GetTempPath()) ("p03-claim-" + [guid]::NewGuid())
+    New-RunDirectory $probe
+    try { New-RunDirectory $probe; "claim self-test: FAIL (second claim succeeded)"; exit 1 }
+    catch { "claim self-test: second claim refused ($($_.Exception.InnerException.Message))" }
+    finally { Remove-Item -Recurse -Force $probe }
+    exit 0
+}
+$results = [System.IO.Path]::GetFullPath(
+    (Join-Path $here ("results/runs/{0}-{1}" -f $Label, (Get-Date -Format "yyyyMMddTHHmmss"))))
+New-RunDirectory $results
 if (-not $env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR = Join-Path $here "spike/target" }
 $bin = Join-Path $env:CARGO_TARGET_DIR "release"
 
