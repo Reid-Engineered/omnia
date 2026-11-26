@@ -201,7 +201,11 @@ pub enum ToolRequest {
     },
     /// R, X or Y outside a gesture: T5.3 turns the selection with one command.
     ReorientSelection(Orient),
-    /// Del outside a gesture: T5.3's `delete_selection`.
+    /// Del outside a gesture: T5.3's `delete_selection`. The host reads
+    /// `WiringPrefs::delete_wires_with_part` when it carries this out, so every Delete path
+    /// (the key, `OverlayView::delete_selection`, `SheetCanvas::delete_selection`) builds one
+    /// `Command::Delete` with the current preference (WD10, WQ4, W3.5). T7.1's Cut must do
+    /// the same.
     DeleteSelection,
 }
 
@@ -283,7 +287,9 @@ impl ToolMachine {
         &self.prefs
     }
 
-    /// The follow policy is read from these at commit (WD12, WK3).
+    /// The follow policy is read from these at commit (WD12, WK3), and
+    /// `delete_wires_with_part` when the host carries out [`ToolRequest::DeleteSelection`]
+    /// (WD10), so a change made mid-gesture applies to the next edit, never a preview.
     pub fn set_prefs(&mut self, prefs: WiringPrefs) {
         self.prefs = prefs;
     }
@@ -1027,7 +1033,7 @@ mod tests {
     use gpui::{
         AppContext, Bounds, Modifiers, MouseButton, Pixels, TestAppContext, VisualTestContext,
     };
-    use omnia_doc::{GRID_NM, Label, Part, PartId, Wire, WireId};
+    use omnia_doc::{Connectivity, GRID_NM, Label, Part, PartId, SHEET_LIMIT_NM, Wire, WireId};
     use omnia_symbols::SymbolLibrary;
     use omnia_theme::GRAPHITE;
     use std::{cell::RefCell, rc::Rc};
@@ -3862,5 +3868,408 @@ mod tests {
                 .expect("provider committed part on doc_b")
         });
         assert_eq!(&*placed.value, "from-mismatch-stub");
+    }
+
+    // ---- W3.5: Delete with wires through the canvas (WD10, WQ4, TC-del-01..03) ----
+
+    /// A resistor (pins at `at` ± 2 grid steps on x) for the TC-del fixtures.
+    fn del_resistor(at: Pt, designator: &str) -> (Part, Vec<Pt>, Rect) {
+        let lib = SymbolLibrary::builtin();
+        let symbol = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let def = lib.get(symbol);
+        (
+            Part {
+                symbol,
+                at,
+                orient: Orient::IDENTITY,
+                designator: designator.into(),
+                value: "1".into(),
+            },
+            def.pins.iter().map(|p| p.at).collect(),
+            def.bounds,
+        )
+    }
+
+    fn del_wire(a: (i32, i32), b: (i32, i32)) -> Wire {
+        Wire {
+            a: pt(a.0, a.1),
+            b: pt(b.0, b.1),
+        }
+    }
+
+    /// TC-del-01/02: R1 at (-6, 0) with pins (-8, 0) and (-4, 0); C1 at (6, 6) with pins
+    /// (4, 6) and (8, 6). The bent run W0-W1-W2 goes from R1's right pin to C1's left pin,
+    /// the run W4 goes from R1's left pin to a free end, and W3 continues beyond C1 to the
+    /// label OUT.
+    fn tc_del_01_doc() -> Doc {
+        Doc::from_items(
+            [del_resistor(pt(-6, 0), "R1"), del_resistor(pt(6, 6), "C1")],
+            [
+                del_wire((-4, 0), (0, 0)),
+                del_wire((0, 0), (0, 6)),
+                del_wire((0, 6), (4, 6)),
+                del_wire((8, 6), (12, 6)),
+                del_wire((-12, 0), (-8, 0)),
+            ],
+            [Label {
+                at: pt(12, 6),
+                text: "OUT".into(),
+            }],
+        )
+        .unwrap()
+    }
+
+    /// TC-del-03: R1's run W0-W1 ends on the junction (0, 6), where W2 and W3 meet
+    /// collinearly and go on to free ends.
+    fn tc_del_03_doc() -> Doc {
+        Doc::from_items(
+            [del_resistor(pt(-6, 0), "R1")],
+            [
+                del_wire((-4, 0), (0, 0)),
+                del_wire((0, 0), (0, 6)),
+                del_wire((-6, 6), (0, 6)),
+                del_wire((0, 6), (6, 6)),
+            ],
+            [],
+        )
+        .unwrap()
+    }
+
+    fn live_wires(doc: &Doc) -> Vec<(WireId, Wire)> {
+        doc.wires().map(|(id, &w)| (id, w)).collect()
+    }
+
+    /// INV10: the document's incremental connectivity and junctions agree with an
+    /// independent rebuild over its live parts, wires and labels.
+    fn assert_inv10(doc: &Doc) {
+        let oracle = Connectivity::rebuild_with_parts(
+            doc.wires().map(|(id, &w)| (id, w)),
+            doc.labels(),
+            doc.parts()
+                .map(|(id, _)| (id, doc.pins(id).unwrap().to_vec())),
+        );
+        assert_eq!(doc.net_count(), oracle.net_count(), "INV10: net count");
+        let ends = || {
+            doc.wires().flat_map(|(_, w)| [w.a, w.b]).chain(
+                doc.parts()
+                    .flat_map(|(id, _)| doc.pins(id).unwrap().to_vec()),
+            )
+        };
+        let mut points: Vec<Pt> = ends().chain(doc.labels().map(|(_, l)| l.at)).collect();
+        points.sort_by_key(|p| (p.x, p.y));
+        points.dedup();
+        for &p in &points {
+            assert_eq!(
+                doc.net_at(p).is_some(),
+                oracle.net_at(p).is_some(),
+                "INV10: {p:?}"
+            );
+            for &q in &points {
+                assert_eq!(
+                    doc.net_at(p) == doc.net_at(q),
+                    oracle.net_at(p) == oracle.net_at(q),
+                    "INV10: {p:?} and {q:?}"
+                );
+            }
+        }
+        for (id, w) in doc.wires() {
+            assert_eq!(doc.net_of(id), doc.net_at(w.a), "INV10: {id:?}");
+            assert_eq!(doc.net_of(id), doc.net_at(w.b), "INV10: {id:?}");
+        }
+        let mut degree = std::collections::BTreeMap::<(i32, i32), usize>::new();
+        for p in ends() {
+            *degree.entry((p.x, p.y)).or_default() += 1;
+        }
+        let expected: Vec<(i32, i32)> = degree
+            .into_iter()
+            .filter_map(|(p, n)| (n >= 3).then_some(p))
+            .collect();
+        let sheet = Rect {
+            min: Pt {
+                x: -SHEET_LIMIT_NM,
+                y: -SHEET_LIMIT_NM,
+            },
+            max: Pt {
+                x: SHEET_LIMIT_NM,
+                y: SHEET_LIMIT_NM,
+            },
+        };
+        let mut found = Vec::new();
+        doc.junctions(sheet, &mut found);
+        let mut found: Vec<(i32, i32)> = found.iter().map(|p| (p.x, p.y)).collect();
+        found.sort_unstable();
+        assert_eq!(found, expected, "INV10: junctions");
+    }
+
+    /// The pieces a W3.5 test drives: the overlay, its document, an attached `SheetCanvas`
+    /// and the history that canvas re-emits.
+    struct DelRig<'a> {
+        overlay: Entity<OverlayView>,
+        doc: Entity<Doc>,
+        canvas: Entity<SheetCanvas>,
+        history: Rc<RefCell<Vec<CanvasHistory>>>,
+        cx: &'a mut VisualTestContext,
+    }
+
+    fn del_prefs(with_wires: bool) -> WiringPrefs {
+        let mut prefs = WiringPrefs::default();
+        prefs.delete_wires_with_part = with_wires;
+        prefs
+    }
+
+    /// An overlay showing `doc` with `prefs`, focused, with its canvas and history log.
+    fn open_del_rig(cx: &mut TestAppContext, doc: Doc, with_wires: bool) -> DelRig<'_> {
+        cx.update(|cx| cx.bind_keys(standalone_bindings()));
+        let prefs = del_prefs(with_wires);
+        let doc = cx.new(|_| doc);
+        let doc_clone = doc.clone();
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = OverlayView::with_prefs(doc_clone, camera, &GRAPHITE, &prefs, cx);
+            window.activate_window();
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+        cx.run_until_parked();
+        let canvas = canvas_for(cx, Some(doc.clone()), Some(overlay.clone()));
+        let history = record_history(&canvas, cx);
+        DelRig {
+            overlay,
+            doc,
+            canvas,
+            history,
+            cx,
+        }
+    }
+
+    /// How a test asks for Delete.
+    #[derive(Clone, Copy, Debug)]
+    enum DelPath {
+        Key,
+        Overlay,
+        Canvas,
+    }
+
+    impl DelRig<'_> {
+        fn snapshot(&mut self) -> Doc {
+            let doc = self.doc.clone();
+            self.cx.update(|_, cx| snapshot(doc.read(cx)))
+        }
+
+        fn select(&mut self, items: &[ItemId]) {
+            let overlay = self.overlay.clone();
+            let items = items.to_vec();
+            self.cx
+                .update(|_, cx| overlay.update(cx, |o, cx| o.set_selection(items, cx)));
+        }
+
+        fn set_with_wires(&mut self, with_wires: bool) {
+            let overlay = self.overlay.clone();
+            self.cx.update(|_, cx| {
+                overlay.update(cx, |o, cx| o.apply_prefs(&del_prefs(with_wires), cx))
+            });
+        }
+
+        fn delete(&mut self, path: DelPath) {
+            let (overlay, canvas) = (self.overlay.clone(), self.canvas.clone());
+            match path {
+                DelPath::Key => self.cx.simulate_keystrokes("delete"),
+                DelPath::Overlay => self.cx.update(|window, cx| {
+                    overlay.update(cx, |o, cx| o.delete_selection(window, cx))
+                }),
+                DelPath::Canvas => self
+                    .cx
+                    .update(|window, cx| canvas.update(cx, |c, cx| c.delete_selection(window, cx))),
+            }
+            self.cx.run_until_parked();
+        }
+
+        /// Deletes `selection` through `path` and checks one command, one undo step and one
+        /// history event; INV10 after the delete, after undo and after redo; and that undo
+        /// restores exact content and ids and redo repeats the delete (INV4). Returns the
+        /// document after the delete.
+        fn delete_roundtrip(&mut self, selection: &[ItemId], path: DelPath) -> Doc {
+            let doc = self.doc.clone();
+            let before = self.snapshot();
+            let rev = revision(&doc, self.cx);
+            let events = self.history.borrow().len();
+            self.select(selection);
+            self.delete(path);
+
+            assert_eq!(revision(&doc, self.cx), rev + 1, "{path:?}: one command");
+            let cursor = self.cx.update(|_, cx| doc.read(cx).history_cursor());
+            assert_eq!(
+                &self.history.borrow()[events..],
+                &[CanvasHistory {
+                    doc: doc_key(&doc),
+                    can_undo: true,
+                    can_redo: false,
+                    cursor,
+                }],
+                "{path:?}: one history event"
+            );
+            let after = self.snapshot();
+            let overlay = self.overlay.clone();
+            assert!(
+                self.cx
+                    .update(|_, cx| overlay.read(cx).selection().is_empty())
+            );
+            assert_inv10(&after);
+            self.cx.update(|_, cx| assert_inv10(doc.read(cx)));
+
+            self.cx.simulate_keystrokes("ctrl-z");
+            assert!(self.cx.update(|_, cx| doc.read(cx).content_eq(&before)));
+            self.cx.update(|_, cx| assert_inv10(doc.read(cx)));
+            self.cx.simulate_keystrokes("ctrl-y");
+            assert!(self.cx.update(|_, cx| doc.read(cx).content_eq(&after)));
+            self.cx.update(|_, cx| assert_inv10(doc.read(cx)));
+            assert_eq!(self.history.borrow().len(), events + 3);
+            after
+        }
+
+        /// Undoes the last step and checks the document is `content` again.
+        fn undo_to(&mut self, content: &Doc) {
+            let doc = self.doc.clone();
+            self.cx.simulate_keystrokes("ctrl-z");
+            assert!(self.cx.update(|_, cx| doc.read(cx).content_eq(content)));
+        }
+    }
+
+    /// TC-del-02 (preference off, the WQ4 default) through the Del key: only R1 goes; every
+    /// wire stays with its id and keeps a free end where R1's pins were.
+    #[gpui::test]
+    fn tc_del_02_del_key_flag_off_removes_only_the_part_inv4_inv10(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, tc_del_01_doc(), false);
+        let original = rig.snapshot();
+        let after = rig.delete_roundtrip(&[R1], DelPath::Key);
+        assert!(after.part(PartId(0)).is_none());
+        assert!(after.part(PartId(1)).is_some());
+        assert_eq!(live_wires(&after), live_wires(&original));
+        assert_eq!(after.labels().count(), 1);
+    }
+
+    /// TC-del-01 (preference on) through the Del key: R1 goes with both runs that start at
+    /// its pins, up to their far anchors (C1's pin; a free end). W3 beyond C1 and the label
+    /// stay with their ids.
+    #[gpui::test]
+    fn tc_del_01_del_key_flag_on_removes_runs_to_far_anchors_inv4_inv10(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, tc_del_01_doc(), true);
+        let original = rig.snapshot();
+        let after = rig.delete_roundtrip(&[R1], DelPath::Key);
+        assert!(after.part(PartId(0)).is_none());
+        assert_eq!(
+            after.part(PartId(1)).cloned(),
+            original.part(PartId(1)).cloned()
+        );
+        assert_eq!(
+            live_wires(&after),
+            vec![(WireId(3), del_wire((8, 6), (12, 6)))]
+        );
+        assert_eq!(
+            after
+                .labels()
+                .map(|(id, l)| (id, l.clone()))
+                .collect::<Vec<_>>(),
+            original
+                .labels()
+                .map(|(id, l)| (id, l.clone()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// TC-del-03 (preference on) through the Del key: R1's run ends on a junction; the run
+    /// goes, and the junction's other two wires, now collinear through a degree-2 point,
+    /// merge into one.
+    #[gpui::test]
+    fn tc_del_03_del_key_run_to_junction_merges_the_rest_inv4_inv10(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, tc_del_03_doc(), true);
+        let after = rig.delete_roundtrip(&[R1], DelPath::Key);
+        assert_eq!(after.parts().count(), 0);
+        let wires = live_wires(&after);
+        assert_eq!(wires.len(), 1);
+        assert_eq!(wires[0].1, del_wire((-6, 6), (6, 6)));
+        assert!(after.wire(WireId(0)).is_none() && after.wire(WireId(1)).is_none());
+        let mut junctions = Vec::new();
+        after.junctions(
+            Rect {
+                min: pt(-20, -20),
+                max: pt(20, 20),
+            },
+            &mut junctions,
+        );
+        assert!(junctions.is_empty());
+    }
+
+    /// W3.5 audit (WD10, WQ4): the Del key, `OverlayView::delete_selection` and
+    /// `SheetCanvas::delete_selection` each read the preference current at the Delete, so a
+    /// change through `apply_prefs` reaches every path.
+    #[gpui::test]
+    fn w3_5_every_delete_path_reads_the_current_preference(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, tc_del_01_doc(), false);
+        let original = rig.snapshot();
+        let all_wires = live_wires(&original);
+        let beyond = vec![(WireId(3), del_wire((8, 6), (12, 6)))];
+        for (with_wires, path) in [
+            (false, DelPath::Canvas),
+            (false, DelPath::Overlay),
+            (true, DelPath::Key),
+            (true, DelPath::Overlay),
+            (true, DelPath::Canvas),
+            (false, DelPath::Key),
+        ] {
+            rig.set_with_wires(with_wires);
+            let after = rig.delete_roundtrip(&[R1], path);
+            let expected = if with_wires { &beyond } else { &all_wires };
+            assert_eq!(&live_wires(&after), expected, "{with_wires} {path:?}");
+            assert!(after.part(PartId(0)).is_none());
+            rig.undo_to(&original);
+        }
+    }
+
+    /// W3.5 edge cases with the preference on: Del mid-drag changes nothing (the drag never
+    /// commits over deleted items), and a hovered wire removed with its part leaves neither
+    /// the overlay's hover nor the tool's hover mirror pointing at it.
+    #[gpui::test]
+    fn w3_5_del_mid_drag_is_ignored_and_hover_on_a_removed_run_clears(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, tc_del_01_doc(), true);
+        let original = rig.snapshot();
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+
+        // Mid-drag: Del is ignored; Esc cancels with no edit (INV5).
+        rig.select(&[R1]);
+        let rev = revision(&doc, rig.cx);
+        down(&overlay, rig.cx, pt(-6, 0));
+        drag_to(&overlay, rig.cx, pt(-6, 2));
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Dragging);
+        rig.cx.simulate_keystrokes("delete");
+        assert_eq!(revision(&doc, rig.cx), rev);
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Dragging);
+        rig.cx.simulate_keystrokes("escape");
+        up(&overlay, rig.cx, pt(-6, 2));
+        assert_eq!(revision(&doc, rig.cx), rev);
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        assert!(rig.history.borrow().is_empty());
+
+        // Hover W1 (in R1's run), then delete R1 with its runs.
+        let w1 = ItemId::Wire(WireId(1));
+        let at = screen(&overlay, rig.cx, pt(0, 3));
+        rig.cx.simulate_mouse_move(at, None, Modifiers::none());
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).hovered()), Some(w1));
+        assert_eq!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Hovering(w1)
+        );
+        rig.select(&[R1]);
+        rig.delete(DelPath::Key);
+        assert!(
+            rig.cx
+                .update(|_, cx| doc.read(cx).wire(WireId(1)).is_none())
+        );
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).hovered()), None);
+        assert_eq!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Idle
+        );
+        assert_eq!(rig.history.borrow().len(), 1);
     }
 }

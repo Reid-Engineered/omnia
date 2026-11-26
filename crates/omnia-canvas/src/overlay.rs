@@ -498,7 +498,9 @@ impl OverlayView {
         }
     }
 
-    /// Applies wiring preferences (`select_mode`) to the overlay (WD8, WD12; never notifies `SheetView`).
+    /// Applies wiring preferences to the overlay (WD8, WD12; never notifies `SheetView`):
+    /// `select_mode` at once; the follow policy at the next commit; and
+    /// `delete_wires_with_part` at the next Delete, whichever path requests it (WD10, WQ4).
     pub fn apply_prefs(&mut self, prefs: &WiringPrefs, cx: &mut Context<Self>) {
         self.tools.set_prefs(*prefs);
         if self.state.apply_prefs(prefs) {
@@ -690,6 +692,14 @@ impl OverlayView {
             self.sheet.update(cx, |_, cx| cx.notify());
         }
         let mut update = self.state.prune(self.doc.read(cx));
+        // W3.5: an edit can remove the hovered item without a pointer move (Delete with
+        // `delete_wires_with_part` takes unselected runs). Drop the tool's hover mirror of a
+        // removed item; a live one is left for the next pointer move, as before.
+        if let tool::ToolState::Hovering(item) = *self.tools.state()
+            && !item_exists(self.doc.read(cx), item)
+        {
+            self.tools.hover(None);
+        }
         if self.sync_net_highlight(cx) {
             update.visual_changed = true;
         }
@@ -1167,6 +1177,8 @@ impl ToolHost for OverlayView {
                     key: tool::doc_key(&self.doc),
                     revision: self.doc.read(cx).revision(),
                 };
+                // W3.5: the Del key, both `delete_selection` methods and the shell's Delete
+                // all arrive here, so the preference is read once, now (WD10, WQ4).
                 let with_wires = self.tools.prefs().delete_wires_with_part;
                 let command = tool::move_::delete_selection_command(
                     self.doc.read(cx),
