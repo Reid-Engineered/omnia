@@ -48,8 +48,8 @@ use omnia_doc::{
 };
 use omnia_theme::Theme;
 
-/// K5 wire stroke width in world nanometres, matching `sheet/wires.rs`.
-const WIRE_WIDTH_NM: f64 = 228_600.0;
+/// K5 wire stroke width in world nanometres, matching `sheet/wires.rs` and `sheet/symbols.rs`.
+const WIRE_WIDTH_NM: f64 = 254_000.0;
 /// Logical padding around a part body for hover/selection frames.
 const PART_FRAME_PAD_PX: f64 = 4.0;
 /// Logical outline thickness for selected items.

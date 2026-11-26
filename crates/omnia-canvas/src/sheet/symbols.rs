@@ -5,7 +5,7 @@ use gpui::{Bounds, Pixels, SharedString, TransformationMatrix};
 use omnia_doc::{Orient, Part, Pt, SymbolId};
 use omnia_symbols::{SymbolDef, SymbolLibrary};
 
-const SYMBOL_STROKE_NM: f64 = 254_000.0;
+pub(super) const SYMBOL_STROKE_NM: f64 = 254_000.0;
 // Bound the atlas raster at high zoom. The instance matrix maps it to its true size.
 const MAX_BUCKET: u32 = 40; // 2^(40/4) = 1024 device pixels (2048 mask texels).
 const DOT: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4"/></svg>"#;

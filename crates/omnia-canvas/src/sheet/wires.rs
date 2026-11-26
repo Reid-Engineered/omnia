@@ -7,7 +7,7 @@ use crate::{
 use gpui::{Bounds, Pixels};
 use omnia_doc::{Pt, Wire};
 
-pub(super) const WIDTH_NM: f64 = 228_600.0;
+pub(super) const WIDTH_NM: f64 = 254_000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Segment {
@@ -122,6 +122,11 @@ impl MergedSegments {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn k5_wire_stroke_matches_symbol_stroke() {
+        assert_eq!(WIDTH_NM, super::super::symbols::SYMBOL_STROKE_NM);
+    }
 
     #[test]
     fn d4_visible_runs_follow_geometry_and_view_changes() {

@@ -1059,7 +1059,7 @@ mod tests {
                             };
                             let origin = camera.world_to_screen(Pt::ZERO);
                             let device = |p: f64| (p * f64::from(sf)).round() as i32;
-                            let width = (1.8f32 * sf).round() as usize;
+                            let width = (2.0f32 * sf).round() as usize;
                             // A clockwise turn puts the local downward stem to the left of the pin.
                             let pin = camera.world_to_screen(pt(-2, 1));
                             let stem_x = device(pin.x - 12.0);

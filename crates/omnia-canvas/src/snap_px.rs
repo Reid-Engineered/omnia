@@ -111,10 +111,10 @@ mod tests {
         assert_eq!(stroke_device_px(1.2, 1.0), 1);
         assert_eq!(stroke_device_px(1.2, 1.25), 2);
         assert_eq!(stroke_device_px(1.2, 1.5), 2);
-        // K5 wire, 1.8 px.
-        assert_eq!(stroke_device_px(1.8, 1.0), 2);
-        assert_eq!(stroke_device_px(1.8, 1.25), 2);
-        assert_eq!(stroke_device_px(1.8, 1.5), 3);
+        // K5 wire and symbol stroke, 2.0 px.
+        assert_eq!(stroke_device_px(2.0, 1.0), 2);
+        assert_eq!(stroke_device_px(2.0, 1.25), 3);
+        assert_eq!(stroke_device_px(2.0, 1.5), 3);
     }
 
     #[test]
