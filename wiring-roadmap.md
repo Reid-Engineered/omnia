@@ -959,18 +959,22 @@ the Orion Linux/Wayland desktop check that mid-drag `Alt` reaches `omnia-app`
 findings: (1) P1-1 — corrected `docs/measurements/W2.3.md` to match `WK10`
 (`follow_pin_threshold = 10` instead of `8`, noting `inverting-amp.ron` covers
 `TC-move-05` via `R1` while interactive `TC-move-04` needs a `>= 10`-connected-pin
-part); (2) P2-3 — extended `DragGesture` (`affected_labels`, `plan_labels_sorted`,
-`preview_labels`, and fixed lift-off `hidden_items`) and `overlay/follow.rs` /
-`overlay/ghosts.rs` so non-selected rigid-run corner labels (`plan.labels`) hide once at
-lift-off (`WINV11`) and preview at their translated positions (with stationary anchor
-dots when detached/refused and zero warm Omnia heap allocations in `B10`); (3) P2-4 —
+part); (2) P2-3 — extended `DragGesture` (`affected_labels` for rigid-eligible runs with
+`Anchor::Boundary` at both ends, `plan_labels_sorted`, `preview_labels`, fixed lift-off
+`hidden_items`, and `DragFollowCache` boxing so `ToolState` stays compact without
+`#[allow]`) and `overlay/follow.rs` / `overlay/ghosts.rs` so non-selected rigid-run
+corner labels (`plan.labels`) hide once at lift-off (`WINV11`) and preview as outline +
+dot at their translated positions (with stationary anchor dots on rigid refusal and zero
+warm Omnia heap allocations in `B10`; moved label text belongs to W3.6), while
+non-rigid run labels stay unhidden in `SheetView` with their text intact; (3) P2-4 —
 scoped `ToolHost::command_refused` in `tool.rs` to `Command::{Move, Transform, Reorient}`
 using `RefusalVerb::{Move, Reorient}` in `tool/move_.rs` so non-move refusals stay
-silent and idle reorient refusals report `"Reorient refused: ..."`; (4) P2-2 — documented
-in `wiring-plan.md` §10 that `CommandError::{Capture, OffLattice, OutOfBounds}` are
-currently validated at commit in `Doc::apply` (follow-up dry-run validator needed in
-`omnia-doc` outside W2.3's ownership) while adding GPUI coverage proving `Capture`
-refusals preserve `WINV4` and emit `"Move refused: ..."`; (5) nits — documented
-doc-less `ToolMachine::{pointer_move, reorient, pointer_up}` follow behavior in
-`tool.rs` and added `TC-move-17` (selected wire + part). Status stays `needs-human`
+silent and idle reorient refusals report `"Reorient refused: ..."` without the move-only
+`Alt` detach hint; (4) P2-2 — documented in `wiring-plan.md` §10 that
+`CommandError::{Capture, OffLattice, OutOfBounds}` are currently validated at commit in
+`Doc::apply` (follow-up dry-run validator needed in `omnia-doc` outside W2.3's
+ownership) while adding GPUI coverage proving `Capture` refusals preserve `WINV4` and
+emit `"Move refused: ..."`; (5) nits — documented doc-less `ToolMachine::{pointer_move,
+reorient, pointer_up}` follow behavior in `tool.rs` and added `TC-move-17` (selected
+wire + part) plus a non-rigid labelled-run regression test. Status stays `needs-human`
 for the Orion Linux/Wayland `Alt`-during-drag session check (`docs/measurements/W2.3.md`).

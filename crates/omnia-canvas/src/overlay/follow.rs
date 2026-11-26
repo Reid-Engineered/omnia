@@ -207,8 +207,9 @@ pub(super) fn paint_follow_preview(
     });
 
     // Layer 2: surviving original affected wires + K6 junction dots in full `stage/ink`, newly
-    // routed follow wires in ghost ink, moved rigid-run corner labels (or stationary anchor when
-    // detached/refused), dragged items (conflict on refusal), and blocker outline.
+    // routed follow wires in ghost ink, moved rigid-run corner labels (or stationary anchor dot
+    // for already-hidden rigid labels when refused/identity), dragged items (conflict on refusal),
+    // and blocker outline. Labels on non-rigid runs stay in `SheetView` with their text intact.
     window.paint_layer(|window| {
         run_omnia(params.scope, || {
             for &id in data.affected_wires {
@@ -577,7 +578,7 @@ mod tests {
         );
     }
 
-    /// B10: rigid-run corner labels (moved in `plan_labels_sorted` or stationary when detached)
+    /// B10: rigid-run corner labels (moved in `plan_labels_sorted` or stationary when refused)
     /// paint with zero warm Omnia heap allocations.
     #[gpui::test]
     fn w2_3_b10_warm_rigid_label_follow_paint_makes_zero_omnia_allocations(
@@ -604,6 +605,21 @@ mod tests {
                 text: "MID".into(),
             }))
             .unwrap();
+        // Surround (10, -2) on all 4 cardinal neighbours so dragging R1's right pin (-4, 0) by
+        // (14, -2) to (10, -2) refuses every WD4 candidate with `Blocker::Pin`.
+        for (idx, pin_target) in [pt(11, -2), pt(9, -2), pt(10, -1), pt(10, -3)]
+            .into_iter()
+            .enumerate()
+        {
+            let _ = place_resistor(
+                &mut doc_val,
+                Pt {
+                    x: pin_target.x + 2 * G,
+                    y: pin_target.y,
+                },
+                &format!("C{idx}"),
+            );
+        }
 
         let doc = cx.new(|_| doc_val);
         let scope = Rc::new(FollowAllocScope::new());
@@ -632,11 +648,11 @@ mod tests {
         });
         let overlay = host.read_with(cx, |h, _| h.0.clone());
 
-        // Warm rigid moved label + stationary fallback label path.
+        // Warm moved rigid label path (`pt(2, -3)` avoids `RB` at `(0..4, 2)`).
         overlay.update(cx, |o, cx| {
             assert!(o.set_move_preview(
                 [ItemId::Part(r1), ItemId::Part(r2)],
-                pt(1, 2),
+                pt(2, -3),
                 Orient::IDENTITY,
                 false,
                 cx,
@@ -647,13 +663,25 @@ mod tests {
         scope.omnia_allocs.set(0);
         scope.omnia_calls.set(0);
         scope.counting.set(true);
-        for (items, alt) in [
-            (vec![ItemId::Part(r1), ItemId::Part(r2)], false),
-            (vec![ItemId::Part(r1)], true),
-            (vec![ItemId::Part(r1), ItemId::Part(r2)], false),
+        for (delta, expect_refused) in [
+            (pt(1, 2), false),
+            // `(14, -2)` puts R1's right pin at `(10, -2)` inside the 4-pin blocker cage.
+            (pt(14, -2), true),
+            (pt(2, 2), false),
         ] {
             overlay.update(cx, |o, cx| {
-                assert!(o.set_move_preview(items, pt(2, 2), Orient::IDENTITY, alt, cx));
+                assert!(o.set_move_preview(
+                    [ItemId::Part(r1), ItemId::Part(r2)],
+                    delta,
+                    Orient::IDENTITY,
+                    false,
+                    cx,
+                ));
+                let crate::tool::ToolState::Dragging(drag) = o.tool_state() else {
+                    panic!("expected Dragging");
+                };
+                assert_eq!(drag.is_refused(), expect_refused);
+                assert!(!drag.affected_labels().is_empty());
             });
             cx.run_until_parked();
         }

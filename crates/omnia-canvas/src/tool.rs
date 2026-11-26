@@ -9292,6 +9292,45 @@ mod tests {
         let overlay = rig.overlay.clone();
         let doc = rig.doc.clone();
         let rev0 = revision(&doc, rig.cx);
+
+        // Single-part drag makes the labelled run non-rigid: its label stays unhidden in
+        // `SheetView` (text preserved) during both follow and Alt-detach moves.
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                o.set_selection([ItemId::Part(r1)], cx);
+            });
+        });
+        down(&overlay, rig.cx, pt(-6, 0));
+        drag_to(&overlay, rig.cx, pt(-5, 2));
+        for alt in [false, true] {
+            if alt {
+                rig.cx.simulate_event(gpui::ModifiersChangedEvent {
+                    modifiers: Modifiers::alt(),
+                    ..Default::default()
+                });
+            }
+            rig.cx.update(|_, cx| {
+                let ToolState::Dragging(drag) = overlay.read(cx).tool_state() else {
+                    panic!("expected Dragging");
+                };
+                assert!(
+                    drag.affected_labels().is_empty(),
+                    "non-rigid run must not collect corner label into affected_labels (alt={alt})"
+                );
+                assert!(
+                    !drag.hidden_items().contains(&ItemId::Label(lid)),
+                    "non-rigid run label must remain visible with its SheetView text (alt={alt})"
+                );
+            });
+        }
+        rig.cx.simulate_keystrokes("escape");
+        rig.cx.run_until_parked();
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+        up(&overlay, rig.cx, pt(-5, 2));
+        let hover_pt = screen(&overlay, rig.cx, pt(0, -8));
+        rig.cx
+            .simulate_mouse_move(hover_pt, None, Modifiers::none());
+
         let paints0 = rig
             .cx
             .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
@@ -9445,9 +9484,9 @@ mod tests {
             .cx
             .update(|_, cx| canvas.read(cx).last_notice().map(str::to_owned))
             .expect("refused Reorient must emit notice");
-        assert!(
-            reorient_notice.starts_with("Reorient refused:"),
-            "expected 'Reorient refused: ...', got: {reorient_notice}"
+        assert_eq!(
+            reorient_notice,
+            "Reorient refused: no valid wire route (blocked by pin)"
         );
     }
 

@@ -19,8 +19,8 @@ use crate::{
 };
 use gpui::SharedString;
 use omnia_doc::{
-    Boundary, Command, CommandError, Doc, FollowError, FollowPlan, GRID_NM, Isometry, ItemId,
-    LabelId, Orient, Pt, Rect, SHEET_LIMIT_NM, Wire, WireId, plan_follow,
+    Anchor, Boundary, Command, CommandError, Doc, FollowError, FollowPlan, GRID_NM, Isometry,
+    ItemId, LabelId, Orient, Pt, Rect, SHEET_LIMIT_NM, Wire, WireId, plan_follow,
     prefs::{FollowPolicy, WiringPrefs},
     route::Blocker,
     snap_to,
@@ -233,18 +233,20 @@ impl RefusalVerb {
 /// Formats a user-facing status notice for a [`FollowError`] under `verb` (`WD11`, `UD11`).
 pub fn format_follow_refusal_for(verb: RefusalVerb, error: FollowError) -> SharedString {
     let prefix = verb.prefix();
+    let suffix = match verb {
+        RefusalVerb::Move => "; hold Alt to detach",
+        RefusalVerb::Reorient => "",
+    };
     match error {
         FollowError::NoRoute { blocker, .. } => match blocker {
             Blocker::Pin { .. } => {
-                format!("{prefix}: no valid wire route (blocked by pin); hold Alt to detach").into()
+                format!("{prefix}: no valid wire route (blocked by pin){suffix}").into()
             }
             Blocker::WireEnd(_) | Blocker::WireBody(_) | Blocker::Overlap(_) => {
-                format!("{prefix}: no valid wire route (blocked by wire); hold Alt to detach")
-                    .into()
+                format!("{prefix}: no valid wire route (blocked by wire){suffix}").into()
             }
             Blocker::Sheet => {
-                format!("{prefix}: route blocked at sheet limit or off lattice; hold Alt to detach")
-                    .into()
+                format!("{prefix}: route blocked at sheet limit or off lattice{suffix}").into()
             }
         },
     }
@@ -289,6 +291,8 @@ fn canonical_wire(w: Wire) -> Wire {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DragFollowCache {
     affected_wires: Vec<WireId>,
+    /// Corner labels on rigid-eligible runs only (`Anchor::Boundary` at both ends), so labels on
+    /// rerouted/detached non-rigid runs stay visible with their sheet text (`WINV11`, W2.1).
     affected_labels: Vec<LabelId>,
     hidden: Vec<ItemId>,
     plan: FollowPlan,
@@ -378,8 +382,11 @@ impl DragGesture {
                 .collect();
             wires.sort_unstable_by_key(|id| id.0);
             wires.dedup();
+            // Only runs with both ends on the moving boundary can translate rigidly and carry
+            // corner labels (WD3); leaving non-rigid run labels unhidden preserves their sheet text.
             let mut labels: Vec<LabelId> = runs
                 .iter()
+                .filter(|run| run.a.1 == Anchor::Boundary && run.b.1 == Anchor::Boundary)
                 .flat_map(|run| run.labels.iter().copied())
                 .filter(|id| !items.contains(&ItemId::Label(*id)))
                 .collect();
@@ -535,8 +542,9 @@ impl DragGesture {
         &self.cache.affected_wires
     }
 
-    /// Sorted non-selected corner label ids belonging to affected runs (empty when over
-    /// [`FOLLOW_PREVIEW_CAP`]).
+    /// Sorted non-selected corner label ids belonging to rigid-eligible runs (both ends
+    /// `Anchor::Boundary`; empty when over [`FOLLOW_PREVIEW_CAP`]). Labels on non-rigid runs stay
+    /// in the sheet with their text (`WINV11`, W2.1).
     pub fn affected_labels(&self) -> &[LabelId] {
         &self.cache.affected_labels
     }
@@ -858,9 +866,9 @@ impl DragGesture {
         wires
     }
 
-    /// Returns the canonical list of non-selected run corner labels (`affected_labels`) and their
-    /// preview coordinates: translated coordinates from `plan.labels` when not refused, or their
-    /// original coordinates when detached/rerouted/refused (`WINV5`).
+    /// Returns the canonical list of non-selected rigid-run corner labels (`affected_labels`) and
+    /// their preview coordinates: translated coordinates from `plan.labels` when not refused, or
+    /// their original coordinates on refusal/identity (`WINV5`).
     pub fn preview_labels(&self, doc: &Doc) -> Vec<(LabelId, Pt)> {
         let mut labels = Vec::with_capacity(self.cache.affected_labels.len());
         let refused = self.is_refused();
@@ -1349,7 +1357,7 @@ mod tests {
         );
         assert_eq!(
             format_follow_refusal_for(RefusalVerb::Reorient, follow_err),
-            "Reorient refused: no valid wire route (blocked by pin); hold Alt to detach"
+            "Reorient refused: no valid wire route (blocked by pin)"
         );
         assert_eq!(
             format_command_refusal(RefusalVerb::Reorient, CommandError::OutOfBounds),
@@ -1403,6 +1411,30 @@ mod tests {
             key: 3,
             revision: doc.revision(),
         };
+        // Dragging only R1 makes the L-run non-rigid, so `lid` stays unhidden in `SheetView`.
+        for alt in [false, true] {
+            let mut single_drag = DragGesture::start(
+                &doc,
+                vec![ItemId::Part(r1)],
+                ItemId::Part(r1),
+                pt(-6, 0),
+                stamp,
+                WiringPrefs::default(),
+                alt,
+            );
+            assert!(
+                single_drag.affected_labels().is_empty(),
+                "non-rigid run must not hide its corner label (alt={alt})"
+            );
+            single_drag.current = pt(-5, 2);
+            single_drag.set_lifted();
+            assert!(single_drag.update_preview(Some(&doc)));
+            assert!(
+                !single_drag.hidden_items().contains(&ItemId::Label(lid)),
+                "non-rigid corner label keeps SheetView text during drag (alt={alt})"
+            );
+        }
+
         let mut drag = DragGesture::start(
             &doc,
             vec![ItemId::Part(r1), ItemId::Part(r2)],
