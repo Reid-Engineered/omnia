@@ -7,14 +7,17 @@
 //!   became LF at extraction; a lone CR is a line break to some simulators and would let a
 //!   directive hide from this line-oriented screen) and no NUL byte;
 //! - no `PK10` directive (`.control`, `.endc`, `shell`, `system`, `osdi`, `pre_osdi`,
-//!   `codemodel`, `.csdf`) as the first token of any line, continuation lines included;
+//!   `codemodel`, `.csdf`) as the first token of a line;
 //! - no `.include`, `.inc`, `.lib` or `.endl` at all: an embedded deck has no external file
 //!   references (`PINV9`).
 //!
 //! Directive tokens are compared ASCII case-insensitively with any leading dots ignored. A
 //! token that starts with a dot is also refused when it merely *starts with* one of these
-//! names (`.controlx`, `.library`), because simulators commonly match dot-directives by
-//! prefix. Over-refusal is accepted: the screen is hostile by default (`P0.3` gap 9).
+//! names (`.controlx`, `.libsave`), because simulators commonly match dot-directives by
+//! prefix. The first token after the `+` of a continuation line is checked only when it is
+//! written with a dot: a bare `+ SYSTEM` continues the previous line (a port, node or model
+//! type of that name) and starts nothing. Over-refusal of a bare first token, such as an
+//! element named `SHELL`, is accepted: the screen is hostile by default (`P0.3` gap 9).
 
 use std::fmt;
 
@@ -98,9 +101,12 @@ pub fn screen_embedded(spice: &str) -> Result<(), ScreenError> {
         if raw.contains('\0') {
             return Err(ScreenError::Nul { line });
         }
-        let Some(first) = screened_token(raw) else {
+        let Some((first, continuation)) = screened_token(raw) else {
             continue;
         };
+        if continuation && !first.starts_with('.') {
+            continue;
+        }
         if is_directive(first, &FORBIDDEN) {
             return Err(ScreenError::Forbidden {
                 line,
@@ -117,18 +123,23 @@ pub fn screen_embedded(spice: &str) -> Result<(), ScreenError> {
     Ok(())
 }
 
-/// The token the screen checks on one physical line: the first token of a normal line, or the
-/// first token after the `+` of a continuation line. Comment (`*`) and blank lines have none.
-/// Tokens split on any Unicode whitespace, so `shell\u{a0}x` still yields `shell`.
-fn screened_token(raw: &str) -> Option<&str> {
+/// The token the screen checks on one physical line, and whether the line is a continuation:
+/// the first token of a normal line, or the first token after the `+` of a continuation line.
+/// Comment (`*`) and blank lines have none. Tokens split on any Unicode whitespace, so
+/// `shell\u{a0}x` still yields `shell`.
+fn screened_token(raw: &str) -> Option<(&str, bool)> {
     let t = raw.trim_start();
     if t.starts_with('*') {
         return None;
     }
-    let body = t.strip_prefix('+').unwrap_or(t);
+    let (body, continuation) = match t.strip_prefix('+') {
+        Some(body) => (body, true),
+        None => (t, false),
+    };
     code_part(body)
         .split(char::is_whitespace)
         .find(|s| !s.is_empty())
+        .map(|token| (token, continuation))
 }
 
 /// Whether `token` names one of `names`: exact after dropping leading dots, or, for a token
@@ -201,8 +212,9 @@ fn tokens(code: &str) -> Vec<String> {
 /// The number of ports of the top-level `.subckt` named `entry` (ASCII case-insensitive), or
 /// `None` if there is none. The header is read as one logical line: `+` continuations are
 /// joined, with blank and `*` comment lines allowed between them, and inline comments cut.
-/// Ports end at `PARAMS:` (any case) or at the first `name=value`, after `a = b` is merged into
-/// `a=b`. Used for terminal counts (`PINV3`, `PINV11`).
+/// Ports end at a standalone `PARAMS:` token (any case) or at the first `name=value`, after
+/// `a = b` is merged into `a=b`, so a port named `params:out` is a port. Used for terminal
+/// counts (`PINV3`, `PINV11`).
 pub fn subckt_ports(spice: &str, entry: &str) -> Option<usize> {
     let mut depth = 0usize;
     for logical in logical_lines(spice) {
@@ -215,11 +227,7 @@ pub fn subckt_ports(spice: &str, entry: &str) -> Option<usize> {
                 let rest = &toks[2..];
                 let ports = rest
                     .iter()
-                    .position(|t| {
-                        t.get(..7)
-                            .is_some_and(|p| p.eq_ignore_ascii_case("params:"))
-                            || t.contains('=')
-                    })
+                    .position(|t| t.eq_ignore_ascii_case("params:") || t.contains('='))
                     .unwrap_or(rest.len());
                 return Some(ports);
             }
@@ -291,12 +299,38 @@ mod tests {
     }
 
     #[test]
-    fn pinv9_forbidden_directive_on_a_continuation_is_refused() {
-        let text = ".model D1 D(IS=1e-14\n+ shell rm\n+ N=1)\n";
-        assert!(matches!(
-            screen_embedded(text),
-            Err(ScreenError::Forbidden { line: 2, .. })
-        ));
+    fn pinv9_dot_directive_on_a_continuation_is_refused() {
+        for (cont, want) in [
+            ("+ .control", "forbidden"),
+            ("+.ENDC", "forbidden"),
+            ("+ .inc x.lib", "include"),
+            ("+ .libsave", "include"),
+        ] {
+            let text = format!(".model D1 D(IS=1e-14\n{cont}\n+ N=1)\n");
+            let got = match screen_embedded(&text) {
+                Err(ScreenError::Forbidden { line: 2, .. }) => "forbidden",
+                Err(ScreenError::Include { line: 2, .. }) => "include",
+                other => panic!("{cont}: {other:?}"),
+            };
+            assert_eq!(got, want, "{cont}");
+        }
+    }
+
+    /// Review of #142: a bare token on a continuation continues the line; it is not a command.
+    #[test]
+    fn bare_tokens_on_continuations_are_not_directives() {
+        for text in [
+            ".subckt AMP in\n+ SYSTEM\n.ends AMP\n",
+            ".model\n+ SYSTEM D\n",
+            ".model D1 D(IS=1e-14\n+ shell=1 control=2)\n",
+            "R1 a b\n+ codemodel\n",
+        ] {
+            assert_eq!(screen_embedded(text), Ok(()), "{text:?}");
+        }
+        assert_eq!(
+            subckt_ports(".subckt AMP in\n+ SYSTEM\n.ends AMP\n", "amp"),
+            Some(2)
+        );
     }
 
     #[test]
@@ -408,6 +442,12 @@ mod tests {
         assert_eq!(subckt_ports(".subckt A p n g = 1\n.ends\n", "A"), Some(2));
         assert_eq!(subckt_ports(".subckt A p n g =1\n.ends\n", "A"), Some(2));
         assert_eq!(subckt_ports(".subckt A\n.ends\n", "A"), Some(0));
+        // Review of #142: `PARAMS:` is a boundary only as a whole token.
+        assert_eq!(
+            subckt_ports(".subckt A in params:out PARAMS: g=1\n.ends\n", "A"),
+            Some(2)
+        );
+        assert_eq!(subckt_ports(".subckt A params:out\n.ends\n", "A"), Some(1));
     }
 
     #[test]

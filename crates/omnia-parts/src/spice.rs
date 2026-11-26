@@ -69,13 +69,6 @@ pub enum DefKind {
 }
 
 impl DefKind {
-    const ALL: [DefKind; 4] = [
-        DefKind::Model,
-        DefKind::Subckt,
-        DefKind::Param,
-        DefKind::Func,
-    ];
-
     pub fn as_str(self) -> &'static str {
         match self {
             DefKind::Model => "model",
@@ -480,6 +473,13 @@ fn has_params_prefix(token: &str) -> bool {
         .is_some_and(|p| p.eq_ignore_ascii_case("params:"))
 }
 
+/// Where the ports of a `.subckt` header (or the nodes and subcircuit of an `X` line) end: at a
+/// standalone `PARAMS:` token (any case) or at the first `name=value`. A port named
+/// `params:out` is a port (review of #142).
+fn is_params_boundary(token: &str) -> bool {
+    token.eq_ignore_ascii_case("params:") || token.contains('=')
+}
+
 /// Applies the `PK10` path rules to `raw` (already unquoted) and resolves it against the
 /// including file's directory: no empty path, NUL, leading `/` or `\`, `:` (drive or other
 /// prefix) or `..` component. `\` separates like `/`.
@@ -728,11 +728,14 @@ fn decode(file: &str, bytes: &[u8]) -> Result<Vec<String>, SpiceError> {
 
 /// Screens a whole decoded file with the one `PK10` screen. The include and section lines this
 /// module follows are blanked first (keeping line numbers); everything else, unselected `.lib`
-/// sections included, goes through the embedded rules unchanged.
+/// sections included, goes through the embedded rules unchanged. A line carrying a CR, NUL or
+/// byte-order mark is never blanked, so the stored-form rules hold on every line, include
+/// lines included (review of #142).
 fn screen_file(path: &str, lines: &[String]) -> Result<(), SpiceError> {
     let mut text = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum());
     for raw in lines {
-        let blank = classify(raw) == LineClass::Normal
+        let blank = !raw.contains(['\r', '\0', '\u{feff}'])
+            && classify(raw) == LineClass::Normal
             && directive_args(code_part(raw))
                 .first()
                 .is_some_and(|h| is_include_head(&lc(h)));
@@ -1001,14 +1004,12 @@ impl Deck {
         while let Some(d) = queue.pop() {
             for l in &self.logical[self.defs[d].lfirst..=self.defs[d].llast] {
                 self.check_slots(l)?;
-                for t in reference_tokens(&l.code) {
-                    for k in DefKind::ALL {
-                        if let Some(x) = self.resolve(&t, k, l.scope)
-                            && self.defs[x].scope.is_none()
-                            && included.insert(x)
-                        {
-                            queue.push(x);
-                        }
+                for (t, k) in references(&l.code) {
+                    if let Some(x) = self.resolve(&t, k, l.scope)
+                        && self.defs[x].scope.is_none()
+                        && included.insert(x)
+                    {
+                        queue.push(x);
                     }
                 }
             }
@@ -1087,7 +1088,7 @@ impl Deck {
             'x' => {
                 let end = toks
                     .iter()
-                    .position(|t| has_params_prefix(t) || t.contains('='))
+                    .position(|t| is_params_boundary(t))
                     .unwrap_or(toks.len());
                 if end < 2 {
                     return Err(self.unresolved(l, "", DefKind::Subckt));
@@ -1125,11 +1126,11 @@ impl Deck {
 }
 
 /// Splits `.subckt` header tokens after the name into ports and `PARAMS:` names. Ports end at
-/// `PARAMS:` (any case) or at the first `name=value` (gap 5).
+/// a standalone `PARAMS:` token (any case) or at the first `name=value` (gap 5).
 fn split_header(rest: &[String]) -> (Vec<String>, Vec<String>) {
     let boundary = rest
         .iter()
-        .position(|t| has_params_prefix(t) || t.contains('='))
+        .position(|t| is_params_boundary(t))
         .unwrap_or(rest.len());
     let ports = rest[..boundary].to_vec();
     let tail = rest[boundary..].join(" ");
@@ -1200,48 +1201,91 @@ fn assignment_names(text: &str) -> Vec<Range<usize>> {
     out
 }
 
-/// Candidate reference names on a logical line: coarse tokens (split on whitespace, brackets,
-/// commas, quotes and `=`) plus a finer split on expression operators.
+/// Namespaces an expression may name: parameters and functions.
+const EXPR: &[DefKind] = &[DefKind::Param, DefKind::Func];
+/// Namespaces an element or directive operand may name: a model (any slot, so `R`/`C`/`L`/`S`/`W`
+/// models and `AKO:` bases are included when defined, gap 3) or an expression. Over-including a
+/// model or parameter adds a harmless block.
+const OPERAND: &[DefKind] = &[DefKind::Model, DefKind::Param, DefKind::Func];
+
+/// The `name=value` text with every depth-0 assigned name blanked, so only right-hand sides
+/// remain (gap 13).
+fn blank_assignments(text: &str) -> String {
+    let mut blanked = text.to_owned();
+    for r in assignment_names(text) {
+        let blank = " ".repeat(r.len());
+        blanked.replace_range(r, &blank);
+    }
+    blanked
+}
+
+/// Candidate references on a logical line, each with the namespace its position allows.
 ///
-/// Names are skipped by *position*, never by value (gap 13): the directive keyword or element
-/// name (first token), the name a `.model`/`.subckt`/`.func` line defines (second token), and
-/// the left-hand side of each depth-0 `name=value` on a `.param` line. Any other occurrence of
-/// the same text is still a reference, so `D1 a k D1` with a top-level `.model D1` keeps its
-/// dependency. Over-inclusion is harmless (an extra block); under-inclusion is not.
-fn reference_tokens(code: &str) -> BTreeSet<String> {
+/// A subcircuit is referenced only from the subcircuit slot of an `X` line, so a port or node
+/// named like an unrelated `.subckt` never pulls it in (review of #142). Names are skipped by
+/// *position*, never by value (gap 13): the directive keyword or element name (first token),
+/// the name a `.model`/`.subckt`/`.func` line defines (second token), `.subckt` ports and `X`
+/// nodes, and the left-hand side of each depth-0 `name=value` (on `.param` lines, `.subckt` and
+/// `X` parameter lists and element instance parameters). Any other occurrence of the same text
+/// is still a reference, so `D1 a k D1` with a top-level `.model D1` keeps its dependency.
+/// Operands are split coarsely (whitespace, brackets, commas, quotes and `=`) and again on
+/// expression operators.
+fn references(code: &str) -> BTreeSet<(String, DefKind)> {
     let toks = tokens(code);
     let head = lc(&toks[0]);
-    let mut fragments: Vec<String> = Vec::new();
-    match head.as_str() {
-        ".ends" => return BTreeSet::new(),
-        ".param" | ".params" => {
-            let rest = after_head(code);
-            let mut blanked = rest.to_owned();
-            for r in assignment_names(rest) {
-                let blank = " ".repeat(r.len());
-                blanked.replace_range(r, &blank);
-            }
-            fragments.push(blanked);
-        }
-        _ => {
-            for (i, t) in toks.iter().enumerate().skip(1) {
-                if i == 1 && matches!(head.as_str(), ".model" | ".subckt" | ".func") {
-                    let name_len = t.split('(').next().unwrap_or_default().len();
-                    fragments.push(t[name_len..].to_owned());
-                } else {
-                    fragments.push(t.clone());
-                }
-            }
-        }
-    }
     let mut out = BTreeSet::new();
+    let mut fragments: Vec<(String, &[DefKind])> = Vec::new();
+    let params_tail = |rest: &[String]| {
+        let tail = rest.join(" ");
+        let tail = if has_params_prefix(&tail) {
+            tail[7..].to_owned()
+        } else {
+            tail
+        };
+        blank_assignments(&tail)
+    };
+    match head.as_str() {
+        ".ends" => {}
+        ".param" | ".params" => fragments.push((blank_assignments(after_head(code)), EXPR)),
+        ".subckt" => {
+            let rest = toks.get(2..).unwrap_or_default();
+            let boundary = rest
+                .iter()
+                .position(|t| is_params_boundary(t))
+                .unwrap_or(rest.len());
+            fragments.push((params_tail(&rest[boundary..]), EXPR));
+        }
+        ".model" | ".func" => {
+            for (i, t) in toks.iter().enumerate().skip(1) {
+                let t = if i == 1 {
+                    &t[t.split('(').next().unwrap_or_default().len()..]
+                } else {
+                    t.as_str()
+                };
+                fragments.push((t.to_owned(), OPERAND));
+            }
+        }
+        h if h.starts_with('.') => fragments.push((after_head(code).to_owned(), OPERAND)),
+        h if h.starts_with('x') => {
+            let end = toks
+                .iter()
+                .position(|t| is_params_boundary(t))
+                .unwrap_or(toks.len());
+            if end >= 2 {
+                out.insert((lc(&toks[end - 1]), DefKind::Subckt));
+            }
+            fragments.push((params_tail(&toks[end..]), EXPR));
+        }
+        _ => fragments.push((blank_assignments(after_head(code)), OPERAND)),
+    }
     let coarse = |c: char| c.is_ascii_whitespace() || "(){}[],=\"'".contains(c);
     let fine = |c: char| "*/+-^<>!?:&|%".contains(c);
-    for frag in fragments {
+    for (frag, kinds) in fragments {
         for t in frag.split(coarse).filter(|t| !t.is_empty()) {
-            out.insert(lc(t));
-            for f in t.split(fine).filter(|f| !f.is_empty()) {
-                out.insert(lc(f));
+            for f in std::iter::once(t).chain(t.split(fine).filter(|f| !f.is_empty())) {
+                for &k in kinds {
+                    out.insert((lc(f), k));
+                }
             }
         }
     }
@@ -1817,7 +1861,6 @@ mod tests {
             "C:/x.lib",
             "c:x.lib",
             "file:x.lib",
-            "x\0.lib",
             "\"\"",
             ".",
         ] {
@@ -1830,6 +1873,11 @@ mod tests {
                 "{path:?}"
             );
         }
+        // A NUL in a path is refused by the stored-form rule before the path rules run.
+        let mut s = src(&[("a.lib", ".include x\0.lib\n")]);
+        s.insert("x.lib", ".model A D\n");
+        assert_eq!(Deck::load(&s, "a.lib").err().map(|e| e.code()), Some("nul"));
+        assert_eq!(resolve_path(Some("a.lib"), "x\0.lib"), None);
         for root in ["../a.lib", "/a.lib", "C:\\a.lib", ""] {
             assert_eq!(
                 Deck::load(&src(&[("a.lib", "")]), root)
@@ -1953,30 +2001,49 @@ mod tests {
         for d in DIRECTIVES {
             for written in [d.to_owned(), d.to_ascii_uppercase()] {
                 let line = format!("{written} arg");
-                let cases: Vec<Vec<(&str, String)>> = vec![
-                    vec![("a.lib", format!(".model A D\n{line}\n"))],
-                    vec![("a.lib", format!(".subckt A p\n  {line}\n.ends A\n"))],
-                    vec![("a.lib", format!(".model A D(IS=1\n+ {line}\n+ )\n"))],
-                    vec![
-                        ("a.lib", ".include b.inc\n.model A D\n".to_owned()),
-                        ("b.inc", format!("* included\n{line}\n")),
-                    ],
-                    vec![
-                        ("a.lib", ".lib b.lib TT\n".to_owned()),
-                        (
-                            "b.lib",
-                            format!(".lib TT\n.model A D\n.endl\n.lib FF\n{line}\n.endl\n"),
-                        ),
-                    ],
+                // On a continuation only the dot form starts a directive; a bare token there
+                // continues the line (review of #142).
+                let dotted = if written.starts_with('.') {
+                    written.clone()
+                } else {
+                    format!(".{written}")
+                };
+                let cases: Vec<(Vec<(&str, String)>, &str)> = vec![
+                    (vec![("a.lib", format!(".model A D\n{line}\n"))], &written),
+                    (
+                        vec![("a.lib", format!(".subckt A p\n  {line}\n.ends A\n"))],
+                        &written,
+                    ),
+                    (
+                        vec![("a.lib", format!(".model A D(IS=1\n+ {dotted} arg\n+ )\n"))],
+                        &dotted,
+                    ),
+                    (
+                        vec![
+                            ("a.lib", ".include b.inc\n.model A D\n".to_owned()),
+                            ("b.inc", format!("* included\n{line}\n")),
+                        ],
+                        &written,
+                    ),
+                    (
+                        vec![
+                            ("a.lib", ".lib b.lib TT\n".to_owned()),
+                            (
+                                "b.lib",
+                                format!(".lib TT\n.model A D\n.endl\n.lib FF\n{line}\n.endl\n"),
+                            ),
+                        ],
+                        &written,
+                    ),
                 ];
-                for files in cases {
+                for (files, want) in cases {
                     let refs: Vec<(&str, &str)> =
                         files.iter().map(|(p, t)| (*p, t.as_str())).collect();
                     match run(&refs, "A", M) {
                         Err(SpiceError::Screen {
                             error: ScreenError::Forbidden { directive, .. },
                             ..
-                        }) => assert_eq!(directive, written),
+                        }) => assert_eq!(directive, want),
                         other => panic!("{written} in {files:?}: {other:?}"),
                     }
                 }
@@ -2032,5 +2099,93 @@ mod tests {
             s.insert(*p, t.as_bytes());
         }
         assert_eq!(extract(&s, "top.lib", "T", S), Ok(forward));
+    }
+
+    // ---- review of #142 ----
+
+    /// A bare `+ SYSTEM` continues the line (a port or model type); it is not a command.
+    #[test]
+    fn bare_continuation_tokens_are_not_directives() {
+        let x = ok(
+            &[(
+                "a.lib",
+                ".subckt AMP in\n+ SYSTEM\nR1 in SYSTEM 1k\n.ends AMP\n",
+            )],
+            "amp",
+            S,
+        );
+        assert_eq!(
+            x.ports.as_deref(),
+            Some(&["in", "SYSTEM"].map(String::from)[..])
+        );
+        assert_self_contained(&x);
+        let x = ok(&[("a.lib", ".model DSYS\n+ SYSTEM D\n")], "DSYS", M);
+        assert_eq!(x.text, ".model DSYS\n+ SYSTEM D\n");
+        assert_self_contained(&x);
+    }
+
+    /// `PARAMS:` is a boundary only as a standalone token: `params:out` is a port.
+    #[test]
+    fn a_port_named_like_params_is_a_port() {
+        let deck = ".subckt A in params:out PARAMS: g=1\nR1 in params:out {g}\n.ends A\n\
+                    .subckt B x\nXA x y A g=2\n.ends B\n";
+        let x = ok(&[("a.lib", deck)], "A", S);
+        assert_eq!(
+            x.ports.as_deref(),
+            Some(&["in", "params:out"].map(String::from)[..])
+        );
+        assert_eq!(subckt_ports(&x.text, "A"), Some(2));
+        let x = ok(&[("a.lib", deck)], "B", S);
+        assert_eq!(names(&x), ["subckt:A", "subckt:B"]);
+        // An `X` line whose last node is `params:out` still names its subcircuit last.
+        let deck = ".subckt A p q\n.ends A\n.subckt T i\nX1 i params:out A\n.ends T\n";
+        assert_eq!(
+            names(&ok(&[("a.lib", deck)], "T", S)),
+            ["subckt:A", "subckt:T"]
+        );
+    }
+
+    /// A port or node named like an unrelated `.subckt` does not pull that subcircuit in: only
+    /// the subcircuit slot of an `X` line references the subcircuit namespace.
+    #[test]
+    fn subcircuits_are_referenced_only_from_x_slots() {
+        let deck = ".subckt REQ in OUT\n\
+                    R1 in OUT 1k\n\
+                    E1 OUT 0 VALUE={V(in)}\n\
+                    .ends REQ\n\
+                    .subckt OUT a\n\
+                    D1 a 0 DMISSING\n\
+                    .ends OUT\n";
+        let x = ok(&[("a.lib", deck)], "REQ", S);
+        assert_eq!(names(&x), ["subckt:REQ"]);
+        assert_self_contained(&x);
+        assert_eq!(code(run(&[("a.lib", deck)], "OUT", S)), "unresolved");
+        // The same name in the subcircuit slot is a reference.
+        let deck = ".subckt OUT a\n.ends OUT\n.subckt T OUT\nX1 OUT OUT\n.ends T\n";
+        assert_eq!(
+            names(&ok(&[("a.lib", deck)], "T", S)),
+            ["subckt:OUT", "subckt:T"]
+        );
+    }
+
+    /// The stored-form rules hold on include lines too: a lone CR after an otherwise valid
+    /// `.include` is refused before the line is exempted from the directive screen.
+    #[test]
+    fn lone_cr_on_an_include_line_is_refused() {
+        for (root, want) in [
+            (".include b.inc\r .control\n.model A D\n", "carriage_return"),
+            (".include b.inc\r\r\n.model A D\n", "carriage_return"),
+            (".lib b.inc TT\r x\n.model A D\n", "carriage_return"),
+            (".include b.inc \0\n.model A D\n", "nul"),
+            (".include b.inc \u{feff}\n.model A D\n", "byte_order_mark"),
+        ] {
+            let files = [("a.lib", root), ("b.inc", "* empty\n")];
+            assert_eq!(code(run(&files, "A", M)), want, "{root:?}");
+        }
+        let files = [
+            ("a.lib", ".include b.inc\r\n.model A D\r\n"),
+            ("b.inc", "* empty\n"),
+        ];
+        assert_eq!(ok(&files, "A", M).text, ".model A D\n");
     }
 }
