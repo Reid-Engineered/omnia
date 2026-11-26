@@ -2160,7 +2160,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(96))]
+        #![proptest_config(crate::proptest_config(96))]
         /// T5.5 Done-when: combined Transform matches expected final geometry, keeps normal form
         /// (WINV3), round-trips under undo/redo with exact ids (INV4) and keeps connectivity
         /// consistent (INV10, WINV1/WINV2/WINV4).
@@ -2934,7 +2934,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(crate::proptest_config(128))]
         #[test]
         fn w22_winv1_winv2_winv4_inv10_random_sheets_moves_and_reorientations(
             counts in prop::collection::vec(1usize..6, 1..6),
@@ -3231,7 +3231,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(crate::proptest_config(128))]
         #[test]
         fn wd10_random_sheets_selections_inv4_inv10_and_order(
             shapes in prop::collection::vec((any::<bool>(), any::<bool>(), any::<bool>()), 1..12),
@@ -3988,7 +3988,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(crate::proptest_config(128))]
         #[test]
         fn inv4_and_inv10_over_random_legal_and_invalid_sequences(
             steps in prop::collection::vec(gen_step(), 1..80),

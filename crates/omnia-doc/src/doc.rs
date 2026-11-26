@@ -1980,7 +1980,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(crate::proptest_config(128))]
         /// A1.1 done-when (AD3, INV4, INV10): at every state the T5.1 generator reaches,
         /// undone and redone states included, `fork() == original`, the fork carries the same
         /// derived state, and applying the same command to both gives equal results (`Change`

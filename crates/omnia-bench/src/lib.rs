@@ -9,6 +9,7 @@ pub mod alloc;
 pub mod compare;
 pub mod drag_part;
 pub mod drag_segment;
+pub mod drag_wire;
 pub mod driver;
 pub mod generate;
 pub mod harness;
