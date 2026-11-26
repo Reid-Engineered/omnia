@@ -1,6 +1,6 @@
 # Omnia Canvas: Final Budget and Invariant Report (T7.5 → H4)
 
-**Status: `done → H4`. 9 of 10 budgets (`B1`–`B9`) PASS at both 100% and 125% scaling on the Orion reference machine; `B10` PASSES (`0` allocs/frame) on all pan, zoom, and wire-drag scripts and MISSES (`45` max Omnia allocations/frame) on `1k-drag-part` and `10k-drag-part` following PR #155 (`W2.3`). Every invariant (`INV1`–`INV13`) and all 84 golden images pass.**
+**Status: `done` (`H4` approved by owner 2026-11-26). 9 of 10 budgets (`B1`–`B9`) PASS at both 100% and 125% scaling on the Orion reference machine; `B10` PASSES (`0` allocs/frame) on all pan, zoom, and wire-drag scripts and MISSES (`45` max Omnia allocations/frame) on `1k-drag-part` and `10k-drag-part` following PR #155 (`W2.3`). Every invariant (`INV1`–`INV13`) and all 84 golden images pass.**
 
 Per `AGENTS.md` Hard Rule 3 and `canvas-plan.md` §2.1, only the Orion reference machine (`Q4`) certifies performance budgets. Windows measurements and golden renders (`render_to_image`, unavailable on Linux) are labelled as non-reference.
 
