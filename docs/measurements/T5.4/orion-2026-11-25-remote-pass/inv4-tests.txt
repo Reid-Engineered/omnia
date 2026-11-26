@@ -1,0 +1,47 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.61s
+     Running unittests src/lib.rs (target/debug/deps/omnia_doc-2981c8a0ff9d2880)
+
+running 10 tests
+test command::tests::tc_del_01_02_runs_to_far_pin_flag_on_and_off_inv4_inv10 ... ok
+test command::tests::tc_del_03_junction_other_wires_merge_locally_inv4_inv10 ... ok
+test command::tests::tc_move_14_landed_pin_and_wire_end_split_body_inv4_inv10 ... ok
+test command::tests::t5_5_pr125_review_case_wire_drag_and_rotate_inv4_inv10 ... ok
+test command::tests::t5_5_transform_geometry_follow_inv4_inv10 ... ok
+test route::tests::w32_winv3_winv4_segment_drag_properties ... ok
+test command::tests::w22_winv1_winv2_winv4_inv10_random_sheets_moves_and_reorientations ... ok
+test command::tests::wd10_random_sheets_selections_inv4_inv10_and_order ... ok
+test route::tests::winv3_inv4_inv10_add_delete_sequences ... ok
+test command::tests::inv4_and_inv10_over_random_legal_and_invalid_sequences ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 165 filtered out; finished in 22.68s
+
+     Running tests/add_wires_timing.rs (target/debug/deps/add_wires_timing-cd02c2bd321fb5c6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/change_contract.rs (target/debug/deps/change_contract-ecb2581353d4030d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/follow_alloc.rs (target/debug/deps/follow_alloc-ed53deab4a12e030)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/index_alloc.rs (target/debug/deps/index_alloc-ddfb797f42b3cd4b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/route_alloc.rs (target/debug/deps/route_alloc-3b2878457cc1376c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

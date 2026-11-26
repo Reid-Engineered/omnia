@@ -571,7 +571,7 @@ of the `canvas` lane.
   and undo of each, and a stub provider's command is what placement commits; `SheetView` paints exactly twice per drag (start and end).
 - Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 request for `SheetCanvas::delete_selection` was delivered in T5.3.
 
-### T5.4 Gate: milestone 5 · needs-human
+### T5.4 Gate: milestone 5 · done
 - Lane: bench · Depends: T5.3
 - Do: add the `drag-part` script. `bench run --sheet 1k --script drag-part` and
   `--sheet 10k`: dirty-to-present p99 ≤ one refresh interval (B6) and frame p99 within B3
@@ -2436,3 +2436,24 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        --screenSaver --colorCorrect --notifications` and record `PolicyAgent`
                        inhibition flags and panel brightness/dimming before and after the gate for
                        the next certifying Orion campaign.
+2026-11-25  T5.4  done  Certifying Orion reference campaign on `8579e6a` (`owner-run.sh --remote`,
+                       owner-approved, `18:35:20–19:18:57 EST` / `2026-11-25T23:35:20Z–2026-11-26T00:18:57Z`,
+                       binary SHA-256 `6e86f19d…`, 160/160 runs) passed every check at both `100%` and `125%`
+                       (`status.txt = pass`, exit `0`, replay `0` diff lines, `320/320` DPMS on /
+                       AC / `performance` governor, `SimulateUserActivity` exit `0`,
+                       `PolicyAgent.HasInhibition(1/4) = true`, dimming `100%` before and after,
+                       `0` `backlighthelper` snapshots). Certified results (100% / 125% medians):
+                       `B2` startup delta `41.015` / `47.512 ms` (`< 300`); `B6` `1k-drag-part` d2p
+                       p99 `1.897` / `1.435 ms` and `10k-drag-part` `1.856` / `1.437 ms` (`<= 16.664`);
+                       `B3` `1k-drag-part` `0.985` / `0.757 ms`, `1k-pan` `1.642` / `1.142 ms`,
+                       `1k-zoom` `2.738` / `2.188 ms` (`< 16.7`); `B4` `10k-drag-part` `0.991` /
+                       `0.754 ms`, `10k-pan` `2.107` / `1.536 ms`, `10k-zoom` `5.171` / `5.067 ms`
+                       (`< 33.3`); `B5` worst frame `10.248 ms` (`3.506 ms` across all 40 drag runs);
+                       `120/120` missed-refresh attributions passed; `B9` medians `141.594–164.644 MB`
+                       (max single run `166.691 MB`, all `< 300`); `B10 = 0` Omnia allocs/frame;
+                       `INV5 = 0` revision changes; `INV11 = 0` steady-state and press `SheetView`
+                       paints; `D7` lift `SheetView` paints `[1, 1]`. Orion invariant tests on
+                       `8579e6a`: `inv4` 10/10, `inv10` 13/13, `inv5` 2/2, `inv11` 2/2. Archived
+                       evidence in `docs/measurements/T5.4/orion-2026-11-25-remote-pass/` (tarball
+                       SHA-256 `f103d9e3…`) and updated `docs/measurements/T5.4.md`. Milestone 5
+                       gate certified `done`.
