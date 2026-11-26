@@ -427,6 +427,25 @@ class GateTest(unittest.TestCase):
             self.assertIn("FAIL B3 dense-drag-wire attribution 0/10 passed", out)
             self.assertIn("PASS B4 10k-pan attribution 10/10 passed", out)
 
+        # A 2.6R counted interval fails 10k-pan under its 2.5R B4 limit.
+        trace_2_6r_pan = make_trace(0, late_measured_index=10, late_interval_refreshes=2.6)
+        with tempfile.TemporaryDirectory() as tmp:
+            write_campaign(
+                Path(tmp),
+                {
+                    ("s125", "10k-pan"): {
+                        "trace": trace_2_6r_pan,
+                        "missed_refreshes": 1,
+                        "over_2_5_refreshes": 1,
+                    },
+                },
+            )
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                ok = gate.summarize(Path(tmp))
+            self.assertFalse(ok)
+            self.assertIn("FAIL B4 10k-pan attribution 0/10 passed", buf.getvalue())
+
     def test_mismatched_startup_draws_fails_attribution(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_campaign(Path(tmp), {("s100", "dense-drag-wire"): {"startup_draws": 10}})
@@ -493,6 +512,7 @@ class GateTest(unittest.TestCase):
             ({"transitions": gate.FRAMES - 1}, "incomplete drag-wire exercise"),
             ({"waypoints": 2}, "incomplete drag-wire exercise"),
             ({"two_leg_frames": 0}, "incomplete drag-wire exercise"),
+            ({"sheet_paints": 0.5}, "invalid count"),
             ({"omit_d2p": True}, "p99"),
             (
                 {"warnings": ["window was not active: present intervals are not recorded"]},

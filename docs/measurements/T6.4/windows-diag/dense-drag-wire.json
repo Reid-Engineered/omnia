@@ -46,37 +46,37 @@
     "late": 0,
     "unmeasured": 0,
     "startup_draws": 11,
-    "wall_s": 7.339
+    "wall_s": 7.3468
   },
   "warnings": [],
   "metrics": {
     "frame_ms": {
-      "mean": 0.6218,
-      "p50": 0.6195,
-      "p95": 1.0173,
-      "p99": 1.2493,
-      "max": 1.3281
+      "mean": 0.5379,
+      "p50": 0.4669,
+      "p95": 1.0353,
+      "p99": 1.1684,
+      "max": 1.2564
     },
     "draw_ms": {
-      "mean": 0.6102,
-      "p50": 0.6093,
-      "p95": 1.0015,
-      "p99": 1.2298,
-      "max": 1.3087
+      "mean": 0.5268,
+      "p50": 0.4567,
+      "p95": 1.0148,
+      "p99": 1.15,
+      "max": 1.237
     },
     "dirty_to_present_ms": {
-      "mean": 1.1574,
-      "p50": 1.1448,
-      "p95": 1.8442,
-      "p99": 2.2118,
-      "max": 4.4728
+      "mean": 0.9976,
+      "p50": 0.8653,
+      "p95": 1.9108,
+      "p99": 2.0941,
+      "max": 2.2815
     },
     "present_interval_ms": {
-      "mean": 6.0603,
-      "p50": 6.0908,
-      "p95": 7.0943,
-      "p99": 7.8029,
-      "max": 9.2406
+      "mean": 6.0609,
+      "p50": 6.0867,
+      "p95": 7.0574,
+      "p99": 7.7783,
+      "max": 8.9375
     },
     "paint_samples": 600,
     "paint_sampling": "overlay-every-frame",
@@ -89,11 +89,11 @@
         "max": 0.0
       },
       "total": {
-        "mean": 51.0017,
+        "mean": 51.0,
         "p50": 51.0,
         "p95": 51.0,
         "p99": 51.0,
-        "max": 52.0
+        "max": 51.0
       }
     },
     "alloc_bytes_per_frame": {
@@ -105,21 +105,21 @@
         "max": 0.0
       },
       "total": {
-        "mean": 5346.9867,
+        "mean": 4992.0,
         "p50": 4992.0,
         "p95": 4992.0,
         "p99": 4992.0,
-        "max": 217984.0
+        "max": 4992.0
       }
     },
     "late_frames": 0,
-    "missed_refreshes": 2,
+    "missed_refreshes": 0,
     "present_intervals_over_2_5_refreshes": 0,
-    "max_present_interval_ms": 9.2406,
+    "max_present_interval_ms": 8.9375,
     "work_missed_refreshes": 0,
-    "memory_mb": 101.293,
-    "working_set_mb": 102.6953,
-    "heap_peak_mb": 26.7606,
+    "memory_mb": 101.25,
+    "working_set_mb": 102.6133,
+    "heap_peak_mb": 26.6669,
     "sheet_paints": 0
   },
   "diagnostic_trace": null,

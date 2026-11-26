@@ -2531,29 +2531,36 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        and wired `--script drag-wire` (native + `--headless`) across
                        `crates/omnia-bench/src/{driver.rs,harness.rs,lib.rs,main.rs,scripts.rs}`:
                        focuses `OverlayView`, settles before press (Wayland fullscreen-safe),
-                       enters `Tool::Wire`, anchors a start pin without mutating `Doc`, and sweeps
-                       deterministic in-viewport WD5 snap targets (`Pin`, `WireEnd`, `Junction`,
-                       `WireBody`, `Grid`) with two-leg WD6 L-route previews, verifying `B6`
-                       `dirty_to_present_ms`, `B3`/`B5` `frame_ms`, `B10` (`ours == 0`), `INV5`
-                       (`revision_changes == 0`), and `INV11` (`sheet_paints == 0` across press,
-                       warm-up, and measured frames). Added `#[cfg(test)]` `proptest_config` in
-                       `crates/omnia-doc/src/lib.rs` (wired into `route.rs`, `connectivity.rs`,
-                       `command.rs`, `doc.rs` tests only) so `PROPTEST_CASES=2560` scales all
-                       `INV2`/`INV9`/`INV10` property tests to ≥10× default without ever lowering
+                       enters `Tool::Wire`, clicks (`MouseDown` + `MouseUp`) a start pin without
+                       mutating `Doc`, and sweeps deterministic in-viewport WD5 snap targets
+                       covering every reachable class on the generated sheet (`Pin`, `WireEnd`,
+                       `Grid` on `1k`; `Pin`, `WireEnd`, `Junction`, `Grid` on `dense`, while
+                       probing `WireBody` as well) with two-leg WD6 L-route previews, verifying
+                       `B6` `dirty_to_present_ms`, `B3`/`B5` `frame_ms`, `B10` (`ours == 0`),
+                       `INV5` (`revision_changes == 0`), and `INV11` (`sheet_paints == 0` across
+                       press, warm-up, and measured frames). Added `#[cfg(test)]`
+                       `proptest_config` in `crates/omnia-doc/src/lib.rs` (wired into `route.rs`,
+                       `connectivity.rs`, `command.rs`, `doc.rs` tests only, including
+                       `doc.rs::integrated_edits_restore_and_rebuild`) so `PROPTEST_CASES=2560`
+                       scales every `with_cases(...)` `INV2`/`INV10` property test alongside the
+                       default-config `INV9` property tests to ≥10× default without ever lowering
                        any default. Added frozen `docs/measurements/T6.4/gate.py`, `test_gate.py`
                        (14/14 passing), `owner-run.sh`, and Windows non-reference diagnostics in
                        `docs/measurements/T6.4.md` + `docs/measurements/T6.4/windows-diag/`
                        (Windows 11, i7-14650HX, Intel UHD `32.0.101.7088`, `1536×864` @ 1.25x,
-                       165 Hz, AC `Silent`: `1k-drag-wire` d2p p99 `1.396 ms` / frame p99
-                       `0.759 ms` / `ours = 0` / `sheet_paints = 0`; `dense-drag-wire` d2p p99
-                       `2.212 ms` / frame p99 `1.249 ms` / `ours = 0` / `sheet_paints = 0`;
-                       traced `attribute.py` PASS on both with `counted = 0`; 10× debug proptests
-                       at `PROPTEST_CASES=2560` passed: `inv2` 5/5 in `49.66 s`, `inv9` 7/7 in
-                       `4.18 s`, `inv10` 13/13 in `215.60 s`). Standard checks passed locally on
-                       Windows: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
-                       -- -D warnings`, `cargo clippy -p omnia-bench --all-targets --features
-                       scene-counts,readback -- -D warnings`, `cargo clippy -p omnia-bench
-                       --all-targets --features headless -- -D warnings`, `cargo test -p
-                       omnia-bench --features headless` (59/59), `cargo test --workspace -j 2`
-                       (including 72/72 goldens), and `cargo deny check`. Left `needs-human`
+                       165 Hz, AC `Silent`: `1k-drag-wire` d2p p99 `1.964 ms` / frame p99
+                       `0.996 ms` / `ours = 0` / `sheet_paints = 0`; `dense-drag-wire` d2p p99
+                       `2.094 ms` / frame p99 `1.168 ms` / `ours = 0` / `sheet_paints = 0`;
+                       traced `attribute.py` PASS on both with `counted = 0`; full `omnia-doc
+                       --lib` suite at `PROPTEST_CASES=2560` passed 203/203 in `378.84 s`).
+                       Standard checks passed locally on Windows: `cargo fmt --all --check`,
+                       `cargo clippy --workspace --all-targets -- -D warnings`, `cargo clippy -p
+                       omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
+                       `cargo clippy -p omnia-bench --all-targets --features headless -- -D
+                       warnings`, `cargo test -p omnia-bench --features headless` (59/59),
+                       `cargo test --workspace -j 2` (including 72/72 goldens), and `cargo deny
+                       check`. Addressed independent review (`claude-opus-5-5`: P1 full `omnia-doc`
+                       10× coverage + `doc.rs:1080`, P2 snap-class wording, `2.6R` `10k-pan`
+                       gate test, `INV9` deviation wording, plus nits: `MouseUp`, `integer_count`
+                       for `sheet_paints`, warm-up vs measured `INV5` wording). Left `needs-human`
                        awaiting Orion reference certification via `docs/measurements/T6.4/owner-run.sh`.

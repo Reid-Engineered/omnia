@@ -17,8 +17,8 @@ use crate::hover::{BenchOverlayScope, mouse_move};
 use crate::scene::{STRESS_SEED, Sheet};
 use crate::trace::FrameTrace;
 use gpui::{
-    App, AppContext, Bounds, Context, Entity, FrameDurationSnapshot, IntoElement, Pixels, Point,
-    Render, Window, point, px, size,
+    App, AppContext, Bounds, Context, Entity, FrameDurationSnapshot, IntoElement, Modifiers,
+    MouseButton, MouseUpEvent, Pixels, PlatformInput, Point, Render, Window, point, px, size,
 };
 use omnia_canvas::{
     Camera as SheetCamera, OverlayView,
@@ -404,6 +404,15 @@ pub fn build_wire_plan(
     })
 }
 
+pub(crate) fn mouse_left_up(position: Point<Pixels>) -> PlatformInput {
+    PlatformInput::MouseUp(MouseUpEvent {
+        button: MouseButton::Left,
+        position,
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WirePhase {
     Settle { waited: u32, ready: u32 },
@@ -560,6 +569,7 @@ impl DragWireDriver {
                 view.set_tool(Tool::Wire, cx);
             });
             window.dispatch_event(mouse_left_down(plan.start_screen), cx);
+            window.dispatch_event(mouse_left_up(plan.start_screen), cx);
             let started_ok = matches!(
                 self.overlay.read(cx).tool_state(),
                 ToolState::Wiring(wire) if wire.start == Some(plan.start_snap.at())

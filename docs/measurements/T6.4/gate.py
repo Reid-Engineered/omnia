@@ -268,7 +268,7 @@ def motion(report, sheet, script, scale, viewport):
     d2p_p99 = None
     allowed_warnings = set()
     if script == "drag-wire":
-        sheet_paints = metric(metrics["sheet_paints"])
+        sheet_paints = integer_count(metrics["sheet_paints"])
         wire = report.get("wire") or {}
         press_sheet_paints = integer_count(wire.get("press_sheet_paints"))
         warmup_sheet_paints = integer_count(wire.get("warmup_sheet_paints"))

@@ -5,7 +5,7 @@ use crate::alloc::{AllocCounts, ours};
 use crate::compare::SCHEMA;
 use crate::drag_part::{build_drag_plan, mouse_left_down, mouse_left_drag};
 use crate::drag_segment::build_drag_segment_plan;
-use crate::drag_wire::{WireSnapCounters, build_wire_plan};
+use crate::drag_wire::{WireSnapCounters, build_wire_plan, mouse_left_up};
 use crate::driver::Script;
 use crate::generate::generate;
 use crate::harness::{RunConfig, primitive_counts};
@@ -749,6 +749,7 @@ fn run_headless_drag_wire(
             view.set_tool(Tool::Wire, cx);
         });
         window.dispatch_event(mouse_left_down(plan.start_screen), cx);
+        window.dispatch_event(mouse_left_up(plan.start_screen), cx);
     });
     let started_ok = window.update(|_, _, cx| {
         matches!(
