@@ -1015,7 +1015,7 @@ Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 | Command | Reports |
 | --- | --- |
 | `bench run --sheet S --script pan\|zoom\|drag-part\|drag-wire\|hover [--instrument [--instrument-hz 60\|30]] [--frames 600]` | Frame, draw and dirty-to-present ms (p50, p95, p99, max); `allocs_per_frame` (ours, total); `memory_mb`; primitive counts by kind (build with `--features scene-counts`, which needs GPUI's `bench-support`) |
-| `bench run --headless --sheet S --script pan\|zoom` | Peak and sweep-wide primitive counts and Omnia allocations per frame over the script on the test platform (build with `--features headless`). No frame-time metrics. |
+| `bench run --headless --sheet S --script pan\|zoom [--instrument [--instrument-hz 60\|30]]` | Peak and sweep-wide primitive counts and Omnia allocations per frame over the script on the test platform (build with `--features headless`). No frame-time metrics. |
 | `bench start [--sheet S] [--runs 10]` | Process start to first interactive frame, median and max |
 | `bench idle --seconds N` | Frames drawn; CPU percent |
 | `bench hit --sheet S` | Hit-test time, p50 and p99 |

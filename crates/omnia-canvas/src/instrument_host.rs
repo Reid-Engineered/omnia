@@ -14,7 +14,8 @@ use gpui::{
 use omnia_theme::Theme;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
-/// Default logical dimensions of the oscilloscope stub content (`ui-plan.md` UK10).
+/// Standalone bench content dimensions matching `ui-plan.md` `UK10`'s default frame size
+/// (when `U5.5` mounts this stub inside `U4.1`'s shell frame, `U4.1`'s header reduces inner area).
 pub const DEFAULT_INSTRUMENT_SIZE: (f32, f32) = (576.0, 468.0);
 /// Default horizontal trace resolution in quad columns (matching `S0.4` dual-channel scope).
 pub const DEFAULT_TRACE_COLUMNS: usize = 512;
@@ -24,6 +25,9 @@ const TRACE_STROKE_PX: f64 = 1.5;
 const SWEEP_SPEED_HZ: f64 = 1.0;
 const GRID_DIVS_X: usize = 10;
 const GRID_DIVS_Y: usize = 8;
+// Temporary deviation (`T7.3`, `INV6`): `omnia-theme` does not yet define `instrument/grid` or
+// `instrument/grid-axis` tokens, so scale `theme.stage_tag_text` alpha instead of inventing hex
+// literals until the theme lane adds dedicated grid tokens.
 const GRID_MINOR_ALPHA: f32 = 0.10;
 const GRID_AXIS_ALPHA: f32 = 0.24;
 

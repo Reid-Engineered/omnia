@@ -257,6 +257,10 @@ class GateTest(unittest.TestCase):
             self.assertTrue(ok, out)
             self.assertIn("PASS T7.3 10k-pan-inst60 frame p99", out)
             self.assertIn("PASS T7.3 10k-pan-inst30 frame p99", out)
+            self.assertIn("T7.3 done-when (60 Hz p99 < 16 ms): PASS", out)
+            self.assertIn("T7.3 done-when (30 Hz p99 < 16 ms): PASS", out)
+            self.assertIn("Additional budgets (B4/B5/B9/B10, 60 Hz): PASS", out)
+            self.assertIn("Additional budgets (B4/B5/B9/B10, 30 Hz): PASS", out)
 
     def test_60hz_over_16ms_fails_while_recording_30hz_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -274,7 +278,10 @@ class GateTest(unittest.TestCase):
             self.assertFalse(ok)
             self.assertIn("FAIL T7.3 10k-pan-inst60 frame p99", out)
             self.assertIn("PASS T7.3 10k-pan-inst30 frame p99", out)
-            self.assertIn("30 Hz fallback passed all checks", out)
+            self.assertIn("T7.3 done-when (60 Hz p99 < 16 ms): FAIL", out)
+            self.assertIn("T7.3 done-when (30 Hz p99 < 16 ms): PASS", out)
+            self.assertIn("Additional budgets (B4/B5/B9/B10, 30 Hz): PASS", out)
+            self.assertIn("30 Hz fallback passed T7.3 done-when and all additional budgets", out)
 
     def test_b9_and_b10_and_attribution_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -282,16 +289,22 @@ class GateTest(unittest.TestCase):
             buf = io.StringIO()
             with redirect_stdout(buf):
                 ok = gate.summarize(Path(tmp))
+            out = buf.getvalue()
             self.assertFalse(ok)
-            self.assertIn("FAIL B10 10k-pan-inst60 max Omnia allocations/frame", buf.getvalue())
+            self.assertIn("FAIL B10 10k-pan-inst60 max Omnia allocations/frame", out)
+            self.assertIn("T7.3 done-when (60 Hz p99 < 16 ms): PASS", out)
+            self.assertIn("Additional budgets (B4/B5/B9/B10, 60 Hz): FAIL", out)
 
         with tempfile.TemporaryDirectory() as tmp:
             write_campaign(Path(tmp), {("s125", "10k-pan-inst60"): {"memory": 300.5}})
             buf = io.StringIO()
             with redirect_stdout(buf):
                 ok = gate.summarize(Path(tmp))
+            out = buf.getvalue()
             self.assertFalse(ok)
-            self.assertIn("FAIL B9 10k-pan-inst60 private memory", buf.getvalue())
+            self.assertIn("FAIL B9 10k-pan-inst60 private memory", out)
+            self.assertIn("T7.3 done-when (60 Hz p99 < 16 ms): PASS", out)
+            self.assertIn("Additional budgets (B4/B5/B9/B10, 60 Hz): FAIL", out)
 
         trace_2_6r = make_trace(late_measured_index=10, late_interval_refreshes=2.6)
         with tempfile.TemporaryDirectory() as tmp:
@@ -308,8 +321,11 @@ class GateTest(unittest.TestCase):
             buf = io.StringIO()
             with redirect_stdout(buf):
                 ok = gate.summarize(Path(tmp))
+            out = buf.getvalue()
             self.assertFalse(ok)
-            self.assertIn("FAIL B4 10k-pan-inst60 2.5R attribution 0/10 passed", buf.getvalue())
+            self.assertIn("FAIL B4 10k-pan-inst60 2.5R attribution 0/10 passed", out)
+            self.assertIn("T7.3 done-when (60 Hz p99 < 16 ms): PASS", out)
+            self.assertIn("Additional budgets (B4/B5/B9/B10, 60 Hz): FAIL", out)
 
     def test_incomplete_instrument_exercise_and_warnings_fail_closed(self):
         for override, pattern in [

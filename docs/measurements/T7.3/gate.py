@@ -351,8 +351,10 @@ def summarize(output):
             raise ValueError(f"{stem}: {error}") from error
 
     print(f"Vulkan device and driver: {sorted(adapters)}")
-    results_60 = []
-    results_30 = []
+    t7_3_60 = []
+    t7_3_30 = []
+    extra_60 = []
+    extra_30 = []
 
     def verdict(target_list, passed, summary):
         target_list.append(passed)
@@ -364,44 +366,64 @@ def summarize(output):
             f"CPU governors, power profile and platform profile: {sorted(conditions[tag], key=str)}"
         )
         for case in CASES:
-            target = results_60 if case == "10k-pan-inst60" else results_30
+            t7_3_target = t7_3_60 if case == "10k-pan-inst60" else t7_3_30
+            extra_target = extra_60 if case == "10k-pan-inst60" else extra_30
             p99s, maxes, allocs, memory, traced_b4, traced_b3 = zip(
                 *runs[tag, case], strict=True
             )
             verdict(
-                target,
+                t7_3_target,
                 median(p99s) < TARGET_P99_MS,
                 f"T7.3 {case} frame p99 {med_range(p99s)} ms (< {TARGET_P99_MS})",
             )
             passed_b4 = sum(result["passed"] for result in traced_b4)
             verdict(
-                target,
+                extra_target,
                 passed_b4 == REPETITIONS,
                 f"B4 {case} 2.5R attribution {passed_b4}/{REPETITIONS} passed",
             )
             passed_b3 = sum(result["passed"] for result in traced_b3)
             print(f"INFO {case} 1.5R attribution {passed_b3}/{REPETITIONS} passed")
             verdict(
-                target,
+                extra_target,
                 max(maxes) <= B5_MAX_MS,
                 f"B5 {case} worst frame {max(maxes):.3f} ms (<= {B5_MAX_MS})",
             )
             verdict(
-                target,
+                extra_target,
                 max(allocs) == 0,
                 f"B10 {case} max Omnia allocations/frame {max(allocs):g} (= 0)",
             )
             verdict(
-                target,
+                extra_target,
                 max(memory) < B9_MAX_MB,
                 f"B9 {case} private memory {med_range(memory)} MB (all < {B9_MAX_MB})",
             )
     print("\nMissed-refresh attribution (2.5R)")
     print("\n".join(attribution))
-    if all(results_60):
+    t7_3_60_ok = all(t7_3_60)
+    t7_3_30_ok = all(t7_3_30)
+    extra_60_ok = all(extra_60)
+    extra_30_ok = all(extra_30)
+    print(f"\nT7.3 done-when (60 Hz p99 < {TARGET_P99_MS:g} ms): {'PASS' if t7_3_60_ok else 'FAIL'}")
+    print(f"T7.3 done-when (30 Hz p99 < {TARGET_P99_MS:g} ms): {'PASS' if t7_3_30_ok else 'FAIL'}")
+    print(f"Additional budgets (B4/B5/B9/B10, 60 Hz): {'PASS' if extra_60_ok else 'FAIL'}")
+    print(f"Additional budgets (B4/B5/B9/B10, 30 Hz): {'PASS' if extra_30_ok else 'FAIL'}")
+    if t7_3_60_ok and extra_60_ok:
         return True
-    if all(results_30):
-        print("\nSUMMARY: 60 Hz missed T7.3 gate; 30 Hz fallback passed all checks.")
+    if not t7_3_60_ok and t7_3_30_ok:
+        if extra_30_ok:
+            print(
+                "SUMMARY: 60 Hz missed T7.3 done-when; 30 Hz fallback passed T7.3 done-when and all additional budgets."
+            )
+        else:
+            print(
+                "SUMMARY: 60 Hz missed T7.3 done-when; 30 Hz fallback passed T7.3 done-when but missed an additional budget."
+            )
+    elif t7_3_60_ok and not extra_60_ok:
+        print(
+            "SUMMARY: 60 Hz passed T7.3 done-when (p99 < 16 ms) but missed an additional budget (B4/B5/B9/B10)."
+        )
     return False
 
 

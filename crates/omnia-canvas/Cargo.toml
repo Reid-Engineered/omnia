@@ -29,3 +29,7 @@ harness = false
 [[test]]
 name = "sheet_text_render"
 harness = false
+
+[[test]]
+name = "scale_factor"
+harness = false

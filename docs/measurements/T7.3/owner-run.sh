@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # T7.3 Instrument window stub reference campaign on Orion, started by the owner at the desk.
+# Run only after PR #152 merges into main (this script checks out and builds origin/main).
 #
 # One command, from a clean checkout of this repository on Orion, in a terminal in the local
 # Wayland session:
@@ -238,6 +239,9 @@ baloo_idle() {
         && grep -q -x 'Files waiting for content indexing: 0' <<< "$status"
 }
 
+# Exact process names, executable names and path components of argv entries, so that an
+# Electron app (/opt/t3code/...), a node-launched CLI (.../codex.js, .../claude-code/cli.js) or
+# a cargo build is found, and a shell command that merely mentions one of them is not.
 busy_processes() {
     python3 -I -c '
 import os
@@ -253,15 +257,21 @@ for pid in sorted((p for p in os.listdir("/proc") if p.isdigit()), key=int):
             argv = [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
     except OSError:
         continue
-    hit = comm in names
-    if not hit:
-        for arg in argv:
-            parts = [p for p in arg.replace("\\", "/").split("/") if p]
-            if any(p in names or p.removesuffix(".js") in names for p in parts):
-                hit = True
-                break
-    if hit:
-        print(f"{pid} {comm}: {' '.join(argv[:4])}")
+    try:
+        exe = os.path.basename(os.readlink(f"/proc/{pid}/exe"))
+    except OSError:
+        exe = ""
+    seen = {comm.lower(), exe.lower()}
+    for arg in argv:
+        if any(c.isspace() for c in arg):
+            continue
+        for part in arg.lower().split("/"):
+            seen.add(part)
+            for ext in (".js", ".cjs", ".mjs", ".asar", ".exe"):
+                if part.endswith(ext):
+                    seen.add(part[: -len(ext)])
+    if seen & names:
+        print(pid, comm, " ".join(argv)[:160])
 '
 }
 
@@ -283,4 +293,6 @@ print(json.dumps({"utc": time.strftime("%FT%TZ", time.gmtime()), "procs": procs}
 '
 }
 
-main "$@"
+# Kept on one line: bash reads a whole line before running it, so the checkout inside `main`
+# cannot change what runs next if it replaces this file on disk.
+main "$@"; exit $?
