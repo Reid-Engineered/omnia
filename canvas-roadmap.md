@@ -618,7 +618,7 @@ of the `canvas` lane.
 - Replaced by [wiring-roadmap.md](wiring-roadmap.md) W2.1 to W2.5 (Q6/WQ1 answered "yes"
   on 2026-11-16; no longer blocked). See [wiring-plan.md](wiring-plan.md) WD3.
 
-### T6.4 Gate: milestone 6 · todo
+### T6.4 Gate: milestone 6 · needs-human
 - Lane: bench · Depends: T6.2
 - Do: add the `drag-wire` script. `bench run --sheet 1k --script drag-wire` and
   `--sheet dense`: B6 and B3. The INV2, INV9 and INV10 property tests at 10× the default
@@ -2526,3 +2526,41 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        the affected fractional-scale overlay goldens, routed `set_wire_preview`
                        through `set_tool(Tool::Wire)`, updated `canvas-plan.md` §9/C4 wording,
                        and added regression tests for Space repeat and camera/doc snap refresh.
+2026-11-26  T6.4  needs-human  Prepared Milestone 6 gate (`B2`–`B6`, `B9`, `B10`, `INV2`, `INV5`,
+                       `INV9`, `INV10`, `INV11`). Added `crates/omnia-bench/src/drag_wire.rs`
+                       and wired `--script drag-wire` (native + `--headless`) across
+                       `crates/omnia-bench/src/{driver.rs,harness.rs,lib.rs,main.rs,scripts.rs}`:
+                       focuses `OverlayView`, settles before press (Wayland fullscreen-safe),
+                       enters `Tool::Wire`, clicks (`MouseDown` + `MouseUp`) a start pin without
+                       mutating `Doc`, and sweeps deterministic in-viewport WD5 snap targets
+                       covering every reachable class on the generated sheet (`Pin`, `WireEnd`,
+                       `Grid` on `1k`; `Pin`, `WireEnd`, `Junction`, `Grid` on `dense`, while
+                       probing `WireBody` as well) with two-leg WD6 L-route previews, verifying
+                       `B6` `dirty_to_present_ms`, `B3`/`B5` `frame_ms`, `B10` (`ours == 0`),
+                       `INV5` (`revision_changes == 0`), and `INV11` (`sheet_paints == 0` across
+                       press, warm-up, and measured frames). Added `#[cfg(test)]`
+                       `proptest_config` in `crates/omnia-doc/src/lib.rs` (wired into `route.rs`,
+                       `connectivity.rs`, `command.rs`, `doc.rs` tests only, including
+                       `doc.rs::integrated_edits_restore_and_rebuild`) so `PROPTEST_CASES=2560`
+                       scales every `with_cases(...)` `INV2`/`INV10` property test alongside the
+                       default-config `INV9` property tests to ≥10× default without ever lowering
+                       any default. Added frozen `docs/measurements/T6.4/gate.py`, `test_gate.py`
+                       (14/14 passing), `owner-run.sh`, and Windows non-reference diagnostics in
+                       `docs/measurements/T6.4.md` + `docs/measurements/T6.4/windows-diag/`
+                       (Windows 11, i7-14650HX, Intel UHD `32.0.101.7088`, `1536×864` @ 1.25x,
+                       165 Hz, AC `Silent`: `1k-drag-wire` d2p p99 `1.964 ms` / frame p99
+                       `0.996 ms` / `ours = 0` / `sheet_paints = 0`; `dense-drag-wire` d2p p99
+                       `2.094 ms` / frame p99 `1.168 ms` / `ours = 0` / `sheet_paints = 0`;
+                       traced `attribute.py` PASS on both with `counted = 0`; full `omnia-doc
+                       --lib` suite at `PROPTEST_CASES=2560` passed 203/203 in `378.84 s`).
+                       Standard checks passed locally on Windows: `cargo fmt --all --check`,
+                       `cargo clippy --workspace --all-targets -- -D warnings`, `cargo clippy -p
+                       omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
+                       `cargo clippy -p omnia-bench --all-targets --features headless -- -D
+                       warnings`, `cargo test -p omnia-bench --features headless` (59/59),
+                       `cargo test --workspace -j 2` (including 72/72 goldens), and `cargo deny
+                       check`. Addressed independent review (`claude-opus-5-5`: P1 full `omnia-doc`
+                       10× coverage + `doc.rs:1080`, P2 snap-class wording, `2.6R` `10k-pan`
+                       gate test, `INV9` deviation wording, plus nits: `MouseUp`, `integer_count`
+                       for `sheet_paints`, warm-up vs measured `INV5` wording). Left `needs-human`
+                       awaiting Orion reference certification via `docs/measurements/T6.4/owner-run.sh`.

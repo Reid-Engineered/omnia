@@ -3141,7 +3141,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(crate::proptest_config(128))]
         #[test]
         fn winv3_inv4_inv10_add_delete_sequences(
             steps in prop::collection::vec((any::<bool>(), prop::collection::vec(wire_strategy(), 1..4), any::<usize>()), 1..40),
@@ -3176,7 +3176,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(crate::proptest_config(128))]
         /// INV2 + INV10 hold after every AddWires step, and undoing every step
         /// restores the empty document (INV4, ids included via content_eq).
         #[test]
@@ -4281,7 +4281,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(crate::proptest_config(128))]
         /// W3.2 (WD7, WINV3, WINV4, INV10): for random sheets and segment drags,
         /// plan_segment_drag matches Command::DragSegment; refused drags return
         /// Blocker and leave the document unchanged; accepted drags preserve the

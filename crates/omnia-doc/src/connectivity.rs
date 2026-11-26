@@ -2402,7 +2402,7 @@ pub(crate) mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+        #![proptest_config(crate::proptest_config(256))]
 
         /// INV10: after every add/remove step, incremental connectivity equals a from-scratch rebuild.
         #[test]

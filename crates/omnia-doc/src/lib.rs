@@ -38,3 +38,17 @@ pub mod spice_screen;
 pub use spice_screen::{ScreenError, screen_embedded, subckt_ports};
 pub mod units;
 pub use units::{FiniteF64, ValueError, parse_value};
+
+/// Test-only `proptest` config that keeps `default_cases` unless `PROPTEST_CASES` raises it,
+/// so gate runs (T6.4: 10× default case count) can scale tests that declare a custom baseline
+/// without ever lowering any test below its default.
+#[cfg(test)]
+pub(crate) fn proptest_config(default_cases: u32) -> proptest::test_runner::Config {
+    let mut cfg = proptest::test_runner::Config::default();
+    if std::env::var_os("PROPTEST_CASES").is_none() {
+        cfg.cases = default_cases;
+    } else {
+        cfg.cases = cfg.cases.max(default_cases);
+    }
+    cfg
+}

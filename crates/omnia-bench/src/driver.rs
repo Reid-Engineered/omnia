@@ -1,8 +1,8 @@
 //! Scripted camera and pointer drivers. Every frame differs from the one before, so every
 //! frame repaints and no frame is skipped as identical.
 //!
-//! `drag-part` drives `OverlayView` in `drag_part.rs` (T5.4); `drag-wire` arrives in milestone 6;
-//! `hover` drives `OverlayView` over real sheets in `hover.rs` (T4.6).
+//! `drag-part` drives `OverlayView` in `drag_part.rs` (T5.4); `drag-wire` drives `OverlayView`'s
+//! wire tool in `drag_wire.rs` (T6.4); `hover` drives `OverlayView` over real sheets in `hover.rs` (T4.6).
 
 /// K4: the zoom range the `zoom` script sweeps (5% to 3200%).
 pub use omnia_canvas::camera::{MAX_ZOOM, MIN_ZOOM};
@@ -51,6 +51,9 @@ pub enum Script {
     /// Drags a visible wire segment perpendicular to its axis across grid-step waypoints over a
     /// focused `OverlayView` (W3.3, WB6, WD7, INV5, INV11).
     DragSegment,
+    /// Sweeps an active `Tool::Wire` L-route preview and WD5 snap marker across in-viewport snap
+    /// targets over a focused `OverlayView` (T6.4, B6, INV5, INV11).
+    DragWire,
 }
 
 impl Script {
@@ -61,9 +64,9 @@ impl Script {
             "hover" => Ok(Self::Hover),
             "drag-part" => Ok(Self::DragPart),
             "drag-segment" => Ok(Self::DragSegment),
-            "drag-wire" => Err(format!("script `{name}` arrives in milestone 6 (T6.4)")),
+            "drag-wire" => Ok(Self::DragWire),
             _ => Err(format!(
-                "unknown script `{name}` (available: pan, zoom, hover, drag-part, drag-segment)"
+                "unknown script `{name}` (available: pan, zoom, hover, drag-part, drag-segment, drag-wire)"
             )),
         }
     }
@@ -75,6 +78,7 @@ impl Script {
             Self::Hover => "hover",
             Self::DragPart => "drag-part",
             Self::DragSegment => "drag-segment",
+            Self::DragWire => "drag-wire",
         }
     }
 
@@ -89,7 +93,7 @@ impl Script {
                 zoom: zoom_at(frame),
                 ..Camera::default()
             },
-            Self::Hover | Self::DragPart | Self::DragSegment => Camera::default(),
+            Self::Hover | Self::DragPart | Self::DragSegment | Self::DragWire => Camera::default(),
         }
     }
 }
@@ -149,7 +153,7 @@ mod tests {
         assert_eq!(Script::parse("hover"), Ok(Script::Hover));
         assert_eq!(Script::parse("drag-part"), Ok(Script::DragPart));
         assert_eq!(Script::parse("drag-segment"), Ok(Script::DragSegment));
-        assert!(Script::parse("drag-wire").unwrap_err().contains("T6.4"));
+        assert_eq!(Script::parse("drag-wire"), Ok(Script::DragWire));
         assert!(Script::parse("spin").is_err());
     }
 }

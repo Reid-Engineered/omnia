@@ -1077,7 +1077,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+        #![proptest_config(crate::proptest_config(256))]
         #[test]
         fn integrated_edits_restore_and_rebuild(edits in prop::collection::vec((0u8..9,0usize..32,-4i32..5,-4i32..5,any::<bool>()),1..200)) {
             let mut doc=Doc::new();
@@ -1980,7 +1980,7 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(crate::proptest_config(128))]
         /// A1.1 done-when (AD3, INV4, INV10): at every state the T5.1 generator reaches,
         /// undone and redone states included, `fork() == original`, the fork carries the same
         /// derived state, and applying the same command to both gives equal results (`Change`
