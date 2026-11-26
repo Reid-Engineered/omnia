@@ -48,6 +48,9 @@ pub enum Script {
     /// Drags a visible part's ghost across grid-step waypoints over a focused `OverlayView`
     /// (T5.4, B6, INV5, INV11).
     DragPart,
+    /// Drags a visible wire segment perpendicular to its axis across grid-step waypoints over a
+    /// focused `OverlayView` (W3.3, WB6, WD7, INV5, INV11).
+    DragSegment,
 }
 
 impl Script {
@@ -57,9 +60,10 @@ impl Script {
             "zoom" => Ok(Self::Zoom),
             "hover" => Ok(Self::Hover),
             "drag-part" => Ok(Self::DragPart),
+            "drag-segment" => Ok(Self::DragSegment),
             "drag-wire" => Err(format!("script `{name}` arrives in milestone 6 (T6.4)")),
             _ => Err(format!(
-                "unknown script `{name}` (available: pan, zoom, hover, drag-part)"
+                "unknown script `{name}` (available: pan, zoom, hover, drag-part, drag-segment)"
             )),
         }
     }
@@ -70,6 +74,7 @@ impl Script {
             Self::Zoom => "zoom",
             Self::Hover => "hover",
             Self::DragPart => "drag-part",
+            Self::DragSegment => "drag-segment",
         }
     }
 
@@ -84,7 +89,7 @@ impl Script {
                 zoom: zoom_at(frame),
                 ..Camera::default()
             },
-            Self::Hover | Self::DragPart => Camera::default(),
+            Self::Hover | Self::DragPart | Self::DragSegment => Camera::default(),
         }
     }
 }
@@ -143,6 +148,7 @@ mod tests {
         assert_eq!(Script::parse("zoom"), Ok(Script::Zoom));
         assert_eq!(Script::parse("hover"), Ok(Script::Hover));
         assert_eq!(Script::parse("drag-part"), Ok(Script::DragPart));
+        assert_eq!(Script::parse("drag-segment"), Ok(Script::DragSegment));
         assert!(Script::parse("drag-wire").unwrap_err().contains("T6.4"));
         assert!(Script::parse("spin").is_err());
     }

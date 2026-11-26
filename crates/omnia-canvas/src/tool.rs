@@ -14,7 +14,8 @@
 //! | --- | --- | --- |
 //! | [`ToolState::Idle`] | `Tool::Select` or `Tool::Label` with nothing under the pointer | hover, press on an item, tool change |
 //! | [`ToolState::Hovering`] | the pointer over an item in `Tool::Select` | pointer off the item, press |
-//! | [`ToolState::Dragging`] | a left press on an item in `Tool::Select` without Shift | release (commit); Esc, a lost release, a fresh press, window deactivation, a document swap or a tool change (no edit) |
+//! | [`ToolState::Dragging`] | a left press on a part, label or multi-item selection in `Tool::Select` without Shift | release (commit); Esc, a lost release, a fresh press, window deactivation, a document swap or a tool change (no edit) |
+//! | [`ToolState::DraggingSegment`] | a left press on a single wire segment in `Tool::Select` without Shift | release (commits one `Command::DragSegment` if accepted or cancels if refused); Esc, a lost release, a fresh press, window deactivation, a document swap or a tool change (no edit) |
 //! | [`ToolState::Placing`] | `Tool::Place(symbol)` | Esc or a tool change; a press and release in the tool request a placement and stay |
 //! | [`ToolState::Wiring`] | `Tool::Wire` (W) | Esc (first drops the start, then leaves the tool) or a tool change |
 //!
@@ -39,8 +40,10 @@
 
 pub mod move_;
 pub mod place;
+pub mod segment;
 
 pub use place::{PlaceProvider, PlaceRequest};
+pub use segment::{SegmentDragGesture, SegmentPreview};
 
 use crate::input::SheetCanvas;
 use crate::keymap::{
@@ -171,6 +174,8 @@ pub enum ToolState {
     Idle,
     Hovering(ItemId),
     Dragging(DragGesture),
+    /// W3.3: dragging a single wire segment perpendicular to its axis (`Command::DragSegment`, WD7).
+    DraggingSegment(SegmentDragGesture),
     Placing(PlaceGesture),
     Wiring(WireGesture),
 }
@@ -180,7 +185,7 @@ impl ToolState {
         match self {
             Self::Idle => ToolPhase::Idle,
             Self::Hovering(_) => ToolPhase::Hovering,
-            Self::Dragging(_) => ToolPhase::Dragging,
+            Self::Dragging(_) | Self::DraggingSegment(_) => ToolPhase::Dragging,
             Self::Placing(_) => ToolPhase::Placing,
             Self::Wiring(_) => ToolPhase::Wiring,
         }
@@ -294,17 +299,27 @@ impl ToolMachine {
         self.prefs = prefs;
     }
 
-    /// A drag holds the pointer until release.
+    /// A pointer-driven drag holds the pointer until release.
     pub fn is_dragging(&self) -> bool {
-        matches!(self.state, ToolState::Dragging(_))
+        match &self.state {
+            ToolState::Dragging(_) => true,
+            ToolState::DraggingSegment(seg) => seg.is_pointer_drag(),
+            _ => false,
+        }
     }
 
     /// Whether pointer moves and releases go to the tool instead of hover and selection.
     pub fn routes_pointer(&self) -> bool {
-        matches!(
-            self.state,
-            ToolState::Dragging(_) | ToolState::Placing(_) | ToolState::Wiring(_)
-        )
+        match &self.state {
+            ToolState::Dragging(_) | ToolState::Placing(_) | ToolState::Wiring(_) => true,
+            ToolState::DraggingSegment(seg) => seg.is_pointer_drag(),
+            ToolState::Idle | ToolState::Hovering(_) => false,
+        }
+    }
+
+    /// Installs a non-capturing segment-drag preview (golden rendering / programmatic inspection).
+    pub(crate) fn set_segment_preview(&mut self, gesture: SegmentDragGesture) {
+        self.state = ToolState::DraggingSegment(gesture);
     }
 
     fn rest_state(tool: Tool) -> ToolState {
@@ -355,7 +370,7 @@ impl ToolMachine {
     /// placement press with no edit. Wiring keeps its start; Esc drops it.
     pub fn pointer_lost(&mut self) -> ToolOutcome {
         match &mut self.state {
-            ToolState::Dragging(_) => self.reset(),
+            ToolState::Dragging(_) | ToolState::DraggingSegment(_) => self.reset(),
             ToolState::Placing(place) if place.pressed => {
                 place.pressed = false;
                 ToolOutcome::handled()
@@ -396,7 +411,7 @@ impl ToolMachine {
         selection: &[ItemId],
         shift: bool,
     ) -> ToolOutcome {
-        let stale = if self.is_dragging() {
+        let stale = if self.is_dragging() || matches!(self.state, ToolState::DraggingSegment(_)) {
             self.reset()
         } else {
             ToolOutcome::default()
@@ -411,22 +426,31 @@ impl ToolMachine {
                     } else {
                         vec![hit.item]
                     };
-                    let pivot = move_::selection_pivot(doc, &items).unwrap_or(at);
-                    let anchor_pin = move_::drag_anchor_pin(doc, hit.item, &items);
-                    self.state = ToolState::Dragging(DragGesture {
-                        items,
-                        pressed: hit.item,
-                        anchor: at,
-                        current: at,
-                        pivot,
-                        by: Orient::IDENTITY,
-                        base: DocStamp {
-                            key: doc_key,
-                            revision: doc.revision(),
-                        },
-                        anchor_pin,
-                        lifted: false,
-                    });
+                    let base = DocStamp {
+                        key: doc_key,
+                        revision: doc.revision(),
+                    };
+                    // W3.3 / WD7: dragging a single wire segment starts a perpendicular segment
+                    // drag rather than a whole-item Move.
+                    if let [ItemId::Wire(wire)] = items.as_slice()
+                        && let Some(gesture) = SegmentDragGesture::start(doc, *wire, at, base)
+                    {
+                        self.state = ToolState::DraggingSegment(gesture);
+                    } else {
+                        let pivot = move_::selection_pivot(doc, &items).unwrap_or(at);
+                        let anchor_pin = move_::drag_anchor_pin(doc, hit.item, &items);
+                        self.state = ToolState::Dragging(DragGesture {
+                            items,
+                            pressed: hit.item,
+                            anchor: at,
+                            current: at,
+                            pivot,
+                            by: Orient::IDENTITY,
+                            base,
+                            anchor_pin,
+                            lifted: false,
+                        });
+                    }
                     ToolOutcome {
                         handled: true,
                         preview_changed: true,
@@ -437,7 +461,9 @@ impl ToolMachine {
                     ToolOutcome::default()
                 }
             }
-            ToolState::Dragging(_) => unreachable!("a stale drag was reset above"),
+            ToolState::Dragging(_) | ToolState::DraggingSegment(_) => {
+                unreachable!("a stale drag was reset above")
+            }
             ToolState::Placing(place) => {
                 let next = Some(place::snap_place_origin(place.symbol, at, place.orient));
                 let changed = place.at != next;
@@ -468,7 +494,21 @@ impl ToolMachine {
 
     /// Pointer motion at world point `at`; `left_held` is whether the left button is down.
     /// Hover is not handled here (see [`Self::hover`]).
+    ///
+    /// Without `&Doc`, an active `DraggingSegment` previews attempted wires as
+    /// [`SegmentPreview::Accepted`] without calling [`omnia_doc::route::plan_segment_drag`];
+    /// use [`Self::pointer_move_with_doc`] for live planning.
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome {
+        self.pointer_move_inner(None, at, left_held)
+    }
+
+    /// Like [`Self::pointer_move`], with read access to `doc` so a live segment drag runs
+    /// [`omnia_doc::route::plan_segment_drag`] whenever its snapped offset changes (WD7, WD11).
+    pub fn pointer_move_with_doc(&mut self, doc: &Doc, at: Pt, left_held: bool) -> ToolOutcome {
+        self.pointer_move_inner(Some(doc), at, left_held)
+    }
+
+    fn pointer_move_inner(&mut self, doc: Option<&Doc>, at: Pt, left_held: bool) -> ToolOutcome {
         match &mut self.state {
             ToolState::Idle | ToolState::Hovering(_) => ToolOutcome::default(),
             ToolState::Dragging(drag) => {
@@ -485,6 +525,17 @@ impl ToolMachine {
                 ToolOutcome {
                     handled: true,
                     preview_changed: after != before,
+                    ..ToolOutcome::default()
+                }
+            }
+            ToolState::DraggingSegment(seg) => {
+                if !left_held {
+                    return self.cancel();
+                }
+                let changed = seg.update(doc, at);
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: changed,
                     ..ToolOutcome::default()
                 }
             }
@@ -516,7 +567,21 @@ impl ToolMachine {
 
     /// A left release at world point `at`. `alt` is read from the release event, which
     /// decides the follow policy at commit (WK3).
+    ///
+    /// Without `&Doc`, an active `DraggingSegment` re-plans its release offset without calling
+    /// [`omnia_doc::route::plan_segment_drag`] (`Doc::apply` still validates on commit); use
+    /// [`Self::pointer_up_with_doc`] for live planning and refusal handling.
     pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome {
+        self.pointer_up_inner(None, at, alt)
+    }
+
+    /// Like [`Self::pointer_up`], with read access to `doc` so a segment drag re-plans if the
+    /// release moved onto a new grid step before deciding commit vs refusal cancel (WD7, WD11).
+    pub fn pointer_up_with_doc(&mut self, doc: &Doc, at: Pt, alt: bool) -> ToolOutcome {
+        self.pointer_up_inner(Some(doc), at, alt)
+    }
+
+    fn pointer_up_inner(&mut self, doc: Option<&Doc>, at: Pt, alt: bool) -> ToolOutcome {
         match &mut self.state {
             ToolState::Dragging(drag) => {
                 drag.current = at;
@@ -529,6 +594,26 @@ impl ToolMachine {
                 let request = commit.is_none().then_some(ToolRequest::Click {
                     item: drag.pressed,
                     base: drag.base,
+                });
+                self.state = ToolState::Idle;
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: true,
+                    release: true,
+                    commit,
+                    request,
+                    ..ToolOutcome::default()
+                }
+            }
+            ToolState::DraggingSegment(seg) => {
+                seg.update(doc, at);
+                let commit = seg.command().map(|command| Commit {
+                    command,
+                    base: seg.base,
+                });
+                let request = (seg.offset() == 0).then_some(ToolRequest::Click {
+                    item: ItemId::Wire(seg.wire),
+                    base: seg.base,
                 });
                 self.state = ToolState::Idle;
                 ToolOutcome {
@@ -566,7 +651,7 @@ impl ToolMachine {
     /// leaves. Returns an unhandled outcome when there was nothing to cancel.
     pub fn cancel(&mut self) -> ToolOutcome {
         match &mut self.state {
-            ToolState::Dragging(_) => self.reset(),
+            ToolState::Dragging(_) | ToolState::DraggingSegment(_) => self.reset(),
             ToolState::Wiring(wire) if wire.start.is_some() => {
                 wire.start = None;
                 ToolOutcome::preview()
@@ -1044,7 +1129,6 @@ mod tests {
     const G: i32 = GRID_NM;
     const R1: ItemId = ItemId::Part(PartId(0));
     const C1: ItemId = ItemId::Part(PartId(1));
-    const W0: ItemId = ItemId::Wire(WireId(0));
     /// A hit radius well inside one grid step.
     const TOL: i32 = G / 4;
     /// The document key the pure tests stamp gestures with.
@@ -1346,6 +1430,9 @@ mod tests {
     /// T5.3 / T5.5 (PR 125 review case): R, X and Y during a drag compose into one
     /// `Command::Transform`, planned and normalised once against the original sheet so a valid
     /// final position commits and one undo restores it completely (INV4, INV5).
+    ///
+    /// Uses a two-item selection (`[Wire(1), Label(0)]` sharing the same `(2,2)-(4,2)` bounds and
+    /// `(3,2)` pivot) because W3.3 routes a single selected wire segment to `DraggingSegment`.
     #[test]
     fn t5_3_r_x_y_during_a_drag_commit_one_transform() {
         let mut doc = Doc::from_items(
@@ -1360,13 +1447,19 @@ mod tests {
                     b: pt(4, 2),
                 },
             ],
-            [],
+            [Label {
+                at: pt(4, 2),
+                text: "L1".into(),
+            }],
         )
         .unwrap();
         let original = snapshot(&doc);
-        let selected = ItemId::Wire(WireId(1));
+        let selected = [
+            ItemId::Wire(WireId(1)),
+            ItemId::Label(omnia_doc::LabelId(0)),
+        ];
         let mut m = ToolMachine::new();
-        press(&mut m, &doc, pt(3, 2), &[selected]);
+        press(&mut m, &doc, pt(3, 2), &selected);
         assert_eq!(m.reorient(Orient::IDENTITY), ToolOutcome::default());
         assert!(!dragging(&m).is_lifted());
         m.pointer_move(pt(3, 0), true);
@@ -1380,7 +1473,7 @@ mod tests {
         assert_eq!(
             command,
             Command::Transform {
-                items: vec![selected],
+                items: selected.to_vec(),
                 delta: pt(0, -2),
                 pivot: pt(3, 2),
                 by: expected_orient,
@@ -1889,11 +1982,12 @@ mod tests {
         let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
         let (a0, b0) = cx.update(|_, cx| (snapshot(doc_a.read(cx)), snapshot(doc_b.read(cx))));
         down(&overlay, cx, pt(0, 0));
-        let ToolState::Dragging(drag) = cx.update(|_, cx| overlay.read(cx).tool_state().clone())
+        let ToolState::DraggingSegment(seg) =
+            cx.update(|_, cx| overlay.read(cx).tool_state().clone())
         else {
-            panic!("expected a drag of wire 0");
+            panic!("expected a segment drag of wire 0");
         };
-        assert_eq!(drag.items, vec![W0]);
+        assert_eq!(seg.wire, WireId(0));
         drag_to(&overlay, cx, pt(0, 2));
         assert!(captured(cx));
         cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_document(doc_b.clone(), cx)));
@@ -1901,6 +1995,35 @@ mod tests {
         assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
         assert!(!captured(cx), "the swap releases the drag's capture");
         up(&overlay, cx, pt(0, 2));
+        assert!(
+            cx.update(|_, cx| doc_b.read(cx).content_eq(&b0)),
+            "doc B untouched"
+        );
+        assert_eq!(revision(&doc_b, cx), b0.revision());
+        assert!(
+            cx.update(|_, cx| doc_a.read(cx).content_eq(&a0)),
+            "doc A untouched"
+        );
+    }
+
+    /// Review finding 1: a part drag (`ToolState::Dragging`) never survives a document swap.
+    #[gpui::test]
+    fn t5_2_a_part_drag_does_not_survive_a_document_swap(cx: &mut TestAppContext) {
+        let (overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
+        let (a0, b0) = cx.update(|_, cx| (snapshot(doc_a.read(cx)), snapshot(doc_b.read(cx))));
+        down(&overlay, cx, pt(-6, 0));
+        assert!(matches!(
+            cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Dragging(ref drag) if drag.pressed == R1
+        ));
+        drag_to(&overlay, cx, pt(-4, 2));
+        assert!(captured(cx));
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_document(doc_b.clone(), cx)));
+        cx.run_until_parked();
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        assert!(!captured(cx), "the swap releases the drag's capture");
+        up(&overlay, cx, pt(-4, 2));
         assert!(
             cx.update(|_, cx| doc_b.read(cx).content_eq(&b0)),
             "doc B untouched"
@@ -4449,5 +4572,421 @@ mod tests {
             vec![(WireId(3), del_wire((8, 6), (12, 6)))]
         );
         assert_eq!(rig.history.borrow().len(), 1);
+    }
+
+    // ---- W3.3 Segment drag tool simulated-input GPUI tests (WD7, WD11, WINV3, WINV4, INV5, INV11) ----
+
+    /// Z-shaped run between R1 at (-8, 0) (right pin (-6, 0)) and C1 at (8, 4) (left pin (6, 4)):
+    /// - Wire(0): (-6, 0) -> (0, 0)
+    /// - Wire(1): (0, 0) -> (0, 4)  (middle vertical segment)
+    /// - Wire(2): (0, 4) -> (6, 4)
+    ///
+    /// Plus a foreign part R2 at (4, 2) with left pin at (2, 2) that blocks dragging Wire(1)
+    /// right by +2G to x = 2.
+    fn w3_3_segment_doc() -> Doc {
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let cap = lib.by_name("Capacitor-IEEE-NonPolarized").unwrap();
+        let res_def = lib.get(res);
+        let cap_def = lib.get(cap);
+
+        let parts = [
+            (
+                Part {
+                    symbol: res,
+                    at: pt(-8, 0),
+                    orient: Orient::IDENTITY,
+                    designator: "R1".into(),
+                    value: "10k".into(),
+                },
+                res_def.pins.iter().map(|p| p.at).collect::<Vec<_>>(),
+                res_def.bounds,
+            ),
+            (
+                Part {
+                    symbol: cap,
+                    at: pt(8, 4),
+                    orient: Orient::IDENTITY,
+                    designator: "C1".into(),
+                    value: "100n".into(),
+                },
+                cap_def.pins.iter().map(|p| p.at).collect::<Vec<_>>(),
+                cap_def.bounds,
+            ),
+            (
+                Part {
+                    symbol: res,
+                    at: pt(4, 2),
+                    orient: Orient::IDENTITY,
+                    designator: "R2".into(),
+                    value: "1k".into(),
+                },
+                res_def.pins.iter().map(|p| p.at).collect::<Vec<_>>(),
+                res_def.bounds,
+            ),
+        ];
+        let wires = [
+            Wire {
+                a: pt(-6, 0),
+                b: pt(0, 0),
+            },
+            Wire {
+                a: pt(0, 0),
+                b: pt(0, 4),
+            },
+            Wire {
+                a: pt(0, 4),
+                b: pt(6, 4),
+            },
+        ];
+        Doc::from_items(parts, wires, []).unwrap()
+    }
+
+    /// W3.3 done-when: dragging one selected wire segment starts `DraggingSegment` (not `Move`),
+    /// previews via `plan_segment_drag`, commits one `Command::DragSegment` on release, preserves
+    /// normal form and connectivity (`WINV3`), and round-trips exact ids via Ctrl+Z / Ctrl+Y
+    /// (`WINV4`, `INV5`). Also confirms a multi-item selection containing a wire still starts a
+    /// whole-item `Dragging` move (`TC-move-17`).
+    #[gpui::test]
+    fn w3_3_accepted_segment_drag_commits_once_and_round_trips_undo_redo(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, w3_3_segment_doc(), false);
+        let original = rig.snapshot();
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        let middle = WireId(1);
+        let rev0 = revision(&doc, rig.cx);
+
+        // Select the single middle segment of the Z-run and drag it left by -2G (valid).
+        rig.select(&[ItemId::Wire(middle)]);
+        down(&overlay, rig.cx, pt(0, 2));
+        assert!(
+            matches!(
+                rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+                ToolState::DraggingSegment(ref seg) if seg.wire == middle && !seg.is_lifted()
+            ),
+            "pressing one selected wire segment must start DraggingSegment"
+        );
+        // Dragging parallel along y stays at offset 0 and does not lift.
+        drag_to(&overlay, rig.cx, pt(0, 3));
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::DraggingSegment(ref seg) if seg.offset() == 0 && !seg.is_lifted()
+        ));
+
+        // Dragging left by -2G lifts and matches `plan_segment_drag` exactly; revision unchanged.
+        drag_to(&overlay, rig.cx, pt(-2, 3));
+        assert_eq!(
+            revision(&doc, rig.cx),
+            rev0,
+            "INV5: revision unchanged during segment drag"
+        );
+        let mut expected_plan = omnia_doc::route::SegmentDragPlan::default();
+        rig.cx.update(|_, cx| {
+            omnia_doc::route::plan_segment_drag(doc.read(cx), middle, -2 * G, &mut expected_plan)
+                .unwrap();
+        });
+        match rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()) {
+            ToolState::DraggingSegment(seg) => {
+                assert!(seg.is_lifted());
+                assert!(!seg.is_refused());
+                assert_eq!(seg.offset(), -2 * G);
+                assert_eq!(seg.preview_wires(), expected_plan.add.as_slice());
+            }
+            other => panic!("expected DraggingSegment, got {other:?}"),
+        }
+
+        // Release commits one Command::DragSegment (one undo step, WINV3, WINV4).
+        up(&overlay, rig.cx, pt(-2, 3));
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+        assert!(!captured(rig.cx));
+        assert_eq!(revision(&doc, rig.cx), rev0 + 1);
+        assert_eq!(rig.history.borrow().len(), 1);
+        let after = rig.snapshot();
+        after.assert_normal_form();
+        assert_eq!(
+            after.wire(middle),
+            Some(&Wire {
+                a: pt(-2, 0),
+                b: pt(-2, 4),
+            })
+        );
+        assert_eq!(
+            after.wire(WireId(0)),
+            Some(&Wire {
+                a: pt(-6, 0),
+                b: pt(-2, 0),
+            })
+        );
+        assert_eq!(
+            after.wire(WireId(2)),
+            Some(&Wire {
+                a: pt(-2, 4),
+                b: pt(6, 4),
+            })
+        );
+        assert_inv10(
+            &after,
+            &[
+                pt(-6, 0),
+                pt(-2, 0),
+                pt(-2, 4),
+                pt(6, 4),
+                pt(0, 0),
+                pt(0, 4),
+            ],
+            &[WireId(0), WireId(1), WireId(2)],
+        );
+
+        // Ctrl+Z undoes in one step with exact ids; Ctrl+Y redoes identically (WINV4).
+        rig.cx.simulate_keystrokes("ctrl-z");
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        rig.cx.simulate_keystrokes("ctrl-y");
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&after)));
+        rig.cx.simulate_keystrokes("ctrl-z");
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+
+        // Multi-item selection including a wire still starts whole-item Dragging (not DraggingSegment).
+        rig.select(&[ItemId::Part(PartId(0)), ItemId::Wire(middle)]);
+        down(&overlay, rig.cx, pt(0, 2));
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Dragging(ref drag) if drag.items.len() == 2
+        ));
+        rig.cx.simulate_keystrokes("escape");
+        up(&overlay, rig.cx, pt(0, 2));
+    }
+
+    /// W3.3 done-when: dragging a segment across a foreign pin (TC-seg-03) shows the refusal and
+    /// `Blocker::Pin`, leaves the document unchanged on mouse-up (`WINV4`, `INV5`), and releases
+    /// pointer capture.
+    #[gpui::test]
+    fn w3_3_refused_segment_drag_shows_blocker_and_leaves_doc_unchanged_on_release(
+        cx: &mut TestAppContext,
+    ) {
+        let mut rig = open_del_rig(cx, w3_3_segment_doc(), false);
+        let original = rig.snapshot();
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        let middle = WireId(1);
+        let rev0 = revision(&doc, rig.cx);
+
+        rig.select(&[ItemId::Wire(middle)]);
+        down(&overlay, rig.cx, pt(0, 2));
+        // Drag right by +2G to x = 2, which runs straight across R2's left pin at (2, 2).
+        drag_to(&overlay, rig.cx, pt(2, 2));
+        match rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()) {
+            ToolState::DraggingSegment(seg) => {
+                assert!(seg.is_lifted());
+                assert!(seg.is_refused());
+                assert_eq!(
+                    seg.blocker(),
+                    Some(omnia_doc::route::Blocker::Pin {
+                        part: PartId(2),
+                        pin: 0,
+                    })
+                );
+                assert!(
+                    !seg.preview_wires().is_empty(),
+                    "refused preview must still carry attempted wires for mark/conflict rendering"
+                );
+            }
+            other => panic!("expected refused DraggingSegment, got {other:?}"),
+        }
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        // Mouse-up on a refused drag cancels cleanly like Esc (WD7, WD11, WINV4).
+        up(&overlay, rig.cx, pt(2, 2));
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+        assert!(!captured(rig.cx));
+        assert_eq!(revision(&doc, rig.cx), rev0);
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        assert!(rig.history.borrow().is_empty());
+        assert!(rig.cx.update(|_, cx| {
+            overlay
+                .read(cx)
+                .sheet_entity()
+                .read(cx)
+                .hidden_items()
+                .is_empty()
+        }));
+    }
+
+    /// W3.3 done-when: Esc and every C4 gesture-end path (tool switch, lost capture, window
+    /// deactivation) cancel a segment drag with unchanged revision, cleared hidden items, and
+    /// released pointer capture (`INV5`, `C4`).
+    #[gpui::test]
+    fn w3_3_segment_drag_esc_and_c4_end_paths_cancel_cleanly(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, w3_3_segment_doc(), false);
+        let original = rig.snapshot();
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        let rev0 = revision(&doc, rig.cx);
+
+        let assert_cancelled = |rig: &mut DelRig<'_>, label: &str| {
+            assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle, "{label}: Idle");
+            assert!(!captured(rig.cx), "{label}: capture released");
+            assert_eq!(revision(&doc, rig.cx), rev0, "{label}: revision unchanged");
+            assert!(
+                rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)),
+                "{label}: doc content unchanged"
+            );
+            assert!(
+                rig.cx.update(|_, cx| {
+                    overlay
+                        .read(cx)
+                        .sheet_entity()
+                        .read(cx)
+                        .hidden_items()
+                        .is_empty()
+                }),
+                "{label}: hidden items cleared"
+            );
+            assert!(rig.history.borrow().is_empty(), "{label}: no history event");
+        };
+
+        // 1. Esc cancels mid-drag (valid offset).
+        down(&overlay, rig.cx, pt(0, 2));
+        drag_to(&overlay, rig.cx, pt(-2, 2));
+        assert!(captured(rig.cx));
+        rig.cx.simulate_keystrokes("escape");
+        assert_cancelled(&mut rig, "Esc");
+        up(&overlay, rig.cx, pt(-2, 2));
+        assert_cancelled(&mut rig, "release after Esc");
+
+        // 2. Switching tools (W) cancels mid-drag and releases capture.
+        down(&overlay, rig.cx, pt(0, 2));
+        drag_to(&overlay, rig.cx, pt(-1, 2));
+        rig.cx.simulate_keystrokes("w");
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Wiring);
+        assert!(!captured(rig.cx));
+        assert_eq!(revision(&doc, rig.cx), rev0);
+        rig.cx.simulate_keystrokes("escape");
+        up(&overlay, rig.cx, pt(-1, 2));
+        assert_cancelled(&mut rig, "tool switch");
+
+        // 3. Lost release (mouse move with pressed_button = None) cancels cleanly.
+        down(&overlay, rig.cx, pt(0, 2));
+        drag_to(&overlay, rig.cx, pt(-1, 2));
+        let p = screen(&overlay, rig.cx, pt(-2, 2));
+        rig.cx.simulate_mouse_move(p, None, Modifiers::none());
+        rig.cx.run_until_parked();
+        assert_cancelled(&mut rig, "lost release");
+
+        // 4. Window deactivation cancels cleanly (C4).
+        down(&overlay, rig.cx, pt(0, 2));
+        drag_to(&overlay, rig.cx, pt(-1, 2));
+        assert!(captured(rig.cx));
+        rig.cx.deactivate_window();
+        rig.cx.run_until_parked();
+        assert_cancelled(&mut rig, "window deactivation");
+    }
+
+    /// W3.3 done-when: `SheetView` paints **exactly twice** per segment drag (1 on lift-off hiding
+    /// the dragged segment and its corner neighbours, 0 across all drag moves including accepted,
+    /// zero-offset, shrink-to-zero, and refused transitions, and 1 on end/commit/refusal/cancel),
+    /// and 0 times on a plain click (`INV11`, `D7`).
+    #[gpui::test]
+    fn w3_3_sheet_view_paints_exactly_twice_per_segment_drag(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, w3_3_segment_doc(), false);
+        let original = rig.snapshot();
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        let middle = WireId(1);
+        let paints =
+            |cx: &mut VisualTestContext| cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let hidden = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| {
+                overlay
+                    .read(cx)
+                    .sheet_entity()
+                    .read(cx)
+                    .hidden_items()
+                    .to_vec()
+            })
+        };
+
+        // 0. Plain click on wire segment -> 0 SheetView paints.
+        let p_click = paints(rig.cx);
+        down(&overlay, rig.cx, pt(0, 2));
+        up(&overlay, rig.cx, pt(0, 2));
+        assert_eq!(paints(rig.cx), p_click, "INV11: wire click causes 0 paints");
+
+        // 1. Accepted segment drag through valid, refused, zero, and shrink-to-zero steps -> 2 paints.
+        let p0 = paints(rig.cx);
+        down(&overlay, rig.cx, pt(0, 2));
+        assert_eq!(paints(rig.cx), p0, "press before lift causes 0 paints");
+        assert!(hidden(rig.cx).is_empty());
+
+        drag_to(&overlay, rig.cx, pt(-1, 2));
+        assert_eq!(paints(rig.cx), p0 + 1, "lift paints SheetView once");
+        assert_eq!(
+            hidden(rig.cx),
+            vec![
+                ItemId::Wire(WireId(0)),
+                ItemId::Wire(WireId(1)),
+                ItemId::Wire(WireId(2)),
+            ],
+            "dragged segment and both stretching corner neighbours hidden on lift"
+        );
+
+        // Sweep across valid (-2, -3, -6 shrink-to-zero), back to 0, into refused (+2), and back to -2.
+        for x in [-2, -3, -6, 0, 1, 2, 3, -1, -2] {
+            drag_to(&overlay, rig.cx, pt(x, 2));
+            assert_eq!(
+                paints(rig.cx),
+                p0 + 1,
+                "INV11: 0 SheetView paints during drag move to x={x}"
+            );
+        }
+
+        up(&overlay, rig.cx, pt(-2, 2));
+        assert_eq!(
+            paints(rig.cx),
+            p0 + 2,
+            "W3.3 done-when: SheetView painted exactly twice for accepted segment drag"
+        );
+        assert!(hidden(rig.cx).is_empty());
+
+        // Restore original doc for refused-release and cancel checks.
+        rig.cx.simulate_keystrokes("ctrl-z");
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        let hover_pt = screen(&overlay, rig.cx, pt(0, -8));
+        rig.cx
+            .simulate_mouse_move(hover_pt, None, Modifiers::none());
+        rig.cx.run_until_parked();
+
+        // 2. Refused drag release -> exactly 2 paints.
+        let p1 = paints(rig.cx);
+        down(&overlay, rig.cx, pt(0, 2));
+        assert_eq!(paints(rig.cx), p1);
+        drag_to(&overlay, rig.cx, pt(2, 2));
+        assert_eq!(paints(rig.cx), p1 + 1);
+        up(&overlay, rig.cx, pt(2, 2));
+        assert_eq!(
+            paints(rig.cx),
+            p1 + 2,
+            "W3.3 done-when: refused segment drag paints SheetView exactly twice"
+        );
+        assert!(hidden(rig.cx).is_empty());
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+
+        // 3. Cancelled drag (via overlay.cancel, no keyboard modality switch) -> exactly 2 paints.
+        let p2 = paints(rig.cx);
+        down(&overlay, rig.cx, pt(0, 2));
+        assert_eq!(paints(rig.cx), p2);
+        drag_to(&overlay, rig.cx, pt(-1, 2));
+        assert_eq!(paints(rig.cx), p2 + 1);
+        for x in [-2, -3, 2, -1] {
+            drag_to(&overlay, rig.cx, pt(x, 2));
+            assert_eq!(paints(rig.cx), p2 + 1);
+        }
+        assert!(
+            rig.cx
+                .update(|window, cx| overlay.update(cx, |o, cx| o.cancel(window, cx)))
+        );
+        rig.cx.run_until_parked();
+        assert_eq!(
+            paints(rig.cx),
+            p2 + 2,
+            "W3.3 done-when: cancelled segment drag paints SheetView exactly twice"
+        );
+        assert!(hidden(rig.cx).is_empty());
+        assert_eq!(middle, WireId(1));
     }
 }

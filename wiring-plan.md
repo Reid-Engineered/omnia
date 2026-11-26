@@ -495,7 +495,8 @@ crates/schematic-canvas/src/
   overlay/follow.rs    planned wires and the blocked mark                 (W2.3)
   selection.rs         rubber-band modes (file from T4.3)                 (W3.4)
 crates/schematic-bench/src/
-  follow.rs            `bench follow`; the `--wired` and `drag-segment` scripts (W2.4, W3.7)
+  follow.rs            `bench follow`; the `--wired` script                     (W2.4, W3.7)
+  drag_segment.rs      the `drag-segment` script                                (W3.3)
 tests/wiring/          scenario fixtures (RON) and their expected results  (W4.1)
 ```
 
