@@ -73,18 +73,31 @@ impl std::error::Error for ValueError {}
 /// Parses a decimal value with an optional engineering prefix and declared unit (PK4, PQ2).
 pub fn parse_value(text: &str, unit: Option<&str>) -> Result<FiniteF64, ValueError> {
     let text = text.trim();
-    let (number, suffix) = text.split_at(decimal_end(text)?);
+    let (end, exp_index) = decimal_parts(text)?;
+    let (number, suffix) = text.split_at(end);
     let suffix = suffix.strip_prefix(' ').unwrap_or(suffix);
     if suffix.chars().any(char::is_whitespace) {
         return Err(ValueError::InvalidWhitespace);
     }
-    let value = number
-        .parse::<f64>()
-        .map_err(|_| ValueError::InvalidNumber)?;
-    FiniteF64::new(value * suffix_scale(suffix, unit)?)
+    let extra_exp = suffix_exponent(suffix, unit)?;
+    let value = if extra_exp == 0 {
+        number
+            .parse::<f64>()
+            .map_err(|_| ValueError::InvalidNumber)?
+    } else {
+        let (mantissa, base_exp) = match exp_index {
+            Some(idx) => (&number[..idx], parse_exp_saturating(&number[idx + 1..])),
+            None => (number, 0),
+        };
+        let combined = base_exp.saturating_add(i64::from(extra_exp));
+        format!("{mantissa}e{combined}")
+            .parse::<f64>()
+            .map_err(|_| ValueError::InvalidNumber)?
+    };
+    FiniteF64::new(value)
 }
 
-fn decimal_end(text: &str) -> Result<usize, ValueError> {
+fn decimal_parts(text: &str) -> Result<(usize, Option<usize>), ValueError> {
     let bytes = text.as_bytes();
     let sign_end = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
     let integer_end = digits_end(bytes, sign_end);
@@ -97,15 +110,36 @@ fn decimal_end(text: &str) -> Result<usize, ValueError> {
     if !has_digits {
         return Err(ValueError::InvalidNumber);
     }
+    let mut exp_index = None;
     if matches!(bytes.get(end), Some(b'e' | b'E')) {
         let mut exponent = end + 1;
         exponent += usize::from(matches!(bytes.get(exponent), Some(b'+' | b'-')));
         let exponent_end = digits_end(bytes, exponent);
         if exponent_end > exponent {
+            exp_index = Some(end);
             end = exponent_end;
         }
     }
-    Ok(end)
+    Ok((end, exp_index))
+}
+
+fn parse_exp_saturating(exp_text: &str) -> i64 {
+    let bytes = exp_text.as_bytes();
+    let (neg, digits) = match bytes.first() {
+        Some(b'-') => (true, &bytes[1..]),
+        Some(b'+') => (false, &bytes[1..]),
+        _ => (false, bytes),
+    };
+    let mut acc = 0i64;
+    for &b in digits {
+        let digit = i64::from(b - b'0');
+        acc = if neg {
+            acc.saturating_mul(10).saturating_sub(digit)
+        } else {
+            acc.saturating_mul(10).saturating_add(digit)
+        };
+    }
+    acc
 }
 
 fn digits_end(bytes: &[u8], start: usize) -> usize {
@@ -116,37 +150,37 @@ fn digits_end(bytes: &[u8], start: usize) -> usize {
             .count()
 }
 
-fn suffix_scale(suffix: &str, unit: Option<&str>) -> Result<f64, ValueError> {
-    const PREFIXES: [(&str, f64); 14] = [
-        ("meg", 1e6),
-        ("MEG", 1e6),
-        ("f", 1e-15),
-        ("p", 1e-12),
-        ("n", 1e-9),
-        ("u", 1e-6),
-        ("µ", 1e-6),
-        ("μ", 1e-6),
-        ("m", 1e-3),
-        ("k", 1e3),
-        ("K", 1e3),
-        ("M", 1e6),
-        ("G", 1e9),
-        ("T", 1e12),
+fn suffix_exponent(suffix: &str, unit: Option<&str>) -> Result<i32, ValueError> {
+    const PREFIXES: [(&str, i32); 14] = [
+        ("meg", 6),
+        ("MEG", 6),
+        ("f", -15),
+        ("p", -12),
+        ("n", -9),
+        ("u", -6),
+        ("µ", -6),
+        ("μ", -6),
+        ("m", -3),
+        ("k", 3),
+        ("K", 3),
+        ("M", 6),
+        ("G", 9),
+        ("T", 12),
     ];
 
     if suffix == "%" && unit == Some("ratio") {
-        return Ok(0.01);
+        return Ok(-2);
     }
     if unit_matches(suffix, unit) {
-        return Ok(1.0);
+        return Ok(0);
     }
     PREFIXES
         .into_iter()
-        .find_map(|(prefix, scale)| {
+        .find_map(|(prefix, exp)| {
             suffix
                 .strip_prefix(prefix)
                 .filter(|rest| unit_matches(rest, unit))
-                .map(|_| scale)
+                .map(|_| exp)
         })
         .ok_or(ValueError::InvalidSuffix)
 }
@@ -154,7 +188,7 @@ fn suffix_scale(suffix: &str, unit: Option<&str>) -> Result<f64, ValueError> {
 fn unit_matches(token: &str, unit: Option<&str>) -> bool {
     match (token, unit) {
         ("", _) => true,
-        ("%", _) => false,
+        ("%", _) | (_, Some("ratio")) => false,
         ("Ω" | "ohm", Some("Ω" | "ohm")) => true,
         _ => Some(token) == unit,
     }
@@ -179,12 +213,12 @@ mod tests {
             ("1ohm", Some("Ω"), 1.0),
             ("4.7uF", Some("F"), 4.7e-6),
             ("1F", Some("F"), 1.0),
-            ("10fF", Some("F"), 10.0 * 1e-15),
-            ("10f", None, 10.0 * 1e-15),
+            ("10fF", Some("F"), 1e-14),
+            ("10f", None, 1e-14),
             ("50%", Some("ratio"), 0.5),
             ("50 %", Some("ratio"), 0.5),
             ("+.5pH", Some("H"), 5e-13),
-            ("-1e-3nA", Some("A"), -1e-3 * 1e-9),
+            ("-1e-3nA", Some("A"), -1e-12),
             ("1E+6µV", Some("V"), 1.0),
             ("1μs", Some("s"), 1e-6),
             ("2GHz", Some("Hz"), 2e9),
@@ -193,6 +227,43 @@ mod tests {
         ] {
             assert_eq!(parse_value(text, unit).unwrap().get(), expected, "{text}");
         }
+    }
+
+    #[test]
+    fn pk4_single_rounding_matches_exponent_and_handles_ratio_and_saturating_exp() {
+        for (prefixed, exp_form, unit) in [
+            ("100n", "100e-9", None),
+            ("10fF", "10e-15", Some("F")),
+            ("2.2p", "2.2e-12", None),
+            ("6.8nF", "6.8e-9", Some("F")),
+            ("4.7uF", "4.7e-6", Some("F")),
+            ("50%", "50e-2", Some("ratio")),
+            ("50 %", "50e-2", Some("ratio")),
+        ] {
+            assert_eq!(
+                parse_value(prefixed, unit).unwrap(),
+                parse_value(exp_form, None).unwrap(),
+                "{prefixed} vs {exp_form}"
+            );
+        }
+
+        assert_eq!(
+            parse_value("1e-999999999999999999999T", None)
+                .unwrap()
+                .get(),
+            0.0
+        );
+        assert_eq!(
+            parse_value("-1e-999999999999999999999T", None)
+                .unwrap()
+                .get()
+                .to_bits(),
+            0
+        );
+        assert_eq!(
+            parse_value("1e999999999999999999999f", None),
+            Err(ValueError::NonFinite)
+        );
     }
 
     #[test]
@@ -210,6 +281,8 @@ mod tests {
             ("10 k Ω", Some("ohm")),
             ("10\u{a0}kΩ", Some("ohm")),
             ("1k%", Some("ratio")),
+            ("0.5ratio", Some("ratio")),
+            ("50mratio", Some("ratio")),
             ("50%", None),
             ("50%", Some("V")),
             ("50%", Some("%")),
@@ -263,10 +336,52 @@ mod tests {
         }
 
         #[test]
-        fn pk4_decimal_exponent_and_prefix_agree(value in any::<i32>()) {
-            let integral = f64::from(value);
-            prop_assert_eq!(parse_value(&format!("{value}e3"), None).unwrap().get(), integral * 1e3);
-            prop_assert_eq!(parse_value(&format!("{value} kΩ"), Some("ohm")).unwrap().get(), integral * 1e3);
+        fn pk4_decimal_exponent_and_prefix_agree(
+            neg in any::<bool>(),
+            whole in 0u32..10_000,
+            frac in 0u32..10_000,
+            has_frac in any::<bool>(),
+            base_exp in -20i32..=20,
+            with_base_exp in any::<bool>(),
+            with_space in any::<bool>(),
+        ) {
+            let sign = if neg { "-" } else { "" };
+            let mantissa = if has_frac {
+                format!("{sign}{whole}.{frac:04}")
+            } else {
+                format!("{sign}{whole}")
+            };
+            let decimal = if with_base_exp {
+                format!("{mantissa}e{base_exp}")
+            } else {
+                mantissa.clone()
+            };
+            let space = if with_space { " " } else { "" };
+            for (prefix, exp) in [
+                ("f", -15),
+                ("p", -12),
+                ("n", -9),
+                ("u", -6),
+                ("µ", -6),
+                ("μ", -6),
+                ("m", -3),
+                ("k", 3),
+                ("K", 3),
+                ("M", 6),
+                ("meg", 6),
+                ("MEG", 6),
+                ("G", 9),
+                ("T", 12),
+            ] {
+                let total_exp = if with_base_exp { base_exp + exp } else { exp };
+                let parsed_prefixed = parse_value(&format!("{decimal}{space}{prefix}"), None).unwrap();
+                let parsed_exp = parse_value(&format!("{mantissa}e{total_exp}"), None).unwrap();
+                prop_assert_eq!(parsed_prefixed, parsed_exp, "prefix {}", prefix);
+            }
+            let total_ratio_exp = if with_base_exp { base_exp - 2 } else { -2 };
+            let parsed_pct = parse_value(&format!("{decimal}{space}%"), Some("ratio")).unwrap();
+            let parsed_exp = parse_value(&format!("{mantissa}e{total_ratio_exp}"), None).unwrap();
+            prop_assert_eq!(parsed_pct, parsed_exp);
         }
     }
 }

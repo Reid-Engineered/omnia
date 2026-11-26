@@ -3,7 +3,12 @@
 //! Use `PartToml::parse` and `ManifestToml::parse` to validate source text.
 //! Model and symbol resolution happen after parsing.
 
-use std::{collections::BTreeMap, fmt, str::FromStr, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    str::FromStr,
+    sync::Arc,
+};
 
 use omnia_doc::{FiniteF64, parse_value};
 use serde::{Deserialize, Deserializer, de};
@@ -114,6 +119,12 @@ pub struct ManifestToml {
 impl ManifestToml {
     pub fn parse(text: &str) -> Result<Self, SchemaError> {
         let manifest: Self = parse_toml(text, |manifest: &Self| manifest.schema)?;
+        if manifest.name.trim().is_empty() {
+            return Err(invalid("name", "must not be empty"));
+        }
+        if manifest.version.trim().is_empty() {
+            return Err(invalid("version", "must not be empty"));
+        }
         check_cap(
             "description",
             manifest.description.len(),
@@ -207,12 +218,10 @@ pub enum ParamLiteral {
     Bool(bool),
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Debug)]
 pub enum SimToml {
     Primitive {
         primitive: PrimitiveKind,
-        #[serde(default)]
         pins: Vec<String>,
     },
     Model {
@@ -220,7 +229,6 @@ pub enum SimToml {
         entry: String,
         file: Option<String>,
         spice: Option<String>,
-        #[serde(default)]
         pins: Vec<String>,
         supply: Option<SupplyToml>,
     },
@@ -228,14 +236,76 @@ pub enum SimToml {
         entry: String,
         file: Option<String>,
         spice: Option<String>,
-        #[serde(default)]
         pins: Vec<String>,
         supply: Option<SupplyToml>,
     },
-    None {
-        #[serde(default)]
-        pins: Vec<String>,
-    },
+    None,
+}
+
+impl<'de> Deserialize<'de> for SimToml {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Serde's internally-tagged derive ignores unknown fields on unit variants; deserialize
+        // `kind = "none"` through an empty struct variant so `deny_unknown_fields` applies (N1).
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+        enum Tagged {
+            Primitive {
+                primitive: PrimitiveKind,
+                #[serde(default)]
+                pins: Vec<String>,
+            },
+            Model {
+                spice_prefix: char,
+                entry: String,
+                file: Option<String>,
+                spice: Option<String>,
+                #[serde(default)]
+                pins: Vec<String>,
+                supply: Option<SupplyToml>,
+            },
+            Subckt {
+                entry: String,
+                file: Option<String>,
+                spice: Option<String>,
+                #[serde(default)]
+                pins: Vec<String>,
+                supply: Option<SupplyToml>,
+            },
+            None {},
+        }
+        Ok(match Tagged::deserialize(deserializer)? {
+            Tagged::Primitive { primitive, pins } => Self::Primitive { primitive, pins },
+            Tagged::Model {
+                spice_prefix,
+                entry,
+                file,
+                spice,
+                pins,
+                supply,
+            } => Self::Model {
+                spice_prefix,
+                entry,
+                file,
+                spice,
+                pins,
+                supply,
+            },
+            Tagged::Subckt {
+                entry,
+                file,
+                spice,
+                pins,
+                supply,
+            } => Self::Subckt {
+                entry,
+                file,
+                spice,
+                pins,
+                supply,
+            },
+            Tagged::None {} => Self::None,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -321,6 +391,15 @@ impl PartToml {
     }
 
     fn validate(&self) -> Result<(), SchemaError> {
+        if self.name.trim().is_empty() {
+            return Err(invalid("name", "must not be empty"));
+        }
+        if self.category.trim().is_empty() {
+            return Err(invalid("category", "must not be empty"));
+        }
+        if self.symbol.builtin.trim().is_empty() {
+            return Err(invalid("symbol.builtin", "must not be empty"));
+        }
         check_cap(
             "description",
             self.description.len(),
@@ -340,6 +419,9 @@ impl PartToml {
             }
         }
         for (name, param) in &self.params {
+            if name.trim().is_empty() {
+                return Err(invalid("parameter name", "must not be empty"));
+            }
             check_cap("parameter name", name.len(), MAX_PARAM_BYTES, "bytes")?;
             param.validate(name)?;
         }
@@ -425,11 +507,22 @@ impl ParamToml {
                 )
             }
             (ParamKind::Enum, ParamLiteral::String(default)) => {
-                if self
-                    .variants
-                    .as_ref()
-                    .is_some_and(|variants| variants.contains(default))
-                {
+                let Some(variants) = &self.variants else {
+                    return Err(fail("enum requires variants"));
+                };
+                if variants.is_empty() {
+                    return Err(fail("variants must not be empty"));
+                }
+                let mut seen = BTreeSet::new();
+                for variant in variants {
+                    if !seen.insert(variant.as_str()) {
+                        return Err(invalid(
+                            &field,
+                            format!("duplicate enum variant {variant:?}"),
+                        ));
+                    }
+                }
+                if seen.contains(default.as_str()) {
                     Ok(())
                 } else {
                     Err(fail("default must name a declared enum variant"))
@@ -456,9 +549,30 @@ fn check_bounds<T: Ord>(
 
 impl SimToml {
     fn validate(&self, pins: &[PinToml]) -> Result<(), SchemaError> {
+        let mut by_number = BTreeMap::new();
+        for pin in pins {
+            if pin.number.trim().is_empty() {
+                return Err(invalid("pins", "pin number must not be empty"));
+            }
+            if by_number.insert(pin.number.as_str(), pin.role).is_some() {
+                return Err(invalid(
+                    "pins",
+                    format!("duplicate pin number {:?}", pin.number),
+                ));
+            }
+        }
+
+        if let Self::Model { spice_prefix, .. } = self
+            && !spice_prefix.is_ascii_alphabetic()
+        {
+            return Err(invalid("sim.spice_prefix", "must be an ASCII letter"));
+        }
+
         let terminals = match self {
-            Self::Primitive { pins, .. } | Self::None { pins } => pins,
+            Self::None => return Ok(()),
+            Self::Primitive { pins, .. } => pins,
             Self::Model {
+                entry,
                 file,
                 spice,
                 pins: terminals,
@@ -466,16 +580,26 @@ impl SimToml {
                 ..
             }
             | Self::Subckt {
+                entry,
                 file,
                 spice,
                 pins: terminals,
                 supply,
-                ..
             } => {
+                if entry.trim().is_empty() {
+                    return Err(invalid("sim.entry", "must not be empty"));
+                }
                 match (file, spice) {
-                    (Some(_), None) => {}
+                    (Some(file), None) => {
+                        if file.trim().is_empty() {
+                            return Err(invalid("sim.file", "must not be empty"));
+                        }
+                    }
                     (None, Some(spice)) => {
-                        check_cap("sim.spice", spice.len(), MAX_SPICE_BYTES, "bytes")?
+                        if spice.trim().is_empty() {
+                            return Err(invalid("sim.spice", "must not be empty"));
+                        }
+                        check_cap("sim.spice", spice.len(), MAX_SPICE_BYTES, "bytes")?;
                     }
                     _ => {
                         return Err(invalid(
@@ -491,15 +615,6 @@ impl SimToml {
             }
         };
 
-        let mut by_number = BTreeMap::new();
-        for pin in pins {
-            if by_number.insert(pin.number.as_str(), pin.role).is_some() {
-                return Err(invalid(
-                    "pins",
-                    format!("duplicate pin number {:?}", pin.number),
-                ));
-            }
-        }
         by_number.retain(|_, role| *role != PinRole::NoConnect);
         for terminal in terminals {
             if by_number.remove(terminal.as_str()).is_none() {
@@ -887,6 +1002,106 @@ default = "example"
             assert!(PartToml::parse(&real.replace(from, bad)).is_err(), "{bad}");
         }
         assert!(PartToml::parse(&real.replace("10k", "1 kΩ")).is_ok());
+    }
+
+    #[test]
+    fn b1_n1_n2_bounds_parity_none_sim_and_empty_duplicate_checks() {
+        // B1: exponent and SI prefix forms agree bit for bit at schema bounds.
+        for (default_val, min_val) in [("10e-15", "10f"), ("6.8e-9", "6.8n")] {
+            let cap_toml = format!(
+                r#"
+schema = 1
+id = "cap-test"
+name = "Capacitor"
+category = "Passives"
+[symbol]
+builtin = "Capacitor-IEEE-NonPolarized"
+[[pins]]
+number = "1"
+name = "a"
+role = "passive"
+[[pins]]
+number = "2"
+name = "b"
+role = "passive"
+[params.capacitance]
+kind = "real"
+unit = "F"
+default = "{default_val}"
+min = "{min_val}"
+[sim]
+kind = "primitive"
+primitive = "capacitor"
+pins = ["1", "2"]
+"#
+            );
+            assert!(
+                PartToml::parse(&cap_toml).is_ok(),
+                "{default_val} vs {min_val}"
+            );
+        }
+
+        // N1: kind = "none" takes no [sim].pins and still validates [[pins]].
+        let none_part = r#"
+schema = 1
+id = "mounting-hole"
+name = "Mounting Hole"
+category = "Mechanical"
+[symbol]
+builtin = "Ground-COM-General"
+[[pins]]
+number = "1"
+name = "mount"
+role = "passive"
+[sim]
+kind = "none"
+"#;
+        assert!(matches!(
+            PartToml::parse(none_part).unwrap().sim,
+            SimToml::None
+        ));
+        assert!(PartToml::parse(&format!("{none_part}pins = [\"1\"]\n")).is_err());
+        assert!(
+            PartToml::parse(&format!(
+                "{none_part}\n[[pins]]\nnumber = \"1\"\nname = \"dup\"\nrole = \"passive\"\n"
+            ))
+            .is_err()
+        );
+
+        // N2: empty/duplicate manifest & part fields and invalid spice_prefix refused.
+        assert!(ManifestToml::parse(&MANIFEST.replace("\"Test pack\"", "\"\"")).is_err());
+        assert!(ManifestToml::parse(&MANIFEST.replace("\"1.0.0\"", "\"\"")).is_err());
+        assert!(PartToml::parse(&RESISTOR.replace("\"Resistor\"", "\"\"")).is_err());
+        assert!(PartToml::parse(&RESISTOR.replace("\"Passives\"", "\"\"")).is_err());
+        assert!(PartToml::parse(&RESISTOR.replace("\"Resistor-IEEE-Standard\"", "\"\"")).is_err());
+        assert!(PartToml::parse(&RESISTOR.replace("number = \"1\"", "number = \"\"")).is_err());
+        assert!(PartToml::parse(&RESISTOR.replace("[params.tc1]", "[params.\"\"]")).is_err());
+        assert!(
+            PartToml::parse(&format!(
+                "{RESISTOR}\n[params.mode]\nkind = \"enum\"\ndefault = \"a\"\nvariants = [\"a\", \"a\"]\n"
+            ))
+            .is_err()
+        );
+        assert!(
+            PartToml::parse(&format!(
+                "{RESISTOR}\n[params.mode]\nkind = \"enum\"\ndefault = \"a\"\nvariants = []\n"
+            ))
+            .is_err()
+        );
+        let model = OPAMP.replace(
+            r#"kind = "subckt""#,
+            "kind = \"model\"\nspice_prefix = \"!\"",
+        );
+        assert!(PartToml::parse(&model).is_err());
+        assert!(PartToml::parse(&OPAMP.replace("\"OPAMP_GENERIC\"", "\"\"")).is_err());
+        assert!(PartToml::parse(&OPAMP.replace("models/opamps/opamp-generic.lib", "")).is_err());
+        assert!(
+            PartToml::parse(&OPAMP.replace(
+                "file = \"models/opamps/opamp-generic.lib\"",
+                "spice = \"   \""
+            ))
+            .is_err()
+        );
     }
 
     #[test]
