@@ -627,9 +627,9 @@ of the `canvas` lane.
 
 ## Milestone 7: finish
 
-### T7.1 Copy and paste · todo
+### T7.1 Copy and paste · done
 - Lane: doc, canvas · Depends: T6.4 · Read: D2, INV4, ui-plan.md UD3
-- Owns: `crates/omnia-doc/src/clip.rs`, `crates/omnia-canvas/src/tool/paste.rs`, and `SheetCanvas::{cut, copy, paste}` in `input.rs`/`overlay.rs`
+- Owns: `crates/omnia-doc/src/clip.rs` (plus `Command::Paste` in `command.rs` and `pub mod clip` in `lib.rs`), `crates/omnia-canvas/src/tool/paste.rs`, `SheetCanvas::{cut, copy, paste, has_clip}` in `input.rs`/`overlay.rs` (coordinator-widened 2026-11-26: `tool.rs`, `overlay/ghosts.rs`, `apply_wire_plan` `pub(crate)` in `command.rs`, `canvas-plan.md` §9/`C4`, and the `P2.2` handoff note in `parts-roadmap.md`)
 - Do: `Doc::copy`, the `Paste` command, and `SheetCanvas::cut`, `copy` and `paste` (Ctrl+C,
   Ctrl+X and Ctrl+V are bound by the shell, [ui-plan.md](ui-plan.md) UD3). A paste is placed
   with ghosts like a move. Designators of pasted parts are made unique.
@@ -2607,6 +2607,36 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        manual notify, `INV11`, and `B10` (`0` warm Omnia heap allocs at `1.25`
                        and `1.5`, with `TestScope::gpui` separated) on Windows dev hardware
                        (non-reference, `Q4`).
+2026-11-26 T7.1 done — Implemented copy and paste across `omnia-doc` and `omnia-canvas` (`D2`, `K1`, `K2`,
+                       `INV2`, `INV4`, `INV5`, `INV6`, `INV10`, `INV11`, `B10`, `C4`, `UD3`, `WD9`, `WD10`).
+                       Added `crates/omnia-doc/src/clip.rs` (`Clip`, `ClipPart`, `Doc::copy`, transactional
+                       `apply_paste`) and wired `Command::Paste` in `crates/omnia-doc/src/{command.rs, lib.rs}`:
+                       `Doc::copy` snapshots live items canonically by kind/ID with coordinates relative to
+                       a `GRID_NM`-aligned origin (preserving half-grid pin-lattice parity); `apply_paste`
+                       pre-validates all transformed geometry inside K1, preserves non-colliding designators
+                       first and assigns unique deterministic fallback names only to collisions (two-pass),
+                       normalises pasted wires and splits existing wires only when a landed pin or label
+                       hits a wire's strict interior via `plan_add_wires`/`apply_wire_plan`, and records a
+                       reverse-ordered `UndoOp::Batch` so undo/redo satisfy `INV4` and `INV10`. Deviation on
+                       labelled groups (`D2`/`INV10`): pasted labels preserve their text verbatim so named
+                       nets/rails (such as `VCC`/`GND`) join by name under `D2` while unlabelled internal nets
+                       remain isolated from the source (covered by `t7_1_pasted_labelled_group_...`). Note
+                       for `P2.2` (also logged in `parts-roadmap.md`): `ClipPart` carries `(Part, local_pins,
+                       local_bounds)` until `P2.2` adds embedded `PartDef` and `Params`. Added
+                       `crates/omnia-canvas/src/tool/paste.rs` (`CanvasClipboard` GPUI `Global`,
+                       `snap_paste_origin`, non-allocating `clip_in_bounds_at`, `PasteGesture`), re-exported
+                       from `crates/omnia-canvas/src/lib.rs`, wired `ToolPhase::Pasting`,
+                       `ToolState::Pasting`, `ToolRequest::Paste`, `ToolMachine::start_paste`, and
+                       `tool::apply_change` in `crates/omnia-canvas/src/tool.rs`, shared zero-alloc Layer 1/2
+                       `GhostPreview::Paste` rendering with `Drag` in `crates/omnia-canvas/src/overlay/ghosts.rs`
+                       and shared `apply_orient_i64`, and wired `OverlayView`/`SheetCanvas`
+                       `{has_clip, copy, cut, paste}` in `crates/omnia-canvas/src/{overlay.rs, input.rs}` with
+                       `cut` honouring `WD10` / `W3.5` handoff and `Paste` selecting only pasted parts/labels
+                       and live wires overlapping the pasted clip wire geometry (excluding unrelated split
+                       pieces while selecting collinearly merged wires). Updated `canvas-plan.md` §9 and `C4`.
+                       Verified all five standard checks on Windows after review fixes (incl. two-pass
+                       designators, strict-interior wire splits, labelled-group connectivity/isolation, strict
+                       proptest error check, and post-paste selection GPUI test).
 2026-11-26 T7.3 needs-human — Implemented the animated instrument stub content (`T7.3`, `G5`,
                        `G6`, `G8`, `G16`, `D7`, `B8`, `B10`, `INV6`, `INV11`, `Q2`, `Q5`,
                        `UD5`, `UK10`, `UQ6`). Added `crates/omnia-canvas/src/instrument_host.rs`

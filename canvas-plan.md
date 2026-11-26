@@ -513,6 +513,19 @@ pub enum Command {
     Paste { clip: Clip, at: Pt },
     Batch(Vec<Command>),
 }
+// T7.1 (clip.rs): self-contained copy/paste payload and deterministic origin/designator rules.
+// P2.2 will extend ClipPart/Command::Paste to carry embedded PartDef + Params alongside parts.
+pub struct ClipPart { pub part: Part, pub local_pins: Vec<Pt>, pub local_bounds: Rect }
+pub struct Clip { /* parts: Vec<ClipPart>, wires: Vec<Wire>, labels: Vec<Label> */ }
+impl Clip {
+    pub fn is_empty(&self) -> bool;
+    pub fn item_count(&self) -> usize;
+    pub fn parts(&self) -> &[ClipPart];
+    pub fn wires(&self) -> &[Wire];
+    pub fn labels(&self) -> &[Label];
+    pub fn anchor_pin(&self) -> Option<Pt>;              // K2: pin 0 of first pinned part
+    pub fn reoriented(&self, by: Orient) -> Self;        // reorients around clip-local (0, 0)
+}
 pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
                     pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
 // P2.2 (parts-plan.md PD8, XD7): adds modified: Vec<PartId>, the parts whose params or definition
@@ -672,12 +685,14 @@ impl Camera {
     pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
 pub enum Tool { Select, Wire, Place(SymbolId), Label, ZoomArea } // T5.2 (tool.rs); ZoomArea delivered in T5.6
-pub enum ToolPhase { Idle, Hovering, Dragging, Placing, Wiring, ZoomingArea }
+pub enum ToolPhase { Idle, Hovering, Dragging, Placing, Pasting, Wiring, ZoomingArea }
 // T5.2 (tool.rs): pure tool state machine. One gesture owner, OverlayView, holds it; the owner
 // applies a gesture's one Command only to the document and revision it was planned on (INV5).
 pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture),
                      DraggingSegment(SegmentDragGesture), // W3.3
-                     Placing(PlaceGesture), Wiring(WireGesture),
+                     Placing(PlaceGesture),
+                     Pasting(PasteGesture),               // T7.1
+                     Wiring(WireGesture),
                      ZoomingArea(ZoomAreaGesture) } // T5.6
 pub struct DocStamp { pub key: u64, pub revision: u64 }   // key: doc_key(&Entity<Doc>)
 pub fn doc_key(doc: &Entity<Doc>) -> u64;
@@ -714,6 +729,16 @@ impl SegmentDragGesture {
 }
 pub struct PlaceGesture { pub symbol: SymbolId, pub at: Option<Pt>, pub orient: Orient,
                           pub pressed: bool, /* private raw_cursor */ } // only a press made in Place places
+// T7.1 (tool/paste.rs, re-exported from lib.rs): in-app clipboard Global and ghost paste gesture.
+pub struct CanvasClipboard { /* private clip: Option<Arc<Clip>> */ } // impl gpui::Global
+pub struct PasteGesture { pub clip: Arc<Clip>, pub at: Option<Pt>, pub orient: Orient,
+                          pub pressed: bool, /* private anchor_pin, raw_cursor */ }
+impl PasteGesture {
+    pub fn new(clip: Arc<Clip>, raw_cursor: Option<Pt>) -> Self;
+    pub fn anchor_pin(&self) -> Option<Pt>;
+    pub fn in_bounds_at(&self, at: Pt) -> bool;
+    pub fn is_in_bounds(&self) -> bool;
+}
 // T6.2 (tool/wire.rs, re-exported from tool.rs): interactive wire tool with K14/WD5 snapping and WD6 first-corner routing.
 pub const SNAP_RADIUS_PX: f64;                            // 10.0 logical px (K14, WK4)
 pub fn snap_radius_nm(camera: &Camera) -> i32;
@@ -733,6 +758,7 @@ impl WireGesture {
 pub struct PointerRadii { pub hit: i32, pub snap: i32 }   // K14/WK4 hit tolerance and snap radius in nm
 pub struct ZoomAreaGesture { pub anchor: Option<Pt>, pub current: Option<Pt> } // T5.6
 pub enum ToolRequest { Click { item: ItemId, base: DocStamp }, Place { symbol: SymbolId, at: Pt, orient: Orient },
+                       Paste { clip: Arc<Clip>, at: Pt, orient: Orient }, // T7.1
                        ReorientSelection(Orient), DeleteSelection, ZoomArea(Rect) } // T5.3, T5.6: handled by OverlayView
 pub struct Commit { pub command: Command, pub base: DocStamp }
 pub struct ToolOutcome { pub handled: bool, pub preview_changed: bool, pub capture: bool,
@@ -743,7 +769,11 @@ impl ToolMachine {
     pub fn with_prefs(prefs: WiringPrefs) -> Self;
     pub fn tool(&self) -> Tool;
     pub fn state(&self) -> &ToolState;
+    pub fn phase(&self) -> ToolPhase;
+    pub fn routes_pointer(&self) -> bool;                // T7.1: Placing, Pasting, Wiring, or ZoomingArea
     pub fn holds_capture(&self) -> bool;                 // T5.6: Dragging, pointer-driven DraggingSegment, or active ZoomArea
+    pub(crate) fn has_pending_press(&self) -> bool;             // T7.1: Placing or Pasting with pressed=true
+    pub fn start_paste(&mut self, clip: Arc<Clip>, raw_cursor: Option<Pt>) -> ToolOutcome; // T7.1
     pub fn set_tool(&mut self, tool: Tool) -> ToolOutcome;  // cancels any gesture first
     pub fn document_replaced(&mut self) -> ToolOutcome;     // drops every gesture, keeps the tool
     pub fn pointer_lost(&mut self) -> ToolOutcome;          // window deactivated
@@ -876,6 +906,11 @@ impl OverlayView {
     // T5.3 (tool/place.rs, tool/move_.rs): placement provider (parts-plan.md section 14) and delete.
     pub fn set_place_provider(&mut self, provider: Option<PlaceProvider>);
     pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);
+    pub fn select_all(&mut self, cx: &mut Context<Self>);
+    pub fn has_clip(cx: &App) -> bool;                                // T7.1
+    pub fn copy(&self, cx: &mut Context<Self>) -> bool;               // T7.1: never paints SheetView (INV11)
+    pub fn cut(&mut self, cx: &mut Context<Self>) -> bool;            // T7.1: one Command::Delete w/ WD10 delete_wires_with_part
+    pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool; // T7.1: ghost placement (D2, INV11)
 }
 // T5.3 (tool/place.rs): placement request and shell-supplied provider (parts-plan.md section 14).
 pub struct PlaceRequest { pub symbol: SymbolId, pub at: Pt, pub orient: Orient, pub designator: Arc<str> }
@@ -934,6 +969,7 @@ impl SheetCanvas {
     pub fn set_place_provider(&mut self, provider: Option<PlaceProvider>, cx: &mut Context<Self>); // T5.3
     pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.3 (ui-plan §14)
     pub fn select_all(&mut self, cx: &mut Context<Self>); // T5.6 (T4.3 follow-up, ui-plan §14; forwards to OverlayView::select_all)
+    pub fn has_clip(cx: &App) -> bool;                   // T7.1: true when CanvasClipboard is non-empty
     pub fn cut(&mut self, cx: &mut Context<Self>);        // T7.1 (ui-plan §14)
     pub fn copy(&self, cx: &mut Context<Self>);           // T7.1 (ui-plan §14)
     pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>); // T7.1 (ui-plan §14)
@@ -1003,7 +1039,8 @@ Preconditions of the public canvas API. INV5 and INV11 remain the primary invari
 - **C3.** A `SheetCanvas` does not subscribe to its own history. (`subscribe_history` reads the
   canvas's current document key from a shared `Rc<Cell<Option<u64>>>` rather than re-borrowing
   the emitting entity, so self-subscription never triggers a GPUI double-borrow panic.)
-- **C4.** Every pointer-captured or pending gesture (drag, rubber band, pending place press) ends
+- **C4.** Every pointer-captured or pending gesture (drag, rubber band, pending place or paste
+  press) ends
   by exactly one of: commit to its own document at its stamped revision while it still holds
   capture, or end with no edit. Either way it releases the capture it took, in the window it took
   it in, and never a newer capture. Enforced structurally by a `{ window, hitbox, generation }`

@@ -1,6 +1,7 @@
 //! GPUI-independent schematic document model.
 
 pub mod arena;
+pub mod clip;
 pub mod command;
 pub mod connectivity;
 pub mod doc;
@@ -10,6 +11,7 @@ mod points;
 pub mod prefs;
 mod undo;
 
+pub use clip::{Clip, ClipPart};
 pub use command::{Change, Command, CommandError, TextField};
 pub use connectivity::{Connectivity, NetId};
 pub use doc::{Doc, ItemId, Label, LabelId, Part, PartId, StoreError, SymbolId, Wire, WireId};

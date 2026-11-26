@@ -40,10 +40,12 @@
 //! context and routes the [`crate::keymap`] actions through [`SheetActions`].
 
 pub mod move_;
+pub mod paste;
 pub mod place;
 pub mod segment;
 pub mod wire;
 
+pub use paste::{CanvasClipboard, PasteGesture};
 pub use place::{PlaceProvider, PlaceRequest};
 pub use segment::{SegmentDragGesture, SegmentPreview};
 pub use wire::{
@@ -57,10 +59,10 @@ use crate::keymap::{
 use crate::overlay::{GestureEndReason, OverlayView};
 use gpui::{App, Context, Div, Entity, InteractiveElement, Window};
 use omnia_doc::{
-    Change, Command, Doc, Isometry, ItemId, Orient, Pt, Rect, SymbolId, hit_test,
+    Change, Clip, Command, Doc, Isometry, ItemId, Orient, Pt, Rect, SymbolId, hit_test,
     prefs::{FollowPolicy, WiringPrefs},
 };
-use std::rc::Weak;
+use std::{rc::Weak, sync::Arc};
 
 /// The active tool (canvas-plan section 9).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -85,6 +87,7 @@ pub enum ToolPhase {
     Hovering,
     Dragging,
     Placing,
+    Pasting,
     Wiring,
     ZoomingArea,
 }
@@ -203,6 +206,7 @@ pub enum ToolState {
     /// W3.3: dragging a single wire segment perpendicular to its axis (`Command::DragSegment`, WD7).
     DraggingSegment(SegmentDragGesture),
     Placing(PlaceGesture),
+    Pasting(PasteGesture),
     Wiring(WireGesture),
     ZoomingArea(ZoomAreaGesture),
 }
@@ -214,14 +218,15 @@ impl ToolState {
             Self::Hovering(_) => ToolPhase::Hovering,
             Self::Dragging(_) | Self::DraggingSegment(_) => ToolPhase::Dragging,
             Self::Placing(_) => ToolPhase::Placing,
+            Self::Pasting(_) => ToolPhase::Pasting,
             Self::Wiring(_) => ToolPhase::Wiring,
             Self::ZoomingArea(_) => ToolPhase::ZoomingArea,
         }
     }
 }
 
-/// Work the machine cannot finish alone; the host carries it out (seams for T5.3, T5.6).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Work the machine cannot finish alone; the host carries it out (seams for T5.3, T5.6, T7.1).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolRequest {
     /// A press on an item that did not become a drag: make it the only selection, if it
     /// still exists in the document the press was made on (`base`).
@@ -229,6 +234,12 @@ pub enum ToolRequest {
     /// A press and release in `Tool::Place`: T5.3 asks the placement provider for the command.
     Place {
         symbol: SymbolId,
+        at: Pt,
+        orient: Orient,
+    },
+    /// A press and release in `ToolState::Pasting`: T7.1 commits one `Command::Paste`.
+    Paste {
+        clip: Arc<Clip>,
         at: Pt,
         orient: Orient,
     },
@@ -361,10 +372,33 @@ impl ToolMachine {
         match &self.state {
             ToolState::Dragging(_)
             | ToolState::Placing(_)
+            | ToolState::Pasting(_)
             | ToolState::Wiring(_)
             | ToolState::ZoomingArea(_) => true,
             ToolState::DraggingSegment(seg) => seg.is_pointer_drag(),
             ToolState::Idle | ToolState::Hovering(_) => false,
+        }
+    }
+
+    /// Whether a placement or paste preview currently holds an unreleased left press.
+    pub(crate) fn has_pending_press(&self) -> bool {
+        matches!(self.state, ToolState::Placing(p) if p.pressed)
+            || matches!(self.state, ToolState::Pasting(ref p) if p.pressed)
+    }
+
+    /// Enters [`ToolState::Pasting`] with `clip`, cancelling any active gesture first (T7.1).
+    pub fn start_paste(&mut self, clip: Arc<Clip>, raw_cursor: Option<Pt>) -> ToolOutcome {
+        if clip.is_empty() {
+            return ToolOutcome::default();
+        }
+        let release = self.holds_capture();
+        self.tool = Tool::Select;
+        self.state = ToolState::Pasting(PasteGesture::new(clip, raw_cursor));
+        ToolOutcome {
+            handled: true,
+            preview_changed: true,
+            release,
+            ..ToolOutcome::default()
         }
     }
 
@@ -455,6 +489,10 @@ impl ToolMachine {
             ToolState::Dragging(_) | ToolState::DraggingSegment(_) => self.reset(),
             ToolState::Placing(place) if place.pressed => {
                 place.pressed = false;
+                ToolOutcome::handled()
+            }
+            ToolState::Pasting(paste) if paste.pressed => {
+                paste.pressed = false;
                 ToolOutcome::handled()
             }
             ToolState::ZoomingArea(zoom) if zoom.anchor.is_some() => {
@@ -588,6 +626,15 @@ impl ToolMachine {
                     ..ToolOutcome::default()
                 }
             }
+            ToolState::Pasting(paste) => {
+                let changed = paste.update_cursor(at);
+                paste.pressed = true;
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: changed,
+                    ..ToolOutcome::default()
+                }
+            }
             ToolState::Wiring(wire) => {
                 let (commit, changed) = wire.click(doc, doc_key, at, radii.snap, &mut self.scratch);
                 ToolOutcome {
@@ -688,6 +735,17 @@ impl ToolMachine {
                 let next = Some(place::snap_place_origin(place.symbol, at, place.orient));
                 let changed = place.at != next;
                 place.at = next;
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: changed,
+                    ..ToolOutcome::default()
+                }
+            }
+            ToolState::Pasting(paste) => {
+                if !left_held {
+                    paste.pressed = false;
+                }
+                let changed = paste.update_cursor(at);
                 ToolOutcome {
                     handled: true,
                     preview_changed: changed,
@@ -797,6 +855,34 @@ impl ToolMachine {
                     ..ToolOutcome::handled()
                 }
             }
+            ToolState::Pasting(paste) => {
+                let _ = paste.update_cursor(at);
+                let pressed = std::mem::take(&mut paste.pressed);
+                let ready = pressed
+                    && !paste.clip.is_empty()
+                    && paste
+                        .at
+                        .is_some_and(|paste_at| paste.in_bounds_at(paste_at));
+                if ready {
+                    let paste_at = paste.at.expect("checked Some above");
+                    let clip = Arc::clone(&paste.clip);
+                    let orient = paste.orient;
+                    self.tool = Tool::Select;
+                    self.state = ToolState::Idle;
+                    ToolOutcome {
+                        handled: true,
+                        preview_changed: true,
+                        request: Some(ToolRequest::Paste {
+                            clip,
+                            at: paste_at,
+                            orient,
+                        }),
+                        ..ToolOutcome::default()
+                    }
+                } else {
+                    ToolOutcome::handled()
+                }
+            }
             ToolState::Wiring(_) => ToolOutcome::handled(),
             ToolState::ZoomingArea(zoom) => {
                 let Some(anchor) = zoom.anchor.take() else {
@@ -832,7 +918,7 @@ impl ToolMachine {
                 wire.drop_start();
                 ToolOutcome::preview()
             }
-            ToolState::Placing(_) | ToolState::Wiring(_) => {
+            ToolState::Placing(_) | ToolState::Pasting(_) | ToolState::Wiring(_) => {
                 self.tool = Tool::Select;
                 self.state = ToolState::Idle;
                 ToolOutcome::preview()
@@ -870,6 +956,10 @@ impl ToolMachine {
                 if let Some(raw) = place.raw_cursor {
                     place.at = Some(place::snap_place_origin(place.symbol, raw, place.orient));
                 }
+                ToolOutcome::preview()
+            }
+            ToolState::Pasting(paste) => {
+                paste.reorient(by);
                 ToolOutcome::preview()
             }
             ToolState::Idle | ToolState::Hovering(_) if self.tool == Tool::Select => ToolOutcome {
@@ -1013,10 +1103,18 @@ pub(crate) fn finish<H: ToolHost>(
 /// against: a commit from a stale gesture is dropped with no edit. A refused command changes
 /// nothing (INV4), and a validated no-op keeps the revision, so the host hears only of
 /// effective edits.
-pub(crate) fn apply<H: ToolHost>(host: &mut H, commit: Commit, cx: &mut Context<H>) -> bool {
+/// Commits a prepared `Commit` when the host's document key and revision still match its base,
+/// returning the applied [`Change`].
+///
+/// A refused command or revision mismatch changes nothing and returns `None`.
+pub(crate) fn apply_change<H: ToolHost>(
+    host: &mut H,
+    commit: Commit,
+    cx: &mut Context<H>,
+) -> Option<Change> {
     let doc = host.tool_doc();
     if doc_key(&doc) != commit.base.key {
-        return false;
+        return None;
     }
     let change = doc.update(cx, |doc, _| {
         if doc.revision() != commit.base.revision {
@@ -1027,13 +1125,17 @@ pub(crate) fn apply<H: ToolHost>(host: &mut H, commit: Commit, cx: &mut Context<
             .ok()
             .filter(|_| doc.revision() != before)
     });
-    match change {
-        Some(change) => {
-            host.doc_changed(&change, cx);
-            true
-        }
-        None => false,
+    if let Some(ref ch) = change {
+        host.doc_changed(ch, cx);
     }
+    change
+}
+
+/// Commits a prepared `Commit` when the host's document key and revision still match its base.
+///
+/// A refused command or revision mismatch changes nothing and returns `false`.
+pub(crate) fn apply<H: ToolHost>(host: &mut H, commit: Commit, cx: &mut Context<H>) -> bool {
+    apply_change(host, commit, cx).is_some()
 }
 
 fn run<H: ToolHost>(
@@ -1319,7 +1421,9 @@ mod tests {
     use gpui::{
         AppContext, Bounds, Modifiers, MouseButton, Pixels, TestAppContext, VisualTestContext,
     };
-    use omnia_doc::{Connectivity, GRID_NM, Label, Part, PartId, SHEET_LIMIT_NM, Wire, WireId};
+    use omnia_doc::{
+        Connectivity, GRID_NM, Label, LabelId, Part, PartId, SHEET_LIMIT_NM, Wire, WireId,
+    };
     use omnia_symbols::SymbolLibrary;
     use omnia_theme::GRAPHITE;
     use std::{cell::RefCell, rc::Rc};
@@ -6808,5 +6912,584 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[gpui::test]
+    fn t7_1_copy_paste_ghost_placement_inv11_b10_inv4_and_connectivity(cx: &mut TestAppContext) {
+        struct PasteAllocScope {
+            counting: std::cell::Cell<bool>,
+            omnia_allocs: std::cell::Cell<usize>,
+            omnia_calls: std::cell::Cell<u32>,
+        }
+
+        impl crate::overlay::OverlayPaintScope for PasteAllocScope {
+            fn omnia(&self, work: &mut dyn FnMut()) {
+                self.omnia_calls.set(self.omnia_calls.get() + 1);
+                if !self.counting.get() {
+                    work();
+                    return;
+                }
+                let prev = crate::sheet::replace_alloc_counter(Some(0));
+                work();
+                let used = crate::sheet::replace_alloc_counter(prev).unwrap_or(0);
+                self.omnia_allocs.set(self.omnia_allocs.get() + used);
+            }
+
+            fn gpui(&self, work: &mut dyn FnMut()) {
+                if !self.counting.get() {
+                    work();
+                    return;
+                }
+                let paused = crate::sheet::replace_alloc_counter(None);
+                work();
+                crate::sheet::replace_alloc_counter(paused);
+            }
+        }
+
+        let rig = open_canvas_host(cx);
+        let (canvas, overlay, doc) = (rig.canvas, rig.overlay, rig.doc);
+        let scope = Rc::new(PasteAllocScope {
+            counting: std::cell::Cell::new(false),
+            omnia_allocs: std::cell::Cell::new(0),
+            omnia_calls: std::cell::Cell::new(0),
+        });
+        let scope_trait: Rc<dyn crate::overlay::OverlayPaintScope> = scope.clone();
+        rig.cx.update(|_, cx| {
+            crate::tool::paste::clear_clip(cx);
+            overlay.update(cx, |o, _| o.set_paint_scope(Some(scope_trait)));
+            assert!(!SheetCanvas::has_clip(cx));
+        });
+
+        let rev0 = revision(&doc, rig.cx);
+        let sheet_paints0 = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let sheet_renders0 = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_render_count(cx));
+        let before = rig.cx.update(|_, cx| snapshot(doc.read(cx)));
+
+        // Select connected source group (R1, C1, Wire(0), Label(0)) and copy via SheetCanvas.
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.select_all(cx));
+            canvas.update(cx, |c, cx| c.copy(cx));
+            assert!(SheetCanvas::has_clip(cx));
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev0);
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints0,
+            "INV11: copy must never repaint SheetView"
+        );
+
+        // Start paste -> ToolPhase::Pasting without repainting SheetView (pointer modality only).
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Pasting);
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints0,
+            "INV11: entering paste ghost preview must not repaint SheetView"
+        );
+
+        // Warm paste ghost rendering, then assert 0 SheetView paints (INV11) and 0 Omnia allocs (B10).
+        move_to(&overlay, rig.cx, pt(0, 8));
+        move_to(&overlay, rig.cx, pt(1, 9));
+        let overlay_paints0 = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).overlay_paint_count());
+        scope.omnia_allocs.set(0);
+        scope.omnia_calls.set(0);
+        scope.counting.set(true);
+        for step in 2..=9 {
+            move_to(&overlay, rig.cx, pt(step, 10 + (step % 2)));
+        }
+        scope.counting.set(false);
+        assert!(scope.omnia_calls.get() >= 16);
+        assert_eq!(
+            scope.omnia_allocs.get(),
+            0,
+            "B10: warm Paste ghost placement moves must allocate 0 bytes in Omnia code"
+        );
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints0,
+            "INV11: moving paste ghosts across the sheet must execute 0 SheetView paints"
+        );
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_render_count(cx)),
+            sheet_renders0
+        );
+        assert!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).overlay_paint_count())
+                > overlay_paints0
+        );
+
+        // Reorient via R key and click to commit once (INV5).
+        rig.cx.simulate_keystrokes("r");
+        rig.cx.run_until_parked();
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Pasting(ref p) if p.orient == Orient::ROT_90
+        ));
+        click_world(&overlay, rig.cx, pt(0, 14));
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+        assert_eq!(revision(&doc, rig.cx), rev0 + 1);
+
+        let after = rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            d.assert_normal_form();
+            assert_eq!(d.parts().count(), 4);
+            let mut des: Vec<String> = d.parts().map(|(_, p)| p.designator.to_string()).collect();
+            des.sort();
+            assert_eq!(des, vec!["C1", "C2", "R1", "R2"]);
+
+            // Check internal connectivity isomorphism & strict isolation from source group.
+            let src_r = d.pins(PartId(0)).unwrap();
+            let src_c = d.pins(PartId(1)).unwrap();
+            let src_nets: std::collections::BTreeSet<_> = src_r
+                .iter()
+                .chain(src_c.iter())
+                .filter_map(|&p| d.net_at(p))
+                .collect();
+
+            let p_r = d.pins(PartId(2)).unwrap();
+            let p_c = d.pins(PartId(3)).unwrap();
+            assert_ne!(d.net_at(p_r[0]), d.net_at(p_r[1]));
+            assert_eq!(d.net_at(p_r[1]), d.net_at(p_c[0]));
+            assert_ne!(d.net_at(p_c[0]), d.net_at(p_c[1]));
+            for &p in p_r.iter().chain(p_c.iter()) {
+                let net = d.net_at(p).expect("pasted pin has net");
+                assert!(
+                    !src_nets.contains(&net),
+                    "pasted group must not connect to source nets"
+                );
+            }
+            snapshot(d)
+        });
+
+        let mut all_points = doc_points(&before);
+        all_points.extend(doc_points(&after));
+        all_points.sort_by_key(|p| (p.x, p.y));
+        all_points.dedup();
+        let all_wires: Vec<WireId> = after.wires().map(|(id, _)| id).collect();
+        rig.cx
+            .update(|_, cx| assert_inv10(doc.read(cx), &all_points, &all_wires));
+
+        // Undo restores exact pre-paste document & IDs (INV4, INV10), and redo repeats it.
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| c.undo(window, cx));
+        });
+        rig.cx.run_until_parked();
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert!(d.content_eq(&before), "INV4: undo must restore exact IDs");
+            assert_inv10(d, &all_points, &all_wires);
+        });
+
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| c.redo(window, cx));
+        });
+        rig.cx.run_until_parked();
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert!(d.content_eq(&after));
+            assert_inv10(d, &all_points, &all_wires);
+        });
+
+        // Entering paste and cancelling with Esc leaves document untouched (INV5).
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+        });
+        move_to(&overlay, rig.cx, pt(-4, 14));
+        rig.cx.simulate_keystrokes("escape");
+        rig.cx.run_until_parked();
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+        rig.cx
+            .update(|_, cx| assert!(doc.read(cx).content_eq(&after)));
+    }
+
+    #[gpui::test]
+    fn t7_1_cut_respects_wd10_delete_wires_with_part_as_one_undo_step(cx: &mut TestAppContext) {
+        // 1. delete_wires_with_part = false: cut removes only the selected part, keeps wires.
+        let mut rig = open_del_rig(cx, tc_del_01_doc(), false);
+        let canvas = rig.canvas.clone();
+        let overlay = rig.overlay.clone();
+        let doc = rig.doc.clone();
+
+        let orig = rig.snapshot();
+        let orig_points = doc_points(&orig);
+        let orig_wires: Vec<WireId> = orig.wires().map(|(id, _)| id).collect();
+        let rev0 = revision(&doc, rig.cx);
+
+        rig.select(&[R1]);
+        rig.cx.update(|_, cx| {
+            crate::tool::paste::clear_clip(cx);
+            canvas.update(cx, |c, cx| c.cut(cx));
+            assert!(SheetCanvas::has_clip(cx));
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev0 + 1);
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert!(d.part(PartId(0)).is_none());
+            assert_eq!(live_wires(d), live_wires(&orig));
+            assert_inv10(d, &orig_points, &orig_wires);
+        });
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| c.undo(window, cx));
+        });
+        rig.cx.run_until_parked();
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert!(d.content_eq(&orig));
+            assert_inv10(d, &orig_points, &orig_wires);
+        });
+
+        // 2. delete_wires_with_part = true (WD10 / W3.5 handoff): one cut removes R1 AND its
+        // attached runs W0-W1-W2 and W4 in ONE command and ONE undo step restoring exact IDs.
+        rig.set_with_wires(true);
+        rig.select(&[R1]);
+        let rev1 = revision(&doc, rig.cx);
+        let events1 = rig.history.borrow().len();
+        rig.cx.update(|_, cx| canvas.update(cx, |c, cx| c.cut(cx)));
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev1 + 1);
+        assert_eq!(rig.history.borrow().len(), events1 + 1);
+        let cut_after = rig.snapshot();
+        assert!(cut_after.part(PartId(0)).is_none());
+        assert!(cut_after.part(PartId(1)).is_some());
+        assert_eq!(
+            cut_after.wires().map(|(id, _)| id).collect::<Vec<_>>(),
+            vec![WireId(3)]
+        );
+        rig.cx
+            .update(|_, cx| assert_inv10(doc.read(cx), &orig_points, &orig_wires));
+
+        // Undo restores exact original parts and wires in one step (INV4, INV10).
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| c.undo(window, cx));
+        });
+        rig.cx.run_until_parked();
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert!(d.content_eq(&orig));
+            assert_inv10(d, &orig_points, &orig_wires);
+        });
+
+        // Redo re-applies the single cut.
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| c.redo(window, cx));
+        });
+        rig.cx.run_until_parked();
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert!(d.content_eq(&cut_after));
+            assert_inv10(d, &orig_points, &orig_wires);
+        });
+
+        // Cut-and-paste restores the cut part with its original free designator "R1".
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+        });
+        move_to(&overlay, rig.cx, pt(0, -10));
+        click_world(&overlay, rig.cx, pt(0, -10));
+        let pasted_part = rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            let mut pasted_r: Vec<_> = d
+                .parts()
+                .filter(|(_, p)| p.designator.as_ref() == "R1")
+                .map(|(id, _)| ItemId::Part(id))
+                .collect();
+            assert_eq!(pasted_r.len(), 1);
+            pasted_r.pop().unwrap()
+        });
+
+        // Guards: cut with empty selection preserves clipboard & revision; cut mid-paste is ignored.
+        let saved_clip = rig
+            .cx
+            .update(|_, cx| crate::tool::paste::read_clip(cx).unwrap());
+        let rev2 = revision(&doc, rig.cx);
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.clear_selection(cx));
+            canvas.update(cx, |c, cx| c.cut(cx));
+            assert_eq!(
+                crate::tool::paste::read_clip(cx).as_deref(),
+                Some(saved_clip.as_ref())
+            );
+        });
+        assert_eq!(revision(&doc, rig.cx), rev2);
+
+        rig.select(&[pasted_part]);
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+            canvas.update(cx, |c, cx| c.cut(cx));
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Pasting);
+        assert_eq!(revision(&doc, rig.cx), rev2);
+    }
+
+    #[gpui::test]
+    fn t7_1_copy_paste_works_across_two_canvases(cx: &mut TestAppContext) {
+        let doc_a = cx.new(|_| test_doc());
+        let doc_a_clone = doc_a.clone();
+        let rev_a0;
+        {
+            let (host_a, cx_a) = cx.add_window_view(move |window, cx| {
+                let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+                let overlay = cx
+                    .new(|cx| OverlayView::new(doc_a_clone.clone(), camera.clone(), &GRAPHITE, cx));
+                let canvas = cx.new(|cx| {
+                    let mut canvas = SheetCanvas::new(camera, &GRAPHITE, cx).with_doc(doc_a_clone);
+                    canvas.set_overlay(Some(overlay.clone()), cx);
+                    canvas
+                });
+                window.activate_window();
+                let focus = overlay.read(cx).focus_handle().clone();
+                window.focus(&focus, cx);
+                CanvasHost { canvas, overlay }
+            });
+            cx_a.run_until_parked();
+            let (canvas_a, overlay_a) = cx_a.update(|_, cx| {
+                let h = host_a.read(cx);
+                (h.canvas.clone(), h.overlay.clone())
+            });
+            rev_a0 = revision(&doc_a, cx_a);
+            cx_a.update(|_, cx| {
+                crate::tool::paste::clear_clip(cx);
+                overlay_a.update(cx, |o, cx| {
+                    o.set_selection([R1, ItemId::Label(LabelId(0))], cx);
+                });
+                canvas_a.update(cx, |c, cx| c.copy(cx));
+                assert!(SheetCanvas::has_clip(cx));
+            });
+        }
+
+        let snap_a = cx.update(|cx| snapshot(doc_a.read(cx)));
+        let doc_b = cx.new(|_| Doc::new());
+        let doc_b_clone = doc_b.clone();
+        let (host_b, cx_b) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let overlay =
+                cx.new(|cx| OverlayView::new(doc_b_clone.clone(), camera.clone(), &GRAPHITE, cx));
+            let canvas = cx.new(|cx| {
+                let mut canvas = SheetCanvas::new(camera, &GRAPHITE, cx).with_doc(doc_b_clone);
+                canvas.set_overlay(Some(overlay.clone()), cx);
+                canvas
+            });
+            window.activate_window();
+            let focus = overlay.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+            CanvasHost { canvas, overlay }
+        });
+        cx_b.run_until_parked();
+        let (canvas_b, overlay_b) = cx_b.update(|_, cx| {
+            let h = host_b.read(cx);
+            (h.canvas.clone(), h.overlay.clone())
+        });
+        cx_b.update(|window, cx| {
+            assert!(SheetCanvas::has_clip(cx));
+            canvas_b.update(cx, |c, cx| c.paste(window, cx));
+        });
+        move_to(&overlay_b, cx_b, pt(0, 0));
+        click_world(&overlay_b, cx_b, pt(0, 0));
+
+        cx_b.update(|_, cx| {
+            assert_eq!(doc_a.read(cx).revision(), rev_a0);
+            assert!(doc_a.read(cx).content_eq(&snap_a));
+            let b = doc_b.read(cx);
+            b.assert_normal_form();
+            assert_eq!(b.parts().count(), 1);
+            assert_eq!(
+                b.part(PartId(0)).unwrap().designator.as_ref(),
+                "R1",
+                "unused designator preserved across sheets"
+            );
+            assert_eq!(b.labels().count(), 1);
+            assert_eq!(b.label(LabelId(0)).unwrap().text.as_ref(), "OUT");
+        });
+    }
+
+    #[gpui::test]
+    fn t7_1_post_paste_selection_excludes_split_existing_wires_and_includes_merged_pasted_wire(
+        cx: &mut TestAppContext,
+    ) {
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let res_def = lib.get(res);
+        let res_pins: Vec<Pt> = res_def.pins.iter().map(|p| p.at).collect();
+
+        // 1. Existing wire (0, 10)-(10, 10) split into 3 pieces by a pasted part + label at (5, 10).
+        //    Post-paste selection must contain ONLY the pasted part + pasted label (0 wires).
+        let split_base = Doc::from_items(
+            [
+                (
+                    Part {
+                        symbol: res,
+                        at: pt(0, 0),
+                        orient: Orient::IDENTITY,
+                        designator: "R1".into(),
+                        value: "1k".into(),
+                    },
+                    res_pins.clone(),
+                    res_def.bounds,
+                ),
+                // Source part for case 3 whose pin sits at (4, -10) blocking merge across (4, -10).
+                (
+                    Part {
+                        symbol: res,
+                        at: pt(4, -8),
+                        orient: Orient::ROT_90,
+                        designator: "R2".into(),
+                        value: "1k".into(),
+                    },
+                    res_pins,
+                    res_def.bounds,
+                ),
+            ],
+            [
+                del_wire((0, 10), (10, 10)),
+                del_wire((0, 20), (4, 20)),
+                del_wire((0, -10), (4, -10)),
+            ],
+            [Label {
+                at: pt(2, 0),
+                text: "SIG".into(),
+            }],
+        )
+        .unwrap();
+
+        let mut rig = open_del_rig(cx, split_base, false);
+        let (canvas, overlay, doc) = (rig.canvas.clone(), rig.overlay.clone(), rig.doc.clone());
+
+        let split_clip = rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            d.copy(&[ItemId::Part(PartId(0)), ItemId::Label(LabelId(0))])
+        });
+        rig.cx.update(|window, cx| {
+            crate::tool::paste::write_clip(split_clip, cx);
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+        });
+        move_to(&overlay, rig.cx, pt(5, 10));
+        click_world(&overlay, rig.cx, pt(5, 10));
+
+        let pasted_part = rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert_eq!(
+                d.wires()
+                    .filter(|(_, w)| w.a.y == pt(0, 10).y && w.b.y == pt(0, 10).y)
+                    .count(),
+                3,
+                "existing wire at y=10g must split into 3 pieces"
+            );
+            let pasted_pid = d
+                .parts()
+                .find(|(_, p)| p.designator.as_ref() == "R3")
+                .map(|(id, _)| ItemId::Part(id))
+                .expect("pasted part R3");
+            let pasted_lid = d
+                .labels()
+                .find(|(id, l)| *id != LabelId(0) && l.text.as_ref() == "SIG")
+                .map(|(id, _)| ItemId::Label(id))
+                .expect("pasted label");
+            assert_eq!(
+                overlay.read(cx).selection(),
+                &[pasted_pid, pasted_lid],
+                "post-paste selection must exclude unrelated split pieces of existing wire"
+            );
+            (pasted_pid, pasted_lid)
+        });
+
+        // Deleting the post-paste selection removes only pasted items and keeps all 3 split pieces.
+        rig.delete(DelPath::Key);
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert!(match pasted_part.0 {
+                ItemId::Part(id) => d.part(id).is_none(),
+                _ => false,
+            });
+            assert!(match pasted_part.1 {
+                ItemId::Label(id) => d.label(id).is_none(),
+                _ => false,
+            });
+            assert_eq!(
+                d.wires()
+                    .filter(|(_, w)| w.a.y == pt(0, 10).y && w.b.y == pt(0, 10).y)
+                    .count(),
+                3
+            );
+        });
+
+        // 2. Existing wire (0, 20)-(4, 20) collinearly extended by pasting (4, 20)-(8, 20):
+        //    the pasted wire merges into existing WireId(w_exist), so w_exist MUST be selected.
+        let (wire_clip, w_exist, w_pin_exist) = rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            let w_exist = d
+                .wires()
+                .find(|(_, w)| w.a.y == pt(0, 20).y)
+                .map(|(id, _)| id)
+                .expect("w_exist");
+            let w_pin = d
+                .wires()
+                .find(|(_, w)| w.a.y == pt(0, -10).y)
+                .map(|(id, _)| id)
+                .expect("w_pin");
+            // Copy a 4g horizontal wire from a temporary doc so copy origin aligns with (0, 0).
+            let mut src = Doc::new();
+            let sw = src
+                .apply(Command::AddWires(vec![del_wire((0, 0), (4, 0))]))
+                .unwrap()
+                .added[0];
+            (src.copy(&[sw]), w_exist, w_pin)
+        });
+        assert_eq!(wire_clip.wires()[0], del_wire((-2, 0), (2, 0)));
+        rig.cx.update(|window, cx| {
+            crate::tool::paste::write_clip(wire_clip.clone(), cx);
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+        });
+        move_to(&overlay, rig.cx, pt(6, 20));
+        click_world(&overlay, rig.cx, pt(6, 20));
+        rig.cx.update(|_, cx| {
+            assert_eq!(
+                overlay.read(cx).selection(),
+                &[ItemId::Wire(w_exist)],
+                "merged pasted wire must select its surviving WireId"
+            );
+        });
+
+        // 3. Pasting (4, -10)-(8, -10) next to pin at (4, -10): does NOT merge across pin,
+        //    so ONLY the newly pasted segment is selected (not `w_pin_exist`).
+        rig.cx.update(|window, cx| {
+            crate::tool::paste::write_clip(wire_clip, cx);
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+        });
+        move_to(&overlay, rig.cx, pt(6, -10));
+        click_world(&overlay, rig.cx, pt(6, -10));
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert_eq!(
+                d.wires()
+                    .filter(|(_, w)| w.a.y == pt(0, -10).y && w.b.y == pt(0, -10).y)
+                    .count(),
+                2,
+                "existing wire and pasted wire must not merge across R2's pin"
+            );
+            let sel = overlay.read(cx).selection();
+            assert_eq!(sel.len(), 1);
+            assert_ne!(sel[0], ItemId::Wire(w_pin_exist));
+            let ItemId::Wire(new_wid) = sel[0] else {
+                panic!("expected newly pasted WireId, got {sel:?}");
+            };
+            assert_eq!(d.wire(new_wid).copied(), Some(del_wire((4, -10), (8, -10))));
+        });
     }
 }
