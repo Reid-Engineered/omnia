@@ -697,14 +697,40 @@ pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture),
                      ZoomingArea(ZoomAreaGesture) } // T5.6
 pub struct DocStamp { pub key: u64, pub revision: u64 }   // key: doc_key(&Entity<Doc>)
 pub fn doc_key(doc: &Entity<Doc>) -> u64;
+pub const FOLLOW_PREVIEW_CAP: usize;                      // 256 affected runs (WK7, tool/move_.rs)
+pub enum FollowPreview { None, Accepted, Refused(FollowError), OverCap { run_count: usize } } // W2.3
 pub struct DragGesture { pub items: Vec<ItemId>, pub pressed: ItemId, pub anchor: Pt,
                          pub current: Pt, pub pivot: Pt, pub by: Orient, pub base: DocStamp,
-                         /* private anchor_pin, lifted */ }
+                         /* private anchor_pin, prefs, alt, lifted, preview_only, affected_wires,
+                            hidden, plan, plan_remove_sorted, preview_junctions,
+                            junction_candidates, query_scratch, preview, last_plan_key,
+                            plan_calls */ }
 impl DragGesture {
+    pub fn start(doc: &Doc, items: Vec<ItemId>, pressed: ItemId, anchor: Pt,
+                 base: DocStamp, prefs: WiringPrefs, alt: bool) -> Self; // W2.3
+    pub fn for_preview(doc: &Doc, items: Vec<ItemId>, delta: Pt, by: Orient,
+                       base: DocStamp, prefs: WiringPrefs, alt: bool) -> Option<Self>; // W2.3
+    pub fn is_pointer_drag(&self) -> bool;
     pub fn is_lifted(&self) -> bool;                     // T5.3: true once moved/reoriented off start
+    pub fn alt(&self) -> bool;                           // W2.3: current modifier state
+    pub fn preview(&self) -> FollowPreview;              // W2.3
+    pub fn refusal(&self) -> Option<FollowError>;        // W2.3
+    pub fn blocker(&self) -> Option<Blocker>;            // W2.3
+    pub fn is_refused(&self) -> bool;                    // W2.3
+    pub fn plan_calls(&self) -> u64;                     // W2.3: plan_follow call count (WD11)
+    pub fn hidden_items(&self) -> &[ItemId];             // W2.3: fixed after lift-off (WINV11)
+    pub fn affected_wires(&self) -> &[WireId];           // W2.3
+    pub fn plan(&self) -> &FollowPlan;                   // W2.3
+    pub fn plan_add(&self) -> &[Wire];                   // W2.3
+    pub fn plan_remove_sorted(&self) -> &[WireId];       // W2.3
+    pub fn preview_junctions(&self) -> &[Pt];            // W2.3: restored K6 junction dots
+    pub fn follow_policy(&self, alt: bool) -> FollowPolicy; // W2.3
     pub fn delta(&self) -> Pt;                           // T5.3: anchor-pin snapped to GRID_NM (K2)
     pub fn isometry(&self) -> Isometry;                  // T5.3/T5.5: Transform { delta, pivot, by }
     pub fn command(&self, follow: FollowPolicy) -> Option<Command>; // T5.3/T5.5: Move, Transform, or None
+    pub fn set_alt(&mut self, doc: Option<&Doc>, alt: bool) -> bool; // W2.3
+    pub fn update_preview(&mut self, doc: Option<&Doc>) -> bool;     // W2.3
+    pub fn preview_wires(&self, doc: &Doc) -> Vec<Wire>;             // W2.3 (WINV5)
 }
 // T5.3/T5.5: R, X and Y during a drag compose into `DragGesture.by` (previewed as ghosts) and
 // commit as one `Command::Transform` so one undo reverts the whole gesture (INV5).
@@ -781,6 +807,7 @@ pub struct ZoomAreaGesture { pub anchor: Option<Pt>, pub current: Option<Pt> } /
 pub enum ToolRequest { Click { item: ItemId, base: DocStamp }, Place { symbol: SymbolId, at: Pt, orient: Orient },
                        Paste { clip: Arc<Clip>, at: Pt, orient: Orient }, // T7.1
                        OpenLabelEditor { target: LabelEditTarget, base: DocStamp }, // T7.2
+                       Notice { base: DocStamp, message: SharedString }, // W2.3: follow refusal notice
                        ReorientSelection(Orient), DeleteSelection, ZoomArea(Rect) } // T5.3, T5.6: handled by OverlayView
 pub struct Commit { pub command: Command, pub base: DocStamp }
 pub struct ToolOutcome { pub handled: bool, pub preview_changed: bool, pub capture: bool,
@@ -804,15 +831,21 @@ impl ToolMachine {
                         selection: &[ItemId], shift: bool) -> ToolOutcome; // ends a stale drag; wiring uses tolerance*5/2 (100% K14 ratio)
     pub fn pointer_down_with_radii(&mut self, doc: &Doc, doc_key: u64, at: Pt, radii: PointerRadii,
                                    selection: &[ItemId], shift: bool) -> ToolOutcome; // T6.2: live camera K14/WK4 radii
+    pub fn pointer_down_with_radii_and_modifiers(&mut self, doc: &Doc, doc_key: u64, at: Pt, radii: PointerRadii,
+                                                 selection: &[ItemId], modifiers: gpui::Modifiers) -> ToolOutcome; // W2.3
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome;
     pub fn pointer_move_with_doc(&mut self, doc: &Doc, at: Pt, left_held: bool) -> ToolOutcome; // W3.3; wiring defaults to 100% K14 radius (PIN_LATTICE_NM)
     pub fn pointer_move_with_snap(&mut self, doc: &Doc, at: Pt, snap_radius: i32, left_held: bool) -> ToolOutcome; // T6.2: live camera K14/WK4 snap radius
     pub fn pointer_move_with_radii(&mut self, doc: &Doc, at: Pt, radii: PointerRadii, left_held: bool) -> ToolOutcome; // T7.2: live camera K14/WK4 hit + snap radii
+    pub fn pointer_move_with_radii_and_alt(&mut self, doc: &Doc, at: Pt, radii: PointerRadii,
+                                           left_held: bool, alt: bool) -> ToolOutcome; // W2.3
+    pub fn set_drag_modifier(&mut self, doc: Option<&Doc>, alt: bool) -> ToolOutcome;  // W2.3 (ModifiersChangedEvent)
     pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome; // alt: WK3 at commit
     pub fn pointer_up_with_doc(&mut self, doc: &Doc, at: Pt, alt: bool) -> ToolOutcome;       // W3.3
     pub fn flip_wire_corner(&mut self) -> ToolOutcome;    // T6.2: Space while wiring (WD6)
     pub fn cancel(&mut self) -> ToolOutcome;              // Esc; never a commit
     pub fn reorient(&mut self, by: Orient) -> ToolOutcome; // R, X, Y
+    pub fn reorient_with_doc(&mut self, doc: &Doc, by: Orient) -> ToolOutcome; // W2.3: mid-drag re-plan
     pub fn delete(&mut self) -> ToolOutcome;              // Del
 }
 // T5.2/T5.3: history emitted by the gesture owner (OverlayView) after every effective edit (drag
@@ -821,6 +854,7 @@ impl ToolMachine {
 // matches build.
 pub struct CanvasHistory { pub doc: u64, pub can_undo: bool, pub can_redo: bool, pub cursor: u64 }
 pub struct CanvasEdit { pub doc: u64, pub dirty: Option<Rect> } // OverlayView -> SheetCanvas repaint (D7)
+pub struct CanvasNotice { pub doc: u64, pub message: SharedString } // W2.3: refusal notice (C2-filtered on SheetCanvas)
 // doc: the source document's doc_key. Events queued in one GPUI update arrive after any
 // document switch in it, so SheetCanvas delivers or re-emits one only if doc is the document
 // it shows at delivery, through the owner still attached and showing it. Both OverlayView and
@@ -888,6 +922,8 @@ impl OverlayView {
     pub fn highlighted_wires(&self) -> &[WireId];
     pub fn rubber_band(&self) -> Option<RubberBand>;
     pub fn select_mode(&self) -> SelectMode;
+    pub fn wiring_prefs(&self) -> WiringPrefs;           // W2.3
+    pub fn last_notice(&self) -> Option<&str>;           // W2.3: latest refusal notice
     pub fn sheet_entity(&self) -> &Entity<CachedSheet>;
     pub fn sheet_paint_count(&self, cx: &App) -> u64;
     pub fn sheet_render_count(&self, cx: &App) -> u64;
@@ -901,6 +937,7 @@ impl OverlayView {
     pub fn select_all(&mut self, cx: &mut Context<Self>);
     pub fn cancel_rubber_band(&mut self, cx: &mut Context<Self>);
     pub fn set_rubber_band_preview(&mut self, anchor: Pt, current: Pt, mode: SelectMode, cx: &mut Context<Self>);
+    pub fn set_move_preview(&mut self, items: impl IntoIterator<Item = ItemId>, delta: Pt, by: Orient, alt: bool, cx: &mut Context<Self>) -> bool; // W2.3
     pub fn set_segment_drag_preview(&mut self, wire: WireId, offset: i32, cx: &mut Context<Self>) -> bool; // W3.3
     pub fn set_wire_preview(&mut self, start: Option<Pt>, snap: Snap, first_leg: Option<Axis>, cx: &mut Context<Self>); // T6.2
     pub fn set_label_preview(&mut self, target: Option<LabelTarget>, cx: &mut Context<Self>); // T7.2 (INV11)
@@ -1000,7 +1037,9 @@ impl SheetCanvas {
     pub fn cut(&mut self, cx: &mut Context<Self>);        // T7.1 (ui-plan §14)
     pub fn copy(&self, cx: &mut Context<Self>);           // T7.1 (ui-plan §14)
     pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>); // T7.1 (ui-plan §14)
+    pub fn wiring_prefs(&self) -> WiringPrefs;           // W2.3
     pub fn set_wiring_prefs(&mut self, prefs: WiringPrefs, cx: &mut Context<Self>); // W2.3 (WD12, ui-plan §14)
+    pub fn last_notice(&self) -> Option<&str>;           // W2.3: latest C2-filtered notice
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>);
@@ -1010,6 +1049,7 @@ impl SheetCanvas {
 impl Render for SheetCanvas { /* ... */ }
 impl EventEmitter<CanvasEvent> for SheetCanvas {}
 impl EventEmitter<CanvasHistoryEvent> for SheetCanvas {}
+impl EventEmitter<CanvasNotice> for SheetCanvas {}        // W2.3: C2-filtered refusal notices
 
 // T7.3 (instrument_host.rs): animated instrument stub content only (frame/drag/stacking/focus live in U4.1).
 pub const DEFAULT_INSTRUMENT_SIZE: (f32, f32);              // (576.0, 468.0), UK10

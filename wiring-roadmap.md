@@ -225,9 +225,9 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 - Follow-up (W0.3, from T5.1): adds `follow: FollowPolicy` to T5.1's merged `Command::Move`
   and `Command::Reorient` (until W2.2, every run detaches).
 
-### W2.3 Move tool: preview, modifier, refusal · todo
+### W2.3 Move tool: preview, modifier, refusal · needs-human
 - Lane: canvas · Depends: W2.2, T5.3, T6.2 · Read: WD11, WD12, WK3, WK7, WINV5, WINV11, D7, ui-plan.md UD14
-- Owns: `crates/schematic-canvas/src/tool/move_.rs` (after T5.3), `overlay/follow.rs`, and `SheetCanvas::set_wiring_prefs` in `input.rs`
+- Owns: `crates/schematic-canvas/src/tool/move_.rs` (after T5.3), `overlay/follow.rs`, and `SheetCanvas::set_wiring_prefs` in `input.rs` (coordinator-widened 2026-11-26: `crates/omnia-canvas/src/tool.rs`, `overlay.rs`, `overlay/ghosts.rs`, `sheet/lod.rs`, `sheet/symbols.rs`, `lib.rs`, `tests/golden/tests/overlay.rs`, `tests/golden/overlay-follow-*.png`, `docs/measurements/W2.3.md`, `wiring-plan.md`, `canvas-plan.md`)
 - Do: call `plan_follow` when the snapped delta, the orientation (R, X, Y during the drag)
   or the modifier changes; draw the plan in the overlay; hide replaced wires with the
   dragged items at drag start; read the modifier from the mouse-up event for the command;
@@ -922,3 +922,35 @@ trade-off (`INV11` vs collinear merge partners) in `tool/segment.rs`, removed le
 `middle` in `w3_3_segment_drag_esc_and_c4_end_paths_cancel_cleanly`, and added
 `t5_2_a_part_drag_does_not_survive_a_document_swap` so `ToolState::Dragging` retains document-swap
 coverage. Local checks re-verified after merging `origin/main` (`16615cd`).
+
+2026-11-26 W2.3 needs-human — implemented live move follow preview, mid-drag modifier and
+reorientation updates, refusal handling, and `SheetCanvas::set_wiring_prefs` (`WD3`, `WD4`,
+`WD11`, `WD12`, `WK3`, `WK7`, `WINV4`, `WINV5`, `WINV11`, `D7`, `INV4`, `INV5`, `INV6`,
+`INV11`, `K6`, `K9`, `C2`, `C4`, `B10`, `UD14`) under coordinator-widened ownership recorded in
+**Owns** above. `crates/omnia-canvas/src/tool/move_.rs` adds `FOLLOW_PREVIEW_CAP = 256`,
+`FollowPreview`, and `DragGesture` (computing boundary points and affected runs once at drag
+start, holding a fixed lift-off `hidden_items()` set across `items ∪ affected_wires` so
+`SheetView` paints strictly twice per drag under `WINV11` and 0 times on clicks, caching
+`plan_follow` calls on `(delta, by, alt)`, skipping `plan_follow` at identity and above
+`FOLLOW_PREVIEW_CAP`, exposing `preview_wires` / `preview_junctions` / `for_preview`, and
+formatting refusal notices). `tool.rs` removes the pre-W2.3 `DragGesture` duplicate, wires
+`pointer_down_with_radii_and_modifiers`, `pointer_move_with_radii_and_alt`, `set_drag_modifier`,
+`reorient_with_doc`, `pointer_up_inner` (`WK3` commit-time `alt`, refusal cancel +
+`CanvasNotice` via `ToolRequest::Notice` / `ToolHost::command_refused`), and
+`OverlayView::action_reorient`. `overlay/follow.rs` and `overlay/ghosts.rs` paint surviving
+unaffected wires and restored `K6` junction dots in `stage/ink`, planned `plan.add` wires in
+ghost ink + halo, and refused ghosts plus moved/stationary `Blocker` pins/wires in
+`mark/conflict` using `omnia-theme` tokens only (`INV6`, 0 warm Omnia heap allocations verified
+in `w2_3_b10_warm_follow_paint_makes_zero_omnia_allocations`). `overlay.rs` and `input.rs`
+attach `on_modifiers_changed` onto both focused roots so `Alt` updates live previews when either
+`OverlayView` or `SheetCanvas` holds focus, expose `SheetCanvas::{wiring_prefs,
+set_wiring_prefs, last_notice}` and `OverlayView::{wiring_prefs, set_move_preview,
+last_notice}`, and forward C2-filtered `EventEmitter<CanvasNotice>` notices without modifying
+`CanvasEvent`. Added unit/GPUI simulated-input tests covering `WINV5`, `WINV11`, `WD11`,
+`TC-move-01/04/05/06/07/11/13/15`, `WK7`, `set_wiring_prefs`, and C2 filtering, plus
+`overlay-follow-preview` and `overlay-follow-refused` golden cases (`72/72` match at 0 pixel
+differences on Windows). Updated `wiring-plan.md` §10 and `canvas-plan.md` §9 (noting for
+W2.4/W2.5 that `on_mouse_move` wraps `pointer_move_with_radii_and_alt` in `run_omnia` where
+nonempty `plan_follow` currently allocates its view/scratch). Status is `needs-human` awaiting
+the Orion Linux/Wayland desktop check that mid-drag `Alt` reaches `omnia-app`
+(`docs/measurements/W2.3.md`).

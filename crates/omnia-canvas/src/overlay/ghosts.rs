@@ -28,7 +28,7 @@ use crate::{
 };
 use gpui::{App, Bounds, Hsla, Pixels, Window, fill, point, px};
 use omnia_doc::{
-    Clip, ClipPart, Doc, Isometry, ItemId, Label, LabelId, Orient, PartId, Pt, Rect,
+    Clip, ClipPart, Doc, FollowError, Isometry, ItemId, Label, LabelId, Orient, PartId, Pt, Rect,
     SHEET_LIMIT_NM, SymbolId, Wire, WireId, route::Blocker,
 };
 use omnia_symbols::SymbolDef;
@@ -43,11 +43,11 @@ const PIN_MARKER_PX: f64 = 3.5;
 /// Logical side of the anchor dot on a dragged net-label ghost.
 const LABEL_ANCHOR_DOT_PX: f64 = 3.0;
 /// Half-extent in logical px of the conflict outline around a blocking pin (`WD7`, `TC-seg-03`).
-const BLOCKER_PIN_HALF_PX: f64 = 6.0;
+pub(super) const BLOCKER_PIN_HALF_PX: f64 = 6.0;
 /// Logical side of the center marker square on a blocking pin (`WD7`).
 const BLOCKER_PIN_DOT_PX: f64 = 4.0;
 /// Logical padding around a blocking wire segment (`WD7`).
-const BLOCKER_WIRE_PAD_PX: f64 = 4.0;
+pub(super) const BLOCKER_WIRE_PAD_PX: f64 = 4.0;
 /// Logical outline thickness for conflict blocker frames (`WD7`, `WD11`).
 const BLOCKER_OUTLINE_PX: f64 = 2.0;
 
@@ -85,6 +85,16 @@ pub(super) enum GhostPreview<'a> {
         wires: &'a [Wire],
         blocker: Option<Blocker>,
     },
+    /// W2.3: move-drag follow/detach/refusal preview (`WD11`, `WK7`, `INV6`, `B10`).
+    Follow {
+        items: &'a [ItemId],
+        transform: Isometry,
+        affected_wires: &'a [WireId],
+        plan_add: &'a [Wire],
+        plan_remove_sorted: &'a [WireId],
+        preview_junctions: &'a [Pt],
+        refusal: Option<FollowError>,
+    },
 }
 
 impl GhostPreview<'_> {
@@ -96,6 +106,18 @@ impl GhostPreview<'_> {
             Self::Drag { items, .. } => !items.is_empty(),
             Self::Paste { clip, .. } => !clip.is_empty(),
             Self::Segment { wires, blocker } => !wires.is_empty() || blocker.is_some(),
+            Self::Follow {
+                items,
+                affected_wires,
+                plan_add,
+                refusal,
+                ..
+            } => {
+                !items.is_empty()
+                    || !affected_wires.is_empty()
+                    || !plan_add.is_empty()
+                    || refusal.is_some()
+            }
         }
     }
 }
@@ -115,34 +137,69 @@ pub(super) struct GhostPaintParams<'a> {
 
 /// Result of transforming a world point by an [`Isometry`] or offset without overflowing `i32`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TransformedPt {
-    pt: Pt,
-    in_bounds: bool,
+pub(super) struct TransformedPt {
+    pub pt: Pt,
+    pub in_bounds: bool,
 }
 
 /// Resolved ghost geometry for a dragged part.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct GhostPart {
-    symbol: SymbolId,
-    at: Pt,
-    orient: Orient,
-    body: Option<Rect>,
-    in_bounds: bool,
+pub(super) struct GhostPart {
+    pub symbol: SymbolId,
+    pub at: Pt,
+    pub orient: Orient,
+    pub body: Option<Rect>,
+    pub in_bounds: bool,
 }
 
 /// Resolved ghost geometry for a dragged wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct GhostWire {
-    wire: Wire,
-    bounds: Rect,
-    in_bounds: bool,
+pub(super) struct GhostWire {
+    pub wire: Wire,
+    pub bounds: Rect,
+    pub in_bounds: bool,
 }
 
 /// Resolved ghost geometry for a dragged net label.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct GhostLabel {
-    at: Pt,
-    in_bounds: bool,
+pub(super) struct GhostLabel {
+    pub at: Pt,
+    pub in_bounds: bool,
+}
+
+/// Precomputed device-pixel stroke widths and marker sizes shared across ghost painters.
+#[derive(Clone, Copy)]
+pub(super) struct GhostSizes {
+    pub wire_width_dev: u32,
+    pub wire_halo_dev: u32,
+    pub outline_dev: u32,
+    pub blocker_outline_dev: u32,
+    pub blocker_pin_dot_dev: u32,
+    pub anchor_pin_dev: u32,
+    pub pin_dev: u32,
+    pub label_dot_dev: u32,
+}
+
+impl GhostSizes {
+    pub(super) fn for_params(params: &GhostPaintParams<'_>) -> Self {
+        let wire_width_dev = wires::width(params.camera, params.sf);
+        let wire_base_px = wires::WIDTH_NM * params.camera.scale();
+        let wire_halo_dev = match_parity(
+            stroke_device_px(wire_base_px + GHOST_WIRE_HALO_EXTRA_PX, params.sf)
+                .max(wire_width_dev.saturating_add(2)),
+            wire_width_dev,
+        );
+        Self {
+            wire_width_dev,
+            wire_halo_dev,
+            outline_dev: stroke_device_px(SELECT_OUTLINE_PX, params.sf),
+            blocker_outline_dev: stroke_device_px(BLOCKER_OUTLINE_PX, params.sf),
+            blocker_pin_dot_dev: stroke_device_px(BLOCKER_PIN_DOT_PX, params.sf),
+            anchor_pin_dev: stroke_device_px(ANCHOR_PIN_MARKER_PX, params.sf),
+            pin_dev: stroke_device_px(PIN_MARKER_PX, params.sf),
+            label_dot_dev: stroke_device_px(LABEL_ANCHOR_DOT_PX, params.sf),
+        }
+    }
 }
 
 /// Extracts the orientation component of an [`Isometry`].
@@ -169,7 +226,7 @@ fn to_transformed_pt(x64: i64, y64: i64) -> TransformedPt {
 
 /// Transforms a world point by `transform`, matching `omnia_doc::Isometry::apply` exactly when
 /// in K1 bounds and clamping cleanly to `i32` with `in_bounds = false` otherwise.
-fn transform_pt(transform: Isometry, p: Pt) -> TransformedPt {
+pub(super) fn transform_pt(transform: Isometry, p: Pt) -> TransformedPt {
     if let Ok(pt) = transform.apply(p) {
         return TransformedPt {
             pt,
@@ -246,7 +303,7 @@ fn place_in_bounds(def: &SymbolDef, at: Pt, orient: Orient) -> bool {
 }
 
 /// Resolves a dragged part's transformed placement, body bounds, and K1 validity.
-fn resolve_drag_part(
+pub(super) fn resolve_drag_part(
     doc: &Doc,
     id: PartId,
     transform: Isometry,
@@ -286,7 +343,7 @@ fn resolve_drag_part(
 }
 
 /// Resolves a dragged wire's transformed endpoints, bounding box, and K1 validity.
-fn resolve_drag_wire(doc: &Doc, id: WireId, transform: Isometry) -> Option<GhostWire> {
+pub(super) fn resolve_drag_wire(doc: &Doc, id: WireId, transform: Isometry) -> Option<GhostWire> {
     let wire = *doc.wire(id)?;
     let a = transform_pt(transform, wire.a);
     let b = transform_pt(transform, wire.b);
@@ -309,7 +366,11 @@ fn resolve_drag_wire(doc: &Doc, id: WireId, transform: Isometry) -> Option<Ghost
 }
 
 /// Resolves a dragged net label's transformed anchor and K1 validity.
-fn resolve_drag_label(doc: &Doc, id: LabelId, transform: Isometry) -> Option<GhostLabel> {
+pub(super) fn resolve_drag_label(
+    doc: &Doc,
+    id: LabelId,
+    transform: Isometry,
+) -> Option<GhostLabel> {
     let label = doc.label(id)?;
     let moved = transform_pt(transform, label.at);
     Some(GhostLabel {
@@ -369,19 +430,19 @@ fn resolve_paste_label(label: &Label, paste_at: Pt, orient: Orient) -> GhostLabe
 
 /// Palette derived exclusively from `omnia-theme` tokens (INV6).
 #[derive(Clone, Copy)]
-struct GhostPalette {
-    ink: Hsla,
-    select: Hsla,
-    halo: Hsla,
-    wire_halo: Hsla,
-    snap: Hsla,
-    conflict_ink: Hsla,
-    conflict_outline: Hsla,
-    conflict_halo: Hsla,
+pub(super) struct GhostPalette {
+    pub ink: Hsla,
+    pub select: Hsla,
+    pub halo: Hsla,
+    pub wire_halo: Hsla,
+    pub snap: Hsla,
+    pub conflict_ink: Hsla,
+    pub conflict_outline: Hsla,
+    pub conflict_halo: Hsla,
 }
 
 impl GhostPalette {
-    fn from_theme(theme: &'static Theme) -> Self {
+    pub(super) fn from_theme(theme: &'static Theme) -> Self {
         let ink = gpui_color(theme.stage_ink);
         let select = gpui_color(theme.stage_select);
         let halo = gpui_color(theme.stage_select_halo);
@@ -471,7 +532,7 @@ fn paint_symbol_shape(
 
 /// Computes the device-pixel frame around a WD4 refusal blocker (plus the exact pin point when
 /// blocked by `Blocker::Pin`), allocating nothing (WD7, WD11, B10).
-fn blocker_dev_rect(
+pub(super) fn blocker_dev_rect(
     blocker: Blocker,
     params: &GhostPaintParams<'_>,
 ) -> Option<(super::DevRect, Option<Pt>)> {
@@ -510,7 +571,7 @@ fn blocker_dev_rect(
 }
 
 #[inline]
-fn wire_bounds(wire: Wire) -> Rect {
+pub(super) fn wire_bounds(wire: Wire) -> Rect {
     Rect {
         min: Pt {
             x: wire.a.x.min(wire.b.x),
@@ -706,8 +767,91 @@ fn paint_ghost_label_fg(
     );
 }
 
-/// Paints the active placement, drag-move, or segment-drag ghost preview inside its own GPUI paint
-/// layers.
+/// Palette + device-pixel sizing shared by ghost and follow preview painters.
+#[derive(Clone, Copy)]
+pub(super) struct GhostPaintStyle {
+    pub palette: GhostPalette,
+    pub sizes: GhostSizes,
+}
+
+pub(super) fn paint_drag_items_halo(
+    items: &[ItemId],
+    transform: Isometry,
+    conflict: bool,
+    style: GhostPaintStyle,
+    params: &GhostPaintParams<'_>,
+    window: &mut Window,
+) {
+    let GhostPaintStyle { palette, sizes } = style;
+    for &item in items {
+        match item {
+            ItemId::Part(id) => {
+                if let Some(mut ghost) = resolve_drag_part(params.doc, id, transform, params.masks)
+                {
+                    ghost.in_bounds &= !conflict;
+                    paint_ghost_part_halo(ghost, params, palette, window);
+                }
+            }
+            ItemId::Wire(id) => {
+                if let Some(mut ghost) = resolve_drag_wire(params.doc, id, transform) {
+                    ghost.in_bounds &= !conflict;
+                    paint_ghost_wire_halo(ghost, sizes.wire_halo_dev, params, palette, window);
+                }
+            }
+            ItemId::Label(id) => {
+                if let Some(mut ghost) = resolve_drag_label(params.doc, id, transform) {
+                    ghost.in_bounds &= !conflict;
+                    paint_ghost_label_halo(ghost, params, palette, window);
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn paint_drag_items_fg(
+    items: &[ItemId],
+    transform: Isometry,
+    conflict: bool,
+    style: GhostPaintStyle,
+    params: &GhostPaintParams<'_>,
+    window: &mut Window,
+    cx: &App,
+) {
+    let GhostPaintStyle { palette, sizes } = style;
+    for &item in items {
+        match item {
+            ItemId::Part(id) => {
+                if let Some(mut ghost) = resolve_drag_part(params.doc, id, transform, params.masks)
+                {
+                    ghost.in_bounds &= !conflict;
+                    paint_ghost_part_fg(ghost, sizes.outline_dev, params, palette, window, cx);
+                }
+            }
+            ItemId::Wire(id) => {
+                if let Some(mut ghost) = resolve_drag_wire(params.doc, id, transform) {
+                    ghost.in_bounds &= !conflict;
+                    paint_ghost_wire_fg(ghost, sizes.wire_width_dev, params, palette, window);
+                }
+            }
+            ItemId::Label(id) => {
+                if let Some(mut ghost) = resolve_drag_label(params.doc, id, transform) {
+                    ghost.in_bounds &= !conflict;
+                    paint_ghost_label_fg(
+                        ghost,
+                        sizes.outline_dev,
+                        sizes.label_dot_dev,
+                        params,
+                        palette,
+                        window,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Paints the active placement, drag-move, follow, or segment-drag ghost preview inside its own
+/// GPUI paint layers.
 ///
 /// Must be called from `paint_overlay` inside its content-masked `run_gpui` block.
 pub(super) fn paint_ghosts(
@@ -724,19 +868,16 @@ pub(super) fn paint_ghosts(
     }
 
     let palette = GhostPalette::from_theme(params.theme);
-    let wire_width_dev = wires::width(params.camera, params.sf);
-    let wire_base_px = wires::WIDTH_NM * params.camera.scale();
-    let wire_halo_dev = match_parity(
-        stroke_device_px(wire_base_px + GHOST_WIRE_HALO_EXTRA_PX, params.sf)
-            .max(wire_width_dev.saturating_add(2)),
-        wire_width_dev,
-    );
-    let outline_dev = stroke_device_px(SELECT_OUTLINE_PX, params.sf);
-    let blocker_outline_dev = stroke_device_px(BLOCKER_OUTLINE_PX, params.sf);
-    let blocker_pin_dot_dev = stroke_device_px(BLOCKER_PIN_DOT_PX, params.sf);
-    let anchor_pin_dev = stroke_device_px(ANCHOR_PIN_MARKER_PX, params.sf);
-    let pin_dev = stroke_device_px(PIN_MARKER_PX, params.sf);
-    let label_dot_dev = stroke_device_px(LABEL_ANCHOR_DOT_PX, params.sf);
+    let sizes = GhostSizes::for_params(params);
+    let style = GhostPaintStyle { palette, sizes };
+    let wire_width_dev = sizes.wire_width_dev;
+    let wire_halo_dev = sizes.wire_halo_dev;
+    let outline_dev = sizes.outline_dev;
+    let blocker_outline_dev = sizes.blocker_outline_dev;
+    let blocker_pin_dot_dev = sizes.blocker_pin_dot_dev;
+    let anchor_pin_dev = sizes.anchor_pin_dev;
+    let pin_dev = sizes.pin_dev;
+    let label_dot_dev = sizes.label_dot_dev;
 
     match preview {
         GhostPreview::None => {}
@@ -839,82 +980,41 @@ pub(super) fn paint_ghosts(
             // Layer 1: translucent fills and wire halos underneath crisp ghost geometry.
             window.paint_layer(|window| {
                 run_omnia(params.scope, || {
-                    for &item in items {
-                        match item {
-                            ItemId::Part(id) => {
-                                if let Some(ghost) =
-                                    resolve_drag_part(params.doc, id, transform, params.masks)
-                                {
-                                    paint_ghost_part_halo(ghost, params, palette, window);
-                                }
-                            }
-                            ItemId::Wire(id) => {
-                                if let Some(ghost) = resolve_drag_wire(params.doc, id, transform) {
-                                    paint_ghost_wire_halo(
-                                        ghost,
-                                        wire_halo_dev,
-                                        params,
-                                        palette,
-                                        window,
-                                    );
-                                }
-                            }
-                            ItemId::Label(id) => {
-                                if let Some(ghost) = resolve_drag_label(params.doc, id, transform) {
-                                    paint_ghost_label_halo(ghost, params, palette, window);
-                                }
-                            }
-                        }
-                    }
+                    paint_drag_items_halo(items, transform, false, style, params, window);
                 });
             });
 
             // Layer 2: ghost wires, outlines, label anchors, and symbol sprites/LOD boxes.
             window.paint_layer(|window| {
                 run_omnia(params.scope, || {
-                    for &item in items {
-                        match item {
-                            ItemId::Part(id) => {
-                                if let Some(ghost) =
-                                    resolve_drag_part(params.doc, id, transform, params.masks)
-                                {
-                                    paint_ghost_part_fg(
-                                        ghost,
-                                        outline_dev,
-                                        params,
-                                        palette,
-                                        window,
-                                        cx,
-                                    );
-                                }
-                            }
-                            ItemId::Wire(id) => {
-                                if let Some(ghost) = resolve_drag_wire(params.doc, id, transform) {
-                                    paint_ghost_wire_fg(
-                                        ghost,
-                                        wire_width_dev,
-                                        params,
-                                        palette,
-                                        window,
-                                    );
-                                }
-                            }
-                            ItemId::Label(id) => {
-                                if let Some(ghost) = resolve_drag_label(params.doc, id, transform) {
-                                    paint_ghost_label_fg(
-                                        ghost,
-                                        outline_dev,
-                                        label_dot_dev,
-                                        params,
-                                        palette,
-                                        window,
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    paint_drag_items_fg(items, transform, false, style, params, window, cx);
                 });
             });
+        }
+        GhostPreview::Follow {
+            items,
+            transform,
+            affected_wires,
+            plan_add,
+            plan_remove_sorted,
+            preview_junctions,
+            refusal,
+        } => {
+            super::follow::paint_follow_preview(
+                super::follow::FollowPreviewData {
+                    items,
+                    transform,
+                    affected_wires,
+                    plan_add,
+                    plan_remove_sorted,
+                    preview_junctions,
+                    refusal,
+                },
+                style,
+                params,
+                window,
+                cx,
+            );
         }
         GhostPreview::Paste { clip, at, orient } => {
             // Layer 1: translucent fills and wire halos underneath crisp ghost geometry (D2).

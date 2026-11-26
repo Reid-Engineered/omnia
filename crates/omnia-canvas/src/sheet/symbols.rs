@@ -93,7 +93,7 @@ impl Masks {
         self.symbol_at(part.symbol, part.at, part.orient, camera, sf)
     }
 
-    pub(super) fn dot(&self, x: f64, y: f64, diameter: f64, sf: f32) -> Shape<'_> {
+    pub(crate) fn dot(&self, x: f64, y: f64, diameter: f64, sf: f32) -> Shape<'_> {
         Shape {
             x: x * f64::from(sf),
             y: y * f64::from(sf),

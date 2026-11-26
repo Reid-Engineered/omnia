@@ -1,16 +1,28 @@
-//! T5.3: move, rotate, mirror and delete command planning for selections and drags
-//! (D2, K2, INV5, WD3, WD10, T5.5).
+//! T5.3 / W2.3: move, rotate, mirror and delete command planning, plus live follow preview,
+//! modifier handling, and refusal state for drags (`D2`, `K2`, `INV5`, `INV11`, `WD3`, `WD10`,
+//! `WD11`, `WD12`, `WK3`, `WK7`, `WINV5`, `WINV11`, `T5.5`).
 //!
-//! Pure geometry and command builders used by [`crate::tool::ToolMachine`] and
-//! [`crate::OverlayView`]:
+//! Pure geometry, follow-preview caching, and command builders used by [`crate::tool::ToolMachine`]
+//! and [`crate::OverlayView`]:
 //! - Anchor-pin grid snapping for dragged parts (K2), keeping zero-movement clicks as clicks.
 //! - Deterministic, lattice-safe pivot selection for in-place and mid-drag reorientation.
+//! - Fixed lift-off hidden sets (`items ∪ affected_wires`) up to [`FOLLOW_PREVIEW_CAP`] so
+//!   `SheetView` paints strictly twice per drag (`WINV11`), while `plan_follow` runs only when
+//!   `(delta, by, alt)` changes (`WD11`).
 //! - Single-command commits via `Command::Move`, `Command::Transform` (T5.5), `Command::Reorient`,
 //!   and `Command::Delete` so one undo reverts the whole gesture (INV5).
 
-use crate::{camera_anim::selection_bounds, selection::item_exists};
+use crate::{
+    camera_anim::selection_bounds,
+    selection::{item_exists, item_sort_key},
+    tool::DocStamp,
+};
+use gpui::SharedString;
 use omnia_doc::{
-    Command, Doc, GRID_NM, Isometry, ItemId, Orient, Pt, Rect, SHEET_LIMIT_NM, prefs::FollowPolicy,
+    Boundary, Command, CommandError, Doc, FollowError, FollowPlan, GRID_NM, Isometry, ItemId,
+    Orient, Pt, Rect, SHEET_LIMIT_NM, Wire, WireId, plan_follow,
+    prefs::{FollowPolicy, WiringPrefs},
+    route::Blocker,
     snap_to,
 };
 
@@ -184,6 +196,594 @@ pub fn drag_command(
     }
 }
 
+/// WK7: live follow previews plan and draw up to this many affected runs. Above this cap the
+/// overlay draws dragged ghosts only, and planning happens once at commit (`WD11`, `WK7`).
+pub const FOLLOW_PREVIEW_CAP: usize = 256;
+
+/// Live follow-preview verdict for an active [`DragGesture`] (`WD11`, `WK7`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FollowPreview {
+    /// No affected runs touch the dragged selection (`affected_wires` is empty), or preview was
+    /// cleared back to identity before re-planning.
+    None,
+    /// `plan_follow` accepted the current `(delta, by, alt)` (or the drag is at identity).
+    Accepted,
+    /// `plan_follow` refused the current `(delta, by, alt)` (`WD11`, `TC-move-13`).
+    Refused(FollowError),
+    /// Affected runs exceed [`FOLLOW_PREVIEW_CAP`]; live planning is skipped until commit (`WK7`).
+    OverCap { run_count: usize },
+}
+
+/// Formats a user-facing status notice for a live or commit-time [`FollowError`] (`WD11`, `UD11`).
+pub fn format_follow_refusal(error: FollowError) -> SharedString {
+    match error {
+        FollowError::NoRoute { blocker, .. } => match blocker {
+            Blocker::Pin { .. } => {
+                "Move refused: no valid wire route (blocked by pin); hold Alt to detach".into()
+            }
+            Blocker::WireEnd(_) | Blocker::WireBody(_) | Blocker::Overlap(_) => {
+                "Move refused: no valid wire route (blocked by wire); hold Alt to detach".into()
+            }
+            Blocker::Sheet => {
+                "Move refused: route blocked at sheet limit or off lattice; hold Alt to detach"
+                    .into()
+            }
+        },
+    }
+}
+
+/// Formats a user-facing status notice when a commit command is refused by [`Doc::apply`] (`WD11`,
+/// `WK7`, `UD11`).
+pub fn format_command_refusal(error: CommandError) -> SharedString {
+    match error {
+        CommandError::Follow(err) => format_follow_refusal(err),
+        CommandError::Capture { .. } => {
+            "Move refused: moved wire would connect across a foreign pin or wire".into()
+        }
+        CommandError::OffLattice(_) => {
+            "Move refused: moved geometry would land off the wire lattice".into()
+        }
+        CommandError::OutOfBounds => "Move refused: item or pin lies outside sheet limits".into(),
+        CommandError::Segment(_) => "Segment drag refused: blocked by obstacle".into(),
+        _ => error.to_string().into(),
+    }
+}
+
+#[inline]
+fn canonical_wire(w: Wire) -> Wire {
+    if (w.a.x, w.a.y) <= (w.b.x, w.b.y) {
+        w
+    } else {
+        Wire { a: w.b, b: w.a }
+    }
+}
+
+/// A drag of the selection, held as preview state until release (`INV5`, `WD11`, `WINV5`, `WINV11`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DragGesture {
+    /// The dragged items in canonical selection order.
+    pub items: Vec<ItemId>,
+    /// The item under the press.
+    pub pressed: ItemId,
+    /// World point of the press.
+    pub anchor: Pt,
+    /// World point of the pointer now.
+    pub current: Pt,
+    /// Deterministic, lattice-safe pivot for mid-drag R, X and Y reorientation (T5.3, T5.5).
+    pub pivot: Pt,
+    /// Orientation composed from R, X and Y pressed during the drag (T5.3, T5.5).
+    pub by: Orient,
+    /// The document the drag started on.
+    pub base: DocStamp,
+    /// World position of the dragged part's anchor pin (pin 0) at drag start for K2 snapping.
+    anchor_pin: Option<Pt>,
+    /// Snapshot of wiring preferences captured at drag start so mid-drag preference edits apply to
+    /// the next gesture rather than mutating a live preview (`WD12`, `WINV5`).
+    prefs: WiringPrefs,
+    /// Latest modifier state (`Alt`) tracked for live preview inversion (`WK3`, `WD11`).
+    alt: bool,
+    /// True once the drag has actually moved or reoriented off its starting position (T5.3, D7,
+    /// INV11). Plain selection clicks never lift, keeping click-selection SheetView paints at 0.
+    lifted: bool,
+    /// `true` for static golden/programmatic previews that do not hold pointer capture.
+    preview_only: bool,
+    /// Sorted unique wire ids across affected runs (empty when unwired or `OverCap`).
+    affected_wires: Vec<WireId>,
+    /// Canonically sorted items (`items` plus `affected_wires` when `<= FOLLOW_PREVIEW_CAP`)
+    /// hidden from `SheetView` once `lifted` and kept fixed until drag end (`D7`, `INV11`,
+    /// `WINV11`).
+    hidden: Vec<ItemId>,
+    /// Reusable planner output buffer.
+    plan: FollowPlan,
+    /// Sorted copy of `plan.remove` (`WireId.0`) for zero-alloc `binary_search` in overlay paint
+    /// (`B10`).
+    plan_remove_sorted: Vec<WireId>,
+    /// Precomputed K6 junction dot coordinates hidden by `SheetView` that must be drawn in the
+    /// overlay during the drag (`K6`, `B10`).
+    preview_junctions: Vec<Pt>,
+    /// Reusable scratch buffer of candidate junction points.
+    junction_candidates: Vec<Pt>,
+    /// Reusable scratch buffer for `Doc::query` during junction computation.
+    query_scratch: Vec<ItemId>,
+    /// Live follow-preview verdict.
+    preview: FollowPreview,
+    /// Cache key `(delta, by, alt)` for the last `plan_follow` invocation (`WD11`).
+    last_plan_key: Option<(Pt, Orient, bool)>,
+    /// Count of actual `omnia_doc::plan_follow` calls performed during this drag (`WD11`).
+    plan_calls: u64,
+}
+
+impl DragGesture {
+    /// Starts a drag gesture on `items` against `doc`, computing the boundary, affected runs, and
+    /// fixed lift-off hidden set once (`WD11`, `WK7`, `WINV11`).
+    pub fn start(
+        doc: &Doc,
+        items: Vec<ItemId>,
+        pressed: ItemId,
+        anchor: Pt,
+        base: DocStamp,
+        prefs: WiringPrefs,
+        alt: bool,
+    ) -> Self {
+        let pivot = selection_pivot(doc, &items).unwrap_or(anchor);
+        let anchor_pin = drag_anchor_pin(doc, pressed, &items);
+
+        let mut boundary = Boundary::default();
+        doc.boundary_points(&items, &mut boundary);
+        let mut runs = Vec::new();
+        doc.affected_runs(&boundary, &mut runs);
+
+        let mut hidden = items.clone();
+        hidden.sort_unstable_by_key(|&item| item_sort_key(item));
+        hidden.dedup();
+
+        let (affected_wires, preview) = if runs.len() > FOLLOW_PREVIEW_CAP {
+            (
+                Vec::new(),
+                FollowPreview::OverCap {
+                    run_count: runs.len(),
+                },
+            )
+        } else {
+            let mut wires: Vec<WireId> = runs
+                .iter()
+                .flat_map(|run| run.wires.iter().copied())
+                .collect();
+            wires.sort_unstable_by_key(|id| id.0);
+            wires.dedup();
+            hidden.extend(wires.iter().map(|&id| ItemId::Wire(id)));
+            hidden.sort_unstable_by_key(|&item| item_sort_key(item));
+            hidden.dedup();
+            let verdict = if wires.is_empty() {
+                FollowPreview::None
+            } else {
+                FollowPreview::Accepted
+            };
+            (wires, verdict)
+        };
+
+        let remove_cap = affected_wires.len();
+        let mut gesture = Self {
+            items,
+            pressed,
+            anchor,
+            current: anchor,
+            pivot,
+            by: Orient::IDENTITY,
+            base,
+            anchor_pin,
+            prefs,
+            alt,
+            lifted: false,
+            preview_only: false,
+            affected_wires,
+            hidden,
+            plan: FollowPlan::default(),
+            plan_remove_sorted: Vec::with_capacity(remove_cap),
+            preview_junctions: Vec::new(),
+            junction_candidates: Vec::new(),
+            query_scratch: Vec::new(),
+            preview,
+            last_plan_key: None,
+            plan_calls: 0,
+        };
+        if !gesture.affected_wires.is_empty() {
+            gesture.recompute_preview_junctions(doc);
+        }
+        gesture
+    }
+
+    /// Creates a lifted programmatic drag preview without pointer capture (used for golden rendering
+    /// and programmatic inspection).
+    pub fn for_preview(
+        doc: &Doc,
+        items: Vec<ItemId>,
+        delta: Pt,
+        by: Orient,
+        base: DocStamp,
+        prefs: WiringPrefs,
+        alt: bool,
+    ) -> Option<Self> {
+        let mut live_items: Vec<ItemId> = items
+            .into_iter()
+            .filter(|&item| item_exists(doc, item))
+            .collect();
+        if live_items.is_empty() {
+            return None;
+        }
+        live_items.sort_unstable_by_key(|&item| item_sort_key(item));
+        live_items.dedup();
+        let pressed = live_items[0];
+        let anchor = selection_pivot(doc, &live_items)?;
+        let mut gesture = Self::start(doc, live_items, pressed, anchor, base, prefs, alt);
+        gesture.preview_only = true;
+        // Preserve exact grid-multiple `delta` even when the pressed part has half-grid pins.
+        gesture.anchor_pin = None;
+        gesture.current = Pt {
+            x: anchor.x.saturating_add(delta.x),
+            y: anchor.y.saturating_add(delta.y),
+        };
+        gesture.by = by;
+        gesture.lifted = delta != Pt::ZERO || by != Orient::IDENTITY;
+        gesture.update_preview(Some(doc));
+        Some(gesture)
+    }
+
+    /// Whether this gesture is an active pointer drag (holds capture), as opposed to a static
+    /// programmatic preview.
+    pub fn is_pointer_drag(&self) -> bool {
+        !self.preview_only
+    }
+
+    /// Whether the drag has visually lifted off the sheet (hidden on `SheetView`, drawn as ghost).
+    pub fn is_lifted(&self) -> bool {
+        self.lifted
+    }
+
+    /// Marks the drag as lifted off the sheet.
+    pub(crate) fn set_lifted(&mut self) {
+        self.lifted = true;
+    }
+
+    /// Current `Alt` modifier state tracked by this preview.
+    pub fn alt(&self) -> bool {
+        self.alt
+    }
+
+    /// Updates the stored `Alt` modifier flag without re-planning.
+    pub(crate) fn set_alt_flag(&mut self, alt: bool) {
+        self.alt = alt;
+    }
+
+    /// Current follow-preview verdict (`None`, `Accepted`, `Refused`, or `OverCap`).
+    pub fn preview(&self) -> FollowPreview {
+        self.preview
+    }
+
+    /// Follow refusal error when [`Self::preview`] is [`FollowPreview::Refused`].
+    pub fn refusal(&self) -> Option<FollowError> {
+        match self.preview {
+            FollowPreview::Refused(err) => Some(err),
+            FollowPreview::None | FollowPreview::Accepted | FollowPreview::OverCap { .. } => None,
+        }
+    }
+
+    /// The blocking item when [`Self::preview`] is [`FollowPreview::Refused`] (`WD11`).
+    pub fn blocker(&self) -> Option<Blocker> {
+        self.refusal()
+            .map(|FollowError::NoRoute { blocker, .. }| blocker)
+    }
+
+    /// Returns `true` when the live follow preview is currently refused (`WD11`).
+    pub fn is_refused(&self) -> bool {
+        matches!(self.preview, FollowPreview::Refused(_))
+    }
+
+    /// Number of times [`omnia_doc::plan_follow`] ran during this drag (`WD11`).
+    pub fn plan_calls(&self) -> u64 {
+        self.plan_calls
+    }
+
+    /// Canonically sorted items hidden from `SheetView`: empty before lift-off, then fixed for the
+    /// remainder of the drag (`D7`, `INV11`, `WINV11`).
+    pub fn hidden_items(&self) -> &[ItemId] {
+        if self.lifted { &self.hidden } else { &[] }
+    }
+
+    /// Sorted wire ids belonging to affected runs (empty when unwired or over [`FOLLOW_PREVIEW_CAP`]).
+    pub fn affected_wires(&self) -> &[WireId] {
+        &self.affected_wires
+    }
+
+    /// Latest follow plan computed for this drag.
+    pub fn plan(&self) -> &FollowPlan {
+        &self.plan
+    }
+
+    /// New follow wire segments produced by the latest accepted plan.
+    pub fn plan_add(&self) -> &[Wire] {
+        &self.plan.add
+    }
+
+    /// Sorted replaced wire ids (`WireId.0`) for zero-alloc lookup during overlay paint (`B10`).
+    pub fn plan_remove_sorted(&self) -> &[WireId] {
+        &self.plan_remove_sorted
+    }
+
+    /// Precomputed K6 junction dot coordinates hidden by `SheetView` that must appear in the
+    /// overlay (`K6`, `B10`).
+    pub fn preview_junctions(&self) -> &[Pt] {
+        &self.preview_junctions
+    }
+
+    /// Follow policy for this gesture given `alt` at commit or modifier change (`WD12`, `WK3`).
+    pub fn follow_policy(&self, alt: bool) -> FollowPolicy {
+        self.prefs.follow_policy(alt)
+    }
+
+    /// The pointer movement, snapped so a dragged part's anchor pin lands on `GRID_NM` (K2),
+    /// or snapped directly to `GRID_NM` for wire/label-only drags.
+    pub fn delta(&self) -> Pt {
+        drag_delta(
+            self.anchor,
+            self.current,
+            self.pivot,
+            self.by,
+            self.anchor_pin,
+        )
+    }
+
+    /// The live preview and commit [`Isometry`] for this drag (T5.3, T5.5).
+    pub fn isometry(&self) -> Isometry {
+        drag_isometry(self.delta(), self.pivot, self.by)
+    }
+
+    /// The one command this drag commits: `Command::Move`, `Command::Transform` (when R, X or Y
+    /// was applied mid-drag, T5.5), or `None` for a click that changed nothing (INV5).
+    pub fn command(&self, follow: FollowPolicy) -> Option<Command> {
+        drag_command(&self.items, self.delta(), self.pivot, self.by, follow)
+    }
+
+    /// Updates `alt` and refreshes the live follow preview if the modifier changed (`WD11`, `WK3`).
+    pub fn set_alt(&mut self, doc: Option<&Doc>, alt: bool) -> bool {
+        if self.alt == alt {
+            return false;
+        }
+        self.alt = alt;
+        self.update_preview(doc)
+    }
+
+    /// Updates the follow plan only when `(delta, by, alt)` changes (`WD11`).
+    ///
+    /// At identity (`delta == Pt::ZERO && by == Orient::IDENTITY`), skips `plan_follow`, clears any
+    /// previous plan, and restores `Accepted` (or `None` when unwired) while keeping `OverCap`
+    /// intact. Returns `true` when visible preview state changed.
+    pub fn update_preview(&mut self, doc: Option<&Doc>) -> bool {
+        if matches!(self.preview, FollowPreview::OverCap { .. }) {
+            return false;
+        }
+        let delta = self.delta();
+        if delta == Pt::ZERO && self.by == Orient::IDENTITY {
+            if self.last_plan_key.is_some() {
+                self.last_plan_key = None;
+                self.clear_plan_buffers();
+                self.preview = if self.affected_wires.is_empty() {
+                    FollowPreview::None
+                } else {
+                    FollowPreview::Accepted
+                };
+                if let Some(doc) = doc
+                    && !self.affected_wires.is_empty()
+                {
+                    self.recompute_preview_junctions(doc);
+                } else {
+                    self.preview_junctions.clear();
+                }
+                return true;
+            }
+            return false;
+        }
+        let key = (delta, self.by, self.alt);
+        if self.affected_wires.is_empty() {
+            self.last_plan_key = Some(key);
+            self.preview = FollowPreview::None;
+            return false;
+        }
+        if self.last_plan_key == Some(key) {
+            return false;
+        }
+        let Some(doc) = doc else {
+            return false;
+        };
+        self.last_plan_key = Some(key);
+        self.plan_calls += 1;
+        let policy = self.prefs.follow_policy(self.alt);
+        match plan_follow(doc, &self.items, self.isometry(), policy, &mut self.plan) {
+            Ok(()) => {
+                self.plan_remove_sorted.clear();
+                self.plan_remove_sorted.extend_from_slice(&self.plan.remove);
+                self.plan_remove_sorted.sort_unstable_by_key(|id| id.0);
+                self.preview = FollowPreview::Accepted;
+            }
+            Err(err) => {
+                self.clear_plan_buffers();
+                self.preview = FollowPreview::Refused(err);
+            }
+        }
+        self.recompute_preview_junctions(doc);
+        true
+    }
+
+    fn clear_plan_buffers(&mut self) {
+        self.plan.remove.clear();
+        self.plan.add.clear();
+        self.plan.labels.clear();
+        self.plan.fates.clear();
+        self.plan_remove_sorted.clear();
+    }
+
+    fn recompute_preview_junctions(&mut self, doc: &Doc) {
+        self.junction_candidates.clear();
+        self.preview_junctions.clear();
+        let refused = self.is_refused();
+        let iso = self.isometry();
+
+        for &id in &self.affected_wires {
+            if !refused
+                && self
+                    .plan_remove_sorted
+                    .binary_search_by_key(&id.0, |w| w.0)
+                    .is_ok()
+            {
+                continue;
+            }
+            if let Some(&wire) = doc.wire(id) {
+                self.junction_candidates.push(wire.a);
+                self.junction_candidates.push(wire.b);
+            }
+        }
+        if !refused {
+            for &wire in &self.plan.add {
+                self.junction_candidates.push(wire.a);
+                self.junction_candidates.push(wire.b);
+            }
+            for &item in &self.items {
+                match item {
+                    ItemId::Part(id) => {
+                        if let Some(pins) = doc.pins(id) {
+                            for &pin in pins {
+                                if let Ok(moved) = iso.apply(pin) {
+                                    self.junction_candidates.push(moved);
+                                }
+                            }
+                        }
+                    }
+                    ItemId::Wire(id) => {
+                        if let Some(&wire) = doc.wire(id) {
+                            if let Ok(a) = iso.apply(wire.a) {
+                                self.junction_candidates.push(a);
+                            }
+                            if let Ok(b) = iso.apply(wire.b) {
+                                self.junction_candidates.push(b);
+                            }
+                        }
+                    }
+                    ItemId::Label(_) => {}
+                }
+            }
+        }
+
+        self.junction_candidates
+            .sort_unstable_by_key(|p| (p.x, p.y));
+        self.junction_candidates.dedup();
+
+        for idx in 0..self.junction_candidates.len() {
+            let p = self.junction_candidates[idx];
+            let non_hidden_ends = self.non_hidden_ends_at(doc, p);
+            if non_hidden_ends >= 3 {
+                continue;
+            }
+            if non_hidden_ends + self.overlay_ends_at(doc, iso, refused, p) >= 3 {
+                self.preview_junctions.push(p);
+            }
+        }
+    }
+
+    fn non_hidden_ends_at(&mut self, doc: &Doc, p: Pt) -> usize {
+        doc.query(Rect { min: p, max: p }, &mut self.query_scratch);
+        let mut ends = 0usize;
+        for &item in &self.query_scratch {
+            if self
+                .hidden
+                .binary_search_by_key(&item_sort_key(item), |&h| item_sort_key(h))
+                .is_ok()
+            {
+                continue;
+            }
+            match item {
+                ItemId::Part(id) => {
+                    if let Some(pins) = doc.pins(id) {
+                        ends += pins.iter().filter(|&&pin| pin == p).count();
+                    }
+                }
+                ItemId::Wire(id) => {
+                    if let Some(&wire) = doc.wire(id) {
+                        ends += usize::from(wire.a == p) + usize::from(wire.b == p);
+                    }
+                }
+                ItemId::Label(_) => {}
+            }
+        }
+        ends
+    }
+
+    fn overlay_ends_at(&self, doc: &Doc, iso: Isometry, refused: bool, p: Pt) -> usize {
+        let mut ends = 0usize;
+        for &id in &self.affected_wires {
+            if !refused
+                && self
+                    .plan_remove_sorted
+                    .binary_search_by_key(&id.0, |w| w.0)
+                    .is_ok()
+            {
+                continue;
+            }
+            if let Some(&wire) = doc.wire(id) {
+                ends += usize::from(wire.a == p) + usize::from(wire.b == p);
+            }
+        }
+        if refused {
+            return ends;
+        }
+        for &wire in &self.plan.add {
+            ends += usize::from(wire.a == p) + usize::from(wire.b == p);
+        }
+        for &item in &self.items {
+            match item {
+                ItemId::Part(id) => {
+                    if let Some(pins) = doc.pins(id) {
+                        ends += pins.iter().filter(|&&pin| iso.apply(pin) == Ok(p)).count();
+                    }
+                }
+                ItemId::Wire(id) => {
+                    if let Some(&wire) = doc.wire(id) {
+                        ends += usize::from(iso.apply(wire.a) == Ok(p))
+                            + usize::from(iso.apply(wire.b) == Ok(p));
+                    }
+                }
+                ItemId::Label(_) => {}
+            }
+        }
+        ends
+    }
+
+    /// Returns the exact canonical list of affected-run wires drawn by the overlay in this state:
+    /// surviving unselected affected wires (`affected_wires \ plan_remove_sorted`) plus
+    /// `plan.add` (or all original `affected_wires` when refused) (`WINV5`).
+    pub fn preview_wires(&self, doc: &Doc) -> Vec<Wire> {
+        let mut wires = Vec::new();
+        let refused = self.is_refused();
+        for &id in &self.affected_wires {
+            if !refused
+                && self
+                    .plan_remove_sorted
+                    .binary_search_by_key(&id.0, |w| w.0)
+                    .is_ok()
+            {
+                continue;
+            }
+            if let Some(&w) = doc.wire(id) {
+                wires.push(canonical_wire(w));
+            }
+        }
+        if !refused {
+            wires.extend(self.plan.add.iter().copied().map(canonical_wire));
+        }
+        wires.sort_unstable_by_key(|w| ((w.a.x, w.a.y), (w.b.x, w.b.y)));
+        wires
+    }
+}
+
 /// Builds a direct `Command::Reorient` for idle R, X or Y on `selection` (WD3).
 pub fn reorient_selection_command(
     doc: &Doc,
@@ -240,6 +840,37 @@ mod tests {
 
     fn pt(x: i32, y: i32) -> Pt {
         Pt { x: x * G, y: y * G }
+    }
+
+    fn resistor_part(doc: &mut Doc, at: Pt, des: &str) -> PartId {
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let def = lib.get(res);
+        doc.apply(Command::PlacePart {
+            part: Part {
+                symbol: res,
+                at,
+                orient: Orient::IDENTITY,
+                designator: des.into(),
+                value: "10k".into(),
+            },
+            local_pins: def.pins.iter().map(|p| p.at).collect(),
+            local_bounds: def.bounds,
+        })
+        .unwrap()
+        .added
+        .into_iter()
+        .find_map(|id| match id {
+            ItemId::Part(p) => Some(p),
+            _ => None,
+        })
+        .unwrap()
+    }
+
+    fn canonical_wires_in_doc(doc: &Doc) -> Vec<Wire> {
+        let mut wires: Vec<Wire> = doc.wires().map(|(_, &w)| canonical_wire(w)).collect();
+        wires.sort_unstable_by_key(|w| ((w.a.x, w.a.y), (w.b.x, w.b.y)));
+        wires
     }
 
     #[test]
@@ -406,5 +1037,202 @@ mod tests {
                 follow,
             })
         );
+    }
+
+    #[test]
+    fn w2_3_wd11_subgrid_moves_and_identity_skip_plan_follow() {
+        let mut doc = Doc::new();
+        let r1 = resistor_part(&mut doc, pt(-6, 0), "R1");
+        let r2 = resistor_part(&mut doc, pt(6, 0), "R2");
+        doc.apply(Command::AddWires(vec![Wire {
+            a: pt(-4, 0),
+            b: pt(4, 0),
+        }]))
+        .unwrap();
+
+        let stamp = DocStamp {
+            key: 1,
+            revision: doc.revision(),
+        };
+        let mut drag = DragGesture::start(
+            &doc,
+            vec![ItemId::Part(r1)],
+            ItemId::Part(r1),
+            pt(-6, 0),
+            stamp,
+            WiringPrefs::default(),
+            false,
+        );
+        assert_eq!(drag.preview(), FollowPreview::Accepted);
+        assert_eq!(drag.plan_calls(), 0);
+        assert!(drag.hidden_items().is_empty());
+
+        // Move across multiple sub-grid offsets that snap to (1G, 0): plan_follow runs once.
+        drag.set_lifted();
+        assert_eq!(
+            drag.hidden_items(),
+            &[ItemId::Part(r1), ItemId::Wire(WireId(0))]
+        );
+        for dx_sub in [0, 100, -100, G / 3, -G / 3, G / 2 - 1] {
+            drag.current = Pt {
+                x: -5 * G + dx_sub,
+                y: dx_sub / 2,
+            };
+            let changed = drag.update_preview(Some(&doc));
+            if dx_sub == 0 {
+                assert!(changed, "first snapped move updates plan");
+            } else {
+                assert!(!changed, "sub-grid move with same delta must not re-plan");
+            }
+            assert_eq!(drag.delta(), pt(1, 0));
+            assert_eq!(drag.plan_calls(), 1, "WD11: sub-grid offset {dx_sub}");
+        }
+
+        // Alt toggles trigger re-planning once per toggle; switching back to follow restores routes.
+        assert!(drag.set_alt(Some(&doc), true));
+        assert_eq!(drag.plan_calls(), 2);
+        assert!(drag.plan_add().is_empty());
+        assert_eq!(drag.preview_wires(&doc), canonical_wires_in_doc(&doc));
+        assert!(!drag.set_alt(Some(&doc), true));
+        assert_eq!(drag.plan_calls(), 2);
+
+        assert!(drag.set_alt(Some(&doc), false));
+        assert_eq!(drag.plan_calls(), 3);
+        assert!(!drag.plan_add().is_empty());
+
+        // Dragging back to identity clears the plan without calling plan_follow.
+        drag.current = pt(-6, 0);
+        assert!(drag.update_preview(Some(&doc)));
+        assert_eq!(drag.plan_calls(), 3);
+        assert_eq!(drag.preview(), FollowPreview::Accepted);
+        assert!(drag.plan_add().is_empty());
+        assert_eq!(drag.preview_wires(&doc), canonical_wires_in_doc(&doc));
+        assert_eq!(drag.items, vec![ItemId::Part(r1)]);
+        let _ = r2;
+    }
+
+    #[test]
+    fn w2_3_wk7_over_cap_skips_live_plan_and_keeps_hidden_to_items() {
+        let mut doc = Doc::new();
+        let count = FOLLOW_PREVIEW_CAP / 2 + 2; // 130 resistors × 2 runs = 260 runs (> 256)
+        let mut items = Vec::with_capacity(count);
+        let mut wires = Vec::with_capacity(count * 2);
+        for idx in 0..count {
+            let col = i32::try_from(idx % 13).unwrap();
+            let row = i32::try_from(idx / 13).unwrap();
+            let x_grid = (col - 6) * 14;
+            let y_grid = (row - 5) * 6;
+            let p = resistor_part(&mut doc, pt(x_grid, y_grid), &format!("R{idx}"));
+            items.push(ItemId::Part(p));
+            wires.push(Wire {
+                a: pt(x_grid - 6, y_grid),
+                b: pt(x_grid - 2, y_grid),
+            });
+            wires.push(Wire {
+                a: pt(x_grid + 2, y_grid),
+                b: pt(x_grid + 6, y_grid),
+            });
+        }
+        doc.apply(Command::AddWires(wires)).unwrap();
+
+        let stamp = DocStamp {
+            key: 7,
+            revision: doc.revision(),
+        };
+        let mut drag = DragGesture::start(
+            &doc,
+            items.clone(),
+            items[0],
+            pt(0, 0),
+            stamp,
+            WiringPrefs::default(),
+            false,
+        );
+        assert_eq!(
+            drag.preview(),
+            FollowPreview::OverCap {
+                run_count: count * 2
+            }
+        );
+        assert!(drag.affected_wires().is_empty());
+        assert_eq!(drag.plan_calls(), 0);
+
+        drag.set_lifted();
+        let mut expected_hidden = items;
+        expected_hidden.sort_unstable_by_key(|&item| item_sort_key(item));
+        assert_eq!(
+            drag.hidden_items(),
+            expected_hidden.as_slice(),
+            "WK7: over-cap hides dragged items only"
+        );
+
+        for step in 1..=5 {
+            drag.current = pt(0, step);
+            assert!(!drag.update_preview(Some(&doc)));
+            assert!(!drag.set_alt(Some(&doc), step % 2 == 1));
+            assert_eq!(drag.plan_calls(), 0, "WK7: plan_follow skipped over cap");
+        }
+    }
+
+    #[test]
+    fn w2_3_winv5_preview_wires_match_post_commit_across_scenarios_and_junctions() {
+        // TC-move-15: R1 wired through Wire(0) to 3-way junction (0, 0).
+        let mut doc = Doc::new();
+        let r1 = resistor_part(&mut doc, pt(-6, 0), "R1");
+        doc.apply(Command::AddWires(vec![
+            Wire {
+                a: pt(-4, 0),
+                b: pt(0, 0),
+            },
+            Wire {
+                a: pt(0, 0),
+                b: pt(0, 4),
+            },
+            Wire {
+                a: pt(0, 0),
+                b: pt(6, 0),
+            },
+        ]))
+        .unwrap();
+
+        let stamp = DocStamp {
+            key: 2,
+            revision: doc.revision(),
+        };
+        for alt in [false, true] {
+            let mut drag = DragGesture::start(
+                &doc,
+                vec![ItemId::Part(r1)],
+                ItemId::Part(r1),
+                pt(-6, 0),
+                stamp,
+                WiringPrefs::default(),
+                alt,
+            );
+            drag.current = pt(-5, 2);
+            drag.set_lifted();
+            assert!(drag.update_preview(Some(&doc)));
+            assert!(
+                drag.preview_junctions().contains(&pt(0, 0)),
+                "K6: hidden junction dot at (0, 0) must appear in preview_junctions (alt={alt})"
+            );
+
+            let mut visible_wires = drag.preview_wires(&doc);
+            for (id, &w) in doc.wires() {
+                if !drag.hidden_items().contains(&ItemId::Wire(id)) {
+                    visible_wires.push(canonical_wire(w));
+                }
+            }
+            visible_wires.sort_unstable_by_key(|w| ((w.a.x, w.a.y), (w.b.x, w.b.y)));
+
+            let mut committed = doc.fork();
+            let cmd = drag.command(drag.follow_policy(alt)).unwrap();
+            committed.apply(cmd).unwrap();
+            assert_eq!(
+                visible_wires,
+                canonical_wires_in_doc(&committed),
+                "WINV5: preview wires must match committed sheet wires (alt={alt})"
+            );
+        }
     }
 }
