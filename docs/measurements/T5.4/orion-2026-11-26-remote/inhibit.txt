@@ -1,0 +1,6 @@
+PowerManagement.HasInhibit: true
+PolicyAgent.HasInhibition(1): true
+PolicyAgent.HasInhibition(4): true
+Brightness/dimming:
+[01;33m	Brightness control: [0;0msupported, set to 30% and dimming to 100%
+[01;33m	Automatic brightness: [0;0munsupported
