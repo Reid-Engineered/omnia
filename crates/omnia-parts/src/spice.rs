@@ -1219,17 +1219,75 @@ fn blank_assignments(text: &str) -> String {
     blanked
 }
 
+/// Blanks left-hand parameter names on a `.model` tail (`<type> [(] k1=v1 ... [)]`), unwrapping
+/// an outer parenthesized parameter list before [`blank_assignments`] so parameter names inside
+/// `D(IS=1e-12)` are ignored while right-hand expressions like `D(IS={IS_VAL})` remain.
+fn blank_model_assignments(rest: &str) -> String {
+    let mut chars = rest.as_bytes().to_vec();
+    let mut quote: Option<u8> = None;
+    let mut saw_eq = false;
+    let mut open_idx = None;
+    for (i, &c) in chars.iter().enumerate() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => quote = Some(c),
+            b'=' => saw_eq = true,
+            b'(' if !saw_eq => {
+                open_idx = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    if let Some(open) = open_idx {
+        let mut depth = 0i32;
+        let mut close_idx = None;
+        let mut quote: Option<u8> = None;
+        for (i, &c) in chars.iter().enumerate().skip(open) {
+            if let Some(q) = quote {
+                if c == q {
+                    quote = None;
+                }
+                continue;
+            }
+            match c {
+                b'"' | b'\'' => quote = Some(c),
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_idx = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        chars[open] = b' ';
+        if let Some(close) = close_idx {
+            chars[close] = b' ';
+        }
+    }
+    let unwrapped = std::str::from_utf8(&chars).expect("ASCII edits preserve UTF-8");
+    blank_assignments(unwrapped)
+}
+
 /// Candidate references on a logical line, each with the namespace its position allows.
 ///
 /// A subcircuit is referenced only from the subcircuit slot of an `X` line, so a port or node
 /// named like an unrelated `.subckt` never pulls it in (review of #142). Names are skipped by
 /// *position*, never by value (gap 13): the directive keyword or element name (first token),
 /// the name a `.model`/`.subckt`/`.func` line defines (second token), `.subckt` ports and `X`
-/// nodes, and the left-hand side of each depth-0 `name=value` (on `.param` lines, `.subckt` and
-/// `X` parameter lists and element instance parameters). Any other occurrence of the same text
-/// is still a reference, so `D1 a k D1` with a top-level `.model D1` keeps its dependency.
-/// Operands are split coarsely (whitespace, brackets, commas, quotes and `=`) and again on
-/// expression operators.
+/// nodes, and the left-hand side of each depth-0 `name=value` (on `.param` lines, `.subckt`,
+/// `X` and `.model` parameter lists and element instance parameters). Any other occurrence of the
+/// same text is still a reference, so `D1 a k D1` with a top-level `.model D1` keeps its
+/// dependency. Operands are split coarsely (whitespace, brackets, commas, quotes and `=`) and
+/// again on expression operators.
 fn references(code: &str) -> BTreeSet<(String, DefKind)> {
     let toks = tokens(code);
     let head = lc(&toks[0]);
@@ -1255,7 +1313,13 @@ fn references(code: &str) -> BTreeSet<(String, DefKind)> {
                 .unwrap_or(rest.len());
             fragments.push((params_tail(&rest[boundary..]), EXPR));
         }
-        ".model" | ".func" => {
+        ".model" => {
+            fragments.push((
+                blank_model_assignments(after_head(after_head(code))),
+                OPERAND,
+            ));
+        }
+        ".func" => {
             for (i, t) in toks.iter().enumerate().skip(1) {
                 let t = if i == 1 {
                     &t[t.split('(').next().unwrap_or_default().len()..]
@@ -2187,5 +2251,50 @@ mod tests {
             ("b.inc", "* empty\n"),
         ];
         assert_eq!(ok(&files, "A", M).text, ".model A D\n");
+    }
+
+    /// `.model` parameter lists ignore left-hand parameter names while keeping right-hand
+    /// expressions, `AKO:` bases and same-name right-hand references.
+    #[test]
+    fn model_parameters_only_inspect_right_hand_sides() {
+        // Parenthesized parameters do not pull unrelated `.param` names matching LHS keys.
+        let deck = ".param IS=7\n\
+                    .param N=2\n\
+                    .model DIO D(IS=1e-12 N=1.5)\n";
+        let x = ok(&[("a.lib", deck)], "DIO", M);
+        assert_eq!(names(&x), ["model:DIO"]);
+        assert_self_contained(&x);
+
+        // Right-hand expressions ARE pulled in while LHS parameter names are still ignored.
+        let deck = ".param IS=7\n\
+                    .param IS_VAL=1e-12\n\
+                    .model DIO D(IS={IS_VAL} N=1.5)\n";
+        assert_eq!(
+            names(&ok(&[("a.lib", deck)], "DIO", M)),
+            ["param:IS_VAL", "model:DIO"]
+        );
+
+        // Same name on the right-hand side still resolves as a reference.
+        let deck = ".param IS=1e-12\n\
+                    .model DIO D(IS={IS})\n";
+        assert_eq!(
+            names(&ok(&[("a.lib", deck)], "DIO", M)),
+            ["param:IS", "model:DIO"]
+        );
+
+        // Unparenthesized model parameter lists also ignore LHS keys.
+        let deck = ".param IS=7\n\
+                    .model DIO D IS=1e-12\n";
+        assert_eq!(names(&ok(&[("a.lib", deck)], "DIO", M)), ["model:DIO"]);
+
+        // `AKO:` base models still pull in the base while ignoring LHS parameter keys.
+        let deck = ".param IS=7\n\
+                    .model D1 D\n\
+                    .model D2 AKO:D1 (IS=(2*A))\n\
+                    .param A=1e-12\n";
+        assert_eq!(
+            names(&ok(&[("a.lib", deck)], "D2", M)),
+            ["model:D1", "model:D2", "param:A"]
+        );
     }
 }

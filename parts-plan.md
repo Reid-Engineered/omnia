@@ -879,7 +879,7 @@ pub struct Extraction { pub entry: String, pub kind: EntryKind,
                         pub text: String }                   // LF-terminated, PD3
 pub struct Block { pub kind: DefKind, pub name: String, pub file: String,
                    pub line_first: usize, pub line_last: usize }
-pub enum SpiceError { /* file + line for every refusal; `code()` gives a stable short code */ }
+pub enum SpiceError { /* typed refusal carrying path/file/line/offset/entry as applicable; `code()` gives a stable short code */ }
 // Re-exported at the crate root: Deck, DeckSource, DefKind, EntryKind, Extraction, MemSource,
 // SpiceError, extract.
 ```
