@@ -1,0 +1,63 @@
+owner-run: live output /tmp/omnia-t73-live.cFSpBZ; copied to /home/marcus/omnia-t73-owner-20261126T190859Z after the gate
+owner-run: sudo is needed once, now, for the governor and tailscaled
+Place your finger on the fingerprint reader
+Verification timed out
+owner-run: building origin/main 99e122cd0408e6efb2f43fdc9c56825d6bc87854
+   Compiling omnia-doc v0.1.0 (/home/marcus/omnia/crates/omnia-doc)
+   Compiling omnia-symbols v0.1.0 (/home/marcus/omnia/crates/omnia-symbols)
+   Compiling omnia-canvas v0.1.0 (/home/marcus/omnia/crates/omnia-canvas)
+   Compiling omnia-bench v0.1.0 (/home/marcus/omnia/crates/omnia-bench)
+warning: unused variable: `window`
+    --> crates/omnia-bench/src/spike/shell_cache.rs:1657:57
+     |
+1657 |         if let Err(err) = cx.open_window(options, move |window, cx| {
+     |                                                         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_window`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `omnia-bench` (lib) generated 1 warning (run `cargo fix --lib -p omnia-bench` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 38.65s
+owner-run: settling for 60 s, then waiting (up to 15 minutes) for Baloo to be idle
+s100 1/10 10k-pan-inst60
+s100 1/10 10k-pan-inst30
+s100 2/10 10k-pan-inst30
+s100 2/10 10k-pan-inst60
+s100 3/10 10k-pan-inst60
+s100 3/10 10k-pan-inst30
+s100 4/10 10k-pan-inst30
+s100 4/10 10k-pan-inst60
+s100 5/10 10k-pan-inst60
+s100 5/10 10k-pan-inst30
+s100 6/10 10k-pan-inst30
+s100 6/10 10k-pan-inst60
+s100 7/10 10k-pan-inst60
+s100 7/10 10k-pan-inst30
+s100 8/10 10k-pan-inst30
+s100 8/10 10k-pan-inst60
+s100 9/10 10k-pan-inst60
+s100 9/10 10k-pan-inst30
+s100 10/10 10k-pan-inst30
+s100 10/10 10k-pan-inst60
+s125 1/10 10k-pan-inst60
+s125 1/10 10k-pan-inst30
+s125 2/10 10k-pan-inst30
+s125 2/10 10k-pan-inst60
+s125 3/10 10k-pan-inst60
+s125 3/10 10k-pan-inst30
+s125 4/10 10k-pan-inst30
+s125 4/10 10k-pan-inst60
+s125 5/10 10k-pan-inst60
+s125 5/10 10k-pan-inst30
+s125 6/10 10k-pan-inst30
+s125 6/10 10k-pan-inst60
+s125 7/10 10k-pan-inst60
+s125 7/10 10k-pan-inst30
+s125 8/10 10k-pan-inst30
+s125 8/10 10k-pan-inst60
+s125 9/10 10k-pan-inst60
+s125 9/10 10k-pan-inst30
+s125 10/10 10k-pan-inst30
+s125 10/10 10k-pan-inst60
+pass: /tmp/omnia-t73-live.cFSpBZ/gate/summary.txt
+
+owner-run: gate exit 0 (pass)

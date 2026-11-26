@@ -2711,8 +2711,9 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        -- -D warnings`, `cargo clippy -p omnia-bench --all-targets --features
                        scene-counts,readback -- -D warnings`, `cargo deny check`, and `cargo test
                        --workspace` all passed.
-2026-11-26 T7.3 done — Certified T7.3 on the Orion reference machine (`Q4`, `B4`, `B5`, `B9`, `B10`, `INV11`;
-                       Core i5-7300U, HD Graphics 620 Mesa ANV, Linux 7.2.7-arch1-1, KDE Wayland, native
+2026-11-26 T7.3 done — Certified T7.3 on the Orion reference machine (`Q4`, `B4`, `B5`, `B9`, `B10`;
+                       `INV11` stub-only zero-sheet-repaint proven by PR #152 tests; Core i5-7300U,
+                       HD Graphics 620 Mesa ANV, Linux 7.2.7-arch1-1, KDE Wayland, native
                        `eDP-1` 1920×1080 @ 60.008 Hz, AC power, `performance` governor on all 4 CPUs) at
                        clean `origin/main` `99e122c` (binary SHA-256
                        `2c429c3d5e4ddff211a03920c62a520bd092a0aabb6ce3a67ca6f072e544cc96`) via
