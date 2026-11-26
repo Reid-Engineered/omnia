@@ -18,6 +18,7 @@
 //! | [`ToolState::DraggingSegment`] | a left press on a single wire segment in `Tool::Select` without Shift | release (commits one `Command::DragSegment` if accepted or cancels if refused); Esc, a lost release, a fresh press, window deactivation, a document swap or a tool change (no edit) |
 //! | [`ToolState::Placing`] | `Tool::Place(symbol)` | Esc or a tool change; a press and release in the tool request a placement and stay |
 //! | [`ToolState::Wiring`] | `Tool::Wire` (W) | Esc (first drops the start, then leaves the tool) or a tool change |
+//! | [`ToolState::ZoomingArea`] | `Tool::ZoomArea` | left drag with non-zero width and height zooms to fit and returns to `Tool::Select`; click or 1D drag releases without zooming; Esc leaves for `Tool::Select` |
 //!
 //! One gesture owner: [`OverlayView`] holds the only [`ToolMachine`] (it owns the selection
 //! and the pointer). [`SheetCanvas`], the shell-facing canvas, delegates tool, cancel, undo
@@ -69,6 +70,8 @@ pub enum Tool {
     Place(SymbolId),
     /// Placing net labels (W3.6). No gesture yet: the pointer falls through to selection.
     Label,
+    /// Drag a rectangle and animate the camera to fit it (K13, T5.6).
+    ZoomArea,
 }
 
 /// The state's kind, without its data (tests and status).
@@ -79,6 +82,7 @@ pub enum ToolPhase {
     Dragging,
     Placing,
     Wiring,
+    ZoomingArea,
 }
 
 /// The document a gesture was planned against: the host's identity for the document entity
@@ -167,7 +171,34 @@ pub struct WireGesture {
     pub cursor: Option<Pt>,
 }
 
-/// The tool's state (canvas-plan section 5): idle, hovering, dragging, placing, wiring.
+/// `Tool::ZoomArea` state: a dragged world rectangle to fit into the viewport (K13, T5.6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZoomAreaGesture {
+    /// World point where the left button was pressed inside `Tool::ZoomArea`.
+    pub anchor: Option<Pt>,
+    /// Current world point while dragging.
+    pub current: Option<Pt>,
+}
+
+impl ZoomAreaGesture {
+    /// Whether a left press inside `Tool::ZoomArea` is currently dragging.
+    pub fn is_dragging(&self) -> bool {
+        self.anchor.is_some()
+    }
+
+    /// Normalised world rectangle (`min <= max`) while dragging, independent of drag direction.
+    pub fn world_rect(&self) -> Option<Rect> {
+        let (a, b) = (self.anchor?, self.current?);
+        Some(crate::selection::normalize_world_rect(a, b))
+    }
+
+    /// Whether the pointer has moved away from the press point so a zoom box should be drawn.
+    pub fn is_visible(&self) -> bool {
+        matches!((self.anchor, self.current), (Some(a), Some(b)) if a != b)
+    }
+}
+
+/// The tool's state (canvas-plan section 5): idle, hovering, dragging, placing, wiring, zooming.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ToolState {
     #[default]
@@ -178,6 +209,7 @@ pub enum ToolState {
     DraggingSegment(SegmentDragGesture),
     Placing(PlaceGesture),
     Wiring(WireGesture),
+    ZoomingArea(ZoomAreaGesture),
 }
 
 impl ToolState {
@@ -188,11 +220,12 @@ impl ToolState {
             Self::Dragging(_) | Self::DraggingSegment(_) => ToolPhase::Dragging,
             Self::Placing(_) => ToolPhase::Placing,
             Self::Wiring(_) => ToolPhase::Wiring,
+            Self::ZoomingArea(_) => ToolPhase::ZoomingArea,
         }
     }
 }
 
-/// Work the machine cannot finish alone; the host carries it out (seams for T5.3).
+/// Work the machine cannot finish alone; the host carries it out (seams for T5.3, T5.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolRequest {
     /// A press on an item that did not become a drag: make it the only selection, if it
@@ -212,6 +245,8 @@ pub enum ToolRequest {
     /// `Command::Delete` with the current preference (WD10, WQ4, W3.5). T7.1's Cut must do
     /// the same.
     DeleteSelection,
+    /// A rectangle dragged in `Tool::ZoomArea`: animate the camera to fit it (K13, T5.6).
+    ZoomArea(Rect),
 }
 
 /// One gesture's edit, bound to the document it was planned against.
@@ -308,10 +343,22 @@ impl ToolMachine {
         }
     }
 
+    /// Whether the current tool gesture holds pointer capture (a drag or zoom-area drag).
+    pub fn holds_capture(&self) -> bool {
+        self.is_dragging()
+            || matches!(
+                self.state,
+                ToolState::ZoomingArea(zoom) if zoom.is_dragging()
+            )
+    }
+
     /// Whether pointer moves and releases go to the tool instead of hover and selection.
     pub fn routes_pointer(&self) -> bool {
         match &self.state {
-            ToolState::Dragging(_) | ToolState::Placing(_) | ToolState::Wiring(_) => true,
+            ToolState::Dragging(_)
+            | ToolState::Placing(_)
+            | ToolState::Wiring(_)
+            | ToolState::ZoomingArea(_) => true,
             ToolState::DraggingSegment(seg) => seg.is_pointer_drag(),
             ToolState::Idle | ToolState::Hovering(_) => false,
         }
@@ -333,12 +380,13 @@ impl ToolMachine {
                 pressed: false,
                 raw_cursor: None,
             }),
+            Tool::ZoomArea => ToolState::ZoomingArea(ZoomAreaGesture::default()),
         }
     }
 
     /// Returns to the current tool's rest state with no edit.
     fn reset(&mut self) -> ToolOutcome {
-        let release = self.is_dragging();
+        let release = self.holds_capture();
         let next = Self::rest_state(self.tool);
         let changed = self.state != next;
         self.state = next;
@@ -374,6 +422,16 @@ impl ToolMachine {
             ToolState::Placing(place) if place.pressed => {
                 place.pressed = false;
                 ToolOutcome::handled()
+            }
+            ToolState::ZoomingArea(zoom) if zoom.anchor.is_some() => {
+                zoom.anchor = None;
+                zoom.current = None;
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: true,
+                    release: true,
+                    ..ToolOutcome::default()
+                }
             }
             _ => ToolOutcome::default(),
         }
@@ -411,7 +469,7 @@ impl ToolMachine {
         selection: &[ItemId],
         shift: bool,
     ) -> ToolOutcome {
-        let stale = if self.is_dragging() || matches!(self.state, ToolState::DraggingSegment(_)) {
+        let stale = if self.holds_capture() || matches!(self.state, ToolState::DraggingSegment(_)) {
             self.reset()
         } else {
             ToolOutcome::default()
@@ -484,6 +542,16 @@ impl ToolMachine {
                     ToolOutcome::preview()
                 } else {
                     ToolOutcome::handled()
+                }
+            }
+            ToolState::ZoomingArea(zoom) => {
+                zoom.anchor = Some(at);
+                zoom.current = Some(at);
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: true,
+                    capture: true,
+                    ..ToolOutcome::default()
                 }
             }
         };
@@ -560,6 +628,22 @@ impl ToolMachine {
                     handled: true,
                     preview_changed: changed,
                     ..ToolOutcome::default()
+                }
+            }
+            ToolState::ZoomingArea(zoom) => {
+                if zoom.anchor.is_some() {
+                    if !left_held {
+                        return self.pointer_lost();
+                    }
+                    let changed = zoom.current != Some(at);
+                    zoom.current = Some(at);
+                    ToolOutcome {
+                        handled: true,
+                        preview_changed: changed,
+                        ..ToolOutcome::default()
+                    }
+                } else {
+                    ToolOutcome::handled()
                 }
             }
         }
@@ -642,13 +726,33 @@ impl ToolMachine {
                 }
             }
             ToolState::Wiring(_) => ToolOutcome::handled(),
+            ToolState::ZoomingArea(zoom) => {
+                let Some(anchor) = zoom.anchor.take() else {
+                    zoom.current = None;
+                    return ToolOutcome::handled();
+                };
+                zoom.current = None;
+                let rect = crate::selection::normalize_world_rect(anchor, at);
+                let has_area = rect.min.x < rect.max.x && rect.min.y < rect.max.y;
+                if has_area {
+                    self.tool = Tool::Select;
+                    self.state = ToolState::Idle;
+                }
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: true,
+                    release: true,
+                    request: has_area.then_some(ToolRequest::ZoomArea(rect)),
+                    ..ToolOutcome::default()
+                }
+            }
             ToolState::Idle | ToolState::Hovering(_) => ToolOutcome::default(),
         }
     }
 
     /// Esc: ends the innermost gesture without touching the document (INV5). A drag drops
-    /// its preview; placing leaves for `Tool::Select`; wiring first drops its start, then
-    /// leaves. Returns an unhandled outcome when there was nothing to cancel.
+    /// its preview; placing, wiring (after dropping any start), or zoom-area leaves for
+    /// `Tool::Select`. Returns an unhandled outcome when there was nothing to cancel.
     pub fn cancel(&mut self) -> ToolOutcome {
         match &mut self.state {
             ToolState::Dragging(_) | ToolState::DraggingSegment(_) => self.reset(),
@@ -660,6 +764,17 @@ impl ToolMachine {
                 self.tool = Tool::Select;
                 self.state = ToolState::Idle;
                 ToolOutcome::preview()
+            }
+            ToolState::ZoomingArea(zoom) => {
+                let release = zoom.anchor.is_some();
+                self.tool = Tool::Select;
+                self.state = ToolState::Idle;
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: true,
+                    release,
+                    ..ToolOutcome::default()
+                }
             }
             ToolState::Idle | ToolState::Hovering(_) => ToolOutcome::default(),
         }
@@ -739,8 +854,19 @@ pub struct CanvasEdit {
     pub dirty: Option<Rect>,
 }
 
+/// View-animation sync emitted by the gesture owner during `Tool::ZoomArea` (K13, T5.6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CanvasZoomArea {
+    /// A `Tool::ZoomArea` drag started: cancel any in-flight camera animation so both views
+    /// stay anchored to the sheet.
+    Cancel { doc: u64 },
+    /// A `Tool::ZoomArea` drag completed with a 2D rectangle: animate the camera to fit it.
+    Fit { doc: u64, area: Rect },
+}
+
 impl gpui::EventEmitter<CanvasHistoryEvent> for OverlayView {}
 impl gpui::EventEmitter<CanvasEdit> for OverlayView {}
+impl gpui::EventEmitter<CanvasZoomArea> for OverlayView {}
 /// Opaque history event emitted by [`SheetCanvas`] and [`OverlayView`] (contract C2).
 ///
 /// A raw GPUI subscription to this event yields nothing usable: it has no public fields, no
@@ -3068,6 +3194,7 @@ mod tests {
             Drag,
             Band,
             PendingPlace,
+            ZoomArea,
         }
 
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3143,6 +3270,22 @@ mod tests {
             (GestureKind::PendingPlace, EndPath::DropOverlay, 0),
             (GestureKind::PendingPlace, EndPath::Undo, 1),
             (GestureKind::PendingPlace, EndPath::Redo, 1),
+            // ZoomArea paths
+            (GestureKind::ZoomArea, EndPath::Release, 0),
+            (GestureKind::ZoomArea, EndPath::EscCancel, 0),
+            (GestureKind::ZoomArea, EndPath::FreshPress, 0),
+            (GestureKind::ZoomArea, EndPath::LostCapture, 0),
+            (GestureKind::ZoomArea, EndPath::MoveOffSheet, 0),
+            (GestureKind::ZoomArea, EndPath::ToolChange, 0),
+            (GestureKind::ZoomArea, EndPath::WindowDeactivated, 0),
+            (GestureKind::ZoomArea, EndPath::SetDocSome, 0),
+            (GestureKind::ZoomArea, EndPath::SetDocNone, 0),
+            (GestureKind::ZoomArea, EndPath::Attach, 0),
+            (GestureKind::ZoomArea, EndPath::Replace, 0),
+            (GestureKind::ZoomArea, EndPath::Detach, 0),
+            (GestureKind::ZoomArea, EndPath::DropOverlay, 0),
+            (GestureKind::ZoomArea, EndPath::Undo, 1),
+            (GestureKind::ZoomArea, EndPath::Redo, 1),
         ];
 
         for &(kind, path, expected_edits) in cases {
@@ -3219,6 +3362,27 @@ mod tests {
                         )),
                         "{kind:?}/{path:?}"
                     );
+                }
+                GestureKind::ZoomArea => {
+                    vcx.update(|_, cx| {
+                        overlay.update(cx, |o, cx| o.set_tool(Tool::ZoomArea, cx));
+                    });
+                    vcx.run_until_parked();
+                    down(&overlay, vcx, pt(-6, -4));
+                    drag_to(&overlay, vcx, pt(-2, 0));
+                    assert_eq!(
+                        phase(&overlay, vcx),
+                        ToolPhase::ZoomingArea,
+                        "{kind:?}/{path:?}"
+                    );
+                    assert!(
+                        vcx.update(|_, cx| matches!(
+                            overlay.read(cx).tool_state(),
+                            ToolState::ZoomingArea(z) if z.is_dragging() && z.is_visible()
+                        )),
+                        "{kind:?}/{path:?}"
+                    );
+                    assert!(captured(vcx), "{kind:?}/{path:?}: zoom area takes capture");
                 }
             }
 
@@ -3347,13 +3511,23 @@ mod tests {
                     captured(vcx),
                     "C4 ({kind:?}/FreshPress): fresh press on C1 takes its own capture"
                 );
-                assert!(
-                    vcx.update(|_, cx| matches!(
-                        live.read(cx).tool_state(),
-                        ToolState::Dragging(d) if d.pressed == C1
-                    )),
-                    "C4 ({kind:?}/FreshPress): fresh drag is on C1, not the stale gesture"
-                );
+                if kind == GestureKind::ZoomArea {
+                    assert!(
+                        vcx.update(|_, cx| matches!(
+                            live.read(cx).tool_state(),
+                            ToolState::ZoomingArea(z) if z.anchor == Some(pt(6, 0))
+                        )),
+                        "C4 ({kind:?}/FreshPress): fresh zoom area starts at C1, not stale anchor"
+                    );
+                } else {
+                    assert!(
+                        vcx.update(|_, cx| matches!(
+                            live.read(cx).tool_state(),
+                            ToolState::Dragging(d) if d.pressed == C1
+                        )),
+                        "C4 ({kind:?}/FreshPress): fresh drag is on C1, not the stale gesture"
+                    );
+                }
                 assert!(
                     vcx.update(|_, cx| live.read(cx).rubber_band().is_none()),
                     "C4 ({kind:?}/FreshPress): stale rubber band cleared"
@@ -3431,6 +3605,20 @@ mod tests {
                     )),
                     "C4 failed ({kind:?}/{path:?}): pending place press not cleared"
                 );
+                assert!(
+                    vcx.update(|_, cx| !matches!(
+                        live.read(cx).tool_state(),
+                        ToolState::ZoomingArea(z) if z.is_dragging()
+                    )),
+                    "C4 failed ({kind:?}/{path:?}): zoom-area drag state not cleared"
+                );
+                if kind == GestureKind::ZoomArea {
+                    assert_eq!(
+                        vcx.update(|_, cx| live.read(cx).is_animating()),
+                        path == EndPath::Release,
+                        "C4 failed ({kind:?}/{path:?}): only release commits ZoomArea animation"
+                    );
+                }
                 assert!(
                     vcx.update(|_, cx| live
                         .read(cx)
@@ -4572,6 +4760,899 @@ mod tests {
             vec![(WireId(3), del_wire((8, 6), (12, 6)))]
         );
         assert_eq!(rig.history.borrow().len(), 1);
+    }
+
+    // ---- T5.6: SheetCanvas::select_all and Tool::ZoomArea ----
+
+    #[test]
+    fn t5_6_zoom_area_transitions_directions_cancel_and_degenerate() {
+        let doc = test_doc();
+        let mut m = ToolMachine::new();
+
+        // Entering Tool::ZoomArea resets into rest state without capture.
+        let out = m.set_tool(Tool::ZoomArea);
+        assert!(out.handled && out.preview_changed && !out.release && out.commit.is_none());
+        assert_eq!(m.tool(), Tool::ZoomArea);
+        assert_eq!(m.phase(), ToolPhase::ZoomingArea);
+        assert!(m.routes_pointer());
+        assert!(!m.holds_capture());
+        assert!(!m.is_dragging());
+        assert_eq!(
+            m.state(),
+            &ToolState::ZoomingArea(ZoomAreaGesture::default())
+        );
+
+        // Hover, reorient, delete, and stray release at rest are ignored / non-releasing.
+        assert_eq!(m.hover(Some(R1)), ToolOutcome::default());
+        assert_eq!(m.reorient(Orient::ROT_90), ToolOutcome::default());
+        assert_eq!(m.delete(), ToolOutcome::default());
+        let stray = m.pointer_up(pt(0, 0), false);
+        assert!(
+            stray.handled && !stray.release && stray.request.is_none() && stray.commit.is_none()
+        );
+
+        // Redundant switch while already at rest changes no preview.
+        assert!(!m.set_tool(Tool::ZoomArea).preview_changed);
+
+        // Press (even with Shift on top of an item) starts a captured ZoomArea drag.
+        let out = m.pointer_down(&doc, KEY, pt(-6, 0), TOL, &[R1], true);
+        assert!(out.handled && out.preview_changed && out.capture && !out.release);
+        assert!(m.holds_capture());
+        assert!(!m.is_dragging());
+        assert!(matches!(
+            m.state(),
+            ToolState::ZoomingArea(z) if z.is_dragging() && !z.is_visible() && z.world_rect().is_some()
+        ));
+
+        // Moving to the same point changes no preview; moving elsewhere reveals the box with 0 allocs.
+        let same = m.pointer_move(pt(-6, 0), true);
+        assert!(same.handled && !same.preview_changed);
+        let prev = crate::sheet::replace_alloc_counter(Some(0));
+        let moved = m.pointer_move(pt(2, 3), true);
+        let allocs = crate::sheet::replace_alloc_counter(prev).unwrap_or(0);
+        assert!(moved.handled && moved.preview_changed);
+        assert_eq!(allocs, 0, "B10: ZoomArea pointer_move must not allocate");
+        assert!(matches!(
+            m.state(),
+            ToolState::ZoomingArea(z) if z.is_visible() && z.world_rect() == Some(Rect { min: pt(-6, 0), max: pt(2, 3) })
+        ));
+
+        // Moving with left button released cancels via pointer_lost, releasing capture and keeping Tool::ZoomArea.
+        let lost = m.pointer_move(pt(3, 4), false);
+        assert!(lost.handled && lost.preview_changed && lost.release && lost.request.is_none());
+        assert_eq!(
+            (m.tool(), m.phase()),
+            (Tool::ZoomArea, ToolPhase::ZoomingArea)
+        );
+        assert!(!m.holds_capture());
+
+        // All four diagonal drag directions normalise to the exact same ZoomArea rect and return to Select.
+        let expected = Rect {
+            min: pt(-6, -4),
+            max: pt(2, 3),
+        };
+        for (a, b) in [
+            (pt(-6, -4), pt(2, 3)),
+            (pt(2, 3), pt(-6, -4)),
+            (pt(2, -4), pt(-6, 3)),
+            (pt(-6, 3), pt(2, -4)),
+        ] {
+            m.set_tool(Tool::ZoomArea);
+            assert!(m.pointer_down(&doc, KEY, a, TOL, &[], false).capture);
+            assert!(m.pointer_move(b, true).preview_changed);
+            let up = m.pointer_up(b, false);
+            assert!(up.handled && up.preview_changed && up.release && up.commit.is_none());
+            assert_eq!(up.request, Some(ToolRequest::ZoomArea(expected)));
+            assert_eq!((m.tool(), m.phase()), (Tool::Select, ToolPhase::Idle));
+            assert!(!m.holds_capture());
+        }
+
+        // Click without move and 1D drags release capture with no ZoomArea request and stay in Tool::ZoomArea.
+        m.set_tool(Tool::ZoomArea);
+        for (a, b) in [
+            (pt(1, 1), pt(1, 1)),
+            (pt(-4, 2), pt(4, 2)),
+            (pt(3, -5), pt(3, 5)),
+        ] {
+            assert!(m.pointer_down(&doc, KEY, a, TOL, &[], false).capture);
+            m.pointer_move(b, true);
+            let up = m.pointer_up(b, false);
+            assert!(up.handled && up.preview_changed && up.release && up.request.is_none());
+            assert_eq!(
+                (m.tool(), m.phase()),
+                (Tool::ZoomArea, ToolPhase::ZoomingArea)
+            );
+            assert!(!m.holds_capture());
+        }
+
+        // Esc mid-drag releases capture, requests nothing, and leaves for Tool::Select.
+        assert!(
+            m.pointer_down(&doc, KEY, pt(-2, -2), TOL, &[], false)
+                .capture
+        );
+        m.pointer_move(pt(4, 4), true);
+        let cancel_drag = m.cancel();
+        assert!(
+            cancel_drag.handled
+                && cancel_drag.preview_changed
+                && cancel_drag.release
+                && cancel_drag.request.is_none()
+                && cancel_drag.commit.is_none()
+        );
+        assert_eq!((m.tool(), m.phase()), (Tool::Select, ToolPhase::Idle));
+
+        // Esc at rest in Tool::ZoomArea leaves for Tool::Select without release.
+        m.set_tool(Tool::ZoomArea);
+        let cancel_rest = m.cancel();
+        assert!(cancel_rest.handled && cancel_rest.preview_changed && !cancel_rest.release);
+        assert_eq!((m.tool(), m.phase()), (Tool::Select, ToolPhase::Idle));
+
+        // Document replacement mid-drag releases capture and stays in Tool::ZoomArea at rest.
+        m.set_tool(Tool::ZoomArea);
+        assert!(
+            m.pointer_down(&doc, KEY, pt(-1, -1), TOL, &[], false)
+                .capture
+        );
+        let replaced = m.document_replaced();
+        assert!(replaced.handled && replaced.preview_changed && replaced.release);
+        assert_eq!(
+            (m.tool(), m.phase()),
+            (Tool::ZoomArea, ToolPhase::ZoomingArea)
+        );
+        assert!(!m.holds_capture());
+
+        // A fresh press after a lost release resets the stale drag and starts at the new anchor.
+        assert!(
+            m.pointer_down(&doc, KEY, pt(-5, -5), TOL, &[], false)
+                .capture
+        );
+        m.pointer_move(pt(0, 0), true);
+        let fresh = m.pointer_down(&doc, KEY, pt(6, 1), TOL, &[], false);
+        assert!(fresh.handled && fresh.release && fresh.capture && fresh.preview_changed);
+        assert!(matches!(
+            m.state(),
+            ToolState::ZoomingArea(z) if z.anchor == Some(pt(6, 1)) && z.current == Some(pt(6, 1))
+        ));
+    }
+
+    /// Host mounting `SheetCanvas` and its attached `OverlayView` stacked in the same viewport.
+    struct CanvasHost {
+        canvas: Entity<SheetCanvas>,
+        overlay: Entity<OverlayView>,
+    }
+
+    impl gpui::Render for CanvasHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+            use gpui::{ParentElement, StyleRefinement, Styled};
+            gpui::div()
+                .relative()
+                .size_full()
+                .child(
+                    gpui::div().absolute().inset_0().child(
+                        self.canvas
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    ),
+                )
+                .child(gpui::div().absolute().inset_0().child(self.overlay.clone()))
+        }
+    }
+
+    struct CanvasRig<'a> {
+        _host: Entity<CanvasHost>,
+        canvas: Entity<SheetCanvas>,
+        overlay: Entity<OverlayView>,
+        doc: Entity<Doc>,
+        sheet_notifies: Rc<std::cell::Cell<u64>>,
+        selection_events: Rc<std::cell::Cell<u64>>,
+        cx: &'a mut VisualTestContext,
+    }
+
+    fn open_canvas_host(cx: &mut TestAppContext) -> CanvasRig<'_> {
+        cx.update(|cx| cx.bind_keys(standalone_bindings()));
+        let doc = cx.new(|_| test_doc());
+        let doc_clone = doc.clone();
+        let (host, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let overlay =
+                cx.new(|cx| OverlayView::new(doc_clone.clone(), camera.clone(), &GRAPHITE, cx));
+            let canvas = cx.new(|cx| {
+                let mut canvas = SheetCanvas::new(camera, &GRAPHITE, cx).with_doc(doc_clone);
+                canvas.set_overlay(Some(overlay.clone()), cx);
+                canvas
+            });
+            window.activate_window();
+            let focus = overlay.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+            CanvasHost { canvas, overlay }
+        });
+        cx.run_until_parked();
+        let (canvas, overlay) = cx.update(|_, cx| {
+            let h = host.read(cx);
+            (h.canvas.clone(), h.overlay.clone())
+        });
+        let sheet_notifies = Rc::new(std::cell::Cell::new(0u64));
+        let sn = sheet_notifies.clone();
+        let selection_events = Rc::new(std::cell::Cell::new(0u64));
+        let se = selection_events.clone();
+        cx.update(|_, cx| {
+            let sheet = overlay.read(cx).sheet_entity().clone();
+            cx.observe(&sheet, move |_, _| sn.set(sn.get() + 1))
+                .detach();
+            cx.subscribe(
+                &overlay,
+                move |_, event: &crate::overlay::OverlayEvent, _| {
+                    if *event == crate::overlay::OverlayEvent::SelectionChanged {
+                        se.set(se.get() + 1);
+                    }
+                },
+            )
+            .detach();
+        });
+        CanvasRig {
+            _host: host,
+            canvas,
+            overlay,
+            doc,
+            sheet_notifies,
+            selection_events,
+            cx,
+        }
+    }
+
+    fn pump_anim_frame(cx: &mut VisualTestContext, step: std::time::Duration) -> usize {
+        cx.background_executor.advance_clock(step);
+        let scheduled = cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+        scheduled
+    }
+
+    #[gpui::test]
+    fn t5_6_sheet_canvas_select_all_selects_live_items_without_repainting_sheet(
+        cx: &mut TestAppContext,
+    ) {
+        let rig = open_canvas_host(cx);
+        let (canvas, overlay, doc) = (rig.canvas, rig.overlay, rig.doc);
+
+        // Delete R1 first so the part arena has a hole: select_all must collect only live items.
+        rig.cx.update(|window, cx| {
+            overlay.update(cx, |o, cx| o.set_selection([R1], cx));
+            canvas.update(cx, |c, cx| c.delete_selection(window, cx));
+        });
+        rig.cx.run_until_parked();
+
+        let rev0 = revision(&doc, rig.cx);
+        let sheet_paints0 = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let sheet_renders0 = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_render_count(cx));
+        let canvas_renders0 = rig.cx.update(|_, cx| canvas.read(cx).render_count());
+        let notifies0 = rig.sheet_notifies.get();
+        let sel_events0 = rig.selection_events.get();
+
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.select_all(cx)));
+        rig.cx.run_until_parked();
+
+        assert_eq!(
+            rig.cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![
+                C1,
+                ItemId::Wire(WireId(0)),
+                ItemId::Label(omnia_doc::LabelId(0)),
+            ]
+        );
+        assert_eq!(rig.selection_events.get(), sel_events0 + 1);
+        assert_eq!(
+            revision(&doc, rig.cx),
+            rev0,
+            "INV5: select_all makes no doc edit"
+        );
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints0,
+            "INV11: SheetCanvas::select_all must not repaint SheetView"
+        );
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_render_count(cx)),
+            sheet_renders0
+        );
+        assert_eq!(
+            rig.cx.update(|_, cx| canvas.read(cx).render_count()),
+            canvas_renders0
+        );
+        assert_eq!(rig.sheet_notifies.get(), notifies0);
+
+        // Repeating select_all is a no-op with 0 extra events or repaints.
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.select_all(cx)));
+        rig.cx.run_until_parked();
+        assert_eq!(rig.selection_events.get(), sel_events0 + 1);
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints0
+        );
+
+        // Switching to another document and calling select_all selects that document's live items.
+        let doc_b = rig.cx.update(|_, cx| {
+            let d = Doc::from_items(
+                [],
+                [Wire {
+                    a: pt(-2, 0),
+                    b: pt(2, 0),
+                }],
+                [Label {
+                    at: pt(0, 2),
+                    text: "B".into(),
+                }],
+            )
+            .unwrap();
+            cx.new(|_| d)
+        });
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.set_doc(Some(doc_b.clone()), cx)));
+        rig.cx.run_until_parked();
+        let sheet_paints_b = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let notifies_b = rig.sheet_notifies.get();
+        let canvas_renders_b = rig.cx.update(|_, cx| canvas.read(cx).render_count());
+        let sel_events_b = rig.selection_events.get();
+
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.select_all(cx)));
+        rig.cx.run_until_parked();
+        assert_eq!(
+            rig.cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![
+                ItemId::Wire(WireId(0)),
+                ItemId::Label(omnia_doc::LabelId(0)),
+            ]
+        );
+        assert_eq!(rig.selection_events.get(), sel_events_b + 1);
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints_b
+        );
+        assert_eq!(rig.sheet_notifies.get(), notifies_b);
+        assert_eq!(
+            rig.cx.update(|_, cx| canvas.read(cx).render_count()),
+            canvas_renders_b
+        );
+
+        // Mismatched owner and detached canvas ignore select_all without repainting.
+        let doc_c = rig.cx.update(|_, cx| cx.new(|_| test_doc()));
+        rig.cx
+            .update(|_, cx| overlay.update(cx, |o, cx| o.set_document(doc_c, cx)));
+        rig.cx.run_until_parked();
+        let paints_c = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let sel_events_c = rig.selection_events.get();
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.select_all(cx)));
+        rig.cx.run_until_parked();
+        assert!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).selection().is_empty())
+        );
+        assert_eq!(rig.selection_events.get(), sel_events_c);
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints_c
+        );
+
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.set_doc(None, cx)));
+        rig.cx.run_until_parked();
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.select_all(cx)));
+    }
+
+    #[gpui::test]
+    fn t5_6_zoom_area_drag_animates_to_fit_and_keeps_sheet_cached(cx: &mut TestAppContext) {
+        let directions = [
+            (pt(-6, 0), pt(2, 3)),
+            (pt(2, 3), pt(-6, 0)),
+            (pt(2, 0), pt(-6, 3)),
+            (pt(-6, 3), pt(2, 0)),
+        ];
+
+        for (idx, &(p_start, p_end)) in directions.iter().enumerate() {
+            let rig = open_canvas_host(cx);
+            let (canvas, overlay, doc) = (rig.canvas, rig.overlay, rig.doc);
+
+            // Seed selection to ensure ZoomArea neither drags parts nor clears selection.
+            rig.cx
+                .update(|_, cx| overlay.update(cx, |o, cx| o.set_selection([C1], cx)));
+            rig.cx.run_until_parked();
+
+            rig.cx
+                .update(|_, cx| canvas.update(cx, |c, cx| c.set_tool(Tool::ZoomArea, cx)));
+            rig.cx.run_until_parked();
+            assert_eq!(
+                rig.cx.update(|_, cx| canvas.read(cx).tool(cx)),
+                Tool::ZoomArea
+            );
+            assert_eq!(
+                rig.cx.update(|_, cx| overlay.read(cx).tool()),
+                Tool::ZoomArea
+            );
+            assert_eq!(phase(&overlay, rig.cx), ToolPhase::ZoomingArea);
+
+            let rev0 = revision(&doc, rig.cx);
+            let sheet_paints0 = rig
+                .cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+            let notifies0 = rig.sheet_notifies.get();
+            let canvas_renders0 = rig.cx.update(|_, cx| canvas.read(cx).render_count());
+            let overlay_paints0 = rig
+                .cx
+                .update(|_, cx| overlay.read(cx).overlay_paint_count());
+
+            // Unpressed pointer movement in Tool::ZoomArea repaints neither overlay nor sheet.
+            let hover_pt = screen(&overlay, rig.cx, pt(-2, -1));
+            rig.cx
+                .simulate_mouse_move(hover_pt, None, Modifiers::none());
+            assert_eq!(
+                rig.cx
+                    .update(|_, cx| overlay.read(cx).overlay_paint_count()),
+                overlay_paints0
+            );
+            assert_eq!(
+                rig.cx
+                    .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+                sheet_paints0
+            );
+
+            // Compute exact quantized world points corresponding to the simulated screen coordinates.
+            let s_start = screen(&overlay, rig.cx, p_start);
+            let s_end = screen(&overlay, rig.cx, p_end);
+            let expected_cam = rig.cx.update(|_, cx| {
+                let cam = overlay.read(cx).camera();
+                let w0 =
+                    cam.screen_to_world(gpui::point(f64::from(s_start.x), f64::from(s_start.y)));
+                let w1 = cam.screen_to_world(gpui::point(f64::from(s_end.x), f64::from(s_end.y)));
+                let area = crate::selection::normalize_world_rect(w0, w1);
+                crate::camera_anim::fit_area_camera(area, overlay.read(cx).viewport())
+            });
+            assert!(expected_cam.zoom() > 1.0);
+
+            // Drag rectangle across R1's location with several intermediate moves.
+            rig.cx
+                .simulate_mouse_down(s_start, MouseButton::Left, Modifiers::none());
+            assert!(captured(rig.cx), "dir {idx}: ZoomArea drag takes capture");
+            let mid = gpui::point((s_start.x + s_end.x) * 0.5, (s_start.y + s_end.y) * 0.5);
+            rig.cx
+                .simulate_mouse_move(mid, Some(MouseButton::Left), Modifiers::none());
+            rig.cx
+                .simulate_mouse_move(s_end, Some(MouseButton::Left), Modifiers::none());
+
+            assert!(
+                rig.cx.update(|_, cx| matches!(
+                    overlay.read(cx).tool_state(),
+                    ToolState::ZoomingArea(z) if z.is_dragging() && z.is_visible()
+                )),
+                "dir {idx}: zoom rectangle visible during drag"
+            );
+            assert!(
+                rig.cx
+                    .update(|_, cx| overlay.read(cx).overlay_paint_count())
+                    > overlay_paints0,
+                "dir {idx}: overlay painted zoom rectangle"
+            );
+            assert_eq!(
+                rig.cx
+                    .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+                sheet_paints0,
+                "INV11: ZoomArea drag must not repaint SheetView"
+            );
+            assert_eq!(rig.sheet_notifies.get(), notifies0);
+            assert_eq!(
+                rig.cx.update(|_, cx| canvas.read(cx).render_count()),
+                canvas_renders0
+            );
+            assert_eq!(
+                revision(&doc, rig.cx),
+                rev0,
+                "INV5: no doc edit during drag"
+            );
+            assert_eq!(
+                rig.cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+                vec![C1]
+            );
+
+            // Release commits the zoom animation on both OverlayView and SheetCanvas and exits to Select.
+            rig.cx
+                .simulate_mouse_up(s_end, MouseButton::Left, Modifiers::none());
+            rig.cx.run_until_parked();
+            assert!(!captured(rig.cx));
+            assert_eq!(
+                rig.cx.update(|_, cx| canvas.read(cx).tool(cx)),
+                Tool::Select
+            );
+            assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Select);
+            assert!(rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+            assert!(rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+
+            // Step across 150 ms (K13) in 16 ms frames; verify mid-way progress then exact landing.
+            let mut prev_zoom = 1.0;
+            for step in 0..9 {
+                let scheduled = pump_anim_frame(rig.cx, std::time::Duration::from_millis(16));
+                assert!(
+                    scheduled > 0,
+                    "dir {idx} step {step}: animation requests next frame"
+                );
+                let cur_zoom = rig.cx.update(|_, cx| overlay.read(cx).camera().zoom());
+                assert!(
+                    cur_zoom > prev_zoom && cur_zoom < expected_cam.zoom(),
+                    "dir {idx} step {step}: expected monotonic zoom {prev_zoom} < {cur_zoom} < {}",
+                    expected_cam.zoom()
+                );
+                prev_zoom = cur_zoom;
+                assert!(rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+                assert!(rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+            }
+            let _ = pump_anim_frame(rig.cx, std::time::Duration::from_millis(16));
+            assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+            assert!(!rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+
+            rig.cx.update(|_, cx| {
+                let o_cam = overlay.read(cx).camera();
+                let c_cam = canvas.read(cx).camera();
+                assert_eq!(o_cam.zoom(), expected_cam.zoom());
+                assert_eq!(
+                    o_cam.world_to_screen(Pt::ZERO),
+                    expected_cam.world_to_screen(Pt::ZERO)
+                );
+                assert_eq!(o_cam.visible(), expected_cam.visible());
+                assert_eq!(c_cam.zoom(), expected_cam.zoom());
+                assert_eq!(
+                    c_cam.world_to_screen(Pt::ZERO),
+                    expected_cam.world_to_screen(Pt::ZERO)
+                );
+                assert_eq!(c_cam.visible(), expected_cam.visible());
+            });
+
+            // Once complete, idle frames must stay 0 (B8).
+            let paints_done = rig
+                .cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+            let overlay_done = rig
+                .cx
+                .update(|_, cx| overlay.read(cx).overlay_paint_count());
+            assert_eq!(
+                pump_anim_frame(rig.cx, std::time::Duration::from_secs(1)),
+                0
+            );
+            assert_eq!(
+                rig.cx
+                    .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+                paints_done
+            );
+            assert_eq!(
+                rig.cx
+                    .update(|_, cx| overlay.read(cx).overlay_paint_count()),
+                overlay_done
+            );
+            assert_eq!(
+                revision(&doc, rig.cx),
+                rev0,
+                "INV5: ZoomArea never edits document"
+            );
+            assert_eq!(
+                rig.cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+                vec![C1]
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn t5_6_zoom_area_esc_cancel_and_degenerate_drags(cx: &mut TestAppContext) {
+        let rig = open_canvas_host(cx);
+        let (canvas, overlay, doc) = (rig.canvas, rig.overlay, rig.doc);
+        let rev0 = revision(&doc, rig.cx);
+        let initial_cam = rig.cx.update(|_, cx| overlay.read(cx).camera().clone());
+
+        // 1. Cancel mid-drag via SheetCanvas::cancel (shell NavCancel path): 0 SheetView paints.
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.set_tool(Tool::ZoomArea, cx)));
+        let notifies0 = rig.sheet_notifies.get();
+        let sheet_paints0 = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        down(&overlay, rig.cx, pt(-6, -4));
+        drag_to(&overlay, rig.cx, pt(2, 3));
+        assert!(captured(rig.cx));
+        assert!(
+            rig.cx
+                .update(|window, cx| canvas.update(cx, |c, cx| c.cancel(window, cx)))
+        );
+        rig.cx.run_until_parked();
+        assert!(!captured(rig.cx));
+        assert_eq!(
+            rig.cx.update(|_, cx| canvas.read(cx).tool(cx)),
+            Tool::Select
+        );
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert!(!rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+        assert_eq!(rig.sheet_notifies.get(), notifies0);
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints0
+        );
+        // Stray mouse-up after cancel commits no zoom.
+        up(&overlay, rig.cx, pt(2, 3));
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert_eq!(
+            rig.cx.update(|_, cx| overlay.read(cx).camera().zoom()),
+            initial_cam.zoom()
+        );
+
+        // 2. Cancel mid-drag via simulated Escape keystroke (bounded by UG17/UQ15 modality switch).
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.set_tool(Tool::ZoomArea, cx)));
+        down(&overlay, rig.cx, pt(-5, -3));
+        drag_to(&overlay, rig.cx, pt(4, 2));
+        let notifies_before_esc = rig.sheet_notifies.get();
+        let paints_before_esc = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let was_keyboard = rig.cx.update(|window, _| window.last_input_was_keyboard());
+        rig.cx.simulate_keystrokes("escape");
+        let is_keyboard = rig.cx.update(|window, _| window.last_input_was_keyboard());
+        let modality_switches = u64::from(is_keyboard != was_keyboard);
+        assert!(!captured(rig.cx));
+        assert_eq!(
+            rig.cx.update(|_, cx| canvas.read(cx).tool(cx)),
+            Tool::Select
+        );
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert!(!rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+        assert_eq!(rig.sheet_notifies.get(), notifies_before_esc);
+        assert!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx))
+                - paints_before_esc
+                <= modality_switches,
+            "UQ15: only modality switch may paint SheetView on Escape"
+        );
+        up(&overlay, rig.cx, pt(4, 2));
+        assert_eq!(
+            rig.cx.update(|_, cx| overlay.read(cx).camera().zoom()),
+            initial_cam.zoom()
+        );
+
+        // 3. Escape at rest in Tool::ZoomArea returns to Tool::Select.
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.set_tool(Tool::ZoomArea, cx)));
+        let notifies_rest = rig.sheet_notifies.get();
+        rig.cx.simulate_keystrokes("escape");
+        assert_eq!(
+            rig.cx.update(|_, cx| canvas.read(cx).tool(cx)),
+            Tool::Select
+        );
+        assert_eq!(rig.sheet_notifies.get(), notifies_rest);
+
+        // 4. Degenerate click and 1D drags release capture cleanly without zooming, staying in ZoomArea.
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.set_tool(Tool::ZoomArea, cx)));
+        for (a, b) in [
+            (pt(0, 0), pt(0, 0)),
+            (pt(-4, 1), pt(4, 1)),
+            (pt(2, -3), pt(2, 3)),
+        ] {
+            down(&overlay, rig.cx, a);
+            drag_to(&overlay, rig.cx, b);
+            up(&overlay, rig.cx, b);
+            rig.cx.run_until_parked();
+            assert!(!captured(rig.cx));
+            assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+            assert!(!rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+            assert_eq!(
+                rig.cx.update(|_, cx| canvas.read(cx).tool(cx)),
+                Tool::ZoomArea
+            );
+            assert_eq!(
+                rig.cx.update(|_, cx| overlay.read(cx).camera().zoom()),
+                initial_cam.zoom()
+            );
+        }
+        assert_eq!(revision(&doc, rig.cx), rev0, "INV5: document untouched");
+    }
+
+    #[gpui::test]
+    fn t5_6_zoom_area_warm_paint_makes_zero_omnia_allocations(cx: &mut TestAppContext) {
+        struct ZoomAllocScope {
+            counting: std::cell::Cell<bool>,
+            omnia_allocs: std::cell::Cell<usize>,
+            omnia_calls: std::cell::Cell<u32>,
+        }
+
+        impl crate::overlay::OverlayPaintScope for ZoomAllocScope {
+            fn omnia(&self, work: &mut dyn FnMut()) {
+                self.omnia_calls.set(self.omnia_calls.get() + 1);
+                if !self.counting.get() {
+                    work();
+                    return;
+                }
+                let prev = crate::sheet::replace_alloc_counter(Some(0));
+                work();
+                let used = crate::sheet::replace_alloc_counter(prev).unwrap_or(0);
+                self.omnia_allocs.set(self.omnia_allocs.get() + used);
+            }
+
+            fn gpui(&self, work: &mut dyn FnMut()) {
+                if !self.counting.get() {
+                    work();
+                    return;
+                }
+                let paused = crate::sheet::replace_alloc_counter(None);
+                work();
+                crate::sheet::replace_alloc_counter(paused);
+            }
+        }
+
+        let scope = Rc::new(ZoomAllocScope {
+            counting: std::cell::Cell::new(false),
+            omnia_allocs: std::cell::Cell::new(0),
+            omnia_calls: std::cell::Cell::new(0),
+        });
+        let doc = cx.new(|_| test_doc());
+        let scope_trait: Rc<dyn crate::overlay::OverlayPaintScope> = scope.clone();
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = OverlayView::new(doc, camera, &GRAPHITE, cx).with_paint_scope(scope_trait);
+            window.activate_window();
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+        cx.run_until_parked();
+
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_tool(Tool::ZoomArea, cx)));
+        down(&overlay, cx, pt(-6, -4));
+        drag_to(&overlay, cx, pt(-4, -2));
+
+        scope.omnia_allocs.set(0);
+        scope.omnia_calls.set(0);
+        scope.counting.set(true);
+        for step in 1..=8 {
+            drag_to(&overlay, cx, pt(-4 + step, -2 + step));
+        }
+        scope.counting.set(false);
+        assert!(scope.omnia_calls.get() >= 8);
+        assert_eq!(
+            scope.omnia_allocs.get(),
+            0,
+            "B10: warm ZoomArea overlay drag paints must make 0 Omnia heap allocations"
+        );
+    }
+
+    #[gpui::test]
+    fn t5_6_zoom_area_mid_animation_and_doc_switch_guards(cx: &mut TestAppContext) {
+        // 1. Starting a ZoomArea drag cancels in-flight view animations on BOTH OverlayView and
+        // SheetCanvas so cancelling or clicking never leaves the two cameras out of sync.
+        let rig = open_canvas_host(cx);
+        let (canvas, overlay, doc_a) = (rig.canvas, rig.overlay, rig.doc);
+        rig.cx.update(|window, cx| {
+            overlay.update(cx, |o, cx| o.fit_sheet(window, cx));
+            canvas.update(cx, |c, cx| c.fit_sheet(window, cx));
+        });
+        rig.cx.run_until_parked();
+        assert!(pump_anim_frame(rig.cx, std::time::Duration::from_millis(40)) > 0);
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert!(rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+
+        rig.cx
+            .update(|_, cx| canvas.update(cx, |c, cx| c.set_tool(Tool::ZoomArea, cx)));
+        down(&overlay, rig.cx, pt(-6, -4));
+        assert!(
+            !rig.cx.update(|_, cx| overlay.read(cx).is_animating()),
+            "starting ZoomArea drag cancels active overlay animation"
+        );
+        assert!(
+            !rig.cx.update(|_, cx| canvas.read(cx).is_animating()),
+            "starting ZoomArea drag cancels active SheetCanvas animation"
+        );
+
+        // Cancelling with Esc leaves both animations stopped and cameras in sync.
+        rig.cx.simulate_keystrokes("escape");
+        up(&overlay, rig.cx, pt(-6, -4));
+        let _ = pump_anim_frame(rig.cx, std::time::Duration::from_millis(200));
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert!(!rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+        rig.cx.update(|_, cx| {
+            let o_cam = overlay.read(cx).camera();
+            let c_cam = canvas.read(cx).camera();
+            assert_eq!(o_cam.zoom(), c_cam.zoom());
+            assert_eq!(
+                o_cam.world_to_screen(Pt::ZERO),
+                c_cam.world_to_screen(Pt::ZERO)
+            );
+            assert_eq!(o_cam.visible(), c_cam.visible());
+        });
+
+        // A valid drag after cancelling a SheetCanvas animation starts a new synchronized fit.
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| {
+                c.set_tool(Tool::ZoomArea, cx);
+                c.fit_sheet(window, cx);
+            });
+            overlay.update(cx, |o, cx| o.fit_sheet(window, cx));
+        });
+        rig.cx.run_until_parked();
+        assert!(pump_anim_frame(rig.cx, std::time::Duration::from_millis(40)) > 0);
+        assert!(rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+        down(&overlay, rig.cx, pt(-6, -4));
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert!(!rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+        drag_to(&overlay, rig.cx, pt(2, 3));
+        up(&overlay, rig.cx, pt(2, 3));
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert!(rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+
+        // 2. A CanvasZoomArea emitted before a same-update doc switch is dropped by SheetCanvas::accepts.
+        let doc_b = rig.cx.update(|_, cx| cx.new(|_| test_doc()));
+        let doc_c = rig.cx.update(|_, cx| cx.new(|_| test_doc()));
+        let overlay2 = rig.cx.update(|_, cx| {
+            let d = doc_a.clone();
+            cx.new(|cx| {
+                OverlayView::new(
+                    d,
+                    Camera::new(Pt::ZERO, 1.0, Bounds::default()),
+                    &GRAPHITE,
+                    cx,
+                )
+            })
+        });
+        let canvas2 = canvas_for(rig.cx, Some(doc_a), Some(overlay2.clone()));
+        rig.cx
+            .update(|_, cx| canvas2.update(cx, |c, cx| c.set_tool(Tool::ZoomArea, cx)));
+        rig.cx.update(|_, cx| {
+            overlay2.update(cx, |o, cx| {
+                ToolHost::request(
+                    o,
+                    ToolRequest::ZoomArea(Rect {
+                        min: pt(-6, -4),
+                        max: pt(2, 3),
+                    }),
+                    cx,
+                );
+            });
+            canvas2.update(cx, |c, cx| c.set_doc(Some(doc_b), cx));
+        });
+        rig.cx.run_until_parked();
+        assert!(
+            !rig.cx.update(|_, cx| canvas2.read(cx).is_animating()),
+            "stale CanvasZoomArea from doc A must be dropped after switching to doc B"
+        );
+
+        // 3. Mismatched overlay emitting CanvasZoomArea is also ignored by SheetCanvas::accepts.
+        rig.cx
+            .update(|_, cx| overlay2.update(cx, |o, cx| o.set_document(doc_c, cx)));
+        rig.cx.update(|_, cx| {
+            overlay2.update(cx, |o, cx| {
+                ToolHost::request(
+                    o,
+                    ToolRequest::ZoomArea(Rect {
+                        min: pt(-6, -4),
+                        max: pt(2, 3),
+                    }),
+                    cx,
+                );
+            });
+        });
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| canvas2.read(cx).is_animating()));
     }
 
     // ---- W3.3 Segment drag tool simulated-input GPUI tests (WD7, WD11, WINV3, WINV4, INV5, INV11) ----
