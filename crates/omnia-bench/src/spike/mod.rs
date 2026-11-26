@@ -211,6 +211,7 @@ pub fn run_scene(
         frames,
         warmup,
         size,
+        instrument: None,
     })?;
     report["kind"] = json!("spike");
     report["config"]["spike"] = config.json();

@@ -984,6 +984,33 @@ impl Render for SheetCanvas { /* ... */ }
 impl EventEmitter<CanvasEvent> for SheetCanvas {}
 impl EventEmitter<CanvasHistoryEvent> for SheetCanvas {}
 
+// T7.3 (instrument_host.rs): animated instrument stub content only (frame/drag/stacking/focus live in U4.1).
+pub const DEFAULT_INSTRUMENT_SIZE: (f32, f32);              // (576.0, 468.0), UK10
+pub const DEFAULT_TRACE_COLUMNS: usize;                     // 512
+pub enum InstrumentRate { Hz60, Hz30 }
+pub fn frame_stride(refresh_interval: Option<Duration>, rate: InstrumentRate) -> u32;
+pub trait InstrumentPaintScope { fn omnia(&self, work: &mut dyn FnMut()); fn gpui(&self, work: &mut dyn FnMut()); }
+pub struct InstrumentStub { /* theme, rate, columns, running, tick, render/paint counters */ }
+impl InstrumentStub {
+    pub fn new(theme: &'static Theme) -> Self;
+    pub fn with_rate(self, rate: InstrumentRate) -> Self;
+    pub fn with_columns(self, columns: usize) -> Self;
+    pub fn with_running(self, running: bool) -> Self;
+    pub fn with_paint_scope(self, scope: Rc<dyn InstrumentPaintScope>) -> Self;
+    pub fn set_paint_scope(&mut self, scope: Option<Rc<dyn InstrumentPaintScope>>);
+    pub fn theme(&self) -> &'static Theme;
+    pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
+    pub fn rate(&self) -> InstrumentRate;
+    pub fn set_rate(&mut self, rate: InstrumentRate, cx: &mut Context<Self>);
+    pub fn is_running(&self) -> bool;
+    pub fn set_running(&mut self, running: bool, cx: &mut Context<Self>);
+    pub fn tick_count(&self) -> u64;
+    pub fn render_count(&self) -> u64;
+    pub fn paint_count(&self) -> u64;
+    pub fn phase_rad(&self) -> f64;
+    pub fn paint_quads(&self, bounds: Bounds<Pixels>, scale_factor: f32, sink: impl FnMut(PaintQuad));
+}
+
 // ---- omnia-bench ----
 pub struct CountingAlloc;                                  // #[global_allocator]
 pub fn count_allocs<R>(f: impl FnOnce() -> R) -> (R, u64);
@@ -1024,8 +1051,8 @@ Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 
 | Command | Reports |
 | --- | --- |
-| `bench run --sheet S --script pan\|zoom\|drag-part\|drag-wire\|hover [--frames 600]` | Frame, draw and dirty-to-present ms (p50, p95, p99, max); `allocs_per_frame` (ours, total); `memory_mb`; primitive counts by kind (build with `--features scene-counts`, which needs GPUI's `bench-support`) |
-| `bench run --headless --sheet S --script pan\|zoom` | Peak and sweep-wide primitive counts and Omnia allocations per frame over the script on the test platform (build with `--features headless`). No frame-time metrics. |
+| `bench run --sheet S --script pan\|zoom\|drag-part\|drag-wire\|hover [--instrument [--instrument-hz 60\|30]] [--frames 600]` | Frame, draw and dirty-to-present ms (p50, p95, p99, max); `allocs_per_frame` (ours, total); `memory_mb`; primitive counts by kind (build with `--features scene-counts`, which needs GPUI's `bench-support`) |
+| `bench run --headless --sheet S --script pan\|zoom [--instrument [--instrument-hz 60\|30]]` | Peak and sweep-wide primitive counts and Omnia allocations per frame over the script on the test platform (build with `--features headless`). No frame-time metrics. |
 | `bench start [--sheet S] [--runs 10]` | Process start to first interactive frame, median and max |
 | `bench idle --seconds N` | Frames drawn; CPU percent |
 | `bench hit --sheet S` | Hit-test time, p50 and p99 |

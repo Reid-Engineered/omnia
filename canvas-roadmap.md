@@ -646,9 +646,9 @@ of the `canvas` lane.
 - Done when: two unconnected wires given the same label share a `NetId`, and separate again
   when one label is deleted (INV10 holds).
 
-### T7.3 Instrument window stub · todo
+### T7.3 Instrument window stub · needs-human
 - Lane: canvas · Depends: T6.4 · Read: plan section 6 (last paragraph), G6, ui-plan.md UD5
-- Owns: `crates/omnia-canvas/src/instrument_host.rs`
+- Owns: `crates/omnia-canvas/src/instrument_host.rs` (coordinator-widened 2026-11-26: re-exports in `crates/omnia-canvas/src/lib.rs`, `bench --instrument` CLI/harness/headless across `crates/omnia-bench/src/{harness.rs,main.rs,scripts.rs,drag_part.rs,drag_wire.rs,spike/mod.rs}`, `canvas-plan.md` §9, and Orion gate/diagnostics under `docs/measurements/T7.3.md` and `docs/measurements/T7.3/`)
 - Do: the floating frame, drag, stacking and focus come from [ui-roadmap.md](ui-roadmap.md)
   U4.1 (which `ui-roadmap.md` U5.5 mounts inside the frame); `instrument_host.rs` holds only
   the animated stub content (an animated trace notifying itself at 60 Hz). Add
@@ -2637,3 +2637,36 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        Verified all five standard checks on Windows after review fixes (incl. two-pass
                        designators, strict-interior wire splits, labelled-group connectivity/isolation, strict
                        proptest error check, and post-paste selection GPUI test).
+2026-11-26 T7.3 needs-human — Implemented the animated instrument stub content (`T7.3`, `G5`,
+                       `G6`, `G8`, `G16`, `D7`, `B8`, `B10`, `INV6`, `INV11`, `Q2`, `Q5`,
+                       `UD5`, `UK10`, `UQ6`). Added `crates/omnia-canvas/src/instrument_host.rs`
+                       (`InstrumentStub`, `InstrumentRate::{Hz60, Hz30}`, `frame_stride`,
+                       `InstrumentPaintScope`, `DEFAULT_INSTRUMENT_SIZE` standalone bench
+                       content size matching `UK10`, `DEFAULT_TRACE_COLUMNS`, re-exported from
+                       `crates/omnia-canvas/src/lib.rs`) holding only the animated dual-trace
+                       stub content (no `U4.1` frame, drag, stacking, or focus), using
+                       `omnia-theme` tokens exclusively (`INV6`) and GPUI `on_next_frame`
+                       self-notification at `frame_stride` while skipping `SheetView` repaints
+                       (`INV11`, proven in `CachedSheet` and `OverlayView` tests at 60/30 Hz
+                       plus `B8` idle stop). Deviation (`INV6`/`Q2`/`UQ6`): `omnia-theme` does
+                       not yet define `instrument/grid` or `instrument/grid-axis` tokens, so
+                       grid lines scale `stage_tag_text` alpha instead of using colour literals;
+                       follow-up logged for the theme lane to add dedicated grid tokens. Wired
+                       `bench run --script pan --instrument [--instrument-hz 60|30]` (native and
+                       `--headless`) across `crates/omnia-bench/src/{harness,main,scripts}.rs`
+                       (plus `RunConfig` literals in `spike/mod.rs`, `drag_part.rs`,
+                       `drag_wire.rs`) and updated `canvas-plan.md` §9 (both native and
+                       `--headless` rows). Added Orion scripts in
+                       `docs/measurements/T7.3/{gate.py,test_gate.py,owner-run.sh}` matching
+                       `T6.4`'s `busy_processes` and single-line tail, separating `T7.3`
+                       done-when verdicts from additional `B4`/`B5`/`B9`/`B10` verdicts, and
+                       noting Orion execution runs only after PR #152 merges. Non-reference
+                       Windows diagnostics in `docs/measurements/T7.3.md` (`ASUS TUF Gaming F16`,
+                       i7-14650HX, Intel UHD `32.0.101.7088`, Windows 11 `26200.9974`, `1536×864`
+                       @ 1.25x, 165 Hz, AC `Silent`): `10k-pan` baseline `frame_ms` p99
+                       `2.284 ms` (`ours = 0`), `10k-pan --instrument` 60 Hz (`stride = 3`, `200`
+                       paints) p99 `2.390 ms` (`ours = 0`), 30 Hz (`stride = 6`, `100` paints) p99
+                       `1.417 ms` (`ours = 0`); traced 60 Hz run passed `attribute.py` at both
+                       `1.5R` and `2.5R` (`counted = 0`). Left `needs-human` awaiting Orion
+                       reference certification (`< 16 ms` p99, `Q4`) via
+                       `docs/measurements/T7.3/owner-run.sh`.

@@ -8,16 +8,16 @@ use crate::drag_segment::build_drag_segment_plan;
 use crate::drag_wire::{WireSnapCounters, build_wire_plan, mouse_left_up};
 use crate::driver::Script;
 use crate::generate::generate;
-use crate::harness::{RunConfig, primitive_counts};
+use crate::harness::{BenchInstrumentScope, RunConfig, primitive_counts};
 use crate::hover::{BenchOverlayScope, build_hover_targets, mouse_move};
 use crate::scene::{BenchScene, STRESS_SEED, SceneElement, Sheet};
 use crate::stats::Summary;
 use gpui::{
-    AppContext, Bounds, Context, IntoElement, Render, TestApp, Window, WindowBounds, WindowOptions,
-    point, px, size,
+    AppContext, Bounds, Context, Entity, IntoElement, ParentElement, Render, StyleRefinement,
+    Styled, TestApp, Window, WindowBounds, WindowOptions, div, point, px, size,
 };
 use omnia_canvas::{
-    Camera as SheetCamera, OverlayView,
+    Camera as SheetCamera, DEFAULT_INSTRUMENT_SIZE, InstrumentStub, OverlayView, frame_stride,
     tool::{Tool, ToolState},
 };
 use omnia_doc::{ItemId, Pt};
@@ -33,14 +33,35 @@ struct ScriptView {
     frame: Rc<Cell<u32>>,
     scene: Rc<RefCell<dyn BenchScene>>,
     paint_time: Rc<Cell<Option<Duration>>>,
+    instrument: Option<Entity<InstrumentStub>>,
 }
 
 impl Render for ScriptView {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        SceneElement {
+        let base = SceneElement {
             scene: self.scene.clone(),
             camera: ours(|| self.script.camera(self.frame.get())),
             paint_time: self.paint_time.clone(),
+        };
+        if let Some(instrument) = &self.instrument {
+            let (stub_w, stub_h) = DEFAULT_INSTRUMENT_SIZE;
+            div()
+                .relative()
+                .size_full()
+                .child(base)
+                .child(
+                    instrument.clone().cached(
+                        StyleRefinement::default()
+                            .absolute()
+                            .right(px(20.0))
+                            .top(px(20.0))
+                            .w(px(stub_w))
+                            .h(px(stub_h)),
+                    ),
+                )
+                .into_any_element()
+        } else {
+            base.into_any_element()
         }
     }
 }
@@ -72,6 +93,7 @@ pub fn run_headless(config: RunConfig) -> Result<Value, String> {
     let frame = Rc::new(Cell::new(0));
     let paint_time = Rc::new(Cell::new(None));
     let mut app = TestApp::new();
+    let mut instrument_entity = None;
     let mut window = app.open_window_with_options(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -80,21 +102,49 @@ pub fn run_headless(config: RunConfig) -> Result<Value, String> {
             ))),
             ..Default::default()
         },
-        |_, _| ScriptView {
-            script: config.script,
-            frame: frame.clone(),
-            scene,
-            paint_time: paint_time.clone(),
+        |_, cx| {
+            let instrument = config.instrument.map(|rate| {
+                cx.new(|_| {
+                    InstrumentStub::new(&GRAPHITE)
+                        .with_rate(rate)
+                        .with_paint_scope(Rc::new(BenchInstrumentScope))
+                })
+            });
+            instrument_entity = instrument.clone();
+            ScriptView {
+                script: config.script,
+                frame: frame.clone(),
+                scene,
+                paint_time: paint_time.clone(),
+                instrument,
+            }
         },
     );
     let scale_factor = window.update(|_, window, _| window.scale_factor());
     let mut ours_per_frame = Vec::with_capacity(config.frames as usize);
     let mut peak_primitives = BTreeMap::<String, u64>::new();
     let mut sweep_primitives = BTreeMap::<String, u64>::new();
+    let mut inst_paints_start = 0u64;
+    let mut inst_renders_start = 0u64;
+    let mut inst_ticks_start = 0u64;
     for frame_index in 0..end {
+        if frame_index == config.warmup
+            && let Some(stub) = &instrument_entity
+        {
+            (inst_paints_start, inst_renders_start, inst_ticks_start) =
+                window.update(|_, _, cx| {
+                    let s = stub.read(cx);
+                    (s.paint_count(), s.render_count(), s.tick_count())
+                });
+        }
         frame.set(frame_index);
         paint_time.set(None);
         let before = AllocCounts::now();
+        if instrument_entity.is_some() && frame_index > 0 {
+            window.update(|_, window, cx| {
+                window.simulate_next_frame(cx);
+            });
+        }
         window.draw();
         if paint_time.get().is_none() {
             return Err(format!("headless frame {frame_index} did not paint"));
@@ -113,17 +163,22 @@ pub fn run_headless(config: RunConfig) -> Result<Value, String> {
         }
     }
     let sweep_total: u64 = sweep_primitives.values().sum();
-    Ok(json!({
+    let mut cfg = json!({
+        "sheet": config.sheet.name(),
+        "script": config.script.name(),
+        "frames": config.frames,
+        "warmup": config.warmup,
+        "window_logical": [config.size.0, config.size.1],
+        "scale_factor": scale_factor,
+    });
+    if let Some(rate) = config.instrument {
+        cfg["instrument"] = json!(true);
+        cfg["instrument_hz"] = json!(rate.hz());
+    }
+    let mut report = json!({
         "schema": SCHEMA,
         "kind": "headless-run",
-        "config": {
-            "sheet": config.sheet.name(),
-            "script": config.script.name(),
-            "frames": config.frames,
-            "warmup": config.warmup,
-            "window_logical": [config.size.0, config.size.1],
-            "scale_factor": scale_factor,
-        },
+        "config": cfg,
         "environment": { "platform": "gpui-test", "os": std::env::consts::OS },
         "scene_details": scene_details,
         "metrics": {
@@ -134,7 +189,28 @@ pub fn run_headless(config: RunConfig) -> Result<Value, String> {
                 "sweep_total": sweep_total,
             },
         },
-    }))
+    });
+    if let (Some(rate), Some(stub)) = (config.instrument, &instrument_entity) {
+        let (paints, renders, ticks, stride) = window.update(|_, window, cx| {
+            let s = stub.read(cx);
+            (
+                s.paint_count().saturating_sub(inst_paints_start),
+                s.render_count().saturating_sub(inst_renders_start),
+                s.tick_count().saturating_sub(inst_ticks_start),
+                frame_stride(window.refresh_interval(cx), rate),
+            )
+        });
+        let (stub_w, stub_h) = DEFAULT_INSTRUMENT_SIZE;
+        report["instrument"] = json!({
+            "hz": rate.hz(),
+            "stride": stride,
+            "paints": paints,
+            "renders": renders,
+            "ticks": ticks,
+            "size_logical": [stub_w, stub_h],
+        });
+    }
+    Ok(report)
 }
 
 struct HeadlessHoverView {
@@ -901,4 +977,50 @@ fn run_headless_drag_wire(
             },
         },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::generate::StressSheet;
+    use omnia_canvas::{DEFAULT_TRACE_COLUMNS, InstrumentRate};
+
+    #[test]
+    fn headless_pan_with_instrument_60hz_and_30hz_allocates_zero_and_paints_on_cadence() {
+        let base_cfg = RunConfig {
+            sheet: Sheet::Stress(StressSheet::Parts100),
+            script: Script::Pan,
+            frames: 30,
+            warmup: 10,
+            size: (1280.0, 800.0),
+            instrument: None,
+        };
+        let base = run_headless(base_cfg).expect("headless base pan");
+        assert!(base["config"].get("instrument").is_none());
+        assert!(base.get("instrument").is_none());
+        let base_peak_quads = base["metrics"]["primitives"]["peak"]["quads"]
+            .as_u64()
+            .unwrap();
+
+        let stub_quads = 1 + 9 + 7 + 2 * DEFAULT_TRACE_COLUMNS as u64;
+        for (rate, expected_paints) in [(InstrumentRate::Hz60, 30u64), (InstrumentRate::Hz30, 15)] {
+            let report = run_headless(RunConfig {
+                instrument: Some(rate),
+                ..base_cfg
+            })
+            .expect("headless pan with instrument");
+            assert_eq!(report["config"]["instrument"], json!(true));
+            assert_eq!(report["config"]["instrument_hz"], json!(rate.hz()));
+            assert_eq!(report["metrics"]["allocs_per_frame"]["ours"]["max"], 0.0);
+            assert_eq!(report["instrument"]["hz"], json!(rate.hz()));
+            assert_eq!(report["instrument"]["paints"], json!(expected_paints));
+            assert_eq!(report["instrument"]["ticks"], json!(expected_paints));
+            assert_eq!(
+                report["metrics"]["primitives"]["peak"]["quads"]
+                    .as_u64()
+                    .unwrap(),
+                base_peak_quads + stub_quads
+            );
+        }
+    }
 }

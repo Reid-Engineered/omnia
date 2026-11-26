@@ -872,6 +872,7 @@ mod tests {
             frames: 30,
             warmup: 10,
             size: (1280.0, 800.0),
+            instrument: None,
         };
         let report = crate::scripts::run_headless(config).expect("headless drag-part");
         assert_eq!(report["config"]["script"], "drag-part");

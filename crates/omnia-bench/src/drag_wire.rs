@@ -1052,6 +1052,7 @@ mod tests {
                 frames: 30,
                 warmup: 30,
                 size: (1280.0, 800.0),
+                instrument: None,
             };
             let report = crate::scripts::run_headless(config)
                 .unwrap_or_else(|e| panic!("headless drag-wire on {sheet:?}: {e}"));
