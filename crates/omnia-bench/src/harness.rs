@@ -4,15 +4,19 @@
 //! a watchdog thread exits the process if a run stalls (for example a minimised window that
 //! stops receiving frame requests).
 
-use crate::alloc::{self, AllocCounts, ours};
+use crate::alloc::{self, AllocCounts, not_ours, ours};
 use crate::compare::SCHEMA;
 use crate::driver::{Camera, Script};
 use crate::scene::{BenchScene, PAPER, SceneElement, Sheet};
 use crate::stats::{self, Summary, round};
 use crate::sys;
 use gpui::{
-    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, FrameDurationSnapshot,
-    IntoElement, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Context, Entity,
+    FrameDurationSnapshot, IntoElement, Render, Window, WindowBounds, WindowOptions, div,
+    prelude::*, px, rgb, size,
+};
+use omnia_canvas::{
+    DEFAULT_INSTRUMENT_SIZE, InstrumentPaintScope, InstrumentRate, InstrumentStub, frame_stride,
 };
 use serde_json::{Map, Value, json};
 use std::cell::{Cell, RefCell};
@@ -153,11 +157,13 @@ pub struct RunConfig {
     pub warmup: u32,
     /// Window content size, in logical pixels.
     pub size: (f32, f32),
+    /// T7.3: optional animated instrument stub hosted above the sheet (`--instrument`).
+    pub instrument: Option<InstrumentRate>,
 }
 
 impl RunConfig {
     fn to_json(self) -> Value {
-        json!({
+        let mut cfg = json!({
             "sheet": self.sheet.name(),
             "script": self.script.name(),
             "frames": self.frames,
@@ -165,7 +171,24 @@ impl RunConfig {
             "window_logical": [self.size.0, self.size.1],
             // Reports with and without primitive counts are not comparable.
             "scene_counts": cfg!(feature = "scene-counts"),
-        })
+        });
+        if let Some(rate) = self.instrument {
+            cfg["instrument"] = json!(true);
+            cfg["instrument_hz"] = json!(rate.hz());
+        }
+        cfg
+    }
+}
+
+pub(crate) struct BenchInstrumentScope;
+
+impl InstrumentPaintScope for BenchInstrumentScope {
+    fn omnia(&self, work: &mut dyn FnMut()) {
+        ours(work);
+    }
+
+    fn gpui(&self, work: &mut dyn FnMut()) {
+        not_ours(work);
     }
 }
 
@@ -201,6 +224,10 @@ fn after_frame(frame: u32, warmup: u32, frames: u32) -> AfterFrame {
 struct RunView {
     config: RunConfig,
     cached: Option<gpui::Entity<CachedSheet>>,
+    instrument: Option<Entity<InstrumentStub>>,
+    instrument_paints_start: u64,
+    instrument_renders_start: u64,
+    instrument_ticks_start: u64,
     scene: Option<Rc<RefCell<dyn BenchScene>>>,
     /// Index of the frame being rendered, from 0.
     frame: u32,
@@ -258,6 +285,12 @@ impl Render for RunView {
                     let baseline = window.frame_duration_snapshot();
                     view.update(cx, |view, cx| {
                         view.baseline = Some(baseline);
+                        if let Some(stub) = &view.instrument {
+                            let s = stub.read(cx);
+                            view.instrument_paints_start = s.paint_count();
+                            view.instrument_renders_start = s.render_count();
+                            view.instrument_ticks_start = s.tick_count();
+                        }
                         cx.notify();
                     });
                 });
@@ -265,6 +298,9 @@ impl Render for RunView {
             AfterFrame::Report => {
                 let report = self.report(window, cx);
                 *self.outcome.borrow_mut() = Some(report);
+                if let Some(stub) = &self.instrument {
+                    stub.update(cx, |s, cx| s.set_running(false, cx));
+                }
                 window.on_next_frame(|_, cx| cx.quit());
             }
             AfterFrame::Stop => {}
@@ -300,7 +336,26 @@ impl Render for RunView {
                 )
                 .into_any_element();
         }
-        content(self.config.sheet, &self.scene, camera, &self.paint_time)
+        let base = content(self.config.sheet, &self.scene, camera, &self.paint_time);
+        if let Some(instrument) = &self.instrument {
+            let (stub_w, stub_h) = DEFAULT_INSTRUMENT_SIZE;
+            return div()
+                .relative()
+                .size_full()
+                .child(base)
+                .child(
+                    instrument.clone().cached(
+                        gpui::StyleRefinement::default()
+                            .absolute()
+                            .right(px(20.0))
+                            .top(px(20.0))
+                            .w(px(stub_w))
+                            .h(px(stub_h)),
+                    ),
+                )
+                .into_any_element();
+        }
+        base
     }
 }
 
@@ -513,7 +568,37 @@ impl RunView {
             (_, Some(_)) => "every-frame",
             (_, None) => "none",
         };
-        build_run_report(RunReportInput {
+        let mut extra_warnings = Vec::new();
+        let instrument_summary = if let (Some(rate), Some(stub)) =
+            (self.config.instrument, &self.instrument)
+        {
+            let s = stub.read(cx);
+            let paints = s.paint_count().saturating_sub(self.instrument_paints_start);
+            let renders = s
+                .render_count()
+                .saturating_sub(self.instrument_renders_start);
+            let ticks = s.tick_count().saturating_sub(self.instrument_ticks_start);
+            let stride = frame_stride(window.refresh_interval(cx), rate);
+            let min_expected = u64::from(self.config.frames / stride);
+            if paints < min_expected || ticks < min_expected {
+                extra_warnings.push(format!(
+                    "instrument stub animated {paints} paints / {ticks} ticks across {} frames (stride {stride}, expected >= {min_expected})",
+                    self.config.frames
+                ));
+            }
+            let (stub_w, stub_h) = DEFAULT_INSTRUMENT_SIZE;
+            Some(json!({
+                "hz": rate.hz(),
+                "stride": stride,
+                "paints": paints,
+                "renders": renders,
+                "ticks": ticks,
+                "size_logical": [stub_w, stub_h],
+            }))
+        } else {
+            None
+        };
+        let mut report = build_run_report(RunReportInput {
             config: self.config,
             scene_details: self.scene.as_ref().map(|s| s.borrow().details()),
             window,
@@ -527,8 +612,12 @@ impl RunView {
             started: self.started,
             trace: self.trace.as_mut(),
             extra_metrics: Map::new(),
-            extra_warnings: Vec::new(),
-        })
+            extra_warnings,
+        })?;
+        if let Some(instrument) = instrument_summary {
+            report["instrument"] = instrument;
+        }
+        Ok(report)
     }
 }
 
@@ -598,9 +687,20 @@ pub fn run(config: RunConfig) -> Result<Value, String> {
             let trace = tracing.then(|| crate::trace::FrameTrace::new(cx));
             // Diagnostic only; one sample per paint, warm-up included (paint_probe.rs).
             crate::paint_probe::enable((config.warmup + config.frames) as usize + 64);
+            let instrument = config.instrument.map(|rate| {
+                cx.new(|_| {
+                    InstrumentStub::new(&omnia_theme::GRAPHITE)
+                        .with_rate(rate)
+                        .with_paint_scope(Rc::new(BenchInstrumentScope))
+                })
+            });
             cx.new(|_| RunView {
                 config,
                 cached: None,
+                instrument,
+                instrument_paints_start: 0,
+                instrument_renders_start: 0,
+                instrument_ticks_start: 0,
                 scene: config.sheet.scene(),
                 frame: 0,
                 baseline: None,
@@ -876,5 +976,55 @@ mod tests {
         assert_eq!(after_frame(0, 1, 1), BaselineThenDraw);
         assert_eq!(after_frame(1, 1, 1), Draw);
         assert_eq!(after_frame(2, 1, 1), Report);
+    }
+
+    #[test]
+    fn instrument_stub_paint_makes_zero_warm_allocations() {
+        let stub = InstrumentStub::new(&omnia_theme::GRAPHITE);
+        let bounds = Bounds::new(
+            gpui::point(px(20.0), px(20.0)),
+            size(px(DEFAULT_INSTRUMENT_SIZE.0), px(DEFAULT_INSTRUMENT_SIZE.1)),
+        );
+        let mut count = 0u64;
+        stub.paint_quads(bounds, 1.0, |_| count += 1);
+        assert!(count > 0);
+        for scale in [1.0f32, 1.25, 1.5] {
+            for _ in 0..60 {
+                let (_, allocs) = crate::count_allocs(|| {
+                    stub.paint_quads(bounds, scale, |_| {});
+                });
+                assert_eq!(
+                    allocs, 0,
+                    "B10: instrument stub paint allocated at scale {scale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn run_config_json_omits_instrument_unless_enabled() {
+        let base = RunConfig {
+            sheet: Sheet::Empty,
+            script: Script::Pan,
+            frames: 600,
+            warmup: 600,
+            size: (1920.0, 1080.0),
+            instrument: None,
+        }
+        .to_json();
+        assert!(base.get("instrument").is_none());
+        assert!(base.get("instrument_hz").is_none());
+
+        let inst = RunConfig {
+            sheet: Sheet::Empty,
+            script: Script::Pan,
+            frames: 600,
+            warmup: 600,
+            size: (1920.0, 1080.0),
+            instrument: Some(InstrumentRate::Hz30),
+        }
+        .to_json();
+        assert_eq!(inst["instrument"], json!(true));
+        assert_eq!(inst["instrument_hz"], json!(30));
     }
 }

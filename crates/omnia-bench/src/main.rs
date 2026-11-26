@@ -18,7 +18,7 @@ const USAGE: &str = "\
 usage: bench <command> [options]
 
   run     [--sheet S] [--script pan|zoom|hover|drag-part|drag-segment|drag-wire] [--frames 600] [--warmup 60]
-          [--size 1280x800] [--headless] [--json FILE]
+          [--size 1280x800] [--instrument [--instrument-hz 60|30]] [--headless] [--json FILE]
   spike   s1..s6|s8 [--count N] [--mode fixed|sweep|square|rounded|sprite|direct|direct-sweep|cached|repaint|quality|monitors|displays]\n          [--frames 600] [--warmup 60] [--size 3072x1728] [--json FILE]\n  start   [--sheet empty|t01|placeholder] [--runs 10] [--size 960x640] [--json FILE]
   idle    [--sheet empty|t01|placeholder] [--seconds 10] [--settle-ms 1000] [--size 960x640] [--json FILE]
   hit     [--sheet 10k|1k|100|dense|text] [--samples 20000] [--seed 42] [--snap] [--json FILE]
@@ -161,11 +161,31 @@ fn positive(name: &str, value: u32) -> Result<u32, Failure> {
 fn cmd_run(args: impl Iterator<Item = String>) -> Result<(), Failure> {
     let args = usage(Args::parse_with_flags(
         args,
-        &["sheet", "script", "frames", "warmup", "size", "json"],
-        &["headless"],
+        &[
+            "sheet",
+            "script",
+            "frames",
+            "warmup",
+            "size",
+            "instrument-hz",
+            "json",
+        ],
+        &["headless", "instrument"],
     ))?;
     usage(args.no_positionals())?;
     let size = usage(parse_size(args.get("size").unwrap_or("1280x800")))?;
+    let instrument = if args.flag("instrument") {
+        let hz = usage(args.number("instrument-hz", 60u32))?;
+        let rate = omnia_canvas::InstrumentRate::from_hz(hz)
+            .ok_or_else(|| Failure::Usage("--instrument-hz must be 30 or 60".into()))?;
+        Some(rate)
+    } else if args.get("instrument-hz").is_some() {
+        return Err(Failure::Usage(
+            "--instrument-hz requires --instrument".into(),
+        ));
+    } else {
+        None
+    };
     let config = RunConfig {
         sheet: usage(Sheet::parse(args.get("sheet").unwrap_or("placeholder")))?,
         script: usage(Script::parse(args.get("script").unwrap_or("pan")))?,
@@ -173,7 +193,11 @@ fn cmd_run(args: impl Iterator<Item = String>) -> Result<(), Failure> {
         // Warmup 1 is the minimum: the baseline is taken after the last warm-up frame.
         warmup: positive("warmup", usage(args.number("warmup", 60))?)?,
         size,
+        instrument,
     };
+    if config.instrument.is_some() && config.script != Script::Pan {
+        return Err(Failure::Usage("--instrument requires --script pan".into()));
+    }
     if config.script == Script::Zoom && !config.sheet.supports_zoom() {
         return Err(Failure::Usage(
             "--script zoom needs the empty sheet or a generated document".into(),

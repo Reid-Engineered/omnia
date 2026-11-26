@@ -646,7 +646,7 @@ of the `canvas` lane.
 - Done when: two unconnected wires given the same label share a `NetId`, and separate again
   when one label is deleted (INV10 holds).
 
-### T7.3 Instrument window stub · todo
+### T7.3 Instrument window stub · needs-human
 - Lane: canvas · Depends: T6.4 · Read: plan section 6 (last paragraph), G6, ui-plan.md UD5
 - Owns: `crates/omnia-canvas/src/instrument_host.rs`
 - Do: the floating frame, drag, stacking and focus come from [ui-roadmap.md](ui-roadmap.md)
@@ -2590,3 +2590,30 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        and archived a later post-test governor/source check. Existing
                        Linux-only unused window warning in spike/shell_cache.rs:1657
                        is a separate fix follow-up; no code changed for this gate.
+
+2026-11-26 T7.3 needs-human — Implemented the animated instrument stub content (`T7.3`, `G5`,
+                       `G6`, `G8`, `G16`, `D7`, `B8`, `B10`, `INV6`, `INV11`, `Q2`, `Q5`,
+                       `UD5`, `UK10`, `UQ6`). Added `crates/omnia-canvas/src/instrument_host.rs`
+                       (`InstrumentStub`, `InstrumentRate::{Hz60, Hz30}`, `frame_stride`,
+                       `InstrumentPaintScope`, `DEFAULT_INSTRUMENT_SIZE`,
+                       `DEFAULT_TRACE_COLUMNS`, re-exported from `crates/omnia-canvas/src/lib.rs`)
+                       holding only the animated dual-trace stub content (no U4.1 frame, drag,
+                       stacking, or focus), using `omnia-theme` tokens exclusively (`INV6`) and
+                       GPUI `on_next_frame` self-notification at `frame_stride` while skipping
+                       `SheetView` repaints (`INV11`, proven in both `CachedSheet` and
+                       `OverlayView` tests at 60 Hz and 30 Hz plus B8 idle stop). Wired
+                       `bench run --script pan --instrument [--instrument-hz 60|30]` (native and
+                       `--headless`) across `crates/omnia-bench/src/{harness,main,scripts}.rs`
+                       (plus `RunConfig` literals in `spike/mod.rs`, `drag_part.rs`,
+                       `drag_wire.rs`) and updated `canvas-plan.md` §9. Added Orion campaign
+                       scripts in `docs/measurements/T7.3/{gate.py,test_gate.py,owner-run.sh}`
+                       (6/6 Python gate tests passing). Non-reference Windows diagnostics in
+                       `docs/measurements/T7.3.md` (`ASUS TUF Gaming F16`, i7-14650HX, Intel UHD
+                       `32.0.101.7088`, Windows 11 `26200.9974`, `1536×864` @ 1.25x, 165 Hz, AC
+                       `Silent`): `10k-pan` baseline `frame_ms` p99 `2.284 ms` (`ours = 0`),
+                       `10k-pan --instrument` 60 Hz (`stride = 3`, `200` paints) p99
+                       `2.390 ms` (`ours = 0`), 30 Hz (`stride = 6`, `100` paints) p99
+                       `1.417 ms` (`ours = 0`); traced 60 Hz run passed `attribute.py` at both
+                       `1.5R` and `2.5R` (`counted = 0`). Left `needs-human` awaiting Orion
+                       reference certification (`< 16 ms` p99, `Q4`) via
+                       `docs/measurements/T7.3/owner-run.sh`.
