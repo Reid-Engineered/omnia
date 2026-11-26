@@ -493,6 +493,74 @@ mod tests {
         }
     }
 
+    /// `PD8` (`P2.1`): strict v2 migration interns one unmodelled definition per unique
+    /// `(symbol, local_pins, local_bounds)` tuple in part-slot order (skipping holes), with
+    /// empty `params` on every loaded part.
+    #[test]
+    fn p2_1_v2_load_interns_unmodelled_defs_in_part_slot_order() {
+        let bounds_a = ((-10, -5), (10, 5));
+        let bounds_b = ((-4, -4), (4, 4));
+        let part = |symbol: u16, x: i32, pins: Vec<Coords>, bounds: (Coords, Coords)| PartRecord {
+            symbol,
+            at: (x, 0),
+            orient: 0,
+            designator: format!("U{x}"),
+            value: "1k".into(),
+            local_pins: pins,
+            local_bounds: bounds,
+        };
+        let sheet = Sheet {
+            version: 2,
+            revision: 7,
+            parts: vec![
+                Some(part(0, 0, vec![(-10, 0), (10, 0)], bounds_a)),
+                None,
+                Some(part(1, 20, vec![(0, 0)], bounds_b)),
+                Some(part(0, 40, vec![(-10, 0), (10, 0)], bounds_a)),
+                Some(part(0, 60, vec![(10, 0), (-10, 0)], bounds_a)),
+            ],
+            wires: vec![],
+            labels: vec![],
+        };
+        let text = ron::ser::to_string(&sheet).unwrap();
+        let doc = Doc::load(text.as_bytes()).unwrap();
+
+        assert_eq!(doc.revision(), 7);
+        assert_eq!(doc.part_def_id(PartId(0)), Some(PartDefId(0)));
+        assert_eq!(doc.part_def_id(PartId(1)), None);
+        assert_eq!(doc.part_def_id(PartId(2)), Some(PartDefId(1)));
+        assert_eq!(doc.part_def_id(PartId(3)), Some(PartDefId(0)));
+        assert_eq!(doc.part_def_id(PartId(4)), Some(PartDefId(2)));
+
+        let defs: Vec<_> = doc.part_defs().collect();
+        assert_eq!(defs.len(), 3);
+        assert_eq!(defs[0].0, PartDefId(0));
+        assert_eq!(&*defs[0].1.source_id, "legacy:0");
+        assert_eq!(defs[1].0, PartDefId(1));
+        assert_eq!(&*defs[1].1.source_id, "legacy:1");
+        assert_eq!(defs[2].0, PartDefId(2));
+        assert_eq!(&*defs[2].1.source_id, "legacy:0");
+        assert_ne!(defs[0].1.local_pins, defs[2].1.local_pins);
+
+        for (pid, p) in doc.parts() {
+            assert_eq!(doc.part_params(pid), Some(&crate::Params::new()));
+            let def = doc.part_def(doc.part_def_id(pid).unwrap()).unwrap();
+            assert!(def.is_unmodelled());
+            assert_eq!(crate::part_def::validate(def), Ok(()));
+            assert_eq!(
+                crate::part_def::validate_instance(
+                    def,
+                    p.symbol,
+                    &def.local_pins,
+                    def.local_bounds,
+                    &p.value,
+                    doc.part_params(pid).unwrap(),
+                ),
+                Ok(())
+            );
+        }
+    }
+
     #[test]
     fn empty_round_trip_and_writer_failure() {
         let doc = Doc::new();

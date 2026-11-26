@@ -144,21 +144,16 @@ pub enum PrimitiveKind {
 }
 
 impl PrimitiveKind {
-    /// Number of simulation terminals (`PD5`). Two-terminal elements take 2; the potentiometer
-    /// takes 3 (both ends and the wiper); every controlled source takes 4 (output pair, then
-    /// controlling pair: a current-controlled source senses the current through its
-    /// controlling pair); `ground` and the supply `rail` take 1; `switch` is an ideal
-    /// two-terminal switch.
+    /// Number of simulation terminals (`PK6`, `PD5`). Two-terminal elements take 2; the
+    /// potentiometer takes 3 (both ends and the wiper); every controlled source and the
+    /// voltage-controlled `switch` take 4 (output or switched pair, then controlling pair: a
+    /// current-controlled source senses the current through its controlling pair); `ground`
+    /// and the supply `rail` take 1.
     pub fn arity(self) -> usize {
         match self {
-            Self::Resistor
-            | Self::Capacitor
-            | Self::Inductor
-            | Self::VSource
-            | Self::ISource
-            | Self::Switch => 2,
+            Self::Resistor | Self::Capacitor | Self::Inductor | Self::VSource | Self::ISource => 2,
             Self::Potentiometer => 3,
-            Self::Vcvs | Self::Cccs | Self::Vccs | Self::Ccvs => 4,
+            Self::Vcvs | Self::Cccs | Self::Vccs | Self::Ccvs | Self::Switch => 4,
             Self::Ground | Self::Rail => 1,
         }
     }
@@ -459,13 +454,16 @@ pub enum DefError {
     MissingEntry {
         entry: Arc<str>,
     },
+    /// The embedded deck has malformed block structure (orphan continuation, nameless
+    /// definition, duplicate top-level entry, unterminated `.subckt`, or mismatched `.ends`).
+    MalformedSpice(&'static str),
     /// The embedded deck failed the `PK10` screen.
     Screen(ScreenError),
     /// Supply pins that are not two distinct `power` pins in the terminal list.
     SupplyPins,
     /// Implicit supply voltages with `pos <= neg`.
     SupplyImplicit,
-    /// A `PK12` `model` parameter that is not an enum over the deck's entries.
+    /// A `PK12` `model` parameter that is not an enum over compatible embedded entries.
     ModelParam {
         variant: Option<Arc<str>>,
     },
@@ -516,6 +514,7 @@ impl fmt::Display for DefError {
             Self::MissingEntry { entry } => {
                 write!(f, "embedded SPICE text does not define {entry:?}")
             }
+            Self::MalformedSpice(reason) => write!(f, "malformed embedded SPICE deck: {reason}"),
             Self::Screen(error) => error.fmt(f),
             Self::SupplyPins => {
                 f.write_str("supply pins must be two distinct power pins in the terminal list")
@@ -526,7 +525,10 @@ impl fmt::Display for DefError {
             Self::ModelParam {
                 variant: Some(variant),
             } => {
-                write!(f, "model variant {variant:?} names no embedded entry")
+                write!(
+                    f,
+                    "model variant {variant:?} names no compatible embedded entry"
+                )
             }
             Self::ModelParam { variant: None } => {
                 f.write_str("parameter `model` must be an enum over embedded entries")
@@ -775,10 +777,49 @@ fn deck_code_part(s: &str) -> &str {
     s
 }
 
-/// Top-level `.model` and `.subckt` entry names of an embedded deck: the second token of each
-/// such logical line (joining `+` continuations, skipping `*` comments, and stripping inline
-/// comments) outside any `.subckt`…`.ends` block, in order.
-fn deck_entries(spice: &str) -> Vec<(&'static str, String)> {
+/// ASCII whitespace tokens with `a = b`, `a= b` and `a =b` merged into `a=b` (`P0.3` gap 5,
+/// matching `spice_screen.rs` and `omnia-parts/src/spice.rs`).
+fn deck_tokens(code: &str) -> Vec<String> {
+    let raw: Vec<&str> = code.split_ascii_whitespace().collect();
+    let mut out: Vec<String> = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        let t = raw[i];
+        if t == "=" && !out.is_empty() && i + 1 < raw.len() {
+            let last = out.pop().unwrap_or_default();
+            out.push(format!("{last}={}", raw[i + 1]));
+            i += 2;
+        } else if t.ends_with('=') && t.len() > 1 && i + 1 < raw.len() {
+            out.push(format!("{t}{}", raw[i + 1]));
+            i += 2;
+        } else if t.starts_with('=') && t.len() > 1 && !out.is_empty() {
+            let last = out.pop().unwrap_or_default();
+            out.push(format!("{last}{t}"));
+            i += 1;
+        } else {
+            out.push(t.to_owned());
+            i += 1;
+        }
+    }
+    out
+}
+
+enum DeckEntry {
+    Model { name: String },
+    Subckt { name: String, ports: usize },
+}
+
+struct OpenSubckt {
+    name: String,
+    ports: usize,
+    top_level: bool,
+}
+
+/// Parses an embedded deck's top-level `.model` and `.subckt` definitions and verifies
+/// complete block structure (no orphan continuations, nameless definitions, duplicate
+/// top-level entries, unterminated `.subckt` blocks, or unmatched/mismatched `.ends`), using
+/// ASCII whitespace tokenization matching `spice_screen.rs` and `omnia-parts/src/spice.rs`.
+fn parse_deck(spice: &str) -> Result<Vec<DeckEntry>, DefError> {
     let mut logical: Vec<String> = Vec::new();
     for raw in spice.split('\n') {
         let t = raw.trim_start();
@@ -786,14 +827,13 @@ fn deck_entries(spice: &str) -> Vec<(&'static str, String)> {
             continue;
         }
         if let Some(body) = t.strip_prefix('+') {
+            let Some(cur) = logical.last_mut() else {
+                return Err(DefError::MalformedSpice("orphan continuation line"));
+            };
             let code = deck_code_part(body).trim();
-            match logical.last_mut() {
-                Some(cur) => {
-                    cur.push(' ');
-                    cur.push_str(code);
-                }
-                None if !code.is_empty() => logical.push(code.to_owned()),
-                None => {}
+            if !code.is_empty() {
+                cur.push(' ');
+                cur.push_str(code);
             }
             continue;
         }
@@ -803,30 +843,76 @@ fn deck_entries(spice: &str) -> Vec<(&'static str, String)> {
         }
     }
 
-    let mut depth = 0usize;
-    let mut entries = Vec::new();
+    let mut stack: Vec<OpenSubckt> = Vec::new();
+    let mut entries: Vec<DeckEntry> = Vec::new();
     for line in &logical {
-        let mut tokens = line.split_whitespace();
-        let Some(head) = tokens.next() else {
+        let toks = deck_tokens(line);
+        let Some(head) = toks.first() else {
             continue;
         };
         if head.eq_ignore_ascii_case(".subckt") {
-            if depth == 0
-                && let Some(name) = tokens.next()
+            let Some(name) = toks.get(1) else {
+                return Err(DefError::MalformedSpice(".subckt without a name"));
+            };
+            let rest = &toks[2..];
+            let ports = rest
+                .iter()
+                .position(|t| t.eq_ignore_ascii_case("params:") || t.contains('='))
+                .unwrap_or(rest.len());
+            let top_level = stack.is_empty();
+            if top_level
+                && entries.iter().any(|e| {
+                    matches!(e, DeckEntry::Subckt { name: n, .. } if n.eq_ignore_ascii_case(name))
+                })
             {
-                entries.push((".subckt", name.to_owned()));
+                return Err(DefError::MalformedSpice("duplicate top-level .subckt"));
             }
-            depth += 1;
+            stack.push(OpenSubckt {
+                name: name.clone(),
+                ports,
+                top_level,
+            });
         } else if head.eq_ignore_ascii_case(".ends") {
-            depth = depth.saturating_sub(1);
-        } else if head.eq_ignore_ascii_case(".model")
-            && depth == 0
-            && let Some(name) = tokens.next()
-        {
-            entries.push((".model", name.to_owned()));
+            let Some(open) = stack.pop() else {
+                return Err(DefError::MalformedSpice(".ends without matching .subckt"));
+            };
+            if let Some(close) = toks.get(1)
+                && !close.eq_ignore_ascii_case(&open.name)
+            {
+                return Err(DefError::MalformedSpice(
+                    ".ends name does not match .subckt",
+                ));
+            }
+            if open.top_level {
+                entries.push(DeckEntry::Subckt {
+                    name: open.name,
+                    ports: open.ports,
+                });
+            }
+        } else if head.eq_ignore_ascii_case(".model") {
+            let Some(raw) = toks.get(1) else {
+                return Err(DefError::MalformedSpice(".model without a name"));
+            };
+            let name = raw.split('(').next().unwrap_or_default();
+            if name.is_empty() {
+                return Err(DefError::MalformedSpice(".model without a name"));
+            }
+            if stack.is_empty() {
+                if entries.iter().any(
+                    |e| matches!(e, DeckEntry::Model { name: n } if n.eq_ignore_ascii_case(name)),
+                ) {
+                    return Err(DefError::MalformedSpice("duplicate top-level .model"));
+                }
+                entries.push(DeckEntry::Model {
+                    name: name.to_owned(),
+                });
+            }
         }
     }
-    entries
+    if !stack.is_empty() {
+        return Err(DefError::MalformedSpice("unterminated .subckt"));
+    }
+    Ok(entries)
 }
 
 fn check_deck(entry: &str, spice: &str) -> Result<(), DefError> {
@@ -938,9 +1024,9 @@ pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError> {
         });
     }
 
-    // Binding arity, terminal mapping, deck screen and supply (PD5, PD10, PK10).
-    match &def.sim {
-        EmbeddedSimBinding::None => {}
+    // Binding arity, terminal mapping, deck screen, block structure and supply (PD5, PD10, PK10).
+    let parsed_deck = match &def.sim {
+        EmbeddedSimBinding::None => Vec::new(),
         EmbeddedSimBinding::Primitive { kind, terminals } => {
             if terminals.len() != kind.arity() {
                 return Err(DefError::TerminalCount {
@@ -949,6 +1035,7 @@ pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError> {
                 });
             }
             check_terminals(terminals, &def.pins)?;
+            Vec::new()
         }
         EmbeddedSimBinding::Model {
             spice_prefix,
@@ -960,9 +1047,10 @@ pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError> {
             let counts =
                 model_terminals(*spice_prefix).ok_or(DefError::SpicePrefix(*spice_prefix))?;
             check_deck(entry, spice)?;
-            if !deck_entries(spice)
+            let entries = parse_deck(spice)?;
+            if !entries
                 .iter()
-                .any(|(kind, name)| *kind == ".model" && name.eq_ignore_ascii_case(entry))
+                .any(|e| matches!(e, DeckEntry::Model { name } if name.eq_ignore_ascii_case(entry)))
             {
                 return Err(DefError::MissingEntry {
                     entry: entry.clone(),
@@ -978,6 +1066,7 @@ pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError> {
             if let Some(supply) = supply {
                 check_supply(supply, terminals, &def.pins)?;
             }
+            entries
         }
         EmbeddedSimBinding::Subckt {
             entry,
@@ -986,9 +1075,15 @@ pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError> {
             supply,
         } => {
             check_deck(entry, spice)?;
+            let entries = parse_deck(spice)?;
             let ports = subckt_ports(spice, entry).ok_or_else(|| DefError::MissingEntry {
                 entry: entry.clone(),
             })?;
+            debug_assert!(entries.iter().any(|e| matches!(
+                e,
+                DeckEntry::Subckt { name, ports: p }
+                    if name.eq_ignore_ascii_case(entry) && *p == ports
+            )));
             if terminals.len() != ports {
                 return Err(DefError::TerminalCount {
                     expected: ports,
@@ -999,20 +1094,33 @@ pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError> {
             if let Some(supply) = supply {
                 check_supply(supply, terminals, &def.pins)?;
             }
+            entries
         }
-    }
+    };
 
-    // PK12: `model` is an enum over entries embedded in the same definition.
+    // PK12: `model` is an enum over compatible entries embedded in the same definition:
+    // top-level `.model` entries for a `Model` binding, or top-level `.subckt` entries with
+    // the binding's terminal count for a `Subckt` binding.
     if let Some(spec) = def.param("model") {
         let ParamKind::Enum(variants) = &spec.kind else {
             return Err(DefError::ModelParam { variant: None });
         };
-        let entries = def.sim.spice().map(deck_entries).unwrap_or_default();
-        if let Some(variant) = variants.iter().find(|variant| {
-            !entries
-                .iter()
-                .any(|(_, name)| name.eq_ignore_ascii_case(variant))
-        }) {
+        let compatible = |variant: &str| {
+            match &def.sim {
+            EmbeddedSimBinding::Model { .. } => parsed_deck.iter().any(|entry| {
+                matches!(entry, DeckEntry::Model { name } if name.eq_ignore_ascii_case(variant))
+            }),
+            EmbeddedSimBinding::Subckt { terminals, .. } => parsed_deck.iter().any(|entry| {
+                matches!(
+                    entry,
+                    DeckEntry::Subckt { name, ports }
+                        if name.eq_ignore_ascii_case(variant) && *ports == terminals.len()
+                )
+            }),
+            EmbeddedSimBinding::None | EmbeddedSimBinding::Primitive { .. } => false,
+        }
+        };
+        if let Some(variant) = variants.iter().find(|variant| !compatible(variant)) {
             return Err(DefError::ModelParam {
                 variant: Some(variant.clone()),
             });
@@ -1175,20 +1283,34 @@ impl DefArena {
         )
     }
 
-    /// Counts a live part using `id`. Ids this arena never allocated are ignored: only
-    /// crate-private test scaffolding (such as `follow::view_tests::materialize`) builds such
-    /// parts by copying `StoredPart`s into a fresh `Doc`.
+    /// Counts a live part using `id`. Non-test builds require `id` to exist in this arena;
+    /// test builds ignore unknown ids because crate-private test scaffolding (such as
+    /// `follow::view_tests::materialize`) copies `StoredPart`s into a fresh `Doc`.
     pub(crate) fn acquire(&mut self, id: PartDefId) {
-        if let Some(refs) = self.refs.get_mut(id.0 as usize) {
-            *refs = refs.checked_add(1).expect("definition reference count");
-        }
+        #[cfg(not(test))]
+        let refs = self
+            .refs
+            .get_mut(id.0 as usize)
+            .expect("definition id in arena");
+        #[cfg(test)]
+        let Some(refs) = self.refs.get_mut(id.0 as usize) else {
+            return;
+        };
+        *refs = refs.checked_add(1).expect("definition reference count");
     }
 
     /// Releases a live part's use of `id`; see [`DefArena::acquire`].
     pub(crate) fn release(&mut self, id: PartDefId) {
-        if let Some(refs) = self.refs.get_mut(id.0 as usize) {
-            *refs = refs.checked_sub(1).expect("definition reference count");
-        }
+        #[cfg(not(test))]
+        let refs = self
+            .refs
+            .get_mut(id.0 as usize)
+            .expect("definition id in arena");
+        #[cfg(test)]
+        let Some(refs) = self.refs.get_mut(id.0 as usize) else {
+            return;
+        };
+        *refs = refs.checked_sub(1).expect("definition reference count");
     }
 
     /// Drops every record allocated after the arena had length `len` (`PD8` refusal
@@ -1436,12 +1558,12 @@ mod tests {
             (PrimitiveKind::Inductor, 2),
             (PrimitiveKind::VSource, 2),
             (PrimitiveKind::ISource, 2),
-            (PrimitiveKind::Switch, 2),
             (PrimitiveKind::Potentiometer, 3),
             (PrimitiveKind::Vcvs, 4),
             (PrimitiveKind::Cccs, 4),
             (PrimitiveKind::Vccs, 4),
             (PrimitiveKind::Ccvs, 4),
+            (PrimitiveKind::Switch, 4),
         ] {
             assert_eq!(kind.arity(), expected_arity, "{kind:?}");
             let terminals: Vec<u16> = (0..expected_arity as u16).collect();
@@ -2016,7 +2138,7 @@ mod tests {
             );
         }
 
-        // `Subckt`: port mismatch, missing entry, hostile screen.
+        // `Subckt`: port mismatch, missing entry, hostile screen, incomplete/mismatched blocks.
         let mut wrong_ports = opamp_def();
         if let EmbeddedSimBinding::Subckt { spice, .. } = &mut wrong_ports.sim {
             *spice = ".subckt OPAMP_GENERIC a b c d\n.ends\n".into();
@@ -2049,7 +2171,48 @@ mod tests {
             Err(DefError::Screen(ScreenError::Forbidden { .. }))
         ));
 
-        // `PK12` `model` parameter: must be an enum whose variants name embedded entries.
+        for malformed in [
+            ".subckt OPAMP_GENERIC a b c d e\nE1 e 0 a b 1e5\n",
+            ".subckt OPAMP_GENERIC a b c d e\n.ends OTHER\n",
+            ".subckt OPAMP_GENERIC a b c d e\n.ends OPAMP_GENERIC\n.ends\n",
+            "+ orphan\n.subckt OPAMP_GENERIC a b c d e\n.ends\n",
+            ".subckt\n.ends\n.subckt OPAMP_GENERIC a b c d e\n.ends\n",
+            ".subckt OPAMP_GENERIC a b c d e\n.ends\n.subckt opamp_generic x y\n.ends\n",
+            ".subckt\u{a0}OUTER x y\n.subckt OPAMP_GENERIC a b c d e\n.ends\n.ends\n",
+        ] {
+            let mut bad = opamp_def();
+            if let EmbeddedSimBinding::Subckt { spice, .. } = &mut bad.sim {
+                *spice = malformed.into();
+            }
+            assert!(
+                matches!(validate(&bad), Err(DefError::MalformedSpice(_))),
+                "malformed subckt deck must be refused: {malformed:?}"
+            );
+        }
+
+        // Non-ASCII whitespace must not split `.model` directives (matches `spice_screen.rs` / `spice.rs`).
+        let mut nbsp_model = diode_def();
+        if let EmbeddedSimBinding::Model { spice, .. } = &mut nbsp_model.sim {
+            *spice = ".model\u{a0}DIODE_SIG D(IS=1e-14)\n".into();
+        }
+        assert_eq!(
+            validate(&nbsp_model),
+            Err(DefError::MissingEntry {
+                entry: "DIODE_SIG".into()
+            })
+        );
+
+        // Duplicate top-level `.model` is refused.
+        let mut dup_model = diode_def();
+        if let EmbeddedSimBinding::Model { spice, .. } = &mut dup_model.sim {
+            *spice = ".model DIODE_SIG D(IS=1e-14)\n.model diode_sig D(IS=2e-14)\n".into();
+        }
+        assert!(matches!(
+            validate(&dup_model),
+            Err(DefError::MalformedSpice(_))
+        ));
+
+        // `PK12` `model` parameter: must be an enum whose variants name compatible embedded entries.
         let mut good_model_param = diode_def();
         if let EmbeddedSimBinding::Model { spice, .. } = &mut good_model_param.sim {
             *spice = ".model DIODE_SIG D(IS=1e-14)\n.model DIODE_FAST D(IS=2e-14)\n".into();
@@ -2062,6 +2225,72 @@ mod tests {
             optional: false,
         });
         assert_eq!(validate(&good_model_param), Ok(()));
+
+        // A `Model` binding refuses a `model` variant naming a `.subckt`.
+        let mut model_names_subckt = diode_def();
+        if let EmbeddedSimBinding::Model { spice, .. } = &mut model_names_subckt.sim {
+            *spice = ".model DIODE_SIG D(IS=1e-14)\n.subckt HELPER a b\n.ends HELPER\n".into();
+        }
+        model_names_subckt.params.push(EmbeddedParamSpec {
+            name: "model".into(),
+            label: "Model".into(),
+            kind: ParamKind::Enum(vec!["DIODE_SIG".into(), "HELPER".into()]),
+            default: ParamValue::Enum("DIODE_SIG".into()),
+            optional: false,
+        });
+        assert_eq!(
+            validate(&model_names_subckt),
+            Err(DefError::ModelParam {
+                variant: Some("HELPER".into())
+            })
+        );
+
+        // A `Subckt` binding accepts another top-level `.subckt` with the same port count,
+        // and refuses both a `.model` helper and a `.subckt` helper with a different port count.
+        let mut good_subckt_model_param = opamp_def();
+        if let EmbeddedSimBinding::Subckt { spice, .. } = &mut good_subckt_model_param.sim {
+            *spice = "\
+.model DCLAMP D(IS=1e-14)
+.subckt STAGE a b
+R1 a b 1k
+.ends STAGE
+.subckt OPAMP_GENERIC inp inn vcc vee out
+X1 inp inn STAGE
+.ends OPAMP_GENERIC
+.subckt OPAMP_FAST inp inn vcc vee out
+X1 inp inn STAGE
+.ends OPAMP_FAST
+"
+            .into();
+        }
+        good_subckt_model_param.params.push(EmbeddedParamSpec {
+            name: "model".into(),
+            label: "Model".into(),
+            kind: ParamKind::Enum(vec!["OPAMP_GENERIC".into(), "opamp_fast".into()]),
+            default: ParamValue::Enum("OPAMP_GENERIC".into()),
+            optional: false,
+        });
+        assert_eq!(validate(&good_subckt_model_param), Ok(()));
+
+        let mut subckt_names_model = good_subckt_model_param.clone();
+        subckt_names_model.params[0].kind =
+            ParamKind::Enum(vec!["OPAMP_GENERIC".into(), "DCLAMP".into()]);
+        assert_eq!(
+            validate(&subckt_names_model),
+            Err(DefError::ModelParam {
+                variant: Some("DCLAMP".into())
+            })
+        );
+
+        let mut subckt_wrong_ports = good_subckt_model_param.clone();
+        subckt_wrong_ports.params[0].kind =
+            ParamKind::Enum(vec!["OPAMP_GENERIC".into(), "STAGE".into()]);
+        assert_eq!(
+            validate(&subckt_wrong_ports),
+            Err(DefError::ModelParam {
+                variant: Some("STAGE".into())
+            })
+        );
 
         let mut bad_variant = good_model_param.clone();
         bad_variant.params[0].kind = ParamKind::Enum(vec!["diode_sig".into(), "MISSING".into()]);
