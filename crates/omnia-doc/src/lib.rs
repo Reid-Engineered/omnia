@@ -29,6 +29,11 @@ pub mod run;
 pub use run::{Anchor, Boundary, Run};
 pub mod follow;
 pub use follow::{FollowError, FollowPlan, Isometry, RunFate, plan_follow};
+pub mod part_def;
+pub use part_def::{
+    DefError, EmbeddedParamSpec, EmbeddedPartDef, EmbeddedPin, EmbeddedSimBinding, InstanceError,
+    ParamFault, ParamKind, ParamValue, Params, PartDefId, PinRole, PrimitiveKind, SupplyDecl,
+};
 pub mod spice_screen;
 pub use spice_screen::{ScreenError, screen_embedded, subckt_ports};
 pub mod units;

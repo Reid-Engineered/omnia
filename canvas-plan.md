@@ -553,6 +553,11 @@ impl Doc {
     pub fn parts(&self) -> impl Iterator<Item = (PartId, &Part)>;
     pub fn wires(&self) -> impl Iterator<Item = (WireId, &Wire)>;
     pub fn labels(&self) -> impl Iterator<Item = (LabelId, &Label)>;
+    pub fn part_def(&self, id: PartDefId) -> Option<&EmbeddedPartDef>; // P2.1 (parts-plan.md PD8): referenced or retained
+    pub fn part_defs(&self) -> impl Iterator<Item = (PartDefId, &EmbeddedPartDef)>; // P2.1: referenced only, id order
+    pub fn part_def_id(&self, part: PartId) -> Option<PartDefId>;      // P2.1
+    pub fn part_params(&self, part: PartId) -> Option<&Params>;        // P2.1 (parts-plan.md PD6): overrides only
+    pub fn resolved_param(&self, part: PartId, name: &str) -> Option<&ParamValue>; // P2.1: override, else default
     pub fn net_of(&self, wire: WireId) -> Option<NetId>;
     pub fn net_at(&self, at: Pt) -> Option<NetId>;
     pub fn net_wires(&self, net: NetId, out: &mut Vec<WireId>);
@@ -562,8 +567,8 @@ impl Doc {
     pub fn load(r: impl io::Read) -> io::Result<Self>;
     // Version 2 RON embeds local bounds and pins (omnia-symbols depends on omnia-doc).
     // P2.3 (parts-plan.md PD3, PD8, PK9): Version 3 adds the deduplicated part_defs table and per-part def/params;
-    // v2 loads by migration to unmodelled definitions. P2.1 adds part_def, part_defs, part_def_id,
-    // part_params and resolved_param queries, and extends PartialEq/content_eq per parts-plan.md PD8.
+    // v2 loads by migration to unmodelled definitions. P2.1 extended PartialEq/content_eq per parts-plan.md PD8
+    // and added temporary save refusal until v3 lands.
     // Saves retain reserved arena slots and revision; loads validate inserts and rebuild points, index and connectivity.
     pub fn content_eq(&self, other: &Self) -> bool; // live items, exact live IDs, interior gaps, bounds/pins
     // PartialEq compares persistent state, including revision and every reserved slot (pre-T5.1 contract).

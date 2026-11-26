@@ -1299,10 +1299,10 @@ mod tests {
         .unwrap()
     }
 
+    /// In-memory copy without history (`P2.1`, `PD8`): a v2 save/load round trip cannot carry
+    /// definition ids, which `content_eq` compares.
     fn snapshot(doc: &Doc) -> Doc {
-        let mut bytes = Vec::new();
-        doc.save(&mut bytes).unwrap();
-        Doc::load(bytes.as_slice()).unwrap()
+        doc.fork()
     }
 
     fn symbol() -> SymbolId {

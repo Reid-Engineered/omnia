@@ -134,7 +134,7 @@ thresholds (`XD9`); these are added. `PB1`–`PB5` are chosen targets, to be ver
 | PK3 | Archive safety limits (`.opart` / `.olib`) | Max compressed file: 8 MiB (`AK2`). Max uncompressed total: 32 MiB. Max single entry: 2 MiB. Max entries: 1,024. Max expansion ratio: 100:1. |
 | PK4 | Numeric grammar for user-facing values (`XD2`) | `value := number [" "] [prefix] [unit]` after trimming leading and trailing whitespace. `number` is a decimal with optional sign, fraction and exponent (`4.7`, `.5`, `-1e-3`). At most one ASCII space may separate the number from what follows (`10 kΩ`, `10k`, `50 %`); any other inner whitespace is refused. `prefix` is case-sensitive: `f`, `p`, `n`, `u`/`µ` (U+00B5)/`μ` (U+03BC), `m` (milli), `k`/`K`, `M` (mega), `G`, `T`, or `meg`/`MEG` (= `1e6`) (`PQ2`). `unit`, if present, must name the parameter's declared unit: `Ω`/`ohm` (ohm), `F` (farad), `H` (henry), `V` (volt), `A` (ampere), `Hz` (hertz), `s` (second); a mismatched or unknown unit is refused. A prefix letter is read as a prefix only when a unit or nothing follows it, so `1F` is one farad, `10fF` ten femtofarads and `10f` ten femto-units; `F` is never femto. `%` is accepted only for a parameter whose unit is `ratio` and shifts the decimal exponent by `-2` (`50%` = `50 %` = `0.5`); `ratio` itself is dimensionless and is refused as a literal suffix (`0.5ratio` is rejected). Prefixed values adjust the decimal exponent before a single decimal-to-`f64` parse rather than multiplying by `10^k`, so `"100n"` and `"100e-9"` agree bit for bit. Embedded-digit forms such as `4k7` are refused in v1. Native SPICE number syntax applies only inside model decks. Values handed to lowering are plain finite `f64`s; the emitter writes unambiguous numbers. One parser, in `omnia-doc` (`units.rs`), serves the parts loader, `Doc::apply` and the simulator. |
 | PK5 | Content hash | Lowercase hex SHA-256 (64 chars) over the canonical encoding of a definition: every field except `source_id` and the hash itself, in a fixed field order, each length-prefixed; text fields (including SPICE text) hashed exactly as stored (`PD3`). Independent of ZIP timestamps, file order, TOML key order or OS line endings (line endings are normalised once, at extraction). Computed by `omnia-parts` only. |
-| PK6 | Built-in primitive kinds | `resistor`, `capacitor`, `inductor`, `potentiometer`, `vsource`, `isource`, `vcvs`, `cccs`, `vccs`, `ccvs`, `ground`, `switch`, and `rail` (added 2026-11-23, sim S0.2): a one-terminal supply rail whose `dc` parameter is the rail voltage; simulation lowers it as a DC source from the pin's net to node 0. |
+| PK6 | Built-in primitive kinds | `resistor` (2), `capacitor` (2), `inductor` (2), `potentiometer` (3: ends + wiper), `vsource` (2), `isource` (2), `vcvs` (4), `cccs` (4), `vccs` (4), `ccvs` (4), `ground` (1), `switch` (4: switched pair + controlling pair, matching SPICE `S`), and `rail` (1, added 2026-11-23, sim S0.2): a one-terminal supply rail whose `dc` parameter is the rail voltage; simulation lowers it as a DC source from the pin's net to node 0. Terminal counts in parentheses (`PD5`, recorded 2026-11-25 in `P2.1` to match `omnia-parts`). |
 | PK7 | Field size caps | At most 64 parameters per part definition; parameter string max 256 bytes; description max 2,048 bytes; at most 64 tags (32 bytes each); at most 256 pins per part; embedded SPICE text max 2 MiB (`PK3` single entry). |
 | PK8 | Container extensions | `.opart` (single-part ZIP archive), `.olib` (multi-part pack ZIP archive), `.omnia` (schematic document). |
 | PK9 | Document RON version | `version: 3` adds the `part_defs` table and per-part `def` + `params`. `version: 2` loads by strict migration (`PD8`); every other version is refused. |
@@ -939,10 +939,19 @@ pub enum ScreenError { ByteOrderMark { line }, CarriageReturn { line }, Nul { li
 // Re-exported at the crate root: omnia_doc::{ScreenError, screen_embedded, subckt_ports}.
 
 // ---- omnia-doc: part_def.rs (P2.1) ----
+pub const MAX_PARAMS: usize = 64;                          // PK7
+pub const MAX_PARAM_STRING_BYTES: usize = 256;             // PK7
+pub const MAX_DESCRIPTION_BYTES: usize = 2048;             // PK7
+pub const MAX_PINS: usize = 256;                           // PK7
+pub const MAX_SPICE_BYTES: usize = 2 * 1024 * 1024;        // PK7 / PK3
+pub const LEGACY_SOURCE_PREFIX: &str = "legacy:";          // PD8
+pub const MODEL_TERMINALS: [(char, &[usize]); 9];          // PD5: C, D, J, L, M, Q, R, S, Z
+pub fn model_terminals(spice_prefix: char) -> Option<&'static [usize]>;
+
 pub struct PartDefId(pub u32);
 
 pub enum ParamValue {
-    Real { raw: Arc<str>, value: FiniteF64 },  // PD6
+    Real { raw: Arc<str>, value: FiniteF64 },  // PD6; kind_name(), display_text()
     Int(i64),
     Bool(bool),
     Enum(Arc<str>),
@@ -965,12 +974,12 @@ pub struct EmbeddedParamSpec {
     pub default: ParamValue, pub optional: bool,
 }
 
-pub enum PrimitiveKind {
+pub enum PrimitiveKind {                       // arity() -> usize (PK6, PD5)
     Resistor, Capacitor, Inductor, Potentiometer,
     VSource, ISource, Vcvs, Cccs, Vccs, Ccvs, Ground, Switch, Rail,
 }
 
-pub enum EmbeddedSimBinding {
+pub enum EmbeddedSimBinding {                  // terminals(), spice(), supply()
     None,
     Primitive { kind: PrimitiveKind, terminals: Vec<u16> },               // stored pin indices
     Model { spice_prefix: char, entry: Arc<str>, terminals: Vec<u16>, spice: Arc<str>,
@@ -982,7 +991,7 @@ pub struct SupplyDecl {                    // PD5: read by sim lowering and ERC0
     pub implicit: Option<(FiniteF64, FiniteF64)>, // fallback volts (pos, neg), pos > neg
 }
 
-pub struct EmbeddedPartDef {               // Eq; validated by validate() on every ingress (PD10)
+pub struct EmbeddedPartDef {               // Eq; unmodelled(), is_unmodelled(), param()
     pub source_id: Arc<str>,
     pub content_hash: Option<[u8; 32]>,    // None: no library provenance (v2 migration, Unmodelled)
     pub name: Arc<str>,
@@ -992,15 +1001,21 @@ pub struct EmbeddedPartDef {               // Eq; validated by validate() on eve
     pub symbol: SymbolId,                  // built-in only in v1 (PQ3)
     pub local_pins: Vec<Pt>,
     pub local_bounds: Rect,
-    pub pins: Vec<EmbeddedPin>,            // stored-pin-index order (PD5); empty only for unmodelled defs
+    pub pins: Vec<EmbeddedPin>,            // stored-pin-index order (PD5); empty only for unmodelled/zero-pin defs
     pub params: Vec<EmbeddedParamSpec>,    // sorted by name
     pub primary_param: Option<Arc<str>>,
     pub sim: EmbeddedSimBinding,
 }
+pub enum ParamFault { /* Kind, BelowMin, AboveMax, UnknownVariant, TooLong, Unparseable, RawMismatch */ }
+pub enum DefError { /* typed PD10/PD5/PK7/PK10/PK12 definition validation errors */ }
+pub enum InstanceError { /* typed PD8/PD6/PINV12 instance validation errors */ }
 pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError>;
 pub fn validate_instance(def: &EmbeddedPartDef, symbol: SymbolId, local_pins: &[Pt],
                          local_bounds: Rect, value: &str, params: &Params)
                          -> Result<(), InstanceError>; // PD8
+// Re-exported at the crate root: omnia_doc::{DefError, EmbeddedParamSpec, EmbeddedPartDef,
+// EmbeddedPin, EmbeddedSimBinding, InstanceError, ParamFault, ParamKind, ParamValue, Params,
+// PartDefId, PinRole, PrimitiveKind, SupplyDecl}.
 
 // ---- omnia-doc: command.rs (P2.2) ----
 pub enum PlaceDef { Unmodelled, Existing(PartDefId), Embed(Arc<EmbeddedPartDef>) }

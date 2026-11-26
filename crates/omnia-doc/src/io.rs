@@ -102,14 +102,40 @@ impl Doc {
 
     /// Writes version 2 RON, including reserved IDs and revision, in stable slot order.
     /// Local bounds and pin geometry are embedded to keep this crate independent of `omnia-symbols`.
+    ///
+    /// Version 2 holds no definitions or parameters, so until the version 3 writer lands
+    /// (`P2.3`) a document whose parts use a definition other than an unmodelled one, or carry
+    /// parameter overrides, is refused with `InvalidData` and nothing is written (`PD8`, no
+    /// lossy save). A document of unmodelled parts saves exactly as before.
     pub fn save(&self, mut w: impl Write) -> io::Result<()> {
+        if !self.is_v2_representable() {
+            return Err(invalid(
+                "document holds part definitions or parameters that this build cannot save",
+            ));
+        }
         let text = ron::ser::to_string_pretty(&self.sheet(), ron::ser::PrettyConfig::default())
             .map_err(invalid)?;
         w.write_all(text.as_bytes())
     }
 
+    /// Whether every live part has no overrides and uses an unmodelled definition (`PD8`).
+    fn is_v2_representable(&self) -> bool {
+        self.parts.slots.iter().flatten().all(|stored| {
+            stored.params.is_empty()
+                && self
+                    .part_defs
+                    .get(stored.def)
+                    .is_some_and(|def| def.is_unmodelled())
+        })
+    }
+
     /// Loads a self-contained test sheet, validating geometry and rebuilding incidence.
     /// Symbol IDs retain their meaning in the library used to generate the sheet.
+    ///
+    /// Strict v2 migration (`PD8`, `XD1`): each part is inserted through the same path as an
+    /// unmodelled placement, so each unique `(symbol, local_pins, local_bounds)` becomes one
+    /// unmodelled definition, in order of first appearance by part slot, and every part has
+    /// empty `params`.
     pub fn load(r: impl Read) -> io::Result<Self> {
         let sheet: Sheet = ron::de::from_reader(r).map_err(invalid)?;
         if sheet.version != 2 {
@@ -182,21 +208,34 @@ impl Doc {
     /// Unlike `PartialEq`, this ignores revision and trailing reserved slots. Undo restores
     /// this content while advancing revision and retaining issued IDs for redo (INV4/D2/D8).
     /// Equal content does not imply equal serialization or equal future ID allocation.
+    ///
+    /// Live equality (`PD8`, `PINV7`): each live part's `def` id and `params` are compared with
+    /// its slot, and so is the record that id resolves to. The arena length is not compared.
     pub fn content_eq(&self, other: &Self) -> bool {
         trim_trailing_none(&self.parts.slots) == trim_trailing_none(&other.parts.slots)
             && trim_trailing_none(&self.wires.slots) == trim_trailing_none(&other.wires.slots)
             && trim_trailing_none(&self.labels.slots) == trim_trailing_none(&other.labels.slots)
+            && self
+                .parts
+                .slots
+                .iter()
+                .flatten()
+                .all(|stored| self.part_defs.get(stored.def) == other.part_defs.get(stored.def))
     }
 }
 
 // Persistent-state equality retains the pre-command contract: revision and all reserved
 // slots matter. History and derived caches are not serialized and are not compared.
+// PD8: every slot's `def` and `params`, the definition arena length and the records of
+// referenced definitions are persistent too; retained records are history state and are
+// neither saved nor compared.
 impl PartialEq for Doc {
     fn eq(&self, other: &Self) -> bool {
         self.revision == other.revision
             && self.parts.slots == other.parts.slots
             && self.wires.slots == other.wires.slots
             && self.labels.slots == other.labels.slots
+            && self.part_defs.referenced_eq(&other.part_defs)
     }
 }
 impl Eq for Doc {}
@@ -304,8 +343,14 @@ mod tests {
         let mut bytes = Vec::new();
         doc.save(&mut bytes).unwrap();
         let mut loaded = Doc::load(bytes.as_slice()).unwrap();
-        assert_eq!(doc, loaded);
+        // Version 2 carries no definition table, so a trailing retained definition from the
+        // removed part cannot survive save/load until RON v3 lands in P2.3 (`PINV4`); live
+        // content, reserved item slots, revision and v2 bytes all match.
+        assert!(doc.content_eq(&loaded));
         assert_eq!(doc.revision(), loaded.revision());
+        let mut again = Vec::new();
+        loaded.save(&mut again).unwrap();
+        assert_eq!(again, bytes);
         let area = Rect::from_points(Pt { x: -10, y: -10 }, Pt { x: 10, y: 10 }).unwrap();
         let mut dots = Vec::new();
         loaded.junctions(area, &mut dots);
@@ -419,6 +464,99 @@ mod tests {
             assert_eq!(
                 Doc::load(text.as_bytes()).unwrap_err().kind(),
                 io::ErrorKind::InvalidData
+            );
+        }
+    }
+
+    /// `PTC-v2-compat` (`PD8`, `P2.1`): unmodelled documents still save as version 2, byte for
+    /// byte. The committed goldens were written by the v2 writer. The writer's line ending is
+    /// the platform's and a checkout may rewrite the goldens' line endings, so both sides are
+    /// compared with CRLF folded to LF; everything else must match exactly.
+    #[test]
+    fn p2_1_v2_save_load_is_byte_compatible_for_unmodelled_documents() {
+        for golden in [
+            include_str!("../../../tests/golden/inverting-amp.ron"),
+            include_str!("../../../tests/golden/wien-oscillator.ron"),
+        ] {
+            let golden = golden.replace("\r\n", "\n");
+            let doc = Doc::load(golden.as_bytes()).unwrap();
+            let mut saved = Vec::new();
+            doc.save(&mut saved).unwrap();
+            let text = String::from_utf8(saved.clone()).unwrap();
+            assert_eq!(text.replace("\r\n", "\n"), golden);
+            let mut again = Vec::new();
+            Doc::load(saved.as_slice())
+                .unwrap()
+                .save(&mut again)
+                .unwrap();
+            assert_eq!(again, saved);
+        }
+    }
+
+    /// `PD8` (`P2.1`): strict v2 migration interns one unmodelled definition per unique
+    /// `(symbol, local_pins, local_bounds)` tuple in part-slot order (skipping holes), with
+    /// empty `params` on every loaded part.
+    #[test]
+    fn p2_1_v2_load_interns_unmodelled_defs_in_part_slot_order() {
+        let bounds_a = ((-10, -5), (10, 5));
+        let bounds_b = ((-4, -4), (4, 4));
+        let part = |symbol: u16, x: i32, pins: Vec<Coords>, bounds: (Coords, Coords)| PartRecord {
+            symbol,
+            at: (x, 0),
+            orient: 0,
+            designator: format!("U{x}"),
+            value: "1k".into(),
+            local_pins: pins,
+            local_bounds: bounds,
+        };
+        let sheet = Sheet {
+            version: 2,
+            revision: 7,
+            parts: vec![
+                Some(part(0, 0, vec![(-10, 0), (10, 0)], bounds_a)),
+                None,
+                Some(part(1, 20, vec![(0, 0)], bounds_b)),
+                Some(part(0, 40, vec![(-10, 0), (10, 0)], bounds_a)),
+                Some(part(0, 60, vec![(10, 0), (-10, 0)], bounds_a)),
+            ],
+            wires: vec![],
+            labels: vec![],
+        };
+        let text = ron::ser::to_string(&sheet).unwrap();
+        let doc = Doc::load(text.as_bytes()).unwrap();
+
+        assert_eq!(doc.revision(), 7);
+        assert_eq!(doc.part_def_id(PartId(0)), Some(PartDefId(0)));
+        assert_eq!(doc.part_def_id(PartId(1)), None);
+        assert_eq!(doc.part_def_id(PartId(2)), Some(PartDefId(1)));
+        assert_eq!(doc.part_def_id(PartId(3)), Some(PartDefId(0)));
+        assert_eq!(doc.part_def_id(PartId(4)), Some(PartDefId(2)));
+
+        let defs: Vec<_> = doc.part_defs().collect();
+        assert_eq!(defs.len(), 3);
+        assert_eq!(defs[0].0, PartDefId(0));
+        assert_eq!(&*defs[0].1.source_id, "legacy:0");
+        assert_eq!(defs[1].0, PartDefId(1));
+        assert_eq!(&*defs[1].1.source_id, "legacy:1");
+        assert_eq!(defs[2].0, PartDefId(2));
+        assert_eq!(&*defs[2].1.source_id, "legacy:0");
+        assert_ne!(defs[0].1.local_pins, defs[2].1.local_pins);
+
+        for (pid, p) in doc.parts() {
+            assert_eq!(doc.part_params(pid), Some(&crate::Params::new()));
+            let def = doc.part_def(doc.part_def_id(pid).unwrap()).unwrap();
+            assert!(def.is_unmodelled());
+            assert_eq!(crate::part_def::validate(def), Ok(()));
+            assert_eq!(
+                crate::part_def::validate_instance(
+                    def,
+                    p.symbol,
+                    &def.local_pins,
+                    def.local_bounds,
+                    &p.value,
+                    doc.part_params(pid).unwrap(),
+                ),
+                Ok(())
             );
         }
     }
