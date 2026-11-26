@@ -578,7 +578,7 @@ of the `canvas` lane.
   and B4. Re-run the T2.7 table.
 - Done when: all pass on the reference machine; otherwise record and set `needs-human`.
 
-### T5.6 Shell canvas hooks: select_all and ZoomArea · todo
+### T5.6 Shell canvas hooks: select_all and ZoomArea · done
 - Lane: canvas · Depends: T5.3 · Read: K13, D7, ui-plan.md UD3, section 10
 - Owns: `SheetCanvas::select_all` in `crates/omnia-canvas/src/input.rs`; `Tool::ZoomArea` in
   `crates/omnia-canvas/src/tool.rs`, `overlay.rs` and `input.rs`
@@ -2457,3 +2457,34 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        evidence in `docs/measurements/T5.4/orion-2026-11-25-remote-pass/` (tarball
                        SHA-256 `f103d9e3…`) and updated `docs/measurements/T5.4.md`. Milestone 5
                        gate certified `done`.
+2026-11-25  T5.6  done  Added `SheetCanvas::select_all` (`crates/omnia-canvas/src/input.rs`,
+                       forwarding via `gesture_owner` to `OverlayView::select_all`) and
+                       `Tool::ZoomArea` across `crates/omnia-canvas/src/{tool.rs,overlay.rs,input.rs}`
+                       (`T4.3` and `T4.5` follow-ups; `ui-plan.md` §10/§14, `K13`, `D7`, `INV5`,
+                       `INV6`, `INV11`, `B8`, `B10`, `C4`, `UD3`). Added `ZoomAreaGesture`,
+                       `ToolPhase::ZoomingArea`, `ToolState::ZoomingArea`,
+                       `ToolRequest::ZoomArea`, `ToolMachine::holds_capture()`, crate-private
+                       `CanvasZoomArea`, and `OverlayView::fit_area` / `SheetCanvas::fit_area`
+                       (`fit_area_camera`, 150 ms K13 ease-out); wired `holds_capture()` across
+                       all C4 capture guards, cancelled in-flight animations on drag start, and
+                       painted the zoom rectangle with `stage_select_halo` + `stage_select`
+                       outline (0 warm Omnia allocs, 0 `SheetView` paints); degenerate
+                       click/1D drags stay in `Tool::ZoomArea` without zooming while valid
+                       2D drags animate and return to `Tool::Select`, and Esc cancels cleanly.
+                       Added pure `ToolMachine` tests, all 15 C4 end paths for
+                       `GestureKind::ZoomArea`, and GPUI simulated-input tests for
+                       `SheetCanvas::select_all` and `Tool::ZoomArea` (all 4 drag directions,
+                       INV5, INV11/UQ15, K13, B8, B10, mid-animation and doc-switch guards).
+                       Updated `canvas-plan.md` §9. Local Windows checks passed:
+                       `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+                       `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
+                       `cargo test --workspace`, and `cargo deny check`.
+2026-11-25  T5.6 review fixes  done  Addressed independent review findings on PR #144
+                       (`gemini-4-neon`): converted `CanvasZoomArea` into `{ Cancel { doc },
+                       Fit { doc, area } }` so starting a `ZoomArea` drag cancels any in-flight
+                       `SheetCanvas` camera animation alongside `OverlayView` (extended
+                       `t5_6_zoom_area_mid_animation_and_doc_switch_guards` to assert both views
+                       stop animating and stay synced on `Esc` cancel), and updated
+                       `holds_capture`'s comment in `canvas-plan.md` §9 to list pointer-driven
+                       `DraggingSegment`. Merged `origin/main` and re-ran all five standard
+                       checks locally on Windows.

@@ -1,0 +1,20 @@
+ngspice version: 47
+source url: https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/47/ngspice-47.tar.gz
+tarball sha256: 894e649651f1838a14095e5a5439e7d3aa63e87ede14d283173fda4fcdef675f
+configure flags: --disable-dependency-tracking --with-ngshared --disable-debug --enable-xspice --disable-cider --disable-klu --disable-osdi --disable-openmp --without-x --with-readline=no --with-editline=no --with-fftw3=no CFLAGS=-O2 LDFLAGS='-static-libgcc -static-libstdc++'
+build targets: src/misc src/maths src/frontend src/spicelib src/xspice/{mif,cm,enh,evt,idn} + src/libngspice.la (src/xspice/icm skipped; zero .cm codemodels built or installed)
+=== config.h selected macros ===
+/* The CIDER enhancements */
+/* #undef CIDER */
+/* #undef HAVE_BSDEDITLINE */
+/* #undef HAVE_GNUREADLINE */
+/* #undef HAVE_LIBFFTW3 */
+/* Define if we want KLU linear systems solver */
+/* #undef KLU */
+/* The OSDI enhancements */
+/* #undef OSDI */
+#define SHARED_MODULE 1
+/* #undef USE_OMP */
+/* The XSPICE enhancements */
+#define XSPICE 1
+#define X_DISPLAY_MISSING 1
