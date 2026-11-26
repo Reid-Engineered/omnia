@@ -90,8 +90,10 @@ pub(super) enum GhostPreview<'a> {
         items: &'a [ItemId],
         transform: Isometry,
         affected_wires: &'a [WireId],
+        affected_labels: &'a [LabelId],
         plan_add: &'a [Wire],
         plan_remove_sorted: &'a [WireId],
+        plan_labels_sorted: &'a [(LabelId, Pt)],
         preview_junctions: &'a [Pt],
         refusal: Option<FollowError>,
     },
@@ -109,12 +111,14 @@ impl GhostPreview<'_> {
             Self::Follow {
                 items,
                 affected_wires,
+                affected_labels,
                 plan_add,
                 refusal,
                 ..
             } => {
                 !items.is_empty()
                     || !affected_wires.is_empty()
+                    || !affected_labels.is_empty()
                     || !plan_add.is_empty()
                     || refusal.is_some()
             }
@@ -639,7 +643,7 @@ fn paint_ghost_wire_halo(
     }
 }
 
-fn paint_ghost_label_halo(
+pub(super) fn paint_ghost_label_halo(
     ghost: GhostLabel,
     params: &GhostPaintParams<'_>,
     palette: GhostPalette,
@@ -738,7 +742,7 @@ fn paint_ghost_wire_fg(
     }
 }
 
-fn paint_ghost_label_fg(
+pub(super) fn paint_ghost_label_fg(
     ghost: GhostLabel,
     outline_dev: u32,
     label_dot_dev: u32,
@@ -995,8 +999,10 @@ pub(super) fn paint_ghosts(
             items,
             transform,
             affected_wires,
+            affected_labels,
             plan_add,
             plan_remove_sorted,
+            plan_labels_sorted,
             preview_junctions,
             refusal,
         } => {
@@ -1005,8 +1011,10 @@ pub(super) fn paint_ghosts(
                     items,
                     transform,
                     affected_wires,
+                    affected_labels,
                     plan_add,
                     plan_remove_sorted,
+                    plan_labels_sorted,
                     preview_junctions,
                     refusal,
                 },

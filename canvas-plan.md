@@ -699,12 +699,11 @@ pub struct DocStamp { pub key: u64, pub revision: u64 }   // key: doc_key(&Entit
 pub fn doc_key(doc: &Entity<Doc>) -> u64;
 pub const FOLLOW_PREVIEW_CAP: usize;                      // 256 affected runs (WK7, tool/move_.rs)
 pub enum FollowPreview { None, Accepted, Refused(FollowError), OverCap { run_count: usize } } // W2.3
+pub enum RefusalVerb { Move, Reorient }                 // W2.3: notice prefix for refused commits
 pub struct DragGesture { pub items: Vec<ItemId>, pub pressed: ItemId, pub anchor: Pt,
                          pub current: Pt, pub pivot: Pt, pub by: Orient, pub base: DocStamp,
-                         /* private anchor_pin, prefs, alt, lifted, preview_only, affected_wires,
-                            hidden, plan, plan_remove_sorted, preview_junctions,
-                            junction_candidates, query_scratch, preview, last_plan_key,
-                            plan_calls */ }
+                         /* private anchor_pin, prefs, alt, lifted, preview_only, cache, preview,
+                            last_plan_key, plan_calls */ }
 impl DragGesture {
     pub fn start(doc: &Doc, items: Vec<ItemId>, pressed: ItemId, anchor: Pt,
                  base: DocStamp, prefs: WiringPrefs, alt: bool) -> Self; // W2.3
@@ -720,9 +719,11 @@ impl DragGesture {
     pub fn plan_calls(&self) -> u64;                     // W2.3: plan_follow call count (WD11)
     pub fn hidden_items(&self) -> &[ItemId];             // W2.3: fixed after lift-off (WINV11)
     pub fn affected_wires(&self) -> &[WireId];           // W2.3
+    pub fn affected_labels(&self) -> &[LabelId];         // W2.3
     pub fn plan(&self) -> &FollowPlan;                   // W2.3
     pub fn plan_add(&self) -> &[Wire];                   // W2.3
     pub fn plan_remove_sorted(&self) -> &[WireId];       // W2.3
+    pub fn plan_labels_sorted(&self) -> &[(LabelId, Pt)]; // W2.3
     pub fn preview_junctions(&self) -> &[Pt];            // W2.3: restored K6 junction dots
     pub fn follow_policy(&self, alt: bool) -> FollowPolicy; // W2.3
     pub fn delta(&self) -> Pt;                           // T5.3: anchor-pin snapped to GRID_NM (K2)
@@ -731,6 +732,7 @@ impl DragGesture {
     pub fn set_alt(&mut self, doc: Option<&Doc>, alt: bool) -> bool; // W2.3
     pub fn update_preview(&mut self, doc: Option<&Doc>) -> bool;     // W2.3
     pub fn preview_wires(&self, doc: &Doc) -> Vec<Wire>;             // W2.3 (WINV5)
+    pub fn preview_labels(&self, doc: &Doc) -> Vec<(LabelId, Pt)>;   // W2.3 (WINV5)
 }
 // T5.3/T5.5: R, X and Y during a drag compose into `DragGesture.by` (previewed as ghosts) and
 // commit as one `Command::Transform` so one undo reverts the whole gesture (INV5).

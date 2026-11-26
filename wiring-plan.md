@@ -640,20 +640,28 @@ W2.3 implementation notes (2026-11-26): `omnia-canvas` implements live follow pr
 mid-drag `R`/`X`/`Y` and `Alt` (`WK3`, `ModifiersChangedEvent`) re-planning, refusal
 feedback, and `SheetCanvas::set_wiring_prefs` (`WD12`, `ui-plan.md` §14). `tool/move_.rs`
 defines `FOLLOW_PREVIEW_CAP = 256` (`WK7`), `FollowPreview { None, Accepted, Refused(FollowError), OverCap { run_count } }`,
-and `DragGesture` (computing `boundary_points` / `affected_runs` once at press, keeping a
-fixed lift-off `hidden_items()` set across `items ∪ affected_wires` so `SheetView` paints
-strictly twice per drag per `WINV11`, caching `plan_follow` on `(delta, by, alt)` per
-`WD11`, skipping `plan_follow` at identity and above `FOLLOW_PREVIEW_CAP`, and exposing
-`preview_wires` / `preview_junctions`). `overlay/follow.rs` renders surviving wires and
-restored `K6` junction dots in `stage/ink`, `plan.add` wires in ghost ink + halo, and
-refused ghosts + moved/stationary `Blocker` in `mark/conflict` with zero warm Omnia heap
-allocations (`B10`, `INV6`). Refusal on mouse-up cancels like `Esc` (`WINV4`) and emits
-`CanvasNotice` via a separate `EventEmitter<CanvasNotice>` (keeping `CanvasEvent` exhaustive
-matches intact), filtered under C2 on `SheetCanvas` (`last_notice`). Note for W2.4/W2.5:
-`OverlayView::on_mouse_move` wraps `ToolMachine::pointer_move_with_radii_and_alt` inside
-`run_omnia`, where `plan_follow`'s nonempty path currently allocates its layered view and
-scratch (as noted in W2.1 above), while the warm overlay paint path (`overlay/follow.rs`)
-allocates zero Omnia bytes.
+`RefusalVerb { Move, Reorient }`, and `DragGesture` (computing `boundary_points` /
+`affected_runs` once at press, keeping a fixed lift-off `hidden_items()` set across
+`items ∪ affected_wires ∪ affected_labels` so `SheetView` paints strictly twice per drag
+per `WINV11`, caching `plan_follow` on `(delta, by, alt)` per `WD11`, skipping
+`plan_follow` at identity and above `FOLLOW_PREVIEW_CAP`, and exposing
+`preview_wires` / `preview_labels` / `preview_junctions`). `overlay/follow.rs` renders
+surviving wires and restored `K6` junction dots in `stage/ink`, `plan.add` wires in
+ghost ink + halo, moved rigid-run corner labels (`plan.labels`, or a stationary anchor
+dot when detached/refused with text deferred to W3.6), and refused ghosts +
+moved/stationary `Blocker` in `mark/conflict` with zero warm Omnia heap allocations
+(`B10`, `INV6`). Refusal on mouse-up cancels like `Esc` (`WINV4`) and `apply_change`
+forwards move/transform/reorient commit refusals as `CanvasNotice` (`RefusalVerb`, via a
+separate `EventEmitter<CanvasNotice>` keeping `CanvasEvent` exhaustive matches intact),
+filtered under C2 on `SheetCanvas` (`last_notice`). Known `WINV5` boundary (P2-2): live
+drag preview runs `plan_follow` only (`FollowError`); non-follow `CommandError::{Capture,
+OffLattice, OutOfBounds}` checks happen at commit inside `Doc::apply` (preserving `WINV4`
+atomicity and surfacing `Move refused: ...` via `CanvasNotice`), and previewing those
+live requires a future dry-run validator in `omnia-doc` outside W2.3's ownership. Note
+for W2.4/W2.5: `OverlayView::on_mouse_move` wraps
+`ToolMachine::pointer_move_with_radii_and_alt` inside `run_omnia`, where `plan_follow`'s
+nonempty path currently allocates its layered view and scratch (as noted in W2.1 above),
+while the warm overlay paint path (`overlay/follow.rs`) allocates zero Omnia bytes.
 
 Bench additions. Every subcommand exits by itself and takes `--json <file>`.
 

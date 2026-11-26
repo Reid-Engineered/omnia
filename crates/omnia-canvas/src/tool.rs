@@ -706,10 +706,12 @@ impl ToolMachine {
     /// Pointer motion at world point `at`; `left_held` is whether the left button is down.
     /// Hover is not handled here (see [`Self::hover`]).
     ///
-    /// Without `&Doc`, an active `DraggingSegment` previews attempted wires as
+    /// Without `&Doc`, an active `Dragging` gesture keeps its prior `FollowPreview` without
+    /// calling [`omnia_doc::plan_follow`], an active `DraggingSegment` previews attempted wires as
     /// [`SegmentPreview::Accepted`] without calling [`omnia_doc::route::plan_segment_drag`], and
-    /// `Tool::Wire` records raw `cursor` without WD5 snapping; use [`Self::pointer_move_with_radii`]
-    /// for live planning and snapping.
+    /// `Tool::Wire` records raw `cursor` without WD5 snapping; use
+    /// [`Self::pointer_move_with_radii`] or [`Self::pointer_move_with_radii_and_alt`] for live
+    /// planning and snapping.
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome {
         let radii = PointerRadii {
             hit: omnia_doc::PIN_LATTICE_NM.saturating_mul(2) / 5,
@@ -899,9 +901,10 @@ impl ToolMachine {
     /// A left release at world point `at`. `alt` is read from the release event, which
     /// decides the follow policy at commit (WK3).
     ///
-    /// Without `&Doc`, an active `DraggingSegment` re-plans its release offset without calling
-    /// [`omnia_doc::route::plan_segment_drag`] (`Doc::apply` still validates on commit); use
-    /// [`Self::pointer_up_with_doc`] for live planning and refusal handling.
+    /// Without `&Doc`, neither an active `Dragging` gesture (`omnia_doc::plan_follow`) nor an
+    /// active `DraggingSegment` (`omnia_doc::route::plan_segment_drag`) re-plans at the release
+    /// point (`Doc::apply` still validates on commit); use [`Self::pointer_up_with_doc`] for live
+    /// release re-planning and preview-time refusal handling.
     pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome {
         self.pointer_up_inner(None, at, alt)
     }
@@ -1084,6 +1087,9 @@ impl ToolMachine {
     /// R, X or Y: composes `by` into an active drag (T5.3/T5.5, committed as `Command::Transform`)
     /// or placement preview (re-snapping anchor pin 0); outside a gesture asks the host to turn
     /// the selection with `Command::Reorient`. Ignored in `Tool::Wire`.
+    ///
+    /// Without `&Doc`, a mid-drag call does not re-run [`omnia_doc::plan_follow`]; use
+    /// [`Self::reorient_with_doc`] for live follow preview updates.
     pub fn reorient(&mut self, by: Orient) -> ToolOutcome {
         self.reorient_inner(None, by)
     }
@@ -1247,8 +1253,15 @@ pub(crate) trait ToolHost: Sized + 'static {
     /// Carry out a request the machine cannot finish alone. Default: not supported yet
     /// (T5.3 adds placement, reorienting and deleting the selection).
     fn request(&mut self, _request: ToolRequest, _cx: &mut Context<Self>) {}
-    /// Called when [`Doc::apply`] refuses a commit command (`WD11`, `WK7`).
-    fn command_refused(&mut self, _base: DocStamp, _error: CommandError, _cx: &mut Context<Self>) {}
+    /// Called when [`Doc::apply`] refuses a move, transform, or reorient commit (`WD11`, `WK7`).
+    fn command_refused(
+        &mut self,
+        _base: DocStamp,
+        _verb: move_::RefusalVerb,
+        _error: CommandError,
+        _cx: &mut Context<Self>,
+    ) {
+    }
 }
 
 /// Carries out one [`ToolOutcome`]: applies its commit as one `Doc::apply` (INV5), repaints
@@ -1288,6 +1301,11 @@ pub(crate) fn apply_change<H: ToolHost>(
     if doc_key(&doc) != commit.base.key {
         return None;
     }
+    let refusal_verb = match &commit.command {
+        Command::Move { .. } | Command::Transform { .. } => Some(move_::RefusalVerb::Move),
+        Command::Reorient { .. } => Some(move_::RefusalVerb::Reorient),
+        _ => None,
+    };
     let result = doc.update(cx, |doc, _| {
         if doc.revision() != commit.base.revision {
             return Ok(None);
@@ -1303,7 +1321,9 @@ pub(crate) fn apply_change<H: ToolHost>(
         }
         Ok(None) => None,
         Err(err) => {
-            host.command_refused(commit.base, err, cx);
+            if let Some(verb) = refusal_verb {
+                host.command_refused(commit.base, verb, err, cx);
+            }
             None
         }
     }
@@ -9233,5 +9253,244 @@ mod tests {
             cx.update(|_, cx| canvas.read(cx).last_notice().map(str::to_owned)),
             Some("live notice".to_owned())
         );
+    }
+
+    /// P2-3 + WINV5 + WINV11: a rigid run's non-selected corner label is hidden at lift-off,
+    /// tracked in `DragGesture::preview_labels`, paints `SheetView` strictly twice over the whole
+    /// drag, and commits to the exact previewed coordinate.
+    #[gpui::test]
+    fn w2_3_rigid_run_corner_label_preview_hides_once_and_matches_commit(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let r1 = w2_3_part_resistor(&mut doc, pt(-6, 0), "R1");
+        let r2 = w2_3_part_resistor(&mut doc, pt(6, 4), "R2");
+        doc.apply(Command::AddWires(vec![
+            Wire {
+                a: pt(-4, 0),
+                b: pt(4, 0),
+            },
+            Wire {
+                a: pt(4, 0),
+                b: pt(4, 4),
+            },
+        ]))
+        .unwrap();
+        let lid = doc
+            .apply(Command::AddLabel(omnia_doc::Label {
+                at: pt(4, 0),
+                text: "MID".into(),
+            }))
+            .unwrap()
+            .added
+            .into_iter()
+            .find_map(|id| match id {
+                ItemId::Label(l) => Some(l),
+                _ => None,
+            })
+            .unwrap();
+
+        let rig = open_del_rig(cx, doc, false);
+        let overlay = rig.overlay.clone();
+        let doc = rig.doc.clone();
+        let rev0 = revision(&doc, rig.cx);
+        let paints0 = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                o.set_selection([ItemId::Part(r1), ItemId::Part(r2)], cx);
+            });
+        });
+        down(&overlay, rig.cx, pt(-6, 0));
+        drag_to(&overlay, rig.cx, pt(-4, 3));
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints0 + 1,
+            "WINV11: rigid corner label lift paints SheetView once"
+        );
+        let preview_labels = rig.cx.update(|_, cx| {
+            let ToolState::Dragging(drag) = overlay.read(cx).tool_state() else {
+                panic!("expected Dragging");
+            };
+            assert!(drag.hidden_items().contains(&ItemId::Label(lid)));
+            drag.preview_labels(doc.read(cx))
+        });
+        assert_eq!(preview_labels, vec![(lid, pt(6, 3))]);
+
+        up(&overlay, rig.cx, pt(-4, 3));
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints0 + 2,
+            "WINV11: rigid corner label commit paints SheetView strictly twice"
+        );
+        assert_eq!(revision(&doc, rig.cx), rev0 + 1);
+        assert_eq!(
+            doc.read_with(rig.cx, |d, _| d.label(lid).unwrap().at),
+            pt(6, 3),
+            "WINV5: post-commit label matches rigid preview"
+        );
+    }
+
+    /// P2-2 + P2-4: `CommandError::Capture` on commit leaves revision unchanged (`WINV4`) and
+    /// emits `"Move refused: ..."`; refused idle `Reorient` emits `"Reorient refused: ..."`;
+    /// refused non-move commands remain silent (no mislabelled `"Move refused"` notice).
+    #[gpui::test]
+    fn w2_3_command_refused_scopes_move_reorient_and_non_move_plus_capture_winv4(
+        cx: &mut TestAppContext,
+    ) {
+        // 1. Capture on Move commit (WINV4) + silent non-move refusal.
+        let mut doc = Doc::new();
+        let w = doc
+            .apply(Command::AddWires(vec![Wire {
+                a: pt(0, 0),
+                b: pt(0, 4),
+            }]))
+            .unwrap()
+            .added[0];
+        let tag = doc
+            .apply(Command::AddLabel(omnia_doc::Label {
+                at: pt(-2, 0),
+                text: "TAG".into(),
+            }))
+            .unwrap()
+            .added[0];
+        let _foreign = w2_3_part_resistor(&mut doc, pt(4, 2), "RF"); // left pin at (2, 2)
+
+        let mut rig = open_del_rig(cx, doc, false);
+        let overlay = rig.overlay.clone();
+        let canvas = rig.canvas.clone();
+        let doc = rig.doc.clone();
+        let original = rig.snapshot();
+        let rev0 = revision(&doc, rig.cx);
+
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_selection([w, tag], cx));
+        });
+        // Press TAG at (-2, 0) and drag by (+2, 0) so the vertical wire (0,0)-(0,4) lands across
+        // foreign pin (2, 2) at (2, 0)-(2, 4).
+        down(&overlay, rig.cx, pt(-2, 0));
+        drag_to(&overlay, rig.cx, pt(0, 0));
+        up(&overlay, rig.cx, pt(0, 0));
+        assert_eq!(revision(&doc, rig.cx), rev0, "WINV4: Capture refuses edit");
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        let move_notice = rig
+            .cx
+            .update(|_, cx| canvas.read(cx).last_notice().map(str::to_owned))
+            .expect("Capture move refusal must emit notice");
+        assert!(
+            move_notice.starts_with("Move refused:"),
+            "unexpected move refusal notice: {move_notice}"
+        );
+
+        // A refused non-move command (out-of-bounds PlacePart via apply_change) emits NO notice.
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.clear_notice(cx));
+        });
+        rig.cx.run_until_parked();
+        rig.cx.update(|_, cx| {
+            let lib = SymbolLibrary::builtin();
+            let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+            let def = lib.get(res);
+            let bad_place = Commit {
+                command: Command::PlacePart {
+                    part: omnia_doc::Part {
+                        symbol: res,
+                        at: Pt {
+                            x: omnia_doc::SHEET_LIMIT_NM + G,
+                            y: 0,
+                        },
+                        orient: Orient::IDENTITY,
+                        designator: "RBAD".into(),
+                        value: "1k".into(),
+                    },
+                    local_pins: def.pins.iter().map(|p| p.at).collect(),
+                    local_bounds: def.bounds,
+                },
+                base: DocStamp {
+                    key: doc_key(&doc),
+                    revision: rev0,
+                },
+            };
+            let applied = overlay.update(cx, |o, cx| apply_change(o, bad_place, cx));
+            assert!(applied.is_none());
+            assert!(canvas.read(cx).last_notice().is_none());
+            assert!(overlay.read(cx).last_notice().is_none());
+        });
+
+        // 2. Idle `Reorient` follow refusal emits "Reorient refused: ...".
+        let mut rdoc = Doc::new();
+        let r1 = w2_3_part_resistor(&mut rdoc, pt(-6, 0), "R1");
+        rdoc.apply(Command::AddWires(vec![Wire {
+            a: pt(-4, 0),
+            b: pt(0, 0),
+        }]))
+        .unwrap();
+        // Rotating R1 around (-6, 0) puts its right pin (-4, 0) at (-6, 2); cage (-6, 2).
+        w2_3_place_cage(&mut rdoc, pt(-6, 2), "RC");
+        let rrev0 = rdoc.revision();
+        rig.cx.update(|_, cx| {
+            doc.update(cx, |d, _| *d = rdoc);
+            overlay.update(cx, |o, cx| {
+                o.set_document(doc.clone(), cx);
+                o.set_selection([ItemId::Part(r1)], cx);
+            });
+        });
+        down(&overlay, rig.cx, pt(-6, 0));
+        up(&overlay, rig.cx, pt(-6, 0));
+        rig.cx.simulate_keystrokes("r");
+        assert_eq!(revision(&doc, rig.cx), rrev0);
+        let reorient_notice = rig
+            .cx
+            .update(|_, cx| canvas.read(cx).last_notice().map(str::to_owned))
+            .expect("refused Reorient must emit notice");
+        assert!(
+            reorient_notice.starts_with("Reorient refused:"),
+            "expected 'Reorient refused: ...', got: {reorient_notice}"
+        );
+    }
+
+    /// WINV5: dragging a part together with one of its attached wires (`TC-move-17`) matches the
+    /// committed sheet wires.
+    #[gpui::test]
+    fn w2_3_winv5_tc_move_17_selected_wire_and_part(cx: &mut TestAppContext) {
+        let mut doc = Doc::new();
+        let r1 = w2_3_part_resistor(&mut doc, pt(-6, 0), "R1");
+        let w_left = doc
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: pt(-10, 0),
+                    b: pt(-8, 0),
+                },
+                Wire {
+                    a: pt(-4, 0),
+                    b: pt(0, 0),
+                },
+                Wire {
+                    a: pt(0, 0),
+                    b: pt(0, 4),
+                },
+            ]))
+            .unwrap()
+            .added[0];
+        let rig = open_del_rig(cx, doc, false);
+        let overlay = rig.overlay.clone();
+        let doc = rig.doc.clone();
+
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_selection([ItemId::Part(r1), w_left], cx));
+        });
+        down(&overlay, rig.cx, pt(-6, 0));
+        drag_to(&overlay, rig.cx, pt(-5, 2));
+        let preview = rig.cx.update(|_, cx| {
+            let ToolState::Dragging(drag) = overlay.read(cx).tool_state() else {
+                panic!("expected Dragging");
+            };
+            w2_3_preview_sheet_wires(doc.read(cx), drag)
+        });
+        up(&overlay, rig.cx, pt(-5, 2));
+        let committed = rig.cx.update(|_, cx| w2_3_doc_wires(doc.read(cx)));
+        assert_eq!(preview, committed, "WINV5 (TC-move-17)");
     }
 }

@@ -15,9 +15,9 @@
 use super::{
     DevRect,
     ghosts::{
-        BLOCKER_PIN_HALF_PX, BLOCKER_WIRE_PAD_PX, GhostPaintParams, GhostPaintStyle,
-        blocker_dev_rect, paint_drag_items_fg, paint_drag_items_halo, resolve_drag_wire,
-        transform_pt, wire_bounds,
+        BLOCKER_PIN_HALF_PX, BLOCKER_WIRE_PAD_PX, GhostLabel, GhostPaintParams, GhostPaintStyle,
+        blocker_dev_rect, paint_drag_items_fg, paint_drag_items_halo, paint_ghost_label_fg,
+        paint_ghost_label_halo, resolve_drag_wire, transform_pt, wire_bounds,
     },
     gpui_color, label_rect_dev, padded_rect_dev, paint_quad_scoped, paint_solid_outline, run_gpui,
     run_omnia, wire_rect_dev,
@@ -27,7 +27,7 @@ use crate::{
     snap_px::{centered_square, stroke_device_px},
 };
 use gpui::{App, Hsla, Window, fill};
-use omnia_doc::{FollowError, Isometry, ItemId, Pt, Wire, WireId, route::Blocker};
+use omnia_doc::{FollowError, Isometry, ItemId, LabelId, Pt, Wire, WireId, route::Blocker};
 
 /// Resolves the device-pixel conflict rectangle for `blocker`, applying `transform` if the blocker
 /// belongs to a moved item in `items` (`WD11`, `B10`).
@@ -120,8 +120,10 @@ pub(super) struct FollowPreviewData<'a> {
     pub items: &'a [ItemId],
     pub transform: Isometry,
     pub affected_wires: &'a [WireId],
+    pub affected_labels: &'a [LabelId],
     pub plan_add: &'a [Wire],
     pub plan_remove_sorted: &'a [WireId],
+    pub plan_labels_sorted: &'a [(LabelId, Pt)],
     pub preview_junctions: &'a [Pt],
     pub refusal: Option<FollowError>,
 }
@@ -136,13 +138,14 @@ pub(super) fn paint_follow_preview(
 ) {
     let GhostPaintStyle { palette, sizes } = style;
     let full_ink = gpui_color(params.theme.stage_ink);
+    let ink_secondary = gpui_color(params.theme.stage_ink_secondary);
     let refused_blocker = data
         .refusal
         .map(|FollowError::NoRoute { blocker, .. }| blocker);
     let is_refused = refused_blocker.is_some();
 
-    // Layer 1: translucent wire halos behind planned follow segments, dragged item halos (or
-    // conflict fill on refusal), and blocker conflict highlight (`INV6`).
+    // Layer 1: translucent wire/label halos behind planned follow segments, dragged item halos
+    // (or conflict fill on refusal), and blocker conflict highlight (`INV6`).
     window.paint_layer(|window| {
         run_omnia(params.scope, || {
             if !is_refused {
@@ -161,6 +164,23 @@ pub(super) fn paint_follow_preview(
                             window,
                             fill(rect.bounds(params.sf), palette.wire_halo),
                             params.scope,
+                        );
+                    }
+                }
+                for &id in data.affected_labels {
+                    if let Ok(idx) = data
+                        .plan_labels_sorted
+                        .binary_search_by_key(&id.0, |(lid, _)| lid.0)
+                    {
+                        let moved_at = data.plan_labels_sorted[idx].1;
+                        paint_ghost_label_halo(
+                            GhostLabel {
+                                at: moved_at,
+                                in_bounds: moved_at.is_in_bounds(),
+                            },
+                            params,
+                            palette,
+                            window,
                         );
                     }
                 }
@@ -187,7 +207,8 @@ pub(super) fn paint_follow_preview(
     });
 
     // Layer 2: surviving original affected wires + K6 junction dots in full `stage/ink`, newly
-    // routed follow wires in ghost ink, dragged items (conflict on refusal), and blocker outline.
+    // routed follow wires in ghost ink, moved rigid-run corner labels (or stationary anchor when
+    // detached/refused), dragged items (conflict on refusal), and blocker outline.
     window.paint_layer(|window| {
         run_omnia(params.scope, || {
             for &id in data.affected_wires {
@@ -233,6 +254,38 @@ pub(super) fn paint_follow_preview(
                 }
             }
             paint_junction_dots(data.preview_junctions, full_ink, params, window, cx);
+            for &id in data.affected_labels {
+                if !is_refused
+                    && let Ok(idx) = data
+                        .plan_labels_sorted
+                        .binary_search_by_key(&id.0, |(lid, _)| lid.0)
+                {
+                    let moved_at = data.plan_labels_sorted[idx].1;
+                    paint_ghost_label_fg(
+                        GhostLabel {
+                            at: moved_at,
+                            in_bounds: moved_at.is_in_bounds(),
+                        },
+                        sizes.outline_dev,
+                        sizes.label_dot_dev,
+                        params,
+                        palette,
+                        window,
+                    );
+                } else if let Some(label) = params.doc.label(id)
+                    && params.visible_padded.contains(label.at)
+                {
+                    let screen = params.camera.world_to_screen(label.at);
+                    paint_quad_scoped(
+                        window,
+                        fill(
+                            centered_square(screen, sizes.label_dot_dev, params.sf),
+                            ink_secondary,
+                        ),
+                        params.scope,
+                    );
+                }
+            }
             paint_drag_items_fg(
                 data.items,
                 data.transform,
@@ -281,7 +334,7 @@ mod tests {
     use gpui::{
         AppContext, Bounds, Context, IntoElement, Render, TestAppContext, Window, point, px, size,
     };
-    use omnia_doc::{Command, Doc, GRID_NM, ItemId, Orient, Part, PartId, Pt, Wire};
+    use omnia_doc::{Command, Doc, GRID_NM, ItemId, Label, Orient, Part, PartId, Pt, Wire};
     use omnia_symbols::SymbolLibrary;
     use omnia_theme::{GRAPHITE, GRAY};
     use std::{cell::Cell, rc::Rc};
@@ -521,6 +574,95 @@ mod tests {
             scope.omnia_allocs.get(),
             0,
             "B10: far-zoom LOD follow overlay paint must make 0 Omnia allocations"
+        );
+    }
+
+    /// B10: rigid-run corner labels (moved in `plan_labels_sorted` or stationary when detached)
+    /// paint with zero warm Omnia heap allocations.
+    #[gpui::test]
+    fn w2_3_b10_warm_rigid_label_follow_paint_makes_zero_omnia_allocations(
+        cx: &mut TestAppContext,
+    ) {
+        let mut doc_val = Doc::new();
+        let r1 = place_resistor(&mut doc_val, pt(-6, 0), "R1");
+        let r2 = place_resistor(&mut doc_val, pt(6, 4), "R2");
+        doc_val
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: pt(-4, 0),
+                    b: pt(4, 0),
+                },
+                Wire {
+                    a: pt(4, 0),
+                    b: pt(4, 4),
+                },
+            ]))
+            .unwrap();
+        doc_val
+            .apply(Command::AddLabel(Label {
+                at: pt(4, 0),
+                text: "MID".into(),
+            }))
+            .unwrap();
+
+        let doc = cx.new(|_| doc_val);
+        let scope = Rc::new(FollowAllocScope::new());
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let doc_clone = doc.clone();
+        let scope_clone = scope.clone();
+
+        struct Host(gpui::Entity<OverlayView>);
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.0.clone()
+            }
+        }
+
+        let (host, cx) = cx.add_window_view(move |_, cx| {
+            let overlay = cx.new(|cx| {
+                OverlayView::new(
+                    doc_clone,
+                    Camera::new(Pt::ZERO, 1.0, viewport),
+                    &GRAPHITE,
+                    cx,
+                )
+                .with_paint_scope(scope_clone)
+            });
+            Host(overlay)
+        });
+        let overlay = host.read_with(cx, |h, _| h.0.clone());
+
+        // Warm rigid moved label + stationary fallback label path.
+        overlay.update(cx, |o, cx| {
+            assert!(o.set_move_preview(
+                [ItemId::Part(r1), ItemId::Part(r2)],
+                pt(1, 2),
+                Orient::IDENTITY,
+                false,
+                cx,
+            ));
+        });
+        cx.run_until_parked();
+
+        scope.omnia_allocs.set(0);
+        scope.omnia_calls.set(0);
+        scope.counting.set(true);
+        for (items, alt) in [
+            (vec![ItemId::Part(r1), ItemId::Part(r2)], false),
+            (vec![ItemId::Part(r1)], true),
+            (vec![ItemId::Part(r1), ItemId::Part(r2)], false),
+        ] {
+            overlay.update(cx, |o, cx| {
+                assert!(o.set_move_preview(items, pt(2, 2), Orient::IDENTITY, alt, cx));
+            });
+            cx.run_until_parked();
+        }
+        scope.counting.set(false);
+        assert!(scope.omnia_calls.get() >= 3);
+        assert_eq!(
+            scope.omnia_allocs.get(),
+            0,
+            "B10: warm rigid-label follow overlay paint must make 0 Omnia allocations"
         );
     }
 }

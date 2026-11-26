@@ -411,7 +411,7 @@ impl OverlayView {
         });
     }
 
-    fn clear_notice(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn clear_notice(&mut self, cx: &mut Context<Self>) {
         if self.last_notice.take().is_some() {
             cx.emit(tool::CanvasNoticeCleared {
                 doc: tool::doc_key(&self.doc),
@@ -1782,11 +1782,12 @@ impl ToolHost for OverlayView {
     fn command_refused(
         &mut self,
         base: tool::DocStamp,
+        verb: tool::move_::RefusalVerb,
         error: CommandError,
         cx: &mut Context<Self>,
     ) {
         if tool::doc_key(&self.doc) == base.key {
-            self.set_notice(tool::move_::format_command_refusal(error), cx);
+            self.set_notice(tool::move_::format_command_refusal(verb, error), cx);
         }
     }
 }
@@ -2030,7 +2031,10 @@ impl Element for OverlayLayer {
                     tool::ToolState::Dragging(drag)
                         if drag.is_lifted() && !drag.items.is_empty() =>
                     {
-                        if drag.affected_wires().is_empty() && !drag.is_refused() {
+                        if drag.affected_wires().is_empty()
+                            && drag.affected_labels().is_empty()
+                            && !drag.is_refused()
+                        {
                             ghosts::GhostPreview::Drag {
                                 items: &drag.items,
                                 transform: drag.isometry(),
@@ -2040,8 +2044,10 @@ impl Element for OverlayLayer {
                                 items: &drag.items,
                                 transform: drag.isometry(),
                                 affected_wires: drag.affected_wires(),
+                                affected_labels: drag.affected_labels(),
                                 plan_add: drag.plan_add(),
                                 plan_remove_sorted: drag.plan_remove_sorted(),
+                                plan_labels_sorted: drag.plan_labels_sorted(),
                                 preview_junctions: drag.preview_junctions(),
                                 refusal: drag.refusal(),
                             }

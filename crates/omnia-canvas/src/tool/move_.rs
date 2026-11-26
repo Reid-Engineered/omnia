@@ -20,7 +20,7 @@ use crate::{
 use gpui::SharedString;
 use omnia_doc::{
     Boundary, Command, CommandError, Doc, FollowError, FollowPlan, GRID_NM, Isometry, ItemId,
-    Orient, Pt, Rect, SHEET_LIMIT_NM, Wire, WireId, plan_follow,
+    LabelId, Orient, Pt, Rect, SHEET_LIMIT_NM, Wire, WireId, plan_follow,
     prefs::{FollowPolicy, WiringPrefs},
     route::Blocker,
     snap_to,
@@ -214,36 +214,62 @@ pub enum FollowPreview {
     OverCap { run_count: usize },
 }
 
-/// Formats a user-facing status notice for a live or commit-time [`FollowError`] (`WD11`, `UD11`).
-pub fn format_follow_refusal(error: FollowError) -> SharedString {
+/// Operation verb used to prefix commit-time and drag-time command refusal notices (`UD11`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusalVerb {
+    Move,
+    Reorient,
+}
+
+impl RefusalVerb {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Move => "Move refused",
+            Self::Reorient => "Reorient refused",
+        }
+    }
+}
+
+/// Formats a user-facing status notice for a [`FollowError`] under `verb` (`WD11`, `UD11`).
+pub fn format_follow_refusal_for(verb: RefusalVerb, error: FollowError) -> SharedString {
+    let prefix = verb.prefix();
     match error {
         FollowError::NoRoute { blocker, .. } => match blocker {
             Blocker::Pin { .. } => {
-                "Move refused: no valid wire route (blocked by pin); hold Alt to detach".into()
+                format!("{prefix}: no valid wire route (blocked by pin); hold Alt to detach").into()
             }
             Blocker::WireEnd(_) | Blocker::WireBody(_) | Blocker::Overlap(_) => {
-                "Move refused: no valid wire route (blocked by wire); hold Alt to detach".into()
+                format!("{prefix}: no valid wire route (blocked by wire); hold Alt to detach")
+                    .into()
             }
             Blocker::Sheet => {
-                "Move refused: route blocked at sheet limit or off lattice; hold Alt to detach"
+                format!("{prefix}: route blocked at sheet limit or off lattice; hold Alt to detach")
                     .into()
             }
         },
     }
 }
 
-/// Formats a user-facing status notice when a commit command is refused by [`Doc::apply`] (`WD11`,
-/// `WK7`, `UD11`).
-pub fn format_command_refusal(error: CommandError) -> SharedString {
+/// Formats a user-facing status notice for a live or commit-time move [`FollowError`] (`WD11`, `UD11`).
+pub fn format_follow_refusal(error: FollowError) -> SharedString {
+    format_follow_refusal_for(RefusalVerb::Move, error)
+}
+
+/// Formats a user-facing status notice when a move, transform, or reorient commit is refused by
+/// [`Doc::apply`] (`WD11`, `WK7`, `UD11`).
+pub fn format_command_refusal(verb: RefusalVerb, error: CommandError) -> SharedString {
+    let prefix = verb.prefix();
     match error {
-        CommandError::Follow(err) => format_follow_refusal(err),
+        CommandError::Follow(err) => format_follow_refusal_for(verb, err),
         CommandError::Capture { .. } => {
-            "Move refused: moved wire would connect across a foreign pin or wire".into()
+            format!("{prefix}: moved wire would connect across a foreign pin or wire").into()
         }
         CommandError::OffLattice(_) => {
-            "Move refused: moved geometry would land off the wire lattice".into()
+            format!("{prefix}: moved geometry would land off the wire lattice").into()
         }
-        CommandError::OutOfBounds => "Move refused: item or pin lies outside sheet limits".into(),
+        CommandError::OutOfBounds => {
+            format!("{prefix}: item or pin lies outside sheet limits").into()
+        }
         CommandError::Segment(_) => "Segment drag refused: blocked by obstacle".into(),
         _ => error.to_string().into(),
     }
@@ -256,6 +282,21 @@ fn canonical_wire(w: Wire) -> Wire {
     } else {
         Wire { a: w.b, b: w.a }
     }
+}
+
+/// Heap-boxed follow-preview caches owned by [`DragGesture`] so `ToolState::Dragging` stays compact
+/// (`clippy::large_enum_variant`) while drag motion and painting allocate nothing warm (`B10`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DragFollowCache {
+    affected_wires: Vec<WireId>,
+    affected_labels: Vec<LabelId>,
+    hidden: Vec<ItemId>,
+    plan: FollowPlan,
+    plan_remove_sorted: Vec<WireId>,
+    plan_labels_sorted: Vec<(LabelId, Pt)>,
+    preview_junctions: Vec<Pt>,
+    junction_candidates: Vec<Pt>,
+    query_scratch: Vec<ItemId>,
 }
 
 /// A drag of the selection, held as preview state until release (`INV5`, `WD11`, `WINV5`, `WINV11`).
@@ -287,24 +328,9 @@ pub struct DragGesture {
     lifted: bool,
     /// `true` for static golden/programmatic previews that do not hold pointer capture.
     preview_only: bool,
-    /// Sorted unique wire ids across affected runs (empty when unwired or `OverCap`).
-    affected_wires: Vec<WireId>,
-    /// Canonically sorted items (`items` plus `affected_wires` when `<= FOLLOW_PREVIEW_CAP`)
-    /// hidden from `SheetView` once `lifted` and kept fixed until drag end (`D7`, `INV11`,
-    /// `WINV11`).
-    hidden: Vec<ItemId>,
-    /// Reusable planner output buffer.
-    plan: FollowPlan,
-    /// Sorted copy of `plan.remove` (`WireId.0`) for zero-alloc `binary_search` in overlay paint
-    /// (`B10`).
-    plan_remove_sorted: Vec<WireId>,
-    /// Precomputed K6 junction dot coordinates hidden by `SheetView` that must be drawn in the
-    /// overlay during the drag (`K6`, `B10`).
-    preview_junctions: Vec<Pt>,
-    /// Reusable scratch buffer of candidate junction points.
-    junction_candidates: Vec<Pt>,
-    /// Reusable scratch buffer for `Doc::query` during junction computation.
-    query_scratch: Vec<ItemId>,
+    /// Cached affected-run sets, fixed lift-off hidden list, reusable planner output, and junction
+    /// buffers (`WD11`, `WINV11`, `B10`).
+    cache: Box<DragFollowCache>,
     /// Live follow-preview verdict.
     preview: FollowPreview,
     /// Cache key `(delta, by, alt)` for the last `plan_follow` invocation (`WD11`).
@@ -337,8 +363,9 @@ impl DragGesture {
         hidden.sort_unstable_by_key(|&item| item_sort_key(item));
         hidden.dedup();
 
-        let (affected_wires, preview) = if runs.len() > FOLLOW_PREVIEW_CAP {
+        let (affected_wires, affected_labels, preview) = if runs.len() > FOLLOW_PREVIEW_CAP {
             (
+                Vec::new(),
                 Vec::new(),
                 FollowPreview::OverCap {
                     run_count: runs.len(),
@@ -351,7 +378,15 @@ impl DragGesture {
                 .collect();
             wires.sort_unstable_by_key(|id| id.0);
             wires.dedup();
+            let mut labels: Vec<LabelId> = runs
+                .iter()
+                .flat_map(|run| run.labels.iter().copied())
+                .filter(|id| !items.contains(&ItemId::Label(*id)))
+                .collect();
+            labels.sort_unstable_by_key(|id| id.0);
+            labels.dedup();
             hidden.extend(wires.iter().map(|&id| ItemId::Wire(id)));
+            hidden.extend(labels.iter().map(|&id| ItemId::Label(id)));
             hidden.sort_unstable_by_key(|&item| item_sort_key(item));
             hidden.dedup();
             let verdict = if wires.is_empty() {
@@ -359,10 +394,11 @@ impl DragGesture {
             } else {
                 FollowPreview::Accepted
             };
-            (wires, verdict)
+            (wires, labels, verdict)
         };
 
         let remove_cap = affected_wires.len();
+        let labels_cap = affected_labels.len();
         let mut gesture = Self {
             items,
             pressed,
@@ -376,18 +412,22 @@ impl DragGesture {
             alt,
             lifted: false,
             preview_only: false,
-            affected_wires,
-            hidden,
-            plan: FollowPlan::default(),
-            plan_remove_sorted: Vec::with_capacity(remove_cap),
-            preview_junctions: Vec::new(),
-            junction_candidates: Vec::new(),
-            query_scratch: Vec::new(),
+            cache: Box::new(DragFollowCache {
+                affected_wires,
+                affected_labels,
+                hidden,
+                plan: FollowPlan::default(),
+                plan_remove_sorted: Vec::with_capacity(remove_cap),
+                plan_labels_sorted: Vec::with_capacity(labels_cap),
+                preview_junctions: Vec::new(),
+                junction_candidates: Vec::new(),
+                query_scratch: Vec::new(),
+            }),
             preview,
             last_plan_key: None,
             plan_calls: 0,
         };
-        if !gesture.affected_wires.is_empty() {
+        if !gesture.cache.affected_wires.is_empty() {
             gesture.recompute_preview_junctions(doc);
         }
         gesture
@@ -487,33 +527,45 @@ impl DragGesture {
     /// Canonically sorted items hidden from `SheetView`: empty before lift-off, then fixed for the
     /// remainder of the drag (`D7`, `INV11`, `WINV11`).
     pub fn hidden_items(&self) -> &[ItemId] {
-        if self.lifted { &self.hidden } else { &[] }
+        if self.lifted { &self.cache.hidden } else { &[] }
     }
 
     /// Sorted wire ids belonging to affected runs (empty when unwired or over [`FOLLOW_PREVIEW_CAP`]).
     pub fn affected_wires(&self) -> &[WireId] {
-        &self.affected_wires
+        &self.cache.affected_wires
+    }
+
+    /// Sorted non-selected corner label ids belonging to affected runs (empty when over
+    /// [`FOLLOW_PREVIEW_CAP`]).
+    pub fn affected_labels(&self) -> &[LabelId] {
+        &self.cache.affected_labels
     }
 
     /// Latest follow plan computed for this drag.
     pub fn plan(&self) -> &FollowPlan {
-        &self.plan
+        &self.cache.plan
     }
 
     /// New follow wire segments produced by the latest accepted plan.
     pub fn plan_add(&self) -> &[Wire] {
-        &self.plan.add
+        &self.cache.plan.add
     }
 
     /// Sorted replaced wire ids (`WireId.0`) for zero-alloc lookup during overlay paint (`B10`).
     pub fn plan_remove_sorted(&self) -> &[WireId] {
-        &self.plan_remove_sorted
+        &self.cache.plan_remove_sorted
+    }
+
+    /// Sorted `(LabelId, Pt)` pairs from `plan.labels` (`LabelId.0`) for zero-alloc lookup during
+    /// overlay paint (`B10`, `WINV5`).
+    pub fn plan_labels_sorted(&self) -> &[(LabelId, Pt)] {
+        &self.cache.plan_labels_sorted
     }
 
     /// Precomputed K6 junction dot coordinates hidden by `SheetView` that must appear in the
     /// overlay (`K6`, `B10`).
     pub fn preview_junctions(&self) -> &[Pt] {
-        &self.preview_junctions
+        &self.cache.preview_junctions
     }
 
     /// Follow policy for this gesture given `alt` at commit or modifier change (`WD12`, `WK3`).
@@ -567,24 +619,24 @@ impl DragGesture {
             if self.last_plan_key.is_some() {
                 self.last_plan_key = None;
                 self.clear_plan_buffers();
-                self.preview = if self.affected_wires.is_empty() {
+                self.preview = if self.cache.affected_wires.is_empty() {
                     FollowPreview::None
                 } else {
                     FollowPreview::Accepted
                 };
                 if let Some(doc) = doc
-                    && !self.affected_wires.is_empty()
+                    && !self.cache.affected_wires.is_empty()
                 {
                     self.recompute_preview_junctions(doc);
                 } else {
-                    self.preview_junctions.clear();
+                    self.cache.preview_junctions.clear();
                 }
                 return true;
             }
             return false;
         }
         let key = (delta, self.by, self.alt);
-        if self.affected_wires.is_empty() {
+        if self.cache.affected_wires.is_empty() {
             self.last_plan_key = Some(key);
             self.preview = FollowPreview::None;
             return false;
@@ -598,11 +650,28 @@ impl DragGesture {
         self.last_plan_key = Some(key);
         self.plan_calls += 1;
         let policy = self.prefs.follow_policy(self.alt);
-        match plan_follow(doc, &self.items, self.isometry(), policy, &mut self.plan) {
+        match plan_follow(
+            doc,
+            &self.items,
+            self.isometry(),
+            policy,
+            &mut self.cache.plan,
+        ) {
             Ok(()) => {
-                self.plan_remove_sorted.clear();
-                self.plan_remove_sorted.extend_from_slice(&self.plan.remove);
-                self.plan_remove_sorted.sort_unstable_by_key(|id| id.0);
+                self.cache.plan_remove_sorted.clear();
+                self.cache
+                    .plan_remove_sorted
+                    .extend_from_slice(&self.cache.plan.remove);
+                self.cache
+                    .plan_remove_sorted
+                    .sort_unstable_by_key(|id| id.0);
+                self.cache.plan_labels_sorted.clear();
+                self.cache
+                    .plan_labels_sorted
+                    .extend_from_slice(&self.cache.plan.labels);
+                self.cache
+                    .plan_labels_sorted
+                    .sort_unstable_by_key(|(id, _)| id.0);
                 self.preview = FollowPreview::Accepted;
             }
             Err(err) => {
@@ -615,22 +684,24 @@ impl DragGesture {
     }
 
     fn clear_plan_buffers(&mut self) {
-        self.plan.remove.clear();
-        self.plan.add.clear();
-        self.plan.labels.clear();
-        self.plan.fates.clear();
-        self.plan_remove_sorted.clear();
+        self.cache.plan.remove.clear();
+        self.cache.plan.add.clear();
+        self.cache.plan.labels.clear();
+        self.cache.plan.fates.clear();
+        self.cache.plan_remove_sorted.clear();
+        self.cache.plan_labels_sorted.clear();
     }
 
     fn recompute_preview_junctions(&mut self, doc: &Doc) {
-        self.junction_candidates.clear();
-        self.preview_junctions.clear();
+        self.cache.junction_candidates.clear();
+        self.cache.preview_junctions.clear();
         let refused = self.is_refused();
         let iso = self.isometry();
 
-        for &id in &self.affected_wires {
+        for &id in &self.cache.affected_wires {
             if !refused
                 && self
+                    .cache
                     .plan_remove_sorted
                     .binary_search_by_key(&id.0, |w| w.0)
                     .is_ok()
@@ -638,14 +709,14 @@ impl DragGesture {
                 continue;
             }
             if let Some(&wire) = doc.wire(id) {
-                self.junction_candidates.push(wire.a);
-                self.junction_candidates.push(wire.b);
+                self.cache.junction_candidates.push(wire.a);
+                self.cache.junction_candidates.push(wire.b);
             }
         }
         if !refused {
-            for &wire in &self.plan.add {
-                self.junction_candidates.push(wire.a);
-                self.junction_candidates.push(wire.b);
+            for &wire in &self.cache.plan.add {
+                self.cache.junction_candidates.push(wire.a);
+                self.cache.junction_candidates.push(wire.b);
             }
             for &item in &self.items {
                 match item {
@@ -653,7 +724,7 @@ impl DragGesture {
                         if let Some(pins) = doc.pins(id) {
                             for &pin in pins {
                                 if let Ok(moved) = iso.apply(pin) {
-                                    self.junction_candidates.push(moved);
+                                    self.cache.junction_candidates.push(moved);
                                 }
                             }
                         }
@@ -661,10 +732,10 @@ impl DragGesture {
                     ItemId::Wire(id) => {
                         if let Some(&wire) = doc.wire(id) {
                             if let Ok(a) = iso.apply(wire.a) {
-                                self.junction_candidates.push(a);
+                                self.cache.junction_candidates.push(a);
                             }
                             if let Ok(b) = iso.apply(wire.b) {
-                                self.junction_candidates.push(b);
+                                self.cache.junction_candidates.push(b);
                             }
                         }
                     }
@@ -673,27 +744,29 @@ impl DragGesture {
             }
         }
 
-        self.junction_candidates
+        self.cache
+            .junction_candidates
             .sort_unstable_by_key(|p| (p.x, p.y));
-        self.junction_candidates.dedup();
+        self.cache.junction_candidates.dedup();
 
-        for idx in 0..self.junction_candidates.len() {
-            let p = self.junction_candidates[idx];
+        for idx in 0..self.cache.junction_candidates.len() {
+            let p = self.cache.junction_candidates[idx];
             let non_hidden_ends = self.non_hidden_ends_at(doc, p);
             if non_hidden_ends >= 3 {
                 continue;
             }
             if non_hidden_ends + self.overlay_ends_at(doc, iso, refused, p) >= 3 {
-                self.preview_junctions.push(p);
+                self.cache.preview_junctions.push(p);
             }
         }
     }
 
     fn non_hidden_ends_at(&mut self, doc: &Doc, p: Pt) -> usize {
-        doc.query(Rect { min: p, max: p }, &mut self.query_scratch);
+        doc.query(Rect { min: p, max: p }, &mut self.cache.query_scratch);
         let mut ends = 0usize;
-        for &item in &self.query_scratch {
+        for &item in &self.cache.query_scratch {
             if self
+                .cache
                 .hidden
                 .binary_search_by_key(&item_sort_key(item), |&h| item_sort_key(h))
                 .is_ok()
@@ -719,9 +792,10 @@ impl DragGesture {
 
     fn overlay_ends_at(&self, doc: &Doc, iso: Isometry, refused: bool, p: Pt) -> usize {
         let mut ends = 0usize;
-        for &id in &self.affected_wires {
+        for &id in &self.cache.affected_wires {
             if !refused
                 && self
+                    .cache
                     .plan_remove_sorted
                     .binary_search_by_key(&id.0, |w| w.0)
                     .is_ok()
@@ -735,7 +809,7 @@ impl DragGesture {
         if refused {
             return ends;
         }
-        for &wire in &self.plan.add {
+        for &wire in &self.cache.plan.add {
             ends += usize::from(wire.a == p) + usize::from(wire.b == p);
         }
         for &item in &self.items {
@@ -763,9 +837,10 @@ impl DragGesture {
     pub fn preview_wires(&self, doc: &Doc) -> Vec<Wire> {
         let mut wires = Vec::new();
         let refused = self.is_refused();
-        for &id in &self.affected_wires {
+        for &id in &self.cache.affected_wires {
             if !refused
                 && self
+                    .cache
                     .plan_remove_sorted
                     .binary_search_by_key(&id.0, |w| w.0)
                     .is_ok()
@@ -777,10 +852,32 @@ impl DragGesture {
             }
         }
         if !refused {
-            wires.extend(self.plan.add.iter().copied().map(canonical_wire));
+            wires.extend(self.cache.plan.add.iter().copied().map(canonical_wire));
         }
         wires.sort_unstable_by_key(|w| ((w.a.x, w.a.y), (w.b.x, w.b.y)));
         wires
+    }
+
+    /// Returns the canonical list of non-selected run corner labels (`affected_labels`) and their
+    /// preview coordinates: translated coordinates from `plan.labels` when not refused, or their
+    /// original coordinates when detached/rerouted/refused (`WINV5`).
+    pub fn preview_labels(&self, doc: &Doc) -> Vec<(LabelId, Pt)> {
+        let mut labels = Vec::with_capacity(self.cache.affected_labels.len());
+        let refused = self.is_refused();
+        for &id in &self.cache.affected_labels {
+            if !refused
+                && let Ok(idx) = self
+                    .cache
+                    .plan_labels_sorted
+                    .binary_search_by_key(&id.0, |(lid, _)| lid.0)
+            {
+                labels.push(self.cache.plan_labels_sorted[idx]);
+            } else if let Some(label) = doc.label(id) {
+                labels.push((id, label.at));
+            }
+        }
+        labels.sort_unstable_by_key(|(id, _)| id.0);
+        labels
     }
 }
 
@@ -1234,5 +1331,150 @@ mod tests {
                 "WINV5: preview wires must match committed sheet wires (alt={alt})"
             );
         }
+    }
+
+    #[test]
+    fn w2_3_refusal_verb_formats_move_vs_reorient_notices() {
+        let follow_err = FollowError::NoRoute {
+            from: pt(0, 0),
+            to: pt(4, 0),
+            blocker: Blocker::Pin {
+                part: PartId(0),
+                pin: 0,
+            },
+        };
+        assert_eq!(
+            format_follow_refusal(follow_err),
+            "Move refused: no valid wire route (blocked by pin); hold Alt to detach"
+        );
+        assert_eq!(
+            format_follow_refusal_for(RefusalVerb::Reorient, follow_err),
+            "Reorient refused: no valid wire route (blocked by pin); hold Alt to detach"
+        );
+        assert_eq!(
+            format_command_refusal(RefusalVerb::Reorient, CommandError::OutOfBounds),
+            "Reorient refused: item or pin lies outside sheet limits"
+        );
+        assert_eq!(
+            format_command_refusal(
+                RefusalVerb::Move,
+                CommandError::Capture {
+                    wire: WireId(0),
+                    blocker: Blocker::WireBody(WireId(1)),
+                }
+            ),
+            "Move refused: moved wire would connect across a foreign pin or wire"
+        );
+    }
+
+    #[test]
+    fn w2_3_rigid_corner_label_preview_and_tc_move_17_selected_wire_and_part() {
+        // Two resistors joined by a 2-segment L run carrying a non-selected corner label (WD9).
+        let mut doc = Doc::new();
+        let r1 = resistor_part(&mut doc, pt(-6, 0), "R1");
+        let r2 = resistor_part(&mut doc, pt(6, 4), "R2");
+        doc.apply(Command::AddWires(vec![
+            Wire {
+                a: pt(-4, 0),
+                b: pt(4, 0),
+            },
+            Wire {
+                a: pt(4, 0),
+                b: pt(4, 4),
+            },
+        ]))
+        .unwrap();
+        let label_added = doc
+            .apply(Command::AddLabel(Label {
+                at: pt(4, 0),
+                text: "MID".into(),
+            }))
+            .unwrap()
+            .added;
+        let lid = label_added
+            .into_iter()
+            .find_map(|id| match id {
+                ItemId::Label(l) => Some(l),
+                _ => None,
+            })
+            .unwrap();
+
+        let stamp = DocStamp {
+            key: 3,
+            revision: doc.revision(),
+        };
+        let mut drag = DragGesture::start(
+            &doc,
+            vec![ItemId::Part(r1), ItemId::Part(r2)],
+            ItemId::Part(r1),
+            pt(-6, 0),
+            stamp,
+            WiringPrefs::default(),
+            false,
+        );
+        assert_eq!(drag.affected_labels(), &[lid]);
+        drag.current = pt(-4, 3);
+        drag.set_lifted();
+        assert!(drag.update_preview(Some(&doc)));
+        assert!(drag.hidden_items().contains(&ItemId::Label(lid)));
+        assert_eq!(drag.preview_labels(&doc), vec![(lid, pt(6, 3))]);
+
+        let mut committed = doc.fork();
+        committed
+            .apply(drag.command(drag.follow_policy(false)).unwrap())
+            .unwrap();
+        assert_eq!(committed.label(lid).unwrap().at, pt(6, 3));
+
+        // TC-move-17: drag a part together with one of its attached wires.
+        let mut mix_doc = Doc::new();
+        let mr1 = resistor_part(&mut mix_doc, pt(-6, 0), "R1");
+        let attached = mix_doc
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: pt(-10, 0),
+                    b: pt(-8, 0),
+                },
+                Wire {
+                    a: pt(-4, 0),
+                    b: pt(0, 0),
+                },
+            ]))
+            .unwrap()
+            .added[0];
+        let mut mix_drag = DragGesture::start(
+            &mix_doc,
+            vec![ItemId::Part(mr1), attached],
+            ItemId::Part(mr1),
+            pt(-6, 0),
+            DocStamp {
+                key: 4,
+                revision: mix_doc.revision(),
+            },
+            WiringPrefs::default(),
+            false,
+        );
+        mix_drag.current = pt(-5, 2);
+        mix_drag.set_lifted();
+        assert!(mix_drag.update_preview(Some(&mix_doc)));
+
+        let mut preview = mix_drag.preview_wires(&mix_doc);
+        let iso = mix_drag.isometry();
+        for (id, &w) in mix_doc.wires() {
+            if !mix_drag.hidden_items().contains(&ItemId::Wire(id)) {
+                preview.push(canonical_wire(w));
+            } else if mix_drag.items.contains(&ItemId::Wire(id)) {
+                preview.push(canonical_wire(Wire {
+                    a: iso.apply(w.a).unwrap(),
+                    b: iso.apply(w.b).unwrap(),
+                }));
+            }
+        }
+        preview.sort_unstable_by_key(|w| ((w.a.x, w.a.y), (w.b.x, w.b.y)));
+
+        let mut mix_committed = mix_doc.fork();
+        mix_committed
+            .apply(mix_drag.command(mix_drag.follow_policy(false)).unwrap())
+            .unwrap();
+        assert_eq!(preview, canonical_wires_in_doc(&mix_committed));
     }
 }

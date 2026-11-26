@@ -954,3 +954,23 @@ W2.4/W2.5 that `on_mouse_move` wraps `pointer_move_with_radii_and_alt` in `run_o
 nonempty `plan_follow` currently allocates its view/scratch). Status is `needs-human` awaiting
 the Orion Linux/Wayland desktop check that mid-drag `Alt` reaches `omnia-app`
 (`docs/measurements/W2.3.md`).
+
+2026-11-26 W2.3 review fixes — needs-human. Addressed PR #155 independent review
+findings: (1) P1-1 — corrected `docs/measurements/W2.3.md` to match `WK10`
+(`follow_pin_threshold = 10` instead of `8`, noting `inverting-amp.ron` covers
+`TC-move-05` via `R1` while interactive `TC-move-04` needs a `>= 10`-connected-pin
+part); (2) P2-3 — extended `DragGesture` (`affected_labels`, `plan_labels_sorted`,
+`preview_labels`, and fixed lift-off `hidden_items`) and `overlay/follow.rs` /
+`overlay/ghosts.rs` so non-selected rigid-run corner labels (`plan.labels`) hide once at
+lift-off (`WINV11`) and preview at their translated positions (with stationary anchor
+dots when detached/refused and zero warm Omnia heap allocations in `B10`); (3) P2-4 —
+scoped `ToolHost::command_refused` in `tool.rs` to `Command::{Move, Transform, Reorient}`
+using `RefusalVerb::{Move, Reorient}` in `tool/move_.rs` so non-move refusals stay
+silent and idle reorient refusals report `"Reorient refused: ..."`; (4) P2-2 — documented
+in `wiring-plan.md` §10 that `CommandError::{Capture, OffLattice, OutOfBounds}` are
+currently validated at commit in `Doc::apply` (follow-up dry-run validator needed in
+`omnia-doc` outside W2.3's ownership) while adding GPUI coverage proving `Capture`
+refusals preserve `WINV4` and emit `"Move refused: ..."`; (5) nits — documented
+doc-less `ToolMachine::{pointer_move, reorient, pointer_up}` follow behavior in
+`tool.rs` and added `TC-move-17` (selected wire + part). Status stays `needs-human`
+for the Orion Linux/Wayland `Alt`-during-drag session check (`docs/measurements/W2.3.md`).
