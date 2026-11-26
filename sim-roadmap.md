@@ -135,7 +135,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 - Do: present `SQ1`–`SQ10` and `SD6`–`SD14` to the owner at `HS1`; record dated answers in `sim-plan.md` and turn all `PROPOSED` decisions into `DECIDED` (only `SD5` stays `HYPOTHESIS` until `SS1`); apply every cross-plan decision `XD1`–`XD9` that touches the simulation plan and roadmap.
 - Done when: `HS1` is signed off by the owner and no `PROPOSED` entries remain in `sim-plan.md`.
 
-### S0.3 Spike SS1: `ngspice` worker isolation & BSD-3-Clause build · todo
+### S0.3 Spike SS1: `ngspice` worker isolation & BSD-3-Clause build · needs-human
 - Lane: sim-ngspice · Depends: S0.2 · Read: `sim-plan.md` SD5, SD12, SB3, SB4, SINV11, SQ1
 - Owns: `docs/measurements/S0.3.md`, spike harness in `docs/measurements/S0.3/`
 - Do: build BSD-3-Clause `libngspice` (no GPL/LGPL libraries bundled or statically linked; system C/compiler runtimes excepted) on Windows and Orion Linux; benchmark worker-process IPC vs in-process `libngspice` for startup latency (`SB3`), binary double streaming rate, and kill-on-cancel reliability (`SB4`); audit linked shared libs and record exact configure flags.
@@ -404,4 +404,80 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        should use per-channel rings or update the plans if it
                        adopts the shared ring. The Windows notes explain the 60 Hz
                        empty updates and preserve the rationale for the rerun.
+2026-11-25 S0.3 SS1 needs-human — Built ngspice-47 libngspice-0.dll on Windows
+                       (MSYS2 UCRT64 GCC 15.2.0, tarball SHA-256 894e6496...675f)
+                       with --with-ngshared --disable-debug --enable-xspice
+                       --disable-cider --disable-klu --disable-osdi
+                       --disable-openmp --without-x --with-readline=no
+                       --with-editline=no --with-fftw3=no and skipped
+                       src/xspice/icm (no table.cm). Dynamic audit (objdump/ldd):
+                       zero third-party GPL/LGPL DLLs (only OS/UCRT/MinGW
+                       runtimes). Static source audit found upstream ngspice-47
+                       unconditionally links src/frontend/numparam (LGPLv2+)
+                       into libngspice (flagged in S0.3.md for owner decision
+                       on SD12/SINV11 before S1.6/HS2; neither weakened here).
+                       Windows diagnostics (non-certifying, 10 rotating reps):
+                       cold worker Wien first-sample 15.17 ms p99 (cold OP
+                       14.06 ms, warm 1.00 ms vs 0.59 ms in-proc; SB3 < 150 ms);
+                       binary IPC streaming 748k pts/s / 1.50 MS/s vs 780k pts/s
+                       in-proc (~4.3% overhead, ~15x over 100 kS/s); worker hard
+                       kill 2.25 ms p99 with 0 orphans (SINV5) whereas upstream
+                       Windows bg_halt Sleep(100) makes in-proc cancel 109.00 ms
+                       and coop+wait 114.49 ms (exceeding SB4 100 ms). SD5 stays
+                       HYPOTHESIS pending Orion run via docs/measurements/S0.3/run-orion.sh.
+2026-11-25 S0.3 review fixes — Addressed PR #141 independent review findings
+                       (all 5): enforced process-global singleton InstanceGuard,
+                       removed Sync, serialized FFI via &mut self and safe Drop
+                       (bg_halt + join + detach before library unload); applied
+                       50 ms SK11 deadline across total cancel+exit+reap,
+                       distinguished RunDone from Cancelled, and surfaced OS
+                       PID liveness errors via io::Result<bool>; added pre-alloc
+                       IPC count/batch-size bounds and negative tests; stamped
+                       run-orion.sh source/build reuse by SHA-256 + flags and
+                       replaced head pipes with pipefail-safe awk; fixed even-N
+                       medians, scrubbed DLL paths, removed trailing blank line
+                       in ss1-windows.txt, rebuilt libngspice-0.dll and
+                       re-measured Windows diagnostics (0 coop stops, 50/50
+                       hard-kill fallbacks, 0 orphans). Status stays needs-human.
+2026-11-25 S0.3 second review fixes — Addressed PR #141 second independent review
+                       findings (all 5): updated `NgspiceLib::Drop` to pin library,
+                       callback state, and singleton guard for the process lifetime
+                       whenever a background solver thread was ever started (avoiding
+                       unload of detached/unjoined solver threads); required `bg_halt`
+                       success and live running state before crediting
+                       `halted_by_cancel`; checked total 50 ms `SK11` deadline before
+                       and after `child.try_wait()` before crediting cooperative reap;
+                       enforced `MAX_CHANNELS` pre-allocation inside `decode_str_list`
+                       with complete 65-probe tests; resolved relative `work_dir` to an
+                       absolute path in `run-orion.sh`; removed redundant OS vendor word
+                       in `S0.3.md` and qualified PR #141 `SB4` claim cleanly. Status
+                       stays needs-human.
+2026-11-25 S0.3 third review fixes — Addressed PR #141 third independent review
+                       findings (all 4): latched background-run pinning across
+                       `NgspiceLib::command`, `start_tran_bg`, `is_running`, and
+                       `cb_bg_thread_running` (and aligned `S0.3.md` table);
+                       required `status.success()` for cooperative cancel exits,
+                       rejected premature `Eof` before `Cancelled`, and separated
+                       `CancelMode::CooperativeLateReaped` from `HardKilled` in
+                       `worker_client.rs`/`bench_ss1.rs`; cleared `CDPATH` for
+                       directory resolution in `run-orion.sh`; stripped the redundant
+                       OS vendor prefix in `conditions.ps1` and both Windows
+                       condition snapshots. Status stays needs-human.
+2026-11-25 S0.3 fourth review fixes — Addressed PR #141 fourth independent review
+                       findings (all 3): made raw `command`/`reset_circuit`/
+                       `load_circuit` helpers private in `ngspice.rs`, latched pinning
+                       before any `bg_*` (non-halt), `controlswait`, `source`, or
+                       `.control` call, and updated `S0.3.md` accordingly; checked
+                       `child.kill()` success and OS host-kill exit status in
+                       `worker_client.rs` so pre-kill exits cannot inflate `HardKilled`
+                       or hide nonzero exits; removed third-party review-tool names
+                       from the roadmap log. Status stays needs-human.
+2026-11-25 S0.3 fifth review fixes — Addressed PR #141 fifth independent review
+                       findings: replaced `Child::kill()` on Windows with direct
+                       Win32 `TerminateProcess(..., HOST_KILL_EXIT_CODE)` (`0x50304B49`)
+                       and `is_host_kill_status` in `worker_client.rs`, updated
+                       `CancelMode::CooperativeLateReaped` docs, and added a real
+                       subprocess regression test covering already-exited `0`/`1`/`2`
+                       and live host termination; updated `S0.3.md` to list all nine
+                       public `NgspiceLib` methods accurately. Status stays needs-human.
 ```

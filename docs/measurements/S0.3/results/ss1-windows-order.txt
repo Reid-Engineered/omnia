@@ -1,0 +1,30 @@
+startup rep 0: worker-cold-op worker-cold-wien-first worker-warm-wien-first inproc-wien-first
+startup rep 1: worker-cold-wien-first worker-warm-wien-first inproc-wien-first worker-cold-op
+startup rep 2: worker-warm-wien-first inproc-wien-first worker-cold-op worker-cold-wien-first
+startup rep 3: inproc-wien-first worker-cold-op worker-cold-wien-first worker-warm-wien-first
+startup rep 4: worker-cold-op worker-cold-wien-first worker-warm-wien-first inproc-wien-first
+startup rep 5: worker-cold-wien-first worker-warm-wien-first inproc-wien-first worker-cold-op
+startup rep 6: worker-warm-wien-first inproc-wien-first worker-cold-op worker-cold-wien-first
+startup rep 7: inproc-wien-first worker-cold-op worker-cold-wien-first worker-warm-wien-first
+startup rep 8: worker-cold-op worker-cold-wien-first worker-warm-wien-first inproc-wien-first
+startup rep 9: worker-cold-wien-first worker-warm-wien-first inproc-wien-first worker-cold-op
+stream rep 0: worker-stream-tran inproc-stream-tran
+stream rep 1: inproc-stream-tran worker-stream-tran
+stream rep 2: worker-stream-tran inproc-stream-tran
+stream rep 3: inproc-stream-tran worker-stream-tran
+stream rep 4: worker-stream-tran inproc-stream-tran
+stream rep 5: inproc-stream-tran worker-stream-tran
+stream rep 6: worker-stream-tran inproc-stream-tran
+stream rep 7: inproc-stream-tran worker-stream-tran
+stream rep 8: worker-stream-tran inproc-stream-tran
+stream rep 9: inproc-stream-tran worker-stream-tran
+cancel rep 0: worker-cancel-coop-kill worker-cancel-hard-kill inproc-cancel-bghalt
+cancel rep 1: worker-cancel-hard-kill inproc-cancel-bghalt worker-cancel-coop-kill
+cancel rep 2: inproc-cancel-bghalt worker-cancel-coop-kill worker-cancel-hard-kill
+cancel rep 3: worker-cancel-coop-kill worker-cancel-hard-kill inproc-cancel-bghalt
+cancel rep 4: worker-cancel-hard-kill inproc-cancel-bghalt worker-cancel-coop-kill
+cancel rep 5: inproc-cancel-bghalt worker-cancel-coop-kill worker-cancel-hard-kill
+cancel rep 6: worker-cancel-coop-kill worker-cancel-hard-kill inproc-cancel-bghalt
+cancel rep 7: worker-cancel-hard-kill inproc-cancel-bghalt worker-cancel-coop-kill
+cancel rep 8: inproc-cancel-bghalt worker-cancel-coop-kill worker-cancel-hard-kill
+cancel rep 9: worker-cancel-coop-kill worker-cancel-hard-kill inproc-cancel-bghalt
