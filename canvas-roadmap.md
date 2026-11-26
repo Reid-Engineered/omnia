@@ -2436,9 +2436,9 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        --screenSaver --colorCorrect --notifications` and record `PolicyAgent`
                        inhibition flags and panel brightness/dimming before and after the gate for
                        the next certifying Orion campaign.
-2026-11-26  T5.4  done  Certifying Orion reference campaign on `8579e6a` (`owner-run.sh --remote`,
-                       owner-approved, `2026-11-25T23:35:20Z–2026-11-26T00:18:57Z`, binary SHA-256
-                       `6e86f19d…`, 160/160 runs) passed every check at both `100%` and `125%`
+2026-11-25  T5.4  done  Certifying Orion reference campaign on `8579e6a` (`owner-run.sh --remote`,
+                       owner-approved, `18:35:20–19:18:57 EST` / `2026-11-25T23:35:20Z–2026-11-26T00:18:57Z`,
+                       binary SHA-256 `6e86f19d…`, 160/160 runs) passed every check at both `100%` and `125%`
                        (`status.txt = pass`, exit `0`, replay `0` diff lines, `320/320` DPMS on /
                        AC / `performance` governor, `SimulateUserActivity` exit `0`,
                        `PolicyAgent.HasInhibition(1/4) = true`, dimming `100%` before and after,
@@ -2454,6 +2454,6 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `INV5 = 0` revision changes; `INV11 = 0` steady-state and press `SheetView`
                        paints; `D7` lift `SheetView` paints `[1, 1]`. Orion invariant tests on
                        `8579e6a`: `inv4` 10/10, `inv10` 13/13, `inv5` 2/2, `inv11` 2/2. Archived
-                       evidence in `docs/measurements/T5.4/orion-2026-11-26-remote/` (tarball
+                       evidence in `docs/measurements/T5.4/orion-2026-11-25-remote-pass/` (tarball
                        SHA-256 `f103d9e3…`) and updated `docs/measurements/T5.4.md`. Milestone 5
                        gate certified `done`.
