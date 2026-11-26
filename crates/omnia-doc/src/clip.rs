@@ -306,7 +306,7 @@ fn next_unique_designator(
     }
 }
 
-fn point_in_wire_strict_interior(p: Pt, w: Wire) -> bool {
+pub(crate) fn point_in_wire_strict_interior(p: Pt, w: Wire) -> bool {
     if w.a.y == w.b.y {
         p.y == w.a.y && w.a.x.min(w.b.x) < p.x && p.x < w.a.x.max(w.b.x)
     } else if w.a.x == w.b.x {

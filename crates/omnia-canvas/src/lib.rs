@@ -24,4 +24,7 @@ pub use instrument_host::{
 pub use overlay::{CachedSheet, NetHighlight, OverlayEvent, OverlayPaintScope, OverlayView};
 pub use selection::{RubberBand, Selection, SelectionState};
 pub use sheet::SheetView;
-pub use tool::{CanvasClipboard, PasteGesture, PlaceProvider, PlaceRequest};
+pub use tool::{
+    CanvasClipboard, LabelEditTarget, LabelGesture, LabelTarget, PasteGesture, PlaceProvider,
+    PlaceRequest,
+};

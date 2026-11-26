@@ -25,7 +25,7 @@ use crate::{
         centered_square, device_rect, device_to_logical, match_parity, round_device,
         stroke_device_px, to_device,
     },
-    tool::WireGesture,
+    tool::{LabelEditTarget, LabelGesture, LabelTarget, WireGesture},
 };
 use gpui::{BorderStyle, Bounds, Corners, Edges, Hsla, Pixels, Point, Window, fill, px, quad};
 use omnia_doc::{Pt, Rect, Snap, Wire};
@@ -177,6 +177,196 @@ fn paint_crosshair(
     );
 }
 
+const LABEL_BOX_PX: f64 = 12.0;
+const LABEL_BOX_STROKE_PX: f64 = 2.0;
+const LABEL_BOX_HALO_ALPHA: f32 = 0.22;
+
+struct SnapMetrics {
+    pin_ring_dev: u32,
+    pin_stroke_dev: u32,
+    pin_dot_dev: u32,
+    end_square_dev: u32,
+    end_stroke_dev: u32,
+    junc_ring_dev: u32,
+    junc_stroke_dev: u32,
+    junc_dot_dev: u32,
+    body_span_dev: u32,
+    body_stroke_dev: u32,
+    body_halo_dev: u32,
+    grid_dot_dev: u32,
+}
+
+impl SnapMetrics {
+    fn for_scale(sf: f32) -> Self {
+        let pin_ring_dev = stroke_device_px(PIN_RING_DIAMETER_PX, sf);
+        let junc_ring_dev = stroke_device_px(JUNCTION_OUTER_RING_PX, sf);
+        let body_span_dev = stroke_device_px(WIRE_BODY_CROSS_SPAN_PX, sf);
+        Self {
+            pin_ring_dev,
+            pin_stroke_dev: stroke_device_px(PIN_RING_STROKE_PX, sf),
+            pin_dot_dev: match_parity(stroke_device_px(PIN_CENTER_DOT_PX, sf), pin_ring_dev),
+            end_square_dev: stroke_device_px(WIRE_END_SQUARE_PX, sf),
+            end_stroke_dev: stroke_device_px(WIRE_END_STROKE_PX, sf),
+            junc_ring_dev,
+            junc_stroke_dev: stroke_device_px(JUNCTION_RING_STROKE_PX, sf),
+            junc_dot_dev: match_parity(stroke_device_px(JUNCTION_INNER_DOT_PX, sf), junc_ring_dev),
+            body_span_dev,
+            body_stroke_dev: match_parity(
+                stroke_device_px(WIRE_BODY_CROSS_STROKE_PX, sf),
+                body_span_dev,
+            ),
+            body_halo_dev: match_parity(stroke_device_px(WIRE_BODY_HALO_PX, sf), body_span_dev),
+            grid_dot_dev: stroke_device_px(GRID_DOT_PX, sf),
+        }
+    }
+}
+
+fn paint_snap_halo(
+    target: Snap,
+    metrics: &SnapMetrics,
+    snap_color: Hsla,
+    transparent: Hsla,
+    params: &WirePaintParams<'_>,
+    window: &mut Window,
+) {
+    let screen = params.camera.world_to_screen(target.at());
+    match target {
+        Snap::Pin { .. } => {
+            paint_circle(
+                screen,
+                CircleStyle {
+                    diameter_dev: metrics.pin_ring_dev,
+                    fill_color: snap_color.opacity(PIN_FILL_ALPHA),
+                    border_dev: 0,
+                    border_color: transparent,
+                },
+                params,
+                window,
+            );
+        }
+        Snap::Junction { .. } => {
+            paint_circle(
+                screen,
+                CircleStyle {
+                    diameter_dev: metrics.junc_ring_dev,
+                    fill_color: snap_color.opacity(JUNCTION_HALO_ALPHA),
+                    border_dev: 0,
+                    border_color: transparent,
+                },
+                params,
+                window,
+            );
+        }
+        Snap::WireBody { .. } => {
+            paint_circle(
+                screen,
+                CircleStyle {
+                    diameter_dev: metrics.body_halo_dev,
+                    fill_color: snap_color.opacity(WIRE_BODY_HALO_ALPHA),
+                    border_dev: 0,
+                    border_color: transparent,
+                },
+                params,
+                window,
+            );
+        }
+        Snap::WireEnd { .. } | Snap::Grid(_) => {}
+    }
+}
+
+fn paint_snap_glyph(
+    target: Snap,
+    metrics: &SnapMetrics,
+    snap_color: Hsla,
+    transparent: Hsla,
+    params: &WirePaintParams<'_>,
+    window: &mut Window,
+) {
+    let screen = params.camera.world_to_screen(target.at());
+    match target {
+        Snap::Pin { .. } => {
+            paint_circle(
+                screen,
+                CircleStyle {
+                    diameter_dev: metrics.pin_ring_dev,
+                    fill_color: transparent,
+                    border_dev: metrics.pin_stroke_dev,
+                    border_color: snap_color,
+                },
+                params,
+                window,
+            );
+            paint_quad_scoped(
+                window,
+                fill(
+                    centered_square(screen, metrics.pin_dot_dev, params.sf),
+                    snap_color,
+                ),
+                params.scope,
+            );
+        }
+        Snap::WireEnd { .. } => {
+            if let Some(rect) =
+                centered_dev_rect(screen, metrics.end_square_dev, params.sf, params.clip)
+            {
+                paint_solid_outline(
+                    rect,
+                    metrics.end_stroke_dev,
+                    snap_color,
+                    params.sf,
+                    params.scope,
+                    window,
+                );
+            }
+        }
+        Snap::Junction { .. } => {
+            paint_circle(
+                screen,
+                CircleStyle {
+                    diameter_dev: metrics.junc_ring_dev,
+                    fill_color: transparent,
+                    border_dev: metrics.junc_stroke_dev,
+                    border_color: snap_color,
+                },
+                params,
+                window,
+            );
+            paint_circle(
+                screen,
+                CircleStyle {
+                    diameter_dev: metrics.junc_dot_dev,
+                    fill_color: snap_color,
+                    border_dev: 0,
+                    border_color: transparent,
+                },
+                params,
+                window,
+            );
+        }
+        Snap::WireBody { .. } => {
+            paint_crosshair(
+                screen,
+                metrics.body_span_dev,
+                metrics.body_stroke_dev,
+                snap_color,
+                params.sf,
+                params.scope,
+                window,
+            );
+        }
+        Snap::Grid(_) => {
+            paint_quad_scoped(
+                window,
+                fill(
+                    centered_square(screen, metrics.grid_dot_dev, params.sf),
+                    snap_color.opacity(GRID_DOT_ALPHA),
+                ),
+                params.scope,
+            );
+        }
+    }
+}
+
 /// Paints the active wire-tool L-route preview and WD5 snap marker inside its own GPUI paint
 /// layers.
 ///
@@ -211,32 +401,7 @@ pub(super) fn paint_wire_preview(
             .max(wire_width_dev.saturating_add(2)),
         wire_width_dev,
     );
-
-    let pin_ring_dev = stroke_device_px(PIN_RING_DIAMETER_PX, params.sf);
-    let pin_stroke_dev = stroke_device_px(PIN_RING_STROKE_PX, params.sf);
-    let pin_dot_dev = match_parity(stroke_device_px(PIN_CENTER_DOT_PX, params.sf), pin_ring_dev);
-
-    let end_square_dev = stroke_device_px(WIRE_END_SQUARE_PX, params.sf);
-    let end_stroke_dev = stroke_device_px(WIRE_END_STROKE_PX, params.sf);
-
-    let junc_ring_dev = stroke_device_px(JUNCTION_OUTER_RING_PX, params.sf);
-    let junc_stroke_dev = stroke_device_px(JUNCTION_RING_STROKE_PX, params.sf);
-    let junc_dot_dev = match_parity(
-        stroke_device_px(JUNCTION_INNER_DOT_PX, params.sf),
-        junc_ring_dev,
-    );
-
-    let body_span_dev = stroke_device_px(WIRE_BODY_CROSS_SPAN_PX, params.sf);
-    let body_stroke_dev = match_parity(
-        stroke_device_px(WIRE_BODY_CROSS_STROKE_PX, params.sf),
-        body_span_dev,
-    );
-    let body_halo_dev = match_parity(
-        stroke_device_px(WIRE_BODY_HALO_PX, params.sf),
-        body_span_dev,
-    );
-
-    let grid_dot_dev = stroke_device_px(GRID_DOT_PX, params.sf);
+    let metrics = SnapMetrics::for_scale(params.sf);
     let start_dot_dev = stroke_device_px(START_ANCHOR_PX, params.sf);
 
     // Layer 1: translucent wire-preview halos and snap-marker background fills.
@@ -263,49 +428,7 @@ pub(super) fn paint_wire_preview(
                     }
                 }
                 if let Some(target) = visible_snap {
-                    let screen = params.camera.world_to_screen(target.at());
-                    match target {
-                        Snap::Pin { .. } => {
-                            paint_circle(
-                                screen,
-                                CircleStyle {
-                                    diameter_dev: pin_ring_dev,
-                                    fill_color: snap_color.opacity(PIN_FILL_ALPHA),
-                                    border_dev: 0,
-                                    border_color: transparent,
-                                },
-                                params,
-                                window,
-                            );
-                        }
-                        Snap::Junction { .. } => {
-                            paint_circle(
-                                screen,
-                                CircleStyle {
-                                    diameter_dev: junc_ring_dev,
-                                    fill_color: snap_color.opacity(JUNCTION_HALO_ALPHA),
-                                    border_dev: 0,
-                                    border_color: transparent,
-                                },
-                                params,
-                                window,
-                            );
-                        }
-                        Snap::WireBody { .. } => {
-                            paint_circle(
-                                screen,
-                                CircleStyle {
-                                    diameter_dev: body_halo_dev,
-                                    fill_color: snap_color.opacity(WIRE_BODY_HALO_ALPHA),
-                                    border_dev: 0,
-                                    border_color: transparent,
-                                },
-                                params,
-                                window,
-                            );
-                        }
-                        Snap::WireEnd { .. } | Snap::Grid(_) => {}
-                    }
+                    paint_snap_halo(target, &metrics, snap_color, transparent, params, window);
                 }
             });
         });
@@ -344,84 +467,153 @@ pub(super) fn paint_wire_preview(
             }
 
             if let Some(target) = visible_snap {
-                let screen = params.camera.world_to_screen(target.at());
-                match target {
-                    Snap::Pin { .. } => {
-                        paint_circle(
-                            screen,
-                            CircleStyle {
-                                diameter_dev: pin_ring_dev,
-                                fill_color: transparent,
-                                border_dev: pin_stroke_dev,
-                                border_color: snap_color,
-                            },
-                            params,
-                            window,
-                        );
-                        paint_quad_scoped(
-                            window,
-                            fill(centered_square(screen, pin_dot_dev, params.sf), snap_color),
-                            params.scope,
-                        );
+                paint_snap_glyph(target, &metrics, snap_color, transparent, params, window);
+            }
+        });
+    });
+}
+
+/// Paints `Tool::Label` hover target feedback (`Pin`, `WireEnd`, `Junction`, `WireBody`,
+/// `ExistingLabel`) or the active inline-editing anchor marker using `omnia-theme` tokens (`INV6`,
+/// `INV11`, `B10`, `WD5`).
+pub(super) fn paint_label_preview(
+    gesture: Option<&LabelGesture>,
+    active_edit_at: Option<Pt>,
+    params: &WirePaintParams<'_>,
+    window: &mut Window,
+) {
+    if params.bounds.size.width <= px(0.0) || params.bounds.size.height <= px(0.0) {
+        return;
+    }
+    let edit_at = active_edit_at
+        .or_else(|| {
+            gesture
+                .and_then(|g| g.editing.as_ref())
+                .map(LabelEditTarget::at)
+        })
+        .filter(|at| params.visible_padded.contains(*at));
+    let visible_target = if edit_at.is_some() {
+        None
+    } else {
+        gesture
+            .and_then(|g| g.target)
+            .filter(|t| params.visible_padded.contains(t.at()))
+    };
+    if edit_at.is_none() && visible_target.is_none() {
+        return;
+    }
+
+    let snap_color = gpui_color(params.theme.stage_snap);
+    let hover_color = gpui_color(params.theme.stage_hover);
+    let transparent = snap_color.opacity(0.0);
+    let metrics = SnapMetrics::for_scale(params.sf);
+    let label_box_dev = stroke_device_px(LABEL_BOX_PX, params.sf);
+    let label_stroke_dev = stroke_device_px(LABEL_BOX_STROKE_PX, params.sf);
+    let anchor_dot_dev = stroke_device_px(START_ANCHOR_PX, params.sf);
+
+    // Layer 1: translucent target halo / existing-label box fill.
+    let needs_halo = edit_at.is_some()
+        || matches!(
+            visible_target,
+            Some(
+                LabelTarget::ExistingLabel { .. }
+                    | LabelTarget::Attach(
+                        Snap::Pin { .. } | Snap::Junction { .. } | Snap::WireBody { .. }
+                    )
+            )
+        );
+    if needs_halo {
+        window.paint_layer(|window| {
+            run_omnia(params.scope, || {
+                if let Some(at) = edit_at {
+                    let screen = params.camera.world_to_screen(at);
+                    paint_circle(
+                        screen,
+                        CircleStyle {
+                            diameter_dev: metrics.pin_ring_dev,
+                            fill_color: snap_color.opacity(PIN_FILL_ALPHA),
+                            border_dev: 0,
+                            border_color: transparent,
+                        },
+                        params,
+                        window,
+                    );
+                } else if let Some(target) = visible_target {
+                    match target {
+                        LabelTarget::Attach(snap) => {
+                            paint_snap_halo(
+                                snap,
+                                &metrics,
+                                snap_color,
+                                transparent,
+                                params,
+                                window,
+                            );
+                        }
+                        LabelTarget::ExistingLabel { at, .. } => {
+                            let screen = params.camera.world_to_screen(at);
+                            if let Some(rect) =
+                                centered_dev_rect(screen, label_box_dev, params.sf, params.clip)
+                            {
+                                paint_quad_scoped(
+                                    window,
+                                    fill(
+                                        rect.bounds(params.sf),
+                                        hover_color.opacity(LABEL_BOX_HALO_ALPHA),
+                                    ),
+                                    params.scope,
+                                );
+                            }
+                        }
                     }
-                    Snap::WireEnd { .. } => {
+                }
+            });
+        });
+    }
+
+    // Layer 2: crisp WD5 snap glyph, existing-label target frame, or active anchor marker.
+    window.paint_layer(|window| {
+        run_omnia(params.scope, || {
+            if let Some(at) = edit_at {
+                let screen = params.camera.world_to_screen(at);
+                paint_circle(
+                    screen,
+                    CircleStyle {
+                        diameter_dev: metrics.pin_ring_dev,
+                        fill_color: transparent,
+                        border_dev: metrics.pin_stroke_dev,
+                        border_color: snap_color,
+                    },
+                    params,
+                    window,
+                );
+                paint_quad_scoped(
+                    window,
+                    fill(
+                        centered_square(screen, anchor_dot_dev, params.sf),
+                        snap_color,
+                    ),
+                    params.scope,
+                );
+            } else if let Some(target) = visible_target {
+                match target {
+                    LabelTarget::Attach(snap) => {
+                        paint_snap_glyph(snap, &metrics, snap_color, transparent, params, window);
+                    }
+                    LabelTarget::ExistingLabel { at, .. } => {
+                        let screen = params.camera.world_to_screen(at);
                         if let Some(rect) =
-                            centered_dev_rect(screen, end_square_dev, params.sf, params.clip)
+                            centered_dev_rect(screen, label_box_dev, params.sf, params.clip)
                         {
                             paint_solid_outline(
                                 rect,
-                                end_stroke_dev,
+                                label_stroke_dev,
                                 snap_color,
                                 params.sf,
                                 params.scope,
                                 window,
                             );
                         }
-                    }
-                    Snap::Junction { .. } => {
-                        paint_circle(
-                            screen,
-                            CircleStyle {
-                                diameter_dev: junc_ring_dev,
-                                fill_color: transparent,
-                                border_dev: junc_stroke_dev,
-                                border_color: snap_color,
-                            },
-                            params,
-                            window,
-                        );
-                        paint_circle(
-                            screen,
-                            CircleStyle {
-                                diameter_dev: junc_dot_dev,
-                                fill_color: snap_color,
-                                border_dev: 0,
-                                border_color: transparent,
-                            },
-                            params,
-                            window,
-                        );
-                    }
-                    Snap::WireBody { .. } => {
-                        paint_crosshair(
-                            screen,
-                            body_span_dev,
-                            body_stroke_dev,
-                            snap_color,
-                            params.sf,
-                            params.scope,
-                            window,
-                        );
-                    }
-                    Snap::Grid(_) => {
-                        paint_quad_scoped(
-                            window,
-                            fill(
-                                centered_square(screen, grid_dot_dev, params.sf),
-                                snap_color.opacity(GRID_DOT_ALPHA),
-                            ),
-                            params.scope,
-                        );
                     }
                 }
             }
@@ -483,14 +675,20 @@ mod tests {
 
     struct WirePreviewHarness {
         camera: Camera,
-        gesture: WireGesture,
+        wire: Option<WireGesture>,
+        label: Option<LabelGesture>,
+        edit_at: Option<Pt>,
+        theme: &'static Theme,
         scope: Rc<CountingScope>,
         paints: Rc<Cell<u64>>,
     }
 
     struct WirePreviewElement {
         camera: Camera,
-        gesture: WireGesture,
+        wire: Option<WireGesture>,
+        label: Option<LabelGesture>,
+        edit_at: Option<Pt>,
+        theme: &'static Theme,
         scope: Rc<CountingScope>,
         paints: Rc<Cell<u64>>,
     }
@@ -553,10 +751,15 @@ mod tests {
                 visible_padded,
                 sf,
                 clip,
-                theme: &GRAPHITE,
+                theme: self.theme,
                 scope: Some(self.scope.as_ref()),
             };
-            paint_wire_preview(&self.gesture, &params, window);
+            if let Some(ref wire) = self.wire {
+                paint_wire_preview(wire, &params, window);
+            }
+            if self.label.is_some() || self.edit_at.is_some() {
+                paint_label_preview(self.label.as_ref(), self.edit_at, &params, window);
+            }
         }
     }
 
@@ -564,7 +767,10 @@ mod tests {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             WirePreviewElement {
                 camera: self.camera.clone(),
-                gesture: self.gesture,
+                wire: self.wire,
+                label: self.label.clone(),
+                edit_at: self.edit_at,
+                theme: self.theme,
                 scope: self.scope.clone(),
                 paints: self.paints.clone(),
             }
@@ -606,7 +812,14 @@ mod tests {
         let paints_init = paints.clone();
         let (view, cx) = cx.add_window_view(move |_, _| WirePreviewHarness {
             camera: Camera::new(Pt::ZERO, 1.0, viewport),
-            gesture: WireGesture::for_preview(Some(start), snaps[0], Some(Axis::Horizontal)),
+            wire: Some(WireGesture::for_preview(
+                Some(start),
+                snaps[0],
+                Some(Axis::Horizontal),
+            )),
+            label: None,
+            edit_at: None,
+            theme: &GRAPHITE,
             scope: scope_init,
             paints: paints_init,
         });
@@ -620,7 +833,7 @@ mod tests {
             for leg in [None, Some(Axis::Horizontal), Some(Axis::Vertical)] {
                 let s = leg.map(|_| start);
                 view.update(cx, |v, cx| {
-                    v.gesture = WireGesture::for_preview(s, snap_target, leg);
+                    v.wire = Some(WireGesture::for_preview(s, snap_target, leg));
                     cx.notify();
                 });
                 cx.run_until_parked();
@@ -630,5 +843,75 @@ mod tests {
         assert!(paints.get() >= 15);
         assert!(scope.omnia_calls.get() >= 15);
         assert_eq!(scope.omnia_allocs.get(), 0);
+    }
+
+    #[gpui::test]
+    fn t7_2_label_preview_paints_targets_zero_allocs(cx: &mut TestAppContext) {
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(640.0), px(400.0)));
+        let scope = CountingScope::new();
+        let paints = Rc::new(Cell::new(0u64));
+        let pt_target = Pt {
+            x: 3 * GRID_NM,
+            y: -2 * GRID_NM,
+        };
+        let targets = [
+            Some(LabelTarget::Attach(Snap::Pin {
+                part: PartId(0),
+                pin: 0,
+                at: pt_target,
+            })),
+            Some(LabelTarget::Attach(Snap::WireEnd {
+                wire: WireId(0),
+                at: pt_target,
+            })),
+            Some(LabelTarget::Attach(Snap::Junction { at: pt_target })),
+            Some(LabelTarget::Attach(Snap::WireBody {
+                wire: WireId(0),
+                at: pt_target,
+            })),
+            Some(LabelTarget::ExistingLabel {
+                id: omnia_doc::LabelId(0),
+                at: pt_target,
+            }),
+            None,
+        ];
+
+        let scope_init = scope.clone();
+        let paints_init = paints.clone();
+        let (view, cx) = cx.add_window_view(move |_, _| WirePreviewHarness {
+            camera: Camera::new(Pt::ZERO, 1.0, viewport),
+            wire: None,
+            label: Some(LabelGesture::for_preview(targets[0])),
+            edit_at: None,
+            theme: &GRAPHITE,
+            scope: scope_init,
+            paints: paints_init,
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+
+        scope.omnia_calls.set(0);
+        scope.omnia_allocs.set(0);
+        scope.counting.set(true);
+        for &theme in &[&GRAPHITE, &omnia_theme::GRAY] {
+            for target in targets {
+                let edit_at = target.is_none().then_some(pt_target);
+                view.update(cx, |v, cx| {
+                    v.theme = theme;
+                    v.label = Some(LabelGesture::for_preview(target));
+                    v.edit_at = edit_at;
+                    cx.notify();
+                });
+                cx.run_until_parked();
+            }
+        }
+        scope.counting.set(false);
+        assert!(paints.get() >= 12);
+        assert!(scope.omnia_calls.get() >= 12);
+        assert_eq!(
+            scope.omnia_allocs.get(),
+            0,
+            "B10: label preview paint must not allocate"
+        );
     }
 }

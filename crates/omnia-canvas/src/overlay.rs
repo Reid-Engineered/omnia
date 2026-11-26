@@ -19,7 +19,7 @@ mod snap_marker;
 
 pub use net::NetHighlight;
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use crate::{
     camera::Camera,
@@ -40,8 +40,8 @@ use gpui::{
     ElementId, Entity, EventEmitter, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior,
     HitboxId, Hsla, InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position,
-    Render, Style, StyleRefinement, Styled, Subscription, WeakEntity, Window, div, fill, point, px,
-    relative,
+    Render, SharedString, Style, StyleRefinement, Styled, Subscription, WeakEntity, Window, div,
+    fill, point, px, relative,
 };
 use omnia_doc::{
     Change, Command, Doc, ItemId, NetId, Pt, Rect, Snap, Wire, WireId,
@@ -67,9 +67,15 @@ const LABEL_HALF_PX: f64 = 6.0;
 /// Logical dash and gap lengths for Intersecting-mode rubber-band borders.
 const BAND_DASH_PX: f64 = 5.0;
 const BAND_GAP_PX: f64 = 4.0;
+/// Logical anchor offsets and clamp bounds for the floating inline net-label editor (`T7.2`).
+const LABEL_EDITOR_OFFSET_X_PX: f64 = 6.0;
+const LABEL_EDITOR_OFFSET_Y_PX: f64 = 14.0;
+const LABEL_EDITOR_MARGIN_PX: f64 = 4.0;
+const LABEL_EDITOR_CLAMP_WIDTH_PX: f64 = 140.0;
+const LABEL_EDITOR_CLAMP_HEIGHT_PX: f64 = 30.0;
 
 /// Converts an `omnia-theme` token into GPUI's colour type (INV6).
-fn gpui_color(c: omnia_theme::Rgba) -> Hsla {
+pub(crate) fn gpui_color(c: omnia_theme::Rgba) -> Hsla {
     gpui::Rgba {
         r: c.r,
         g: c.g,
@@ -294,6 +300,13 @@ pub(crate) enum GestureEndReason<'a> {
     HistoryStep,
 }
 
+struct ActiveLabelEditor {
+    editor: Entity<tool::label::LabelEditor>,
+    target: tool::LabelEditTarget,
+    base: tool::DocStamp,
+    _sub: Subscription,
+}
+
 /// Transient interactive overlay above a `.cached()` [`SheetView`] (D7, INV11).
 ///
 /// Owns hover, selection, net-highlight, and rubber-band state, registers one sheet-wide hitbox
@@ -331,6 +344,8 @@ pub struct OverlayView {
     activation: Option<Subscription>,
     /// T5.2: the one window this overlay belongs to (contract C1), recorded at first render.
     window_handle: Option<AnyWindowHandle>,
+    /// T7.2: active inline net-label text editor and its commit metadata.
+    label_editor: Option<ActiveLabelEditor>,
 }
 
 impl EventEmitter<OverlayEvent> for OverlayView {}
@@ -375,6 +390,7 @@ impl OverlayView {
             capture_gen: Rc::new(Cell::new(0)),
             activation: None,
             window_handle: None,
+            label_editor: None,
         }
     }
 
@@ -452,6 +468,23 @@ impl OverlayView {
 
     pub fn focus_handle(&self) -> &FocusHandle {
         &self.focus
+    }
+
+    /// Whether an inline net-label text editor is currently active (`T7.2`).
+    pub fn is_editing_label(&self) -> bool {
+        self.label_editor.is_some()
+    }
+
+    /// Current text inside the active inline net-label editor, if open (`T7.2`).
+    pub fn label_editor_text(&self, cx: &App) -> Option<SharedString> {
+        self.label_editor
+            .as_ref()
+            .map(|active| active.editor.read(cx).shared_text())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn label_editor(&self) -> Option<&Entity<tool::label::LabelEditor>> {
+        self.label_editor.as_ref().map(|active| &active.editor)
     }
 
     pub fn selection(&self) -> &[ItemId] {
@@ -591,10 +624,12 @@ impl OverlayView {
     ///
     /// Ignored while a gesture or rubber band is live, or when nothing live is selected.
     pub fn cut(&mut self, cx: &mut Context<Self>) -> bool {
-        if !matches!(
-            self.tools.state(),
-            tool::ToolState::Idle | tool::ToolState::Hovering(_)
-        ) || self.state.is_rubber_banding()
+        if self.is_editing_label()
+            || !matches!(
+                self.tools.state(),
+                tool::ToolState::Idle | tool::ToolState::Hovering(_)
+            )
+            || self.state.is_rubber_banding()
         {
             return false;
         }
@@ -712,6 +747,23 @@ impl OverlayView {
         cx.notify();
     }
 
+    /// Sets a label-tool target preview directly for golden rendering or programmatic inspection
+    /// (`T7.2`, `WD5`; never notifies `SheetView`, `INV11`). Ends any active gesture/editor first
+    /// through [`Self::end_gesture`] (`C4`).
+    pub fn set_label_preview(&mut self, target: Option<tool::LabelTarget>, cx: &mut Context<Self>) {
+        if self.tools.holds_capture()
+            || self.state.is_rubber_banding()
+            || matches!(self.tools.state(), tool::ToolState::DraggingSegment(_))
+            || self.is_editing_label()
+        {
+            self.end_gesture(GestureEndReason::Cancel, None, Some(cx));
+        }
+        self.tools
+            .set_label_preview(tool::LabelGesture::for_preview(target));
+        self.sync_hidden_items(cx);
+        cx.notify();
+    }
+
     /// Space while wiring (T6.2, WD6): flips the active wire preview's first corner.
     /// Returns `true` if a live wire preview handled it. Never notifies `SheetView` (INV11).
     pub fn flip_wire_corner(&mut self, cx: &mut Context<Self>) -> bool {
@@ -778,6 +830,13 @@ impl OverlayView {
         self.animate_to(target, cx);
     }
 
+    fn pointer_radii(&self) -> tool::PointerRadii {
+        tool::PointerRadii {
+            hit: hit_tolerance_nm(&self.camera),
+            snap: tool::snap_radius_nm(&self.camera),
+        }
+    }
+
     /// Re-evaluates the live wire tool's WD5 snap marker against the current camera and document
     /// (called on camera changes and document edits so the marker never goes stale, T6.2, WD5).
     fn refresh_wire_snap(&mut self, cx: &App) -> bool {
@@ -796,6 +855,94 @@ impl OverlayView {
             .refresh_wire_snap(self.doc.read(cx), raw_world, snap_radius)
     }
 
+    /// Re-evaluates the live `Tool::Label` hover target against the current camera and document
+    /// without waiting for pointer motion (T7.2).
+    fn refresh_label_target(&mut self, cx: &App) -> bool {
+        if self.label_editor.is_some() {
+            return false;
+        }
+        let tool::ToolState::Labeling(ref label) = *self.tools.state() else {
+            return false;
+        };
+        let raw_world = self
+            .pointer_screen
+            .map(|p| self.camera.screen_to_world(p))
+            .or_else(|| label.target.map(tool::LabelTarget::at));
+        let Some(raw_world) = raw_world else {
+            return false;
+        };
+        let radii = self.pointer_radii();
+        self.tools
+            .refresh_label_target(self.doc.read(cx), raw_world, radii)
+    }
+
+    fn close_label_editor(&mut self, cx: Option<&mut Context<Self>>) -> bool {
+        let Some(active) = self.label_editor.take() else {
+            return false;
+        };
+        if let Some(cx) = cx {
+            active.editor.update(cx, |editor, _| editor.deactivate());
+        }
+        self.tools.clear_label_editing();
+        true
+    }
+
+    fn open_label_editor(
+        &mut self,
+        target: tool::LabelEditTarget,
+        base: tool::DocStamp,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_label_editor(Some(cx));
+        if tool::doc_key(&self.doc) != base.key || self.doc.read(cx).revision() != base.revision {
+            self.tools.clear_label_editing();
+            return;
+        }
+        if let tool::LabelEditTarget::Existing { id, .. } = target
+            && self.doc.read(cx).label(id).is_none()
+        {
+            self.tools.clear_label_editing();
+            return;
+        }
+        let focus = self.focus.clone();
+        let theme = self.theme;
+        let select_all = matches!(target, tool::LabelEditTarget::Existing { .. });
+        let initial = target.initial_text().to_owned();
+        let editor =
+            cx.new(|cx| tool::label::LabelEditor::new(focus, theme, &initial, select_all, cx));
+        let sub = cx.subscribe(&editor, |this, emitter, event, cx| {
+            let Some(active) = this.label_editor.as_ref() else {
+                return;
+            };
+            if active.editor != emitter {
+                return;
+            }
+            let target = active.target.clone();
+            let base = active.base;
+            this.close_label_editor(Some(cx));
+            match event {
+                tool::label::LabelEditorEvent::Submit(raw) => {
+                    if let Some(command) = tool::label::label_commit_command(&target, raw) {
+                        tool::apply(this, tool::Commit { command, base }, cx);
+                    }
+                    this.refresh_label_target(cx);
+                    cx.notify();
+                }
+                tool::label::LabelEditorEvent::Cancel => {
+                    this.refresh_label_target(cx);
+                    cx.notify();
+                }
+            }
+        });
+        self.label_editor = Some(ActiveLabelEditor {
+            editor,
+            target,
+            base,
+            _sub: sub,
+        });
+        cx.notify();
+    }
+
     /// Updates the camera and invalidates both the cached sheet and the overlay when changed (D7).
     pub fn set_camera(&mut self, camera: Camera, cx: &mut Context<Self>) {
         self.anim = None;
@@ -807,6 +954,7 @@ impl OverlayView {
         }
         self.camera = camera.clone();
         self.refresh_wire_snap(cx);
+        self.refresh_label_target(cx);
         self.sheet.update(cx, |sheet, cx| {
             sheet.camera = camera;
             cx.notify();
@@ -820,6 +968,10 @@ impl OverlayView {
             return;
         }
         self.theme = theme;
+        if let Some(active) = &self.label_editor {
+            let editor = active.editor.clone();
+            editor.update(cx, |editor, cx| editor.set_theme(theme, cx));
+        }
         self.sheet.update(cx, |sheet, cx| {
             sheet.theme = theme;
             cx.notify();
@@ -865,7 +1017,19 @@ impl OverlayView {
         {
             self.tools.hover(None);
         }
+        let doc_rev = self.doc.read(cx).revision();
+        if self
+            .label_editor
+            .as_ref()
+            .is_some_and(|active| active.base.revision != doc_rev)
+            && self.close_label_editor(Some(cx))
+        {
+            update.visual_changed = true;
+        }
         if self.refresh_wire_snap(cx) {
+            update.visual_changed = true;
+        }
+        if self.refresh_label_target(cx) {
             update.visual_changed = true;
         }
         if self.sync_net_highlight(cx) {
@@ -965,6 +1129,14 @@ impl OverlayView {
                 }
             }
             GestureEndReason::Cancel => {
+                if self.close_label_editor(cx.as_deref_mut()) {
+                    if let Some(cx) = cx.as_deref_mut() {
+                        self.refresh_label_target(cx);
+                        self.sync_hidden_items(cx);
+                        cx.notify();
+                    }
+                    return true;
+                }
                 let mut outcome = self.tools.cancel();
                 if !outcome.handled {
                     let had_band = self.state.is_rubber_banding();
@@ -991,6 +1163,7 @@ impl OverlayView {
                 was_visible || held
             }
             GestureEndReason::FreshPress => {
+                let closed_editor = self.close_label_editor(cx.as_deref_mut());
                 let had_band = self.state.is_rubber_banding();
                 let band_vis = if had_band {
                     self.state.cancel_rubber_band()
@@ -998,16 +1171,14 @@ impl OverlayView {
                     false
                 };
                 let outcome = self.tools.pointer_lost();
-                if (outcome.preview_changed || band_vis || had_band)
+                if (outcome.preview_changed || band_vis || had_band || closed_editor)
                     && let Some(cx) = cx.as_deref_mut()
                 {
                     cx.notify();
                 }
-                outcome.handled || had_band || band_vis
+                outcome.handled || had_band || band_vis || closed_editor
             }
-            GestureEndReason::LostCapture
-            | GestureEndReason::MoveOffSheet
-            | GestureEndReason::WindowDeactivated => {
+            GestureEndReason::LostCapture | GestureEndReason::MoveOffSheet => {
                 let had_band = self.state.is_rubber_banding();
                 let band_vis = if had_band {
                     self.state.cancel_rubber_band()
@@ -1022,12 +1193,29 @@ impl OverlayView {
                 }
                 handled
             }
+            GestureEndReason::WindowDeactivated => {
+                let closed_editor = self.close_label_editor(cx.as_deref_mut());
+                let had_band = self.state.is_rubber_banding();
+                let band_vis = if had_band {
+                    self.state.cancel_rubber_band()
+                } else {
+                    false
+                };
+                let mut outcome = self.tools.pointer_lost();
+                outcome.preview_changed |= band_vis || closed_editor;
+                let handled = outcome.handled || had_band || band_vis || closed_editor;
+                if let Some(cx) = cx.as_deref_mut() {
+                    tool::finish(self, outcome, cx);
+                }
+                handled
+            }
             GestureEndReason::ToolChange(tool) => {
+                let closed_editor = self.close_label_editor(cx.as_deref_mut());
                 let had_band = self.state.is_rubber_banding();
                 let band_vis = self.state.cancel_rubber_band();
                 let mut outcome = self.tools.set_tool(tool);
-                outcome.preview_changed |= band_vis || had_band;
-                let handled = outcome.handled;
+                outcome.preview_changed |= band_vis || had_band || closed_editor;
+                let handled = outcome.handled || closed_editor;
                 if let Some(cx) = cx.as_deref_mut() {
                     tool::finish(self, outcome, cx);
                 }
@@ -1036,17 +1224,19 @@ impl OverlayView {
             GestureEndReason::DocumentSwitch
             | GestureEndReason::Attach
             | GestureEndReason::Detach => {
+                let closed_editor = self.close_label_editor(cx.as_deref_mut());
                 let had_band = self.state.is_rubber_banding();
                 let band_vis = self.state.cancel_rubber_band();
                 let mut outcome = self.tools.document_replaced();
-                outcome.preview_changed |= band_vis || had_band;
-                let handled = outcome.handled || had_band || band_vis;
+                outcome.preview_changed |= band_vis || had_band || closed_editor;
+                let handled = outcome.handled || had_band || band_vis || closed_editor;
                 if let Some(cx) = cx.as_deref_mut() {
                     tool::finish(self, outcome, cx);
                 }
                 handled
             }
             GestureEndReason::Drop => {
+                self.close_label_editor(None);
                 self.state.cancel_rubber_band();
                 self.tools.document_replaced();
                 true
@@ -1058,13 +1248,22 @@ impl OverlayView {
                 } else {
                     false
                 };
-                let mut outcome = self.tools.cancel();
-                outcome.preview_changed |= band_vis || had_band;
-                let handled = outcome.handled || had_band || band_vis;
-                if let Some(cx) = cx.as_deref_mut() {
-                    tool::finish(self, outcome, cx);
+                if self.close_label_editor(cx.as_deref_mut()) {
+                    if let Some(cx) = cx.as_deref_mut() {
+                        self.refresh_label_target(cx);
+                        self.sync_hidden_items(cx);
+                        cx.notify();
+                    }
+                    true
+                } else {
+                    let mut outcome = self.tools.cancel();
+                    outcome.preview_changed |= band_vis || had_band;
+                    let handled = outcome.handled || had_band || band_vis;
+                    if let Some(cx) = cx.as_deref_mut() {
+                        tool::finish(self, outcome, cx);
+                    }
+                    handled
                 }
-                handled
             }
         };
 
@@ -1122,6 +1321,7 @@ impl OverlayView {
         if self.tools.holds_capture()
             || self.state.is_rubber_banding()
             || self.tools.has_pending_press()
+            || self.is_editing_label()
         {
             self.end_gesture(GestureEndReason::FreshPress, Some(window), Some(cx));
         }
@@ -1129,10 +1329,32 @@ impl OverlayView {
         let screen_pos = to_f64(event.position);
         self.pointer_screen = Some(screen_pos);
         let world = self.camera.screen_to_world(screen_pos);
-        let radii = tool::PointerRadii {
-            hit: hit_tolerance_nm(&self.camera),
-            snap: tool::snap_radius_nm(&self.camera),
-        };
+        let radii = self.pointer_radii();
+        // T7.2: double-clicking an existing net label in `Tool::Select` opens inline editing
+        // via one `Command::SetText` without starting a drag.
+        if self.tools.tool() == tool::Tool::Select
+            && event.click_count == 2
+            && !event.modifiers.shift
+            && let Some((id, at)) =
+                self.tools
+                    .find_existing_label(self.doc.read(cx), world, radii.hit)
+            && let Some(label) = self.doc.read(cx).label(id)
+        {
+            let base = tool::DocStamp {
+                key: tool::doc_key(&self.doc),
+                revision: self.doc.read(cx).revision(),
+            };
+            let target = tool::LabelEditTarget::Existing {
+                id,
+                at,
+                original: Arc::clone(&label.text),
+            };
+            if !self.state.is_selected(ItemId::Label(id)) {
+                self.set_selection([ItemId::Label(id)], cx);
+            }
+            self.open_label_editor(target, base, cx);
+            return false;
+        }
         let outcome = self.tools.pointer_down_with_radii(
             self.doc.read(cx),
             tool::doc_key(&self.doc),
@@ -1194,6 +1416,12 @@ impl OverlayView {
         cx: &mut Context<Self>,
     ) {
         let scope = self.scope.clone();
+        if self.is_editing_label() {
+            self.viewport = bounds;
+            self.camera.set_viewport(bounds);
+            self.pointer_screen = hovered.then(|| to_f64(event.position));
+            return;
+        }
         if self.tools.routes_pointer() {
             // T5.2: a gesture holds the pointer; hover and selection wait for it to end.
             self.viewport = bounds;
@@ -1228,9 +1456,9 @@ impl OverlayView {
             }
             let outcome = run_omnia(scope.as_deref(), || {
                 let doc = self.doc.read(cx);
-                let snap_radius = tool::snap_radius_nm(&self.camera);
+                let radii = self.pointer_radii();
                 self.tools
-                    .pointer_move_with_snap(doc, world, snap_radius, left_held)
+                    .pointer_move_with_radii(doc, world, radii, left_held)
             });
             run_gpui(scope.as_deref(), || {
                 tool::finish(self, outcome, cx);
@@ -1374,6 +1602,9 @@ impl ToolHost for OverlayView {
                     }
                 }
             }
+            ToolRequest::OpenLabelEditor { target, base } => {
+                self.open_label_editor(target, base, cx);
+            }
             ToolRequest::ReorientSelection(by) => {
                 let base = tool::DocStamp {
                     key: tool::doc_key(&self.doc),
@@ -1479,19 +1710,34 @@ impl Render for OverlayView {
                 });
             }
         }
-        tool::sheet_key_context(div(), cx)
-            .relative()
+        let root = if self.is_editing_label() {
+            // UD3: keep `Sheet` out of the key-context stack while inline editing is active, and
+            // reuse `self.focus` so GPUI focus never switches away from this overlay (`INV11`).
+            div().key_context(tool::label::TEXT_FIELD_CONTEXT)
+        } else {
+            tool::sheet_key_context(div(), cx).on_key_down(cx.listener(
+                |this, event: &KeyDownEvent, _, cx| {
+                    if !event.is_held
+                        && !event.keystroke.modifiers.modified()
+                        && event.keystroke.key == "space"
+                        && this.flip_wire_corner(cx)
+                    {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+        };
+        let editor_layer = self.label_editor.as_ref().map(|active| {
+            let (left, top) = label_editor_offset(&self.camera, self.viewport, active.target.at());
+            div()
+                .absolute()
+                .left(left)
+                .top(top)
+                .child(active.editor.clone())
+        });
+        root.relative()
             .size_full()
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if !event.is_held
-                    && !event.keystroke.modifiers.modified()
-                    && event.keystroke.key == "space"
-                    && this.flip_wire_corner(cx)
-                {
-                    cx.stop_propagation();
-                }
-            }))
             .child(
                 self.sheet
                     .clone()
@@ -1509,7 +1755,29 @@ impl Render for OverlayView {
                 capture: self.capture.clone(),
                 window_handle: current_window,
             })
+            .children(editor_layer)
     }
+}
+
+fn label_editor_offset(camera: &Camera, viewport: Bounds<Pixels>, at: Pt) -> (Pixels, Pixels) {
+    let screen = camera.world_to_screen(at);
+    let vp_left = f64::from(viewport.left());
+    let vp_top = f64::from(viewport.top());
+    let vp_w = f64::from(viewport.size.width);
+    let vp_h = f64::from(viewport.size.height);
+    let mut local_x = screen.x - vp_left + LABEL_EDITOR_OFFSET_X_PX;
+    let mut local_y = screen.y - vp_top - LABEL_EDITOR_OFFSET_Y_PX;
+    if vp_w > 0.0 && vp_h > 0.0 {
+        local_x = local_x.clamp(
+            LABEL_EDITOR_MARGIN_PX,
+            (vp_w - LABEL_EDITOR_CLAMP_WIDTH_PX).max(LABEL_EDITOR_MARGIN_PX),
+        );
+        local_y = local_y.clamp(
+            LABEL_EDITOR_MARGIN_PX,
+            (vp_h - LABEL_EDITOR_CLAMP_HEIGHT_PX).max(LABEL_EDITOR_MARGIN_PX),
+        );
+    }
+    (px(local_x as f32), px(local_y as f32))
 }
 
 /// Absolutely-positioned overlay element stacked above the `.cached()` sheet.
@@ -1647,6 +1915,11 @@ impl Element for OverlayLayer {
                     tool::ToolState::Wiring(wire) => Some(*wire),
                     _ => None,
                 };
+                let label_preview = match view.tools.state() {
+                    tool::ToolState::Labeling(label) => Some(label),
+                    _ => None,
+                };
+                let label_edit_at = view.label_editor.as_ref().map(|active| active.target.at());
                 let ctx = OverlayPaintContext {
                     doc,
                     camera: &camera,
@@ -1662,6 +1935,8 @@ impl Element for OverlayLayer {
                     OverlayPreviews {
                         ghost: ghost_preview,
                         wire: wire_preview,
+                        label: label_preview,
+                        label_edit_at,
                         zoom_area,
                     },
                     &ctx,
@@ -2070,6 +2345,8 @@ struct OverlayPaintContext<'a> {
 struct OverlayPreviews<'a> {
     ghost: ghosts::GhostPreview<'a>,
     wire: Option<tool::WireGesture>,
+    label: Option<&'a tool::LabelGesture>,
+    label_edit_at: Option<Pt>,
     zoom_area: Option<Rect>,
 }
 
@@ -2084,6 +2361,8 @@ fn paint_overlay(
     let OverlayPreviews {
         ghost: ghost_preview,
         wire: wire_preview,
+        label: label_preview,
+        label_edit_at,
         zoom_area,
     } = previews;
     let OverlayPaintContext {
@@ -2111,6 +2390,8 @@ fn paint_overlay(
     };
     let band = state.rubber_band().filter(|b| b.is_visible());
     let has_wire_preview = wire_preview.is_some_and(|w| w.start.is_some() || w.snap.is_some());
+    let has_label_preview = label_edit_at.is_some()
+        || label_preview.is_some_and(|l| l.target.is_some() || l.editing.is_some());
     if hovered.is_none()
         && selection.is_empty()
         && band.is_none()
@@ -2118,6 +2399,7 @@ fn paint_overlay(
         && (is_dragging_ghosts || net_highlight.is_empty())
         && !ghost_preview.is_active()
         && !has_wire_preview
+        && !has_label_preview
     {
         return;
     }
@@ -2493,6 +2775,26 @@ fn paint_overlay(
                     scope,
                 };
                 snap_marker::paint_wire_preview(&wire, &wire_params, window);
+            }
+
+            // T7.2: label-tool target markers and active editing anchor in `stage/snap`
+            // (D7, INV6, INV11, B10, WD5).
+            if has_label_preview {
+                let label_params = snap_marker::WirePaintParams {
+                    camera,
+                    bounds,
+                    visible_padded,
+                    sf,
+                    clip,
+                    theme,
+                    scope,
+                };
+                snap_marker::paint_label_preview(
+                    label_preview,
+                    label_edit_at,
+                    &label_params,
+                    window,
+                );
             }
         });
     });
