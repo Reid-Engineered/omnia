@@ -822,6 +822,9 @@ impl SheetActions for OverlayView {
     }
 
     fn action_delete(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_rubber_banding() {
+            return;
+        }
         run(self, ToolMachine::delete, cx);
     }
 
@@ -3939,9 +3942,25 @@ mod tests {
         doc.wires().map(|(id, &w)| (id, w)).collect()
     }
 
+    fn doc_points(doc: &Doc) -> Vec<Pt> {
+        let mut points: Vec<Pt> = doc
+            .wires()
+            .flat_map(|(_, w)| [w.a, w.b])
+            .chain(
+                doc.parts()
+                    .flat_map(|(id, _)| doc.pins(id).unwrap().to_vec()),
+            )
+            .chain(doc.labels().map(|(_, l)| l.at))
+            .collect();
+        points.sort_by_key(|p| (p.x, p.y));
+        points.dedup();
+        points
+    }
+
     /// INV10: the document's incremental connectivity and junctions agree with an
-    /// independent rebuild over its live parts, wires and labels.
-    fn assert_inv10(doc: &Doc) {
+    /// independent rebuild over its live parts, wires and labels, including the union of pre-
+    /// and post-edit fixture points and empty `net_of` for removed wire ids.
+    fn assert_inv10(doc: &Doc, extra_points: &[Pt], known_wires: &[WireId]) {
         let oracle = Connectivity::rebuild_with_parts(
             doc.wires().map(|(id, &w)| (id, w)),
             doc.labels(),
@@ -3955,7 +3974,8 @@ mod tests {
                     .flat_map(|(id, _)| doc.pins(id).unwrap().to_vec()),
             )
         };
-        let mut points: Vec<Pt> = ends().chain(doc.labels().map(|(_, l)| l.at)).collect();
+        let mut points = doc_points(doc);
+        points.extend_from_slice(extra_points);
         points.sort_by_key(|p| (p.x, p.y));
         points.dedup();
         for &p in &points {
@@ -3975,6 +3995,11 @@ mod tests {
         for (id, w) in doc.wires() {
             assert_eq!(doc.net_of(id), doc.net_at(w.a), "INV10: {id:?}");
             assert_eq!(doc.net_of(id), doc.net_at(w.b), "INV10: {id:?}");
+        }
+        for &id in known_wires {
+            if doc.wire(id).is_none() {
+                assert_eq!(doc.net_of(id), None, "INV10: removed {id:?} kept a net");
+            }
         }
         let mut degree = std::collections::BTreeMap::<(i32, i32), usize>::new();
         for p in ends() {
@@ -4091,6 +4116,8 @@ mod tests {
         fn delete_roundtrip(&mut self, selection: &[ItemId], path: DelPath) -> Doc {
             let doc = self.doc.clone();
             let before = self.snapshot();
+            let before_points = doc_points(&before);
+            let before_wires: Vec<WireId> = before.wires().map(|(id, _)| id).collect();
             let rev = revision(&doc, self.cx);
             let events = self.history.borrow().len();
             self.select(selection);
@@ -4109,20 +4136,31 @@ mod tests {
                 "{path:?}: one history event"
             );
             let after = self.snapshot();
+            let mut all_points = before_points;
+            all_points.extend(doc_points(&after));
+            all_points.sort_by_key(|p| (p.x, p.y));
+            all_points.dedup();
+            let mut all_wires = before_wires;
+            all_wires.extend(after.wires().map(|(id, _)| id));
+            all_wires.sort_unstable_by_key(|id| id.0);
+            all_wires.dedup();
             let overlay = self.overlay.clone();
             assert!(
                 self.cx
                     .update(|_, cx| overlay.read(cx).selection().is_empty())
             );
-            assert_inv10(&after);
-            self.cx.update(|_, cx| assert_inv10(doc.read(cx)));
+            assert_inv10(&after, &all_points, &all_wires);
+            self.cx
+                .update(|_, cx| assert_inv10(doc.read(cx), &all_points, &all_wires));
 
             self.cx.simulate_keystrokes("ctrl-z");
             assert!(self.cx.update(|_, cx| doc.read(cx).content_eq(&before)));
-            self.cx.update(|_, cx| assert_inv10(doc.read(cx)));
+            self.cx
+                .update(|_, cx| assert_inv10(doc.read(cx), &all_points, &all_wires));
             self.cx.simulate_keystrokes("ctrl-y");
             assert!(self.cx.update(|_, cx| doc.read(cx).content_eq(&after)));
-            self.cx.update(|_, cx| assert_inv10(doc.read(cx)));
+            self.cx
+                .update(|_, cx| assert_inv10(doc.read(cx), &all_points, &all_wires));
             assert_eq!(self.history.borrow().len(), events + 3);
             after
         }
@@ -4143,9 +4181,21 @@ mod tests {
         let original = rig.snapshot();
         let after = rig.delete_roundtrip(&[R1], DelPath::Key);
         assert!(after.part(PartId(0)).is_none());
-        assert!(after.part(PartId(1)).is_some());
+        assert_eq!(
+            after.part(PartId(1)).cloned(),
+            original.part(PartId(1)).cloned()
+        );
         assert_eq!(live_wires(&after), live_wires(&original));
-        assert_eq!(after.labels().count(), 1);
+        assert_eq!(
+            after
+                .labels()
+                .map(|(id, l)| (id, l.clone()))
+                .collect::<Vec<_>>(),
+            original
+                .labels()
+                .map(|(id, l)| (id, l.clone()))
+                .collect::<Vec<_>>()
+        );
     }
 
     /// TC-del-01 (preference on) through the Del key: R1 goes with both runs that start at
@@ -4269,6 +4319,134 @@ mod tests {
         assert_eq!(
             rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
             ToolState::Idle
+        );
+        assert_eq!(rig.history.borrow().len(), 1);
+    }
+
+    /// W3.5 review finding B1: direct `ToolHost::request(ToolRequest::DeleteSelection)` must
+    /// honour the active-gesture guard (`Dragging`, `Placing`, `Wiring`) just like
+    /// `ToolMachine::delete` (INV5).
+    #[gpui::test]
+    fn w3_5_direct_delete_request_is_ignored_during_active_gestures(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, tc_del_01_doc(), true);
+        let original = rig.snapshot();
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        let rev = revision(&doc, rig.cx);
+
+        // Dragging
+        rig.select(&[R1]);
+        down(&overlay, rig.cx, pt(-6, 0));
+        drag_to(&overlay, rig.cx, pt(-6, 2));
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Dragging);
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                ToolHost::request(o, ToolRequest::DeleteSelection, cx)
+            });
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev);
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Dragging);
+        rig.cx.simulate_keystrokes("escape");
+        up(&overlay, rig.cx, pt(-6, 2));
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+
+        // Placing
+        rig.select(&[R1]);
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Place(symbol()), cx));
+        });
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Placing);
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                ToolHost::request(o, ToolRequest::DeleteSelection, cx)
+            });
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev);
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Placing);
+        rig.cx.simulate_keystrokes("escape");
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+
+        // Wiring
+        rig.select(&[R1]);
+        rig.cx.simulate_keystrokes("w");
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Wiring);
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                ToolHost::request(o, ToolRequest::DeleteSelection, cx)
+            });
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev);
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Wiring);
+        rig.cx.simulate_keystrokes("escape");
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+        assert!(rig.history.borrow().is_empty());
+    }
+
+    /// W3.5 review finding B2: Delete (key, overlay, canvas, or direct request) is ignored
+    /// during a live pointer rubber-band drag so no edit commits mid-gesture (INV5).
+    #[gpui::test]
+    fn w3_5_delete_is_ignored_during_rubber_band_drag(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, tc_del_01_doc(), true);
+        let original = rig.snapshot();
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        rig.select(&[R1]);
+        let rev = revision(&doc, rig.cx);
+
+        down(&overlay, rig.cx, pt(-12, -10));
+        drag_to(&overlay, rig.cx, pt(-10, -8));
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_rubber_banding()));
+        assert_eq!(
+            rig.cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![R1]
+        );
+
+        for path in [DelPath::Key, DelPath::Overlay, DelPath::Canvas] {
+            rig.delete(path);
+            assert_eq!(revision(&doc, rig.cx), rev, "{path:?} during rubber band");
+            assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+            assert!(rig.cx.update(|_, cx| overlay.read(cx).is_rubber_banding()));
+            assert_eq!(
+                rig.cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+                vec![R1]
+            );
+        }
+
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                ToolHost::request(o, ToolRequest::DeleteSelection, cx)
+            });
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev);
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_rubber_banding()));
+        assert_eq!(
+            rig.cx.update(|_, cx| overlay.read(cx).selection().to_vec()),
+            vec![R1]
+        );
+        assert!(rig.history.borrow().is_empty());
+
+        // Cancel the band cleanly, then verify idle Delete removes R1 and its runs.
+        rig.cx.simulate_keystrokes("escape");
+        up(&overlay, rig.cx, pt(-10, -8));
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_rubber_banding()));
+        assert_eq!(revision(&doc, rig.cx), rev);
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+
+        rig.delete(DelPath::Key);
+        assert_eq!(revision(&doc, rig.cx), rev + 1);
+        assert!(
+            rig.cx
+                .update(|_, cx| doc.read(cx).part(PartId(0)).is_none())
+        );
+        assert_eq!(
+            live_wires(&rig.snapshot()),
+            vec![(WireId(3), del_wire((8, 6), (12, 6)))]
         );
         assert_eq!(rig.history.borrow().len(), 1);
     }

@@ -462,6 +462,10 @@ impl OverlayView {
         self.state.rubber_band()
     }
 
+    pub(crate) fn is_rubber_banding(&self) -> bool {
+        self.state.is_rubber_banding()
+    }
+
     pub fn select_mode(&self) -> SelectMode {
         self.state.select_mode()
     }
@@ -1173,6 +1177,15 @@ impl ToolHost for OverlayView {
                 }
             }
             ToolRequest::DeleteSelection => {
+                // W3.5: never delete mid-gesture (Dragging/Placing/Wiring) or during a live
+                // pointer rubber-band drag, even if called directly through ToolHost::request (INV5).
+                if !matches!(
+                    self.tools.state(),
+                    tool::ToolState::Idle | tool::ToolState::Hovering(_)
+                ) || self.state.is_rubber_banding()
+                {
+                    return;
+                }
                 let base = tool::DocStamp {
                     key: tool::doc_key(&self.doc),
                     revision: self.doc.read(cx).revision(),

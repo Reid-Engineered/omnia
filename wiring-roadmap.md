@@ -313,7 +313,8 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 ### W3.5 Delete with wires · done
 - Lane: doc, canvas · Depends: W1.2, T5.3 · Read: WD10, WQ4
 - Owns: `crates/schematic-doc/src/command.rs` (the `with_wires` flag), the Del and Cut handlers
-  in `crates/schematic-canvas/src/tool.rs`
+  in `crates/schematic-canvas/src/tool.rs` (coordinator-widened 2026-11-25: `DeleteSelection`
+  gesture/rubber-band guard and removed-hover prune in `crates/schematic-canvas/src/overlay.rs`)
 - Do: with the flag set, `Delete` also removes every run starting at a deleted part's pin,
   then normalises what is left. The tool sets the flag from the preference.
 - Done when: TC-del-01 to TC-del-03 pass; undo restores parts and wires with their ids
@@ -864,3 +865,16 @@ cargo test --workspace (647 passed, 0 failed, 3 ignored); cargo deny check. The 
 attempt hit transient "can't find crate" build errors, and a clean re-run fixed them. Diff
 check and the rule-1 scan pass. Nothing was measured, and no thresholds, ranges, lints or
 budgets were weakened.
+
+2026-11-25 W3.5 review fixes - done. Addressed independent review findings B1-B4 and N1-N2
+under coordinator-widened ownership of `crates/omnia-canvas/src/overlay.rs` (`is_rubber_banding`,
+`ToolHost::request(ToolRequest::DeleteSelection)` gesture/rubber-band guard, and removed-hover
+prune in `on_doc_change`). Guarded direct `OverlayView::request(ToolRequest::DeleteSelection)`
+against non-`Idle`/`Hovering` tool states (B1) and both `OverlayView::action_delete` and
+`ToolRequest::DeleteSelection` against live pointer rubber-band drags (`is_rubber_banding()`,
+B2, preserving `INV5`). Updated `assert_inv10` and `DelRig::delete_roundtrip` in `tool.rs` to
+verify deleted `WireId`s return `net_of == None` and to compare `net_at` over the union of
+pre- and post-Delete fixture points (N1); tightened `tc_del_02_*` to assert surviving `PartId(1)`
+and labels match `original` by id and value (N2); added `w3_5_direct_delete_request_is_ignored_during_active_gestures`
+and `w3_5_delete_is_ignored_during_rubber_band_drag`; removed the attribution footer from PR
+#139 (B4). Local checks passed (recorded in PR #139).
