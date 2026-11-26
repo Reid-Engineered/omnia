@@ -9,7 +9,7 @@ use std::path::Path;
 
 use gpui::{App, AppContext, Context, Entity, IntoElement, Render, Window, point, px, size};
 use omnia_canvas::{Camera, OverlayView};
-use omnia_doc::{Doc, ItemId, LabelId, PartId, Pt, WireId, prefs::SelectMode};
+use omnia_doc::{Doc, GRID_NM, ItemId, LabelId, PartId, Pt, WireId, prefs::SelectMode};
 use omnia_golden::{Hooks, SCALE_FACTORS, Shot, Suite, scale_tag};
 use omnia_theme::{GRAPHITE, GRAY, Theme};
 
@@ -22,6 +22,7 @@ struct OverlayCase {
     selection: &'static [ItemId],
     hovered: Option<ItemId>,
     rubber_band: Option<(Pt, Pt, SelectMode)>,
+    segment_drag: Option<(WireId, i32)>,
 }
 
 const CASES: &[OverlayCase] = &[
@@ -35,6 +36,7 @@ const CASES: &[OverlayCase] = &[
         ],
         hovered: None,
         rubber_band: None,
+        segment_drag: None,
     },
     // Hovered state: resistor R1 hovered with nothing selected.
     OverlayCase {
@@ -42,6 +44,7 @@ const CASES: &[OverlayCase] = &[
         selection: &[],
         hovered: Some(ItemId::Part(PartId(1))),
         rubber_band: None,
+        segment_drag: None,
     },
     // Rubber-band state: R1 selected while dragging an Intersecting box across D1 and wires.
     OverlayCase {
@@ -59,6 +62,7 @@ const CASES: &[OverlayCase] = &[
             },
             SelectMode::Intersecting,
         )),
+        segment_drag: None,
     },
     // Net-highlight state (T4.4): hovering Wire(0) highlights the entire 6-wire IN net.
     OverlayCase {
@@ -66,6 +70,17 @@ const CASES: &[OverlayCase] = &[
         selection: &[],
         hovered: Some(ItemId::Wire(WireId(0))),
         rubber_band: None,
+        segment_drag: None,
+    },
+    // Refused segment drag state (W3.3, WD7, WD11): dragging horizontal VCC wire WireId(21)
+    // down by +2 grid steps across WireId(11)'s corner is refused in `mark/conflict` with
+    // blocking wire WireId(11) outlined.
+    OverlayCase {
+        name: "overlay-segment-drag-refused",
+        selection: &[ItemId::Wire(WireId(21))],
+        hovered: None,
+        rubber_band: None,
+        segment_drag: Some((WireId(21), 2 * GRID_NM)),
     },
 ];
 
@@ -95,6 +110,22 @@ impl Render for Probe {
                 }
                 if let Some((anchor, current, mode)) = case.rubber_band {
                     overlay.set_rubber_band_preview(anchor, current, mode, cx);
+                }
+                if let Some((wire, offset)) = case.segment_drag {
+                    assert!(
+                        overlay.set_segment_drag_preview(wire, offset, cx),
+                        "golden segment drag wire {:?} must exist",
+                        wire
+                    );
+                    assert!(
+                        matches!(
+                            overlay.tool_state(),
+                            omnia_canvas::tool::ToolState::DraggingSegment(seg)
+                                if seg.blocker() == Some(omnia_doc::route::Blocker::WireEnd(WireId(11)))
+                        ),
+                        "golden segment drag case {} must be refused with WireEnd(11)",
+                        case.name
+                    );
                 }
                 overlay
             });

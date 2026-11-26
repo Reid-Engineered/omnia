@@ -397,6 +397,11 @@ impl OverlayView {
             tool::ToolState::Dragging(drag) if drag.is_lifted() && !drag.items.is_empty() => {
                 Some(drag.items.as_slice())
             }
+            tool::ToolState::DraggingSegment(seg)
+                if seg.is_lifted() && !seg.hidden_items().is_empty() =>
+            {
+                Some(seg.hidden_items())
+            }
             _ => None,
         };
         if self.sheet.read(cx).hidden.as_deref() == lifted_items {
@@ -582,6 +587,36 @@ impl OverlayView {
         if self.state.set_rubber_band_preview(anchor, current, mode) {
             cx.notify();
         }
+    }
+
+    /// Sets a lifted segment-drag preview directly for golden rendering or programmatic
+    /// inspection (WD7, WD11, W3.3). Does not capture the pointer; ends any active gesture first
+    /// through [`Self::end_gesture`] (C4). Returns `false` if `wire` does not exist.
+    pub fn set_segment_drag_preview(
+        &mut self,
+        wire: WireId,
+        offset: i32,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.tools.holds_capture()
+            || self.state.is_rubber_banding()
+            || matches!(self.tools.state(), tool::ToolState::DraggingSegment(_))
+        {
+            self.end_gesture(GestureEndReason::Cancel, None, Some(cx));
+        }
+        let base = tool::DocStamp {
+            key: tool::doc_key(&self.doc),
+            revision: self.doc.read(cx).revision(),
+        };
+        let Some(gesture) =
+            tool::SegmentDragGesture::for_preview(self.doc.read(cx), wire, offset, base)
+        else {
+            return false;
+        };
+        self.tools.set_segment_preview(gesture);
+        self.sync_hidden_items(cx);
+        cx.notify();
+        true
     }
 
     /// Starts a 150 ms ease-out view animation (K13) from the current camera to `target`.
@@ -773,6 +808,10 @@ impl OverlayView {
                     let world = self.camera.screen_to_world(to_f64(event.position));
                     let outcome = if self.tools.holds_capture() && !owns_capture {
                         self.tools.pointer_lost()
+                    } else if let Some(cx) = cx.as_deref() {
+                        let doc = self.doc.read(cx);
+                        self.tools
+                            .pointer_up_with_doc(doc, world, event.modifiers.alt)
                     } else {
                         self.tools.pointer_up(world, event.modifiers.alt)
                     };
@@ -973,9 +1012,13 @@ impl OverlayView {
             event.modifiers.shift,
         );
         if outcome.handled {
-            if let tool::ToolState::Dragging(drag) = self.tools.state() {
+            let pressed = match self.tools.state() {
+                tool::ToolState::Dragging(drag) => Some(drag.pressed),
+                tool::ToolState::DraggingSegment(seg) => Some(ItemId::Wire(seg.wire)),
+                _ => None,
+            };
+            if let Some(pressed) = pressed {
                 // A press on an unselected item selects it; the drag then moves it alone.
-                let pressed = drag.pressed;
                 let mut update = SelectionUpdate {
                     visual_changed: self.state.set_hovered(Some(pressed)),
                     ..SelectionUpdate::default()
@@ -1049,7 +1092,8 @@ impl OverlayView {
                     return;
                 }
             }
-            let outcome = self.tools.pointer_move(world, left_held);
+            let doc = self.doc.read(cx);
+            let outcome = self.tools.pointer_move_with_doc(doc, world, left_held);
             run_gpui(scope.as_deref(), || {
                 tool::finish(self, outcome, cx);
             });
@@ -1407,6 +1451,12 @@ impl Element for OverlayLayer {
                         ghosts::GhostPreview::Drag {
                             items: &drag.items,
                             transform: drag.isometry(),
+                        }
+                    }
+                    tool::ToolState::DraggingSegment(seg) if seg.is_lifted() => {
+                        ghosts::GhostPreview::Segment {
+                            wires: seg.preview_wires(),
+                            blocker: seg.blocker(),
                         }
                     }
                     _ => ghosts::GhostPreview::None,
@@ -1856,7 +1906,10 @@ fn paint_overlay(
         masks,
         scope,
     } = *ctx;
-    let is_dragging_ghosts = matches!(ghost_preview, ghosts::GhostPreview::Drag { .. });
+    let is_dragging_ghosts = matches!(
+        ghost_preview,
+        ghosts::GhostPreview::Drag { .. } | ghosts::GhostPreview::Segment { .. }
+    );
     let hovered = if is_dragging_ghosts {
         None
     } else {
