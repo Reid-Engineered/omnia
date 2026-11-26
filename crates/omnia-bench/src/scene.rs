@@ -24,7 +24,8 @@ const GRID: u32 = 0x00000022;
 const GRID_PITCH: f32 = 20.0;
 /// Grid dot size in logical pixels (K6); never below one device pixel.
 const GRID_DOT: f32 = 1.2;
-/// Wire stroke in logical pixels (K5).
+/// Placeholder-scene wire stroke in logical pixels (original K5 1.8 px kept for historical
+/// placeholder comparisons; `SheetView` uses K5's unified 2.0 px).
 const WIRE_STROKE: f32 = 1.8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

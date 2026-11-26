@@ -12,17 +12,18 @@
 //! calls are used, and the warm paint path performs no heap allocations (B10).
 
 use super::{
-    LABEL_HALF_PX, OverlayPaintScope, PART_FRAME_PAD_PX, SELECT_OUTLINE_PX, WIRE_WIDTH_NM,
-    gpui_color, label_rect_dev, padded_rect_dev, paint_quad_scoped, paint_solid_outline, run_gpui,
-    run_omnia, wire_rect_dev,
+    LABEL_HALF_PX, OverlayPaintScope, PART_FRAME_PAD_PX, SELECT_OUTLINE_PX, gpui_color,
+    label_rect_dev, padded_rect_dev, paint_quad_scoped, paint_solid_outline, run_gpui, run_omnia,
+    wire_rect_dev,
 };
 use crate::{
     camera::Camera,
     sheet::{
         lod,
         symbols::{Masks, Shape},
+        wires,
     },
-    snap_px::{centered_square, stroke_device_px},
+    snap_px::{centered_square, match_parity, stroke_device_px},
 };
 use gpui::{App, Bounds, Hsla, Pixels, Window, fill, point, px};
 use omnia_doc::{
@@ -493,9 +494,13 @@ pub(super) fn paint_ghosts(
     }
 
     let palette = GhostPalette::from_theme(params.theme);
-    let wire_base_px = WIRE_WIDTH_NM * params.camera.scale();
-    let wire_width_dev = stroke_device_px(wire_base_px, params.sf);
-    let wire_halo_dev = stroke_device_px(wire_base_px + GHOST_WIRE_HALO_EXTRA_PX, params.sf);
+    let wire_width_dev = wires::width(params.camera, params.sf);
+    let wire_base_px = wires::WIDTH_NM * params.camera.scale();
+    let wire_halo_dev = match_parity(
+        stroke_device_px(wire_base_px + GHOST_WIRE_HALO_EXTRA_PX, params.sf)
+            .max(wire_width_dev.saturating_add(2)),
+        wire_width_dev,
+    );
     let outline_dev = stroke_device_px(SELECT_OUTLINE_PX, params.sf);
     let blocker_outline_dev = stroke_device_px(BLOCKER_OUTLINE_PX, params.sf);
     let blocker_pin_dot_dev = stroke_device_px(BLOCKER_PIN_DOT_PX, params.sf);
