@@ -27,8 +27,8 @@ use crate::{
 };
 use gpui::{App, Bounds, Hsla, Pixels, Window, fill, point, px};
 use omnia_doc::{
-    Doc, Isometry, ItemId, LabelId, Orient, PartId, Pt, Rect, SHEET_LIMIT_NM, SymbolId, Wire,
-    WireId, route::Blocker,
+    Clip, ClipPart, Doc, Isometry, ItemId, Label, LabelId, Orient, PartId, Pt, Rect,
+    SHEET_LIMIT_NM, SymbolId, Wire, WireId, route::Blocker,
 };
 use omnia_symbols::SymbolDef;
 use omnia_theme::Theme;
@@ -73,6 +73,12 @@ pub(super) enum GhostPreview<'a> {
         items: &'a [ItemId],
         transform: Isometry,
     },
+    /// T7.1: copied-circuit paste preview (`D2`, placed like a move).
+    Paste {
+        clip: &'a Clip,
+        at: Pt,
+        orient: Orient,
+    },
     /// W3.3: planned or refused wire-segment drag preview (`WD7`, `WD11`).
     Segment {
         wires: &'a [Wire],
@@ -87,6 +93,7 @@ impl GhostPreview<'_> {
             Self::None => false,
             Self::Place { .. } => true,
             Self::Drag { items, .. } => !items.is_empty(),
+            Self::Paste { clip, .. } => !clip.is_empty(),
             Self::Segment { wires, blocker } => !wires.is_empty() || blocker.is_some(),
         }
     }
@@ -220,10 +227,10 @@ fn part_world_pin(at: Pt, orient: Orient, local_pin: Pt) -> TransformedPt {
     )
 }
 
-/// Computes the transformed axis-aligned body rectangle for `def` at `(at, orient)`.
-fn part_body_rect(def: &SymbolDef, at: Pt, orient: Orient) -> Rect {
-    let a = orient.apply(def.bounds.min);
-    let b = orient.apply(def.bounds.max);
+/// Computes the transformed axis-aligned bounds rectangle for `bounds` at `(at, orient)`.
+fn oriented_bounds_rect(bounds: Rect, at: Pt, orient: Orient) -> Rect {
+    let a = orient.apply(bounds.min);
+    let b = orient.apply(bounds.max);
     let min_x = (i64::from(at.x) + i64::from(a.x.min(b.x)))
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
     let max_x = (i64::from(at.x) + i64::from(a.x.max(b.x)))
@@ -236,6 +243,11 @@ fn part_body_rect(def: &SymbolDef, at: Pt, orient: Orient) -> Rect {
         min: Pt { x: min_x, y: min_y },
         max: Pt { x: max_x, y: max_y },
     }
+}
+
+/// Computes the transformed axis-aligned body rectangle for `def` at `(at, orient)`.
+fn part_body_rect(def: &SymbolDef, at: Pt, orient: Orient) -> Rect {
+    oriented_bounds_rect(def.bounds, at, orient)
 }
 
 /// Checks whether a `Tool::Place` preview at `(at, orient)` keeps its origin and every pin inside K1.
@@ -318,6 +330,55 @@ fn resolve_drag_label(doc: &Doc, id: LabelId, transform: Isometry) -> Option<Gho
         at: moved.pt,
         in_bounds: moved.in_bounds,
     })
+}
+
+/// Resolves a pasted part's transformed placement, body bounds, and K1 validity without allocating.
+fn resolve_paste_part(cp: &ClipPart, paste_at: Pt, orient: Orient, masks: &Masks) -> GhostPart {
+    let (rx, ry) = apply_orient_i64(orient, i64::from(cp.part.at.x), i64::from(cp.part.at.y));
+    let moved = to_transformed_pt(i64::from(paste_at.x) + rx, i64::from(paste_at.y) + ry);
+    let part_orient = cp.part.orient.then(orient);
+    let pins_ok = cp.local_pins.iter().all(|&local_pin| {
+        local_pin.is_in_bounds() && part_world_pin(moved.pt, part_orient, local_pin).in_bounds
+    });
+    let bounds_ok = cp.local_bounds.is_in_bounds()
+        && part_world_pin(moved.pt, part_orient, cp.local_bounds.min).in_bounds
+        && part_world_pin(moved.pt, part_orient, cp.local_bounds.max).in_bounds;
+    let body = if let Some(def) = masks.symbol_def(cp.part.symbol) {
+        Some(part_body_rect(def, moved.pt, part_orient))
+    } else {
+        Some(oriented_bounds_rect(cp.local_bounds, moved.pt, part_orient))
+    };
+    GhostPart {
+        symbol: cp.part.symbol,
+        at: moved.pt,
+        orient: part_orient,
+        body,
+        in_bounds: moved.in_bounds && pins_ok && bounds_ok,
+    }
+}
+
+/// Resolves a pasted wire's transformed endpoints, bounding box, and K1 validity without allocating.
+fn resolve_paste_wire(wire: Wire, paste_at: Pt, orient: Orient) -> GhostWire {
+    let (ax, ay) = apply_orient_i64(orient, i64::from(wire.a.x), i64::from(wire.a.y));
+    let (bx, by) = apply_orient_i64(orient, i64::from(wire.b.x), i64::from(wire.b.y));
+    let a = to_transformed_pt(i64::from(paste_at.x) + ax, i64::from(paste_at.y) + ay);
+    let b = to_transformed_pt(i64::from(paste_at.x) + bx, i64::from(paste_at.y) + by);
+    let moved = Wire { a: a.pt, b: b.pt };
+    GhostWire {
+        wire: moved,
+        bounds: wire_bounds(moved),
+        in_bounds: a.in_bounds && b.in_bounds,
+    }
+}
+
+/// Resolves a pasted net label's transformed anchor and K1 validity without allocating.
+fn resolve_paste_label(label: &Label, paste_at: Pt, orient: Orient) -> GhostLabel {
+    let (lx, ly) = apply_orient_i64(orient, i64::from(label.at.x), i64::from(label.at.y));
+    let moved = to_transformed_pt(i64::from(paste_at.x) + lx, i64::from(paste_at.y) + ly);
+    GhostLabel {
+        at: moved.pt,
+        in_bounds: moved.in_bounds,
+    }
 }
 
 /// Palette derived exclusively from `omnia-theme` tokens (INV6).
@@ -476,6 +537,189 @@ fn wire_bounds(wire: Wire) -> Rect {
     }
 }
 
+fn paint_ghost_part_halo(
+    ghost: GhostPart,
+    params: &GhostPaintParams<'_>,
+    palette: GhostPalette,
+    window: &mut Window,
+) {
+    let Some(body) = ghost.body else {
+        return;
+    };
+    if !body.intersects(params.visible_padded) {
+        return;
+    }
+    if let Some(rect) = padded_rect_dev(
+        body,
+        PART_FRAME_PAD_PX,
+        params.camera,
+        params.sf,
+        params.clip,
+    ) {
+        paint_quad_scoped(
+            window,
+            fill(rect.bounds(params.sf), palette.halo_for(ghost.in_bounds)),
+            params.scope,
+        );
+    }
+}
+
+fn paint_ghost_wire_halo(
+    ghost: GhostWire,
+    wire_halo_dev: u32,
+    params: &GhostPaintParams<'_>,
+    palette: GhostPalette,
+    window: &mut Window,
+) {
+    if !ghost.bounds.intersects(params.visible_padded) {
+        return;
+    }
+    if let Some(rect) = wire_rect_dev(
+        ghost.wire,
+        params.camera,
+        params.sf,
+        wire_halo_dev,
+        params.clip,
+    ) {
+        paint_quad_scoped(
+            window,
+            fill(
+                rect.bounds(params.sf),
+                palette.wire_halo_for(ghost.in_bounds),
+            ),
+            params.scope,
+        );
+    }
+}
+
+fn paint_ghost_label_halo(
+    ghost: GhostLabel,
+    params: &GhostPaintParams<'_>,
+    palette: GhostPalette,
+    window: &mut Window,
+) {
+    if !params.visible_padded.contains(ghost.at) {
+        return;
+    }
+    if let Some(rect) = label_rect_dev(
+        ghost.at,
+        LABEL_HALF_PX,
+        params.camera,
+        params.sf,
+        params.clip,
+    ) {
+        paint_quad_scoped(
+            window,
+            fill(rect.bounds(params.sf), palette.halo_for(ghost.in_bounds)),
+            params.scope,
+        );
+    }
+}
+
+fn paint_ghost_part_fg(
+    ghost: GhostPart,
+    outline_dev: u32,
+    params: &GhostPaintParams<'_>,
+    palette: GhostPalette,
+    window: &mut Window,
+    cx: &App,
+) {
+    if ghost
+        .body
+        .is_some_and(|body| !body.intersects(params.visible_padded))
+    {
+        return;
+    }
+    if let Some(body) = ghost.body
+        && let Some(rect) = padded_rect_dev(
+            body,
+            PART_FRAME_PAD_PX,
+            params.camera,
+            params.sf,
+            params.clip,
+        )
+    {
+        paint_solid_outline(
+            rect,
+            outline_dev,
+            palette.outline_for(ghost.in_bounds),
+            params.sf,
+            params.scope,
+            window,
+        );
+    }
+    if let Some(shape) = params.masks.symbol_at(
+        ghost.symbol,
+        ghost.at,
+        ghost.orient,
+        params.camera,
+        params.sf,
+    ) {
+        paint_symbol_shape(
+            shape,
+            palette.ink_for(ghost.in_bounds),
+            params.sf,
+            params.scope,
+            window,
+            cx,
+        );
+    }
+}
+
+fn paint_ghost_wire_fg(
+    ghost: GhostWire,
+    wire_width_dev: u32,
+    params: &GhostPaintParams<'_>,
+    palette: GhostPalette,
+    window: &mut Window,
+) {
+    if !ghost.bounds.intersects(params.visible_padded) {
+        return;
+    }
+    if let Some(rect) = wire_rect_dev(
+        ghost.wire,
+        params.camera,
+        params.sf,
+        wire_width_dev,
+        params.clip,
+    ) {
+        paint_quad_scoped(
+            window,
+            fill(rect.bounds(params.sf), palette.ink_for(ghost.in_bounds)),
+            params.scope,
+        );
+    }
+}
+
+fn paint_ghost_label_fg(
+    ghost: GhostLabel,
+    outline_dev: u32,
+    label_dot_dev: u32,
+    params: &GhostPaintParams<'_>,
+    palette: GhostPalette,
+    window: &mut Window,
+) {
+    if !params.visible_padded.contains(ghost.at) {
+        return;
+    }
+    let color = palette.outline_for(ghost.in_bounds);
+    if let Some(rect) = label_rect_dev(
+        ghost.at,
+        LABEL_HALF_PX,
+        params.camera,
+        params.sf,
+        params.clip,
+    ) {
+        paint_solid_outline(rect, outline_dev, color, params.sf, params.scope, window);
+    }
+    let screen = params.camera.world_to_screen(ghost.at);
+    paint_quad_scoped(
+        window,
+        fill(centered_square(screen, label_dot_dev, params.sf), color),
+        params.scope,
+    );
+}
+
 /// Paints the active placement, drag-move, or segment-drag ghost preview inside its own GPUI paint
 /// layers.
 ///
@@ -612,82 +856,26 @@ pub(super) fn paint_ghosts(
                     for &item in items {
                         match item {
                             ItemId::Part(id) => {
-                                let Some(ghost) =
+                                if let Some(ghost) =
                                     resolve_drag_part(params.doc, id, transform, params.masks)
-                                else {
-                                    continue;
-                                };
-                                let Some(body) = ghost.body else {
-                                    continue;
-                                };
-                                if !body.intersects(params.visible_padded) {
-                                    continue;
-                                }
-                                if let Some(rect) = padded_rect_dev(
-                                    body,
-                                    PART_FRAME_PAD_PX,
-                                    params.camera,
-                                    params.sf,
-                                    params.clip,
-                                ) {
-                                    paint_quad_scoped(
-                                        window,
-                                        fill(
-                                            rect.bounds(params.sf),
-                                            palette.halo_for(ghost.in_bounds),
-                                        ),
-                                        params.scope,
-                                    );
+                                {
+                                    paint_ghost_part_halo(ghost, params, palette, window);
                                 }
                             }
                             ItemId::Wire(id) => {
-                                let Some(ghost) = resolve_drag_wire(params.doc, id, transform)
-                                else {
-                                    continue;
-                                };
-                                if !ghost.bounds.intersects(params.visible_padded) {
-                                    continue;
-                                }
-                                if let Some(rect) = wire_rect_dev(
-                                    ghost.wire,
-                                    params.camera,
-                                    params.sf,
-                                    wire_halo_dev,
-                                    params.clip,
-                                ) {
-                                    paint_quad_scoped(
+                                if let Some(ghost) = resolve_drag_wire(params.doc, id, transform) {
+                                    paint_ghost_wire_halo(
+                                        ghost,
+                                        wire_halo_dev,
+                                        params,
+                                        palette,
                                         window,
-                                        fill(
-                                            rect.bounds(params.sf),
-                                            palette.wire_halo_for(ghost.in_bounds),
-                                        ),
-                                        params.scope,
                                     );
                                 }
                             }
                             ItemId::Label(id) => {
-                                let Some(ghost) = resolve_drag_label(params.doc, id, transform)
-                                else {
-                                    continue;
-                                };
-                                if !params.visible_padded.contains(ghost.at) {
-                                    continue;
-                                }
-                                if let Some(rect) = label_rect_dev(
-                                    ghost.at,
-                                    LABEL_HALF_PX,
-                                    params.camera,
-                                    params.sf,
-                                    params.clip,
-                                ) {
-                                    paint_quad_scoped(
-                                        window,
-                                        fill(
-                                            rect.bounds(params.sf),
-                                            palette.halo_for(ghost.in_bounds),
-                                        ),
-                                        params.scope,
-                                    );
+                                if let Some(ghost) = resolve_drag_label(params.doc, id, transform) {
+                                    paint_ghost_label_halo(ghost, params, palette, window);
                                 }
                             }
                         }
@@ -701,110 +889,87 @@ pub(super) fn paint_ghosts(
                     for &item in items {
                         match item {
                             ItemId::Part(id) => {
-                                let Some(ghost) =
+                                if let Some(ghost) =
                                     resolve_drag_part(params.doc, id, transform, params.masks)
-                                else {
-                                    continue;
-                                };
-                                if ghost
-                                    .body
-                                    .is_some_and(|body| !body.intersects(params.visible_padded))
                                 {
-                                    continue;
-                                }
-                                if let Some(body) = ghost.body
-                                    && let Some(rect) = padded_rect_dev(
-                                        body,
-                                        PART_FRAME_PAD_PX,
-                                        params.camera,
-                                        params.sf,
-                                        params.clip,
-                                    )
-                                {
-                                    paint_solid_outline(
-                                        rect,
+                                    paint_ghost_part_fg(
+                                        ghost,
                                         outline_dev,
-                                        palette.outline_for(ghost.in_bounds),
-                                        params.sf,
-                                        params.scope,
-                                        window,
-                                    );
-                                }
-                                if let Some(shape) = params.masks.symbol_at(
-                                    ghost.symbol,
-                                    ghost.at,
-                                    ghost.orient,
-                                    params.camera,
-                                    params.sf,
-                                ) {
-                                    paint_symbol_shape(
-                                        shape,
-                                        palette.ink_for(ghost.in_bounds),
-                                        params.sf,
-                                        params.scope,
+                                        params,
+                                        palette,
                                         window,
                                         cx,
                                     );
                                 }
                             }
                             ItemId::Wire(id) => {
-                                let Some(ghost) = resolve_drag_wire(params.doc, id, transform)
-                                else {
-                                    continue;
-                                };
-                                if !ghost.bounds.intersects(params.visible_padded) {
-                                    continue;
-                                }
-                                if let Some(rect) = wire_rect_dev(
-                                    ghost.wire,
-                                    params.camera,
-                                    params.sf,
-                                    wire_width_dev,
-                                    params.clip,
-                                ) {
-                                    paint_quad_scoped(
+                                if let Some(ghost) = resolve_drag_wire(params.doc, id, transform) {
+                                    paint_ghost_wire_fg(
+                                        ghost,
+                                        wire_width_dev,
+                                        params,
+                                        palette,
                                         window,
-                                        fill(
-                                            rect.bounds(params.sf),
-                                            palette.ink_for(ghost.in_bounds),
-                                        ),
-                                        params.scope,
                                     );
                                 }
                             }
                             ItemId::Label(id) => {
-                                let Some(ghost) = resolve_drag_label(params.doc, id, transform)
-                                else {
-                                    continue;
-                                };
-                                if !params.visible_padded.contains(ghost.at) {
-                                    continue;
-                                }
-                                let color = palette.outline_for(ghost.in_bounds);
-                                if let Some(rect) = label_rect_dev(
-                                    ghost.at,
-                                    LABEL_HALF_PX,
-                                    params.camera,
-                                    params.sf,
-                                    params.clip,
-                                ) {
-                                    paint_solid_outline(
-                                        rect,
+                                if let Some(ghost) = resolve_drag_label(params.doc, id, transform) {
+                                    paint_ghost_label_fg(
+                                        ghost,
                                         outline_dev,
-                                        color,
-                                        params.sf,
-                                        params.scope,
+                                        label_dot_dev,
+                                        params,
+                                        palette,
                                         window,
                                     );
                                 }
-                                let screen = params.camera.world_to_screen(ghost.at);
-                                paint_quad_scoped(
-                                    window,
-                                    fill(centered_square(screen, label_dot_dev, params.sf), color),
-                                    params.scope,
-                                );
                             }
                         }
+                    }
+                });
+            });
+        }
+        GhostPreview::Paste { clip, at, orient } => {
+            // Layer 1: translucent fills and wire halos underneath crisp ghost geometry (D2).
+            window.paint_layer(|window| {
+                run_omnia(params.scope, || {
+                    for cp in clip.parts() {
+                        let ghost = resolve_paste_part(cp, at, orient, params.masks);
+                        paint_ghost_part_halo(ghost, params, palette, window);
+                    }
+                    for &wire in clip.wires() {
+                        let ghost = resolve_paste_wire(wire, at, orient);
+                        paint_ghost_wire_halo(ghost, wire_halo_dev, params, palette, window);
+                    }
+                    for label in clip.labels() {
+                        let ghost = resolve_paste_label(label, at, orient);
+                        paint_ghost_label_halo(ghost, params, palette, window);
+                    }
+                });
+            });
+
+            // Layer 2: ghost wires, outlines, label anchors, and symbol sprites/LOD boxes.
+            window.paint_layer(|window| {
+                run_omnia(params.scope, || {
+                    for cp in clip.parts() {
+                        let ghost = resolve_paste_part(cp, at, orient, params.masks);
+                        paint_ghost_part_fg(ghost, outline_dev, params, palette, window, cx);
+                    }
+                    for &wire in clip.wires() {
+                        let ghost = resolve_paste_wire(wire, at, orient);
+                        paint_ghost_wire_fg(ghost, wire_width_dev, params, palette, window);
+                    }
+                    for label in clip.labels() {
+                        let ghost = resolve_paste_label(label, at, orient);
+                        paint_ghost_label_fg(
+                            ghost,
+                            outline_dev,
+                            label_dot_dev,
+                            params,
+                            palette,
+                            window,
+                        );
                     }
                 });
             });
@@ -1221,6 +1386,11 @@ mod tests {
             items: Vec<ItemId>,
             transform: Isometry,
         },
+        Paste {
+            clip: Clip,
+            at: Pt,
+            orient: Orient,
+        },
         Segment {
             wires: Vec<Wire>,
             blocker: Option<Blocker>,
@@ -1329,6 +1499,11 @@ mod tests {
                 OwnedPreview::Drag { items, transform } => GhostPreview::Drag {
                     items,
                     transform: *transform,
+                },
+                OwnedPreview::Paste { clip, at, orient } => GhostPreview::Paste {
+                    clip,
+                    at: *at,
+                    orient: *orient,
                 },
                 OwnedPreview::Segment { wires, blocker } => GhostPreview::Segment {
                     wires,
@@ -1581,6 +1756,11 @@ mod tests {
                                 items,
                                 transform: *transform,
                             },
+                            OwnedPreview::Paste { clip, at, orient } => GhostPreview::Paste {
+                                clip,
+                                at: *at,
+                                orient: *orient,
+                            },
                             OwnedPreview::Segment { wires, blocker } => GhostPreview::Segment {
                                 wires,
                                 blocker: *blocker,
@@ -1794,6 +1974,373 @@ mod tests {
             alloc_scope.omnia_allocs.get(),
             0,
             "B10: far-zoom LOD ghost paint must not allocate in omnia code"
+        );
+    }
+
+    #[test]
+    fn t7_1_paste_ghost_geometry_matches_committed_command_across_orients() {
+        let g = GRID_NM;
+        let masks = Masks::new();
+        let doc = sample_doc();
+        let clip = doc.copy(&[
+            ItemId::Part(PartId(0)),
+            ItemId::Part(PartId(1)),
+            ItemId::Wire(WireId(0)),
+            ItemId::Label(LabelId(0)),
+        ]);
+        let paste_at = Pt {
+            x: 12 * g,
+            y: -8 * g,
+        };
+
+        for orient in Orient::ALL {
+            let mut probe = doc.fork();
+            let change = probe
+                .apply(Command::Paste {
+                    clip: clip.reoriented(orient),
+                    at: paste_at,
+                })
+                .unwrap();
+
+            let pasted_parts: Vec<PartId> = change
+                .added
+                .iter()
+                .filter_map(|&id| match id {
+                    ItemId::Part(p) => Some(p),
+                    _ => None,
+                })
+                .collect();
+            let pasted_wires: Vec<WireId> = change
+                .added
+                .iter()
+                .filter_map(|&id| match id {
+                    ItemId::Wire(w) => Some(w),
+                    _ => None,
+                })
+                .collect();
+            let pasted_labels: Vec<LabelId> = change
+                .added
+                .iter()
+                .filter_map(|&id| match id {
+                    ItemId::Label(l) => Some(l),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(pasted_parts.len(), clip.parts().len());
+            assert_eq!(pasted_wires.len(), clip.wires().len());
+            assert_eq!(pasted_labels.len(), clip.labels().len());
+
+            for (cp, pid) in clip.parts().iter().zip(pasted_parts) {
+                let ghost = resolve_paste_part(cp, paste_at, orient, &masks);
+                let actual = probe.part(pid).unwrap();
+                assert!(ghost.in_bounds);
+                assert_eq!(ghost.symbol, actual.symbol);
+                assert_eq!(ghost.at, actual.at);
+                assert_eq!(ghost.orient, actual.orient);
+                assert_eq!(ghost.body, probe.part_body(pid));
+            }
+            for (&cw, wid) in clip.wires().iter().zip(pasted_wires) {
+                let ghost = resolve_paste_wire(cw, paste_at, orient);
+                assert!(ghost.in_bounds);
+                assert_eq!(ghost.wire, *probe.wire(wid).unwrap());
+            }
+            for (cl, lid) in clip.labels().iter().zip(pasted_labels) {
+                let ghost = resolve_paste_label(cl, paste_at, orient);
+                assert!(ghost.in_bounds);
+                assert_eq!(ghost.at, probe.label(lid).unwrap().at);
+            }
+        }
+
+        // K1 out-of-bounds checks: shifting pasted part, pin, bounds, wire, or label past limit sets in_bounds = false.
+        let oob_at = Pt {
+            x: SHEET_LIMIT_NM,
+            y: 0,
+        };
+        let rotated = clip.reoriented(Orient::ROT_90);
+        assert!(clip.parts().iter().any(|cp| {
+            let shifted_at = Pt {
+                x: SHEET_LIMIT_NM - cp.part.at.x + g,
+                y: 0,
+            };
+            !resolve_paste_part(cp, shifted_at, Orient::IDENTITY, &masks).in_bounds
+        }));
+        assert!(
+            rotated
+                .wires()
+                .iter()
+                .any(|&w| !resolve_paste_wire(w, oob_at, Orient::IDENTITY).in_bounds)
+                || clip
+                    .wires()
+                    .iter()
+                    .any(|&w| !resolve_paste_wire(w, oob_at, Orient::IDENTITY).in_bounds)
+        );
+        let far_label = Label {
+            at: Pt { x: 4 * g, y: 0 },
+            text: "X".into(),
+        };
+        assert!(!resolve_paste_label(&far_label, oob_at, Orient::IDENTITY).in_bounds);
+    }
+
+    #[gpui::test]
+    fn t7_1_paint_paste_ghosts_both_themes_and_lod(cx: &mut TestAppContext) {
+        let masks = Rc::new(Masks::new());
+        let doc = Rc::new(sample_doc());
+        let clip = doc.copy(&[
+            ItemId::Part(PartId(0)),
+            ItemId::Part(PartId(1)),
+            ItemId::Wire(WireId(0)),
+            ItemId::Label(LabelId(0)),
+        ]);
+        let scope = Rc::new(CountingScope::new());
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+
+        let (view, cx) = cx.add_window_view(|_, _| GhostTestView {
+            doc,
+            camera: Camera::new(Pt::ZERO, 1.0, viewport),
+            theme: &GRAPHITE,
+            masks,
+            preview: OwnedPreview::Paste {
+                clip: clip.clone(),
+                at: Pt {
+                    x: 2 * GRID_NM,
+                    y: -GRID_NM,
+                },
+                orient: Orient::IDENTITY,
+            },
+            scope: scope.clone(),
+        });
+        cx.run_until_parked();
+        assert_eq!(scope.omnia_calls.get(), 2);
+        assert!(scope.gpui_calls.get() > 0);
+
+        // Switch theme to GRAY and reorient.
+        scope.omnia_calls.set(0);
+        scope.gpui_calls.set(0);
+        view.update(cx, |v, cx| {
+            v.theme = &GRAY;
+            v.preview = OwnedPreview::Paste {
+                clip: clip.clone(),
+                at: Pt {
+                    x: 4 * GRID_NM,
+                    y: GRID_NM,
+                },
+                orient: Orient::FLIP_X_ROT_90,
+            };
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(scope.omnia_calls.get(), 2);
+        assert!(scope.gpui_calls.get() > 0);
+
+        // Far-zoom LOD box path.
+        scope.omnia_calls.set(0);
+        scope.gpui_calls.set(0);
+        view.update(cx, |v, cx| {
+            v.camera = Camera::new(Pt::ZERO, 0.05, viewport);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(scope.omnia_calls.get(), 2);
+        assert!(scope.gpui_calls.get() > 0);
+
+        // Empty clip paints nothing.
+        scope.omnia_calls.set(0);
+        scope.gpui_calls.set(0);
+        view.update(cx, |v, cx| {
+            v.preview = OwnedPreview::Paste {
+                clip: Clip::default(),
+                at: Pt::ZERO,
+                orient: Orient::IDENTITY,
+            };
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(scope.omnia_calls.get(), 0);
+        assert_eq!(scope.gpui_calls.get(), 0);
+    }
+
+    #[gpui::test]
+    fn t7_1_paste_ghost_warm_path_makes_zero_omnia_allocations(cx: &mut TestAppContext) {
+        let masks = Rc::new(Masks::new());
+        let doc = Rc::new(sample_doc());
+        let clip = doc.copy(&[
+            ItemId::Part(PartId(0)),
+            ItemId::Part(PartId(1)),
+            ItemId::Wire(WireId(0)),
+            ItemId::Label(LabelId(0)),
+        ]);
+        let alloc_scope = Rc::new(AllocCountingScope::new());
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+
+        struct AllocPasteView {
+            doc: Rc<Doc>,
+            camera: Camera,
+            masks: Rc<Masks>,
+            preview: OwnedPreview,
+            scope: Rc<AllocCountingScope>,
+        }
+
+        impl Render for AllocPasteView {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
+                struct El {
+                    doc: Rc<Doc>,
+                    camera: Camera,
+                    masks: Rc<Masks>,
+                    preview: OwnedPreview,
+                    scope: Rc<AllocCountingScope>,
+                }
+                impl Element for El {
+                    type RequestLayoutState = ();
+                    type PrepaintState = ();
+                    fn id(&self) -> Option<ElementId> {
+                        None
+                    }
+                    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+                        None
+                    }
+                    fn request_layout(
+                        &mut self,
+                        _id: Option<&GlobalElementId>,
+                        _inspector_id: Option<&InspectorElementId>,
+                        window: &mut Window,
+                        cx: &mut App,
+                    ) -> (LayoutId, ()) {
+                        let mut style = Style::default();
+                        style.size.width = relative(1.0).into();
+                        style.size.height = relative(1.0).into();
+                        (window.request_layout(style, [], cx), ())
+                    }
+                    fn prepaint(
+                        &mut self,
+                        _id: Option<&GlobalElementId>,
+                        _inspector_id: Option<&InspectorElementId>,
+                        _bounds: Bounds<Pixels>,
+                        _layout: &mut (),
+                        _window: &mut Window,
+                        _cx: &mut App,
+                    ) {
+                    }
+                    fn paint(
+                        &mut self,
+                        _id: Option<&GlobalElementId>,
+                        _inspector_id: Option<&InspectorElementId>,
+                        bounds: Bounds<Pixels>,
+                        _layout: &mut (),
+                        _prepaint: &mut (),
+                        window: &mut Window,
+                        cx: &mut App,
+                    ) {
+                        let mut camera = self.camera.clone();
+                        camera.set_viewport(bounds);
+                        let sf = window.scale_factor();
+                        let clip_dev = viewport_clip_dev(bounds, sf, 32.0);
+                        let params = GhostPaintParams {
+                            doc: &self.doc,
+                            camera: &camera,
+                            bounds,
+                            visible_padded: camera.visible(),
+                            sf,
+                            clip: clip_dev,
+                            theme: &GRAPHITE,
+                            masks: &self.masks,
+                            scope: Some(self.scope.as_ref()),
+                        };
+                        let preview = match &self.preview {
+                            OwnedPreview::Paste { clip, at, orient } => GhostPreview::Paste {
+                                clip,
+                                at: *at,
+                                orient: *orient,
+                            },
+                            _ => GhostPreview::None,
+                        };
+                        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+                            paint_ghosts(preview, &params, window, cx);
+                        });
+                    }
+                }
+                div().size_full().child(El {
+                    doc: self.doc.clone(),
+                    camera: self.camera.clone(),
+                    masks: self.masks.clone(),
+                    preview: self.preview.clone(),
+                    scope: self.scope.clone(),
+                })
+            }
+        }
+
+        let (view, cx) = cx.add_window_view(|_, _| AllocPasteView {
+            doc,
+            camera: Camera::new(Pt::ZERO, 1.0, viewport),
+            masks,
+            preview: OwnedPreview::Paste {
+                clip: clip.clone(),
+                at: Pt::ZERO,
+                orient: Orient::IDENTITY,
+            },
+            scope: alloc_scope.clone(),
+        });
+        cx.run_until_parked();
+
+        alloc_scope.omnia_allocs.set(0);
+        alloc_scope.omnia_calls.set(0);
+        alloc_scope.counting.set(true);
+        for (step, &orient) in Orient::ALL.iter().enumerate() {
+            let offset = i32::try_from(step).unwrap() * GRID_NM;
+            view.update(cx, |v, cx| {
+                v.preview = OwnedPreview::Paste {
+                    clip: clip.clone(),
+                    at: Pt {
+                        x: offset,
+                        y: -GRID_NM,
+                    },
+                    orient,
+                };
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        alloc_scope.counting.set(false);
+        assert!(alloc_scope.omnia_calls.get() >= 16);
+        assert_eq!(
+            alloc_scope.omnia_allocs.get(),
+            0,
+            "B10: warm Paste ghost paint must not allocate in omnia code"
+        );
+
+        // Far-zoom LOD warm path.
+        view.update(cx, |v, cx| {
+            v.camera = Camera::new(Pt::ZERO, 0.05, viewport);
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        alloc_scope.omnia_allocs.set(0);
+        alloc_scope.omnia_calls.set(0);
+        alloc_scope.counting.set(true);
+        for step in 1..=4 {
+            view.update(cx, |v, cx| {
+                v.preview = OwnedPreview::Paste {
+                    clip: clip.clone(),
+                    at: Pt {
+                        x: step * GRID_NM,
+                        y: 0,
+                    },
+                    orient: Orient::ROT_90,
+                };
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        alloc_scope.counting.set(false);
+        assert!(alloc_scope.omnia_calls.get() >= 8);
+        assert_eq!(
+            alloc_scope.omnia_allocs.get(),
+            0,
+            "B10: far-zoom LOD Paste ghost paint must not allocate in omnia code"
         );
     }
 }

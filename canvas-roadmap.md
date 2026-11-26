@@ -627,9 +627,9 @@ of the `canvas` lane.
 
 ## Milestone 7: finish
 
-### T7.1 Copy and paste · todo
+### T7.1 Copy and paste · done
 - Lane: doc, canvas · Depends: T6.4 · Read: D2, INV4, ui-plan.md UD3
-- Owns: `crates/omnia-doc/src/clip.rs`, `crates/omnia-canvas/src/tool/paste.rs`, and `SheetCanvas::{cut, copy, paste}` in `input.rs`/`overlay.rs`
+- Owns: `crates/omnia-doc/src/clip.rs` (plus `Command::Paste` in `command.rs` and `pub mod clip` in `lib.rs`), `crates/omnia-canvas/src/tool/paste.rs`, `SheetCanvas::{cut, copy, paste, has_clip}` in `input.rs`/`overlay.rs` (plus `tool.rs`/`overlay/ghosts.rs` state & ghost hooks and `canvas-plan.md` §9)
 - Do: `Doc::copy`, the `Paste` command, and `SheetCanvas::cut`, `copy` and `paste` (Ctrl+C,
   Ctrl+X and Ctrl+V are bound by the shell, [ui-plan.md](ui-plan.md) UD3). A paste is placed
   with ghosts like a move. Designators of pasted parts are made unique.
@@ -2590,3 +2590,33 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        and archived a later post-test governor/source check. Existing
                        Linux-only unused window warning in spike/shell_cache.rs:1657
                        is a separate fix follow-up; no code changed for this gate.
+
+2026-11-26  T7.1  done  Implemented copy and paste across `omnia-doc` and `omnia-canvas` (`D2`, `K1`, `K2`,
+                       `INV2`, `INV4`, `INV5`, `INV6`, `INV10`, `INV11`, `B10`, `C4`, `UD3`, `WD9`, `WD10`).
+                       Added `crates/omnia-doc/src/clip.rs` (`Clip`, `ClipPart`, `Doc::copy`, transactional
+                       `apply_paste`) and wired `Command::Paste` in `crates/omnia-doc/src/{command.rs, lib.rs}`:
+                       `Doc::copy` snapshots live items canonically by kind/ID with coordinates relative to
+                       a `GRID_NM`-aligned origin (preserving half-grid pin-lattice parity); `apply_paste`
+                       pre-validates all transformed geometry inside K1, assigns unique deterministic
+                       designators (preserving free names on cut-and-paste, filling numeric gaps on repeats),
+                       normalises pasted wires and splits existing wires at landed pins and labels via
+                       `plan_add_wires`/`apply_wire_plan`, and records a reverse-ordered `UndoOp::Batch` so
+                       undo/redo satisfy `INV4` exact ID round-trip and `INV10` connectivity. Note for `P2.2`:
+                       `ClipPart` carries `(Part, local_pins, local_bounds)` like `Command::PlacePart` until
+                       `P2.2` adds embedded `PartDef` and `Params` placement payloads. Added
+                       `crates/omnia-canvas/src/tool/paste.rs` (`CanvasClipboard` GPUI `Global`,
+                       `snap_paste_origin`, non-allocating `clip_in_bounds_at`, `PasteGesture`), re-exported
+                       from `crates/omnia-canvas/src/lib.rs`, wired `ToolPhase::Pasting`,
+                       `ToolState::Pasting`, `ToolRequest::Paste`, `ToolMachine::start_paste`, and
+                       `tool::apply_change` in `crates/omnia-canvas/src/tool.rs`, shared zero-alloc Layer 1/2
+                       `GhostPreview::Paste` rendering with `Drag` in `crates/omnia-canvas/src/overlay/ghosts.rs`,
+                       and wired `OverlayView`/`SheetCanvas` `{has_clip, copy, cut, paste}` in
+                       `crates/omnia-canvas/src/{overlay.rs, input.rs}` with `cut` honouring `WD10` / `W3.5`
+                       handoff (`delete_wires_with_part`, one `Command::Delete`, one undo step, guarded
+                       mid-gesture/rubber-band and preserving the clipboard on empty selection). Updated
+                       `canvas-plan.md` §9 and `C4`. Verified with `cargo fmt --all --check`,
+                       `cargo clippy --workspace --all-targets -- -D warnings`, `cargo clippy -p omnia-bench
+                       --all-targets --features scene-counts,readback -- -D warnings`, `cargo test --workspace`,
+                       and `cargo deny check` on Windows (covering `clip` unit + proptests, `ghosts` unit +
+                       render + `B10` 0 warm Omnia allocs, `INV11` 0 `SheetView` paints during paste ghost moves,
+                       `WD10` cut, internal connectivity + zero source connection, `INV4`, and cross-canvas paste).
