@@ -332,6 +332,8 @@ impl Render for Probe {
                                     y: 6_096_000,
                                 },
                             },
+                            def: omnia_doc::PlaceDef::Unmodelled,
+                            params: omnia_doc::Params::new(),
                         })
                         .unwrap();
                 }

@@ -366,6 +366,8 @@ fn key_form_pin_net_anchor_and_cd18_tie_breakers() {
                 },
                 local_pins: vec![Pt::ZERO],
                 local_bounds: Rect::new(Pt { x: 0, y: 0 }, Pt { x: STEP, y: STEP }).unwrap(),
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
         let small = doc
@@ -379,6 +381,8 @@ fn key_form_pin_net_anchor_and_cd18_tie_breakers() {
                 },
                 local_pins: vec![Pt::ZERO],
                 local_bounds: Rect::new(Pt { x: -STEP, y: 0 }, Pt { x: STEP, y: STEP }).unwrap(),
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
         let [ItemId::Part(p_big)] = big.added[..] else {
@@ -408,6 +412,8 @@ fn key_form_pin_net_anchor_and_cd18_tie_breakers() {
                 },
                 local_pins: vec![Pt::ZERO, Pt { x: STEP, y: 0 }],
                 local_bounds: Rect::new(Pt::ZERO, Pt { x: STEP, y: STEP }).unwrap(),
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
         let [ItemId::Part(p)] = placed.added[..] else {
@@ -639,6 +645,8 @@ fn empty_doc_and_zero_pin_part() {
             },
             local_pins: vec![],
             local_bounds: Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
+            def: omnia_doc::PlaceDef::Unmodelled,
+            params: omnia_doc::Params::new(),
         })
         .unwrap();
     let [ItemId::Part(p)] = change.added[..] else {
@@ -689,6 +697,8 @@ fn unnumbered_pins_order_by_geometry_before_stored_index() {
                 },
             )
             .unwrap(),
+            def: omnia_doc::PlaceDef::Unmodelled,
+            params: omnia_doc::Params::new(),
         })
         .unwrap();
     let [ItemId::Part(part)] = change.added[..] else {

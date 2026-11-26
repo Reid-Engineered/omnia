@@ -370,6 +370,8 @@ mod render {
                 },
                 local_pins: def.pins.iter().map(|p| p.at).collect(),
                 local_bounds: def.bounds,
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
         }
@@ -425,6 +427,8 @@ mod render {
                 },
                 local_pins: resistor.pins.iter().map(|p| p.at).collect(),
                 local_bounds: resistor.bounds,
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
         }

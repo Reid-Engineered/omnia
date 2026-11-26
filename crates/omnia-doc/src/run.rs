@@ -566,328 +566,330 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(256))]
+            #![proptest_config(ProptestConfig::with_cases(256))]
 
-        /// Every wire belongs to exactly one run; interior points are corners; ends are anchors.
-        #[test]
-        fn runs_partition_wires(ops in prop::collection::vec(op(), 1..60)) {
-            let doc = build(&ops);
-            let mut run = Run::default();
-            let mut owner: HashMap<u32, Vec<u32>> = HashMap::new();
-            let mut closed = HashSet::new();
-            for (id, _) in doc.wires() {
-                doc.run_through(id, &mut run);
-                let set = wire_set(&run);
-                prop_assert!(set.contains(&id.0));
-                prop_assert_eq!(set.len(), run.wires.len(), "a wire repeats in its run");
-                let pts = run_points(&doc, &run);
-                let interior = if run.a.1 == Anchor::Closed {
-                    prop_assert_eq!(run.b.1, Anchor::Closed);
-                    prop_assert_eq!(run.a.0, run.b.0);
-                    let least = pts.iter().min_by_key(|p| (p.x, p.y)).unwrap();
-                    prop_assert_eq!(*least, run.a.0);
-                    closed.insert(id.0);
-                    &pts[..pts.len() - 1]
-                } else {
-                    prop_assert_eq!(Some(run.a.1), brute_anchor(&doc, run.a.0));
-                    prop_assert_eq!(Some(run.b.1), brute_anchor(&doc, run.b.0));
-                    prop_assert!((run.a.0.x, run.a.0.y) <= (run.b.0.x, run.b.0.y));
-                    &pts[1..pts.len() - 1]
-                };
-                for &p in interior {
-                    prop_assert!(is_corner(&doc, p), "interior point {:?} is not a corner", p);
+            /// Every wire belongs to exactly one run; interior points are corners; ends are anchors.
+            #[test]
+            fn runs_partition_wires(ops in prop::collection::vec(op(), 1..60)) {
+                let doc = build(&ops);
+                let mut run = Run::default();
+                let mut owner: HashMap<u32, Vec<u32>> = HashMap::new();
+                let mut closed = HashSet::new();
+                for (id, _) in doc.wires() {
+                    doc.run_through(id, &mut run);
+                    let set = wire_set(&run);
+                    prop_assert!(set.contains(&id.0));
+                    prop_assert_eq!(set.len(), run.wires.len(), "a wire repeats in its run");
+                    let pts = run_points(&doc, &run);
+                    let interior = if run.a.1 == Anchor::Closed {
+                        prop_assert_eq!(run.b.1, Anchor::Closed);
+                        prop_assert_eq!(run.a.0, run.b.0);
+                        let least = pts.iter().min_by_key(|p| (p.x, p.y)).unwrap();
+                        prop_assert_eq!(*least, run.a.0);
+                        closed.insert(id.0);
+                        &pts[..pts.len() - 1]
+                    } else {
+                        prop_assert_eq!(Some(run.a.1), brute_anchor(&doc, run.a.0));
+                        prop_assert_eq!(Some(run.b.1), brute_anchor(&doc, run.b.0));
+                        prop_assert!((run.a.0.x, run.a.0.y) <= (run.b.0.x, run.b.0.y));
+                        &pts[1..pts.len() - 1]
+                    };
+                    for &p in interior {
+                        prop_assert!(is_corner(&doc, p), "interior point {:?} is not a corner", p);
+                    }
+                    let expected: Vec<_> = interior.iter().flat_map(|&p| labels_at(&doc, p)).collect();
+                    prop_assert_eq!(run.labels.to_vec(), sorted_labels(expected));
+                    owner.insert(id.0, set);
                 }
-                let expected: Vec<_> = interior.iter().flat_map(|&p| labels_at(&doc, p)).collect();
-                prop_assert_eq!(run.labels.to_vec(), sorted_labels(expected));
-                owner.insert(id.0, set);
-            }
-            // Every member of a run reports the same run.
-            for set in owner.values() {
-                for w in set {
-                    prop_assert_eq!(&owner[w], set);
-                }
-            }
-            // Walking from every anchor finds every open run: once from each end, or once when
-            // both ends share a point. Closed loops have no anchor and are never found.
-            let mut points: Vec<Pt> = doc.wires().flat_map(|(_, w)| [w.a, w.b]).collect();
-            points.sort_unstable_by_key(|p| (p.x, p.y));
-            points.dedup();
-            let mut seen: HashMap<u32, usize> = HashMap::new();
-            let mut out = Vec::new();
-            for p in points {
-                doc.runs_at(p, &mut out);
-                let anchor = brute_anchor(&doc, p);
-                if anchor.is_none() {
-                    prop_assert!(out.is_empty(), "runs start at a corner {:?}", p);
-                }
-                for r in &out {
-                    prop_assert_eq!(r.a, (p, anchor.unwrap()));
-                    prop_assert_eq!(Some(r.b.1), brute_anchor(&doc, r.b.0));
-                    run_points(&doc, r);
-                    let set = wire_set(r);
-                    prop_assert_eq!(set.len(), r.wires.len(), "a wire repeats in a run");
-                    prop_assert_eq!(&owner[&r.wires[0].0], &set);
-                    doc.run_through(r.wires[0], &mut run);
-                    prop_assert_eq!(&r.labels, &run.labels);
+                // Every member of a run reports the same run.
+                for set in owner.values() {
                     for w in set {
-                        *seen.entry(w).or_default() += 1;
+                        prop_assert_eq!(&owner[w], set);
                     }
                 }
-            }
-            for (id, _) in doc.wires() {
-                doc.run_through(id, &mut run);
-                let expected = if closed.contains(&id.0) {
-                    0
-                } else if run.a.0 == run.b.0 {
-                    1
-                } else {
-                    2
-                };
-                prop_assert_eq!(seen.get(&id.0).copied().unwrap_or(0), expected);
-            }
-        }
-
-        /// `connected_pins` equals a brute-force count (TC-count-01, TC-count-02).
-        #[test]
-        fn connected_pins_matches_brute_force(ops in prop::collection::vec(op(), 1..60)) {
-            let doc = build(&ops);
-            for (id, _) in doc.parts() {
-                let pins = doc.pins(id).unwrap();
-                let expected = pins
-                    .iter()
-                    .filter(|&&p| {
-                        !wire_ends_at(&doc, p).is_empty()
-                            || pins_at(&doc, p).len() > 1
-                            || !labels_at(&doc, p).is_empty()
-                    })
-                    .count();
-                prop_assert_eq!(usize::from(doc.connected_pins(id)), expected);
-            }
-        }
-
-        /// WINV8: the affected runs are the same whatever the order of the selection, and each
-        /// appears once.
-        #[test]
-        fn affected_runs_ignore_selection_order(
-            ops in prop::collection::vec(op(), 1..60),
-            mask in prop::collection::vec(any::<bool>(), 1..64),
-            repeats in prop::collection::vec(any::<usize>(), 0..4),
-            seed in any::<u64>(),
-        ) {
-            let doc = build(&ops);
-            let items = all_items(&doc);
-            let mut selection: Vec<ItemId> = items
-                .iter()
-                .enumerate()
-                .filter_map(|(i, &item)| mask[i % mask.len()].then_some(item))
-                .collect();
-            if !selection.is_empty() {
-                let extra: Vec<_> = repeats.iter().map(|r| selection[r % selection.len()]).collect();
-                selection.extend(extra);
-            }
-            let mut reordered = selection.clone();
-            shuffle(&mut reordered, seed);
-
-            let selected_wires: HashSet<u32> = selection
-                .iter()
-                .filter_map(|i| match i { ItemId::Wire(w) => Some(w.0), _ => None })
-                .collect();
-            let unselected_end = |p: Pt| wire_ends_at(&doc, p).iter().any(|w| !selected_wires.contains(&w.0));
-            let mut expected_points: Vec<Pt> = selection
-                .iter()
-                .flat_map(|&item| match item {
-                    ItemId::Part(id) => doc.pins(id).unwrap().to_vec(),
-                    ItemId::Wire(id) => { let w = doc.wire(id).unwrap(); vec![w.a, w.b] }
-                    ItemId::Label(_) => vec![],
-                })
-                .filter(|&p| unselected_end(p))
-                .collect();
-            expected_points.sort_unstable_by_key(|p| (p.x, p.y));
-            expected_points.dedup();
-
-            let (mut b1, mut b2) = (Boundary::default(), Boundary::default());
-            doc.boundary_points(&selection, &mut b1);
-            doc.boundary_points(&reordered, &mut b2);
-            prop_assert_eq!(b1.points(), expected_points.as_slice());
-            prop_assert_eq!(&b1, &b2);
-
-            let (mut r1, mut r2) = (Vec::new(), Vec::new());
-            doc.affected_runs(&b1, &mut r1);
-            doc.affected_runs(&b2, &mut r2);
-            prop_assert_eq!(&r1, &r2);
-            let mut s1: Vec<_> = r1.iter().map(wire_set).collect();
-            let mut s2: Vec<_> = r2.iter().map(wire_set).collect();
-            s1.sort();
-            s2.sort();
-            prop_assert_eq!(s1, s2);
-
-            let mut claimed = HashSet::new();
-            for run in &r1 {
-                assert_wires_once(run);
-                prop_assert!(b1.contains(run.a.0));
-                prop_assert_eq!(run.a.1, Anchor::Boundary);
-                let pts = run_points(&doc, run);
-                for w in &run.wires {
-                    prop_assert!(!selected_wires.contains(&w.0), "a selected wire is in a run");
-                    prop_assert!(claimed.insert(w.0), "a wire is in two affected runs");
-                }
-                for &p in &pts[1..pts.len() - 1] {
-                    prop_assert!(is_corner(&doc, p) && !b1.contains(p));
-                }
-                let expected_b = if b1.contains(run.b.0) {
-                    Anchor::Boundary
-                } else {
-                    brute_anchor(&doc, run.b.0).expect("a run ends at an anchor")
-                };
-                prop_assert_eq!(run.b.1, expected_b);
-                let labels: Vec<_> = pts[1..pts.len() - 1].iter().flat_map(|&p| labels_at(&doc, p)).collect();
-                prop_assert_eq!(run.labels.to_vec(), sorted_labels(labels));
-            }
-            // Every unselected wire with an end on a boundary point is in some affected run.
-            for (id, w) in doc.wires() {
-                if !selected_wires.contains(&id.0) && (b1.contains(w.a) || b1.contains(w.b)) {
-                    prop_assert!(claimed.contains(&id.0));
-                }
-            }
-        }
-
-        /// Determinism: rebuilding the same document (same geometry, same ids) by deleting and
-        /// undoing every item in a shuffled order, or by saving and loading it, changes the
-        /// order in which ends were added at each point but not `runs_at` or `affected_runs`,
-        /// which must come back identical, order included.
-        #[test]
-        fn reconstruction_keeps_run_order(
-            ops in prop::collection::vec(op(), 1..60),
-            mask in prop::collection::vec(any::<bool>(), 1..64),
-            seed in any::<u64>(),
-        ) {
-            let doc = build(&ops);
-            let mut items = all_items(&doc);
-            let selection: Vec<ItemId> = items
-                .iter()
-                .enumerate()
-                .filter_map(|(i, &item)| mask[i % mask.len()].then_some(item))
-                .collect();
-            let mut points: Vec<Pt> = doc
-                .wires()
-                .flat_map(|(_, w)| [w.a, w.b])
-                .chain(doc.parts().flat_map(|(id, _)| doc.pins(id).unwrap().to_vec()))
-                .collect();
-            points.sort_unstable_by_key(|p| (p.x, p.y));
-            points.dedup();
-            let snapshot = |d: &Doc| {
+                // Walking from every anchor finds every open run: once from each end, or once when
+                // both ends share a point. Closed loops have no anchor and are never found.
+                let mut points: Vec<Pt> = doc.wires().flat_map(|(_, w)| [w.a, w.b]).collect();
+                points.sort_unstable_by_key(|p| (p.x, p.y));
+                points.dedup();
+                let mut seen: HashMap<u32, usize> = HashMap::new();
                 let mut out = Vec::new();
-                let at: Vec<Vec<Run>> = points
-                    .iter()
-                    .map(|&p| {
-                        d.runs_at(p, &mut out);
-                        out.clone()
-                    })
-                    .collect();
-                let mut boundary = Boundary::default();
-                d.boundary_points(&selection, &mut boundary);
-                d.affected_runs(&boundary, &mut out);
-                (at, boundary, out)
-            };
-            let before = snapshot(&doc);
-
-            let mut undone = build(&ops);
-            shuffle(&mut items, seed);
-            for &item in &items {
-                undone.apply(Command::Delete { items: vec![item], with_wires: false }).unwrap();
-                undone.undo().unwrap();
-            }
-            prop_assert!(undone.content_eq(&doc));
-            prop_assert_eq!(&snapshot(&undone), &before);
-
-            let mut bytes = Vec::new();
-            undone.save(&mut bytes).unwrap();
-            let loaded = Doc::load(bytes.as_slice()).unwrap();
-            prop_assert!(loaded.content_eq(&doc));
-            prop_assert_eq!(&snapshot(&loaded), &before);
-        }
-
-        /// The labels at a point are read from the connectivity point store and stay correct
-        /// through insert, remove, restore, `Move`, `Reorient`, undo, redo and load: at every
-        /// step `labels_at`, the corner labels of every run and `connected_pins` match a scan
-        /// of the label arena.
-        #[test]
-        fn labels_at_tracks_every_edit(edits in prop::collection::vec(edit(), 1..40)) {
-            let mut doc = Doc::new();
-            let mut seen: HashSet<Pt> = HashSet::new();
-            for e in edits {
-                let items = all_items(&doc);
-                let pick = |mask: &[bool]| -> Vec<ItemId> {
-                    items
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, &item)| mask[i % mask.len()].then_some(item))
-                        .collect()
-                };
-                // Refused commands change nothing; the checks below hold either way.
-                match e {
-                    Edit::Wire { at, len, horizontal } => {
-                        let b = if horizontal { pt(at.x + len, at.y) } else { pt(at.x, at.y + len) };
-                        let _ = doc.apply(Command::AddWires(vec![Wire { a: at, b }]));
+                for p in points {
+                    doc.runs_at(p, &mut out);
+                    let anchor = brute_anchor(&doc, p);
+                    if anchor.is_none() {
+                        prop_assert!(out.is_empty(), "runs start at a corner {:?}", p);
                     }
-                    Edit::Part { at } => {
-                        let _ = doc.apply(Command::PlacePart {
-                            part: Part {
-                                symbol: SymbolId(0),
-                                at,
-                                orient: Orient::IDENTITY,
-                                designator: "U".into(),
-                                value: "v".into(),
-                            },
-                            local_pins: vec![Pt::ZERO, pt(1, 0)],
-                            local_bounds: Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
-                        });
-                    }
-                    Edit::Label { at } => {
-                        let _ = doc.apply(Command::AddLabel(Label { at, text: "N".into() }));
-                    }
-                    Edit::Move { mask, delta } => {
-                        let _ = doc.apply(Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(), items: pick(&mask), delta });
-                    }
-                    Edit::Reorient { mask, pivot, by } => {
-                        let _ = doc.apply(Command::Reorient { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
-                            items: pick(&mask),
-                            pivot,
-                            by: Orient::ALL[by as usize],
-                        });
-                    }
-                    Edit::Delete { mask } => {
-                        let _ = doc.apply(Command::Delete { items: pick(&mask), with_wires: false });
-                    }
-                    Edit::Undo => {
-                        doc.undo();
-                    }
-                    Edit::Redo => {
-                        doc.redo();
-                    }
-                    Edit::RemoveRestore { pick } => {
-                        // The crate-private remove and restore, as a pair so that the undo
-                        // history still matches the document afterwards.
-                        let ids: Vec<_> = doc.labels().map(|(id, _)| id).collect();
-                        if !ids.is_empty() {
-                            let id = ids[pick % ids.len()];
-                            let label = doc.remove_label(id).unwrap();
-                            check_labels(&doc, &seen);
-                            doc.restore_label(id, label).unwrap();
+                    for r in &out {
+                        prop_assert_eq!(r.a, (p, anchor.unwrap()));
+                        prop_assert_eq!(Some(r.b.1), brute_anchor(&doc, r.b.0));
+                        run_points(&doc, r);
+                        let set = wire_set(r);
+                        prop_assert_eq!(set.len(), r.wires.len(), "a wire repeats in a run");
+                        prop_assert_eq!(&owner[&r.wires[0].0], &set);
+                        doc.run_through(r.wires[0], &mut run);
+                        prop_assert_eq!(&r.labels, &run.labels);
+                        for w in set {
+                            *seen.entry(w).or_default() += 1;
                         }
                     }
-                    Edit::Load => {
-                        let mut bytes = Vec::new();
-                        doc.save(&mut bytes).unwrap();
-                        doc = Doc::load(bytes.as_slice()).unwrap();
+                }
+                for (id, _) in doc.wires() {
+                    doc.run_through(id, &mut run);
+                    let expected = if closed.contains(&id.0) {
+                        0
+                    } else if run.a.0 == run.b.0 {
+                        1
+                    } else {
+                        2
+                    };
+                    prop_assert_eq!(seen.get(&id.0).copied().unwrap_or(0), expected);
+                }
+            }
+
+            /// `connected_pins` equals a brute-force count (TC-count-01, TC-count-02).
+            #[test]
+            fn connected_pins_matches_brute_force(ops in prop::collection::vec(op(), 1..60)) {
+                let doc = build(&ops);
+                for (id, _) in doc.parts() {
+                    let pins = doc.pins(id).unwrap();
+                    let expected = pins
+                        .iter()
+                        .filter(|&&p| {
+                            !wire_ends_at(&doc, p).is_empty()
+                                || pins_at(&doc, p).len() > 1
+                                || !labels_at(&doc, p).is_empty()
+                        })
+                        .count();
+                    prop_assert_eq!(usize::from(doc.connected_pins(id)), expected);
+                }
+            }
+
+            /// WINV8: the affected runs are the same whatever the order of the selection, and each
+            /// appears once.
+            #[test]
+            fn affected_runs_ignore_selection_order(
+                ops in prop::collection::vec(op(), 1..60),
+                mask in prop::collection::vec(any::<bool>(), 1..64),
+                repeats in prop::collection::vec(any::<usize>(), 0..4),
+                seed in any::<u64>(),
+            ) {
+                let doc = build(&ops);
+                let items = all_items(&doc);
+                let mut selection: Vec<ItemId> = items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &item)| mask[i % mask.len()].then_some(item))
+                    .collect();
+                if !selection.is_empty() {
+                    let extra: Vec<_> = repeats.iter().map(|r| selection[r % selection.len()]).collect();
+                    selection.extend(extra);
+                }
+                let mut reordered = selection.clone();
+                shuffle(&mut reordered, seed);
+
+                let selected_wires: HashSet<u32> = selection
+                    .iter()
+                    .filter_map(|i| match i { ItemId::Wire(w) => Some(w.0), _ => None })
+                    .collect();
+                let unselected_end = |p: Pt| wire_ends_at(&doc, p).iter().any(|w| !selected_wires.contains(&w.0));
+                let mut expected_points: Vec<Pt> = selection
+                    .iter()
+                    .flat_map(|&item| match item {
+                        ItemId::Part(id) => doc.pins(id).unwrap().to_vec(),
+                        ItemId::Wire(id) => { let w = doc.wire(id).unwrap(); vec![w.a, w.b] }
+                        ItemId::Label(_) => vec![],
+                    })
+                    .filter(|&p| unselected_end(p))
+                    .collect();
+                expected_points.sort_unstable_by_key(|p| (p.x, p.y));
+                expected_points.dedup();
+
+                let (mut b1, mut b2) = (Boundary::default(), Boundary::default());
+                doc.boundary_points(&selection, &mut b1);
+                doc.boundary_points(&reordered, &mut b2);
+                prop_assert_eq!(b1.points(), expected_points.as_slice());
+                prop_assert_eq!(&b1, &b2);
+
+                let (mut r1, mut r2) = (Vec::new(), Vec::new());
+                doc.affected_runs(&b1, &mut r1);
+                doc.affected_runs(&b2, &mut r2);
+                prop_assert_eq!(&r1, &r2);
+                let mut s1: Vec<_> = r1.iter().map(wire_set).collect();
+                let mut s2: Vec<_> = r2.iter().map(wire_set).collect();
+                s1.sort();
+                s2.sort();
+                prop_assert_eq!(s1, s2);
+
+                let mut claimed = HashSet::new();
+                for run in &r1 {
+                    assert_wires_once(run);
+                    prop_assert!(b1.contains(run.a.0));
+                    prop_assert_eq!(run.a.1, Anchor::Boundary);
+                    let pts = run_points(&doc, run);
+                    for w in &run.wires {
+                        prop_assert!(!selected_wires.contains(&w.0), "a selected wire is in a run");
+                        prop_assert!(claimed.insert(w.0), "a wire is in two affected runs");
+                    }
+                    for &p in &pts[1..pts.len() - 1] {
+                        prop_assert!(is_corner(&doc, p) && !b1.contains(p));
+                    }
+                    let expected_b = if b1.contains(run.b.0) {
+                        Anchor::Boundary
+                    } else {
+                        brute_anchor(&doc, run.b.0).expect("a run ends at an anchor")
+                    };
+                    prop_assert_eq!(run.b.1, expected_b);
+                    let labels: Vec<_> = pts[1..pts.len() - 1].iter().flat_map(|&p| labels_at(&doc, p)).collect();
+                    prop_assert_eq!(run.labels.to_vec(), sorted_labels(labels));
+                }
+                // Every unselected wire with an end on a boundary point is in some affected run.
+                for (id, w) in doc.wires() {
+                    if !selected_wires.contains(&id.0) && (b1.contains(w.a) || b1.contains(w.b)) {
+                        prop_assert!(claimed.contains(&id.0));
                     }
                 }
-                seen.extend(doc.labels().map(|(_, l)| l.at));
-                seen.extend(doc.wires().flat_map(|(_, w)| [w.a, w.b]));
-                check_labels(&doc, &seen);
+            }
+
+            /// Determinism: rebuilding the same document (same geometry, same ids) by deleting and
+            /// undoing every item in a shuffled order, or by saving and loading it, changes the
+            /// order in which ends were added at each point but not `runs_at` or `affected_runs`,
+            /// which must come back identical, order included.
+            #[test]
+            fn reconstruction_keeps_run_order(
+                ops in prop::collection::vec(op(), 1..60),
+                mask in prop::collection::vec(any::<bool>(), 1..64),
+                seed in any::<u64>(),
+            ) {
+                let doc = build(&ops);
+                let mut items = all_items(&doc);
+                let selection: Vec<ItemId> = items
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &item)| mask[i % mask.len()].then_some(item))
+                    .collect();
+                let mut points: Vec<Pt> = doc
+                    .wires()
+                    .flat_map(|(_, w)| [w.a, w.b])
+                    .chain(doc.parts().flat_map(|(id, _)| doc.pins(id).unwrap().to_vec()))
+                    .collect();
+                points.sort_unstable_by_key(|p| (p.x, p.y));
+                points.dedup();
+                let snapshot = |d: &Doc| {
+                    let mut out = Vec::new();
+                    let at: Vec<Vec<Run>> = points
+                        .iter()
+                        .map(|&p| {
+                            d.runs_at(p, &mut out);
+                            out.clone()
+                        })
+                        .collect();
+                    let mut boundary = Boundary::default();
+                    d.boundary_points(&selection, &mut boundary);
+                    d.affected_runs(&boundary, &mut out);
+                    (at, boundary, out)
+                };
+                let before = snapshot(&doc);
+
+                let mut undone = build(&ops);
+                shuffle(&mut items, seed);
+                for &item in &items {
+                    undone.apply(Command::Delete { items: vec![item], with_wires: false }).unwrap();
+                    undone.undo().unwrap();
+                }
+                prop_assert!(undone.content_eq(&doc));
+                prop_assert_eq!(&snapshot(&undone), &before);
+
+                let mut bytes = Vec::new();
+                undone.save(&mut bytes).unwrap();
+                let loaded = Doc::load(bytes.as_slice()).unwrap();
+                prop_assert!(loaded.content_eq(&doc));
+                prop_assert_eq!(&snapshot(&loaded), &before);
+            }
+
+            /// The labels at a point are read from the connectivity point store and stay correct
+            /// through insert, remove, restore, `Move`, `Reorient`, undo, redo and load: at every
+            /// step `labels_at`, the corner labels of every run and `connected_pins` match a scan
+            /// of the label arena.
+            #[test]
+            fn labels_at_tracks_every_edit(edits in prop::collection::vec(edit(), 1..40)) {
+                let mut doc = Doc::new();
+                let mut seen: HashSet<Pt> = HashSet::new();
+                for e in edits {
+                    let items = all_items(&doc);
+                    let pick = |mask: &[bool]| -> Vec<ItemId> {
+                        items
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, &item)| mask[i % mask.len()].then_some(item))
+                            .collect()
+                    };
+                    // Refused commands change nothing; the checks below hold either way.
+                    match e {
+                        Edit::Wire { at, len, horizontal } => {
+                            let b = if horizontal { pt(at.x + len, at.y) } else { pt(at.x, at.y + len) };
+                            let _ = doc.apply(Command::AddWires(vec![Wire { a: at, b }]));
+                        }
+                        Edit::Part { at } => {
+                            let _ = doc.apply(Command::PlacePart {
+                                part: Part {
+                                    symbol: SymbolId(0),
+                                    at,
+                                    orient: Orient::IDENTITY,
+                                    designator: "U".into(),
+                                    value: "v".into(),
+                                },
+                                local_pins: vec![Pt::ZERO, pt(1, 0)],
+                                local_bounds: Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
+        def: crate::PlaceDef::Unmodelled,
+        params: crate::Params::new(),
+    });
+                        }
+                        Edit::Label { at } => {
+                            let _ = doc.apply(Command::AddLabel(Label { at, text: "N".into() }));
+                        }
+                        Edit::Move { mask, delta } => {
+                            let _ = doc.apply(Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(), items: pick(&mask), delta });
+                        }
+                        Edit::Reorient { mask, pivot, by } => {
+                            let _ = doc.apply(Command::Reorient { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
+                                items: pick(&mask),
+                                pivot,
+                                by: Orient::ALL[by as usize],
+                            });
+                        }
+                        Edit::Delete { mask } => {
+                            let _ = doc.apply(Command::Delete { items: pick(&mask), with_wires: false });
+                        }
+                        Edit::Undo => {
+                            doc.undo();
+                        }
+                        Edit::Redo => {
+                            doc.redo();
+                        }
+                        Edit::RemoveRestore { pick } => {
+                            // The crate-private remove and restore, as a pair so that the undo
+                            // history still matches the document afterwards.
+                            let ids: Vec<_> = doc.labels().map(|(id, _)| id).collect();
+                            if !ids.is_empty() {
+                                let id = ids[pick % ids.len()];
+                                let label = doc.remove_label(id).unwrap();
+                                check_labels(&doc, &seen);
+                                doc.restore_label(id, label).unwrap();
+                            }
+                        }
+                        Edit::Load => {
+                            let mut bytes = Vec::new();
+                            doc.save(&mut bytes).unwrap();
+                            doc = Doc::load(bytes.as_slice()).unwrap();
+                        }
+                    }
+                    seen.extend(doc.labels().map(|(_, l)| l.at));
+                    seen.extend(doc.wires().flat_map(|(_, w)| [w.a, w.b]));
+                    check_labels(&doc, &seen);
+                }
             }
         }
-    }
 
     /// `labels_at` at every point in `seen`, the corner labels of every run and
     /// `connected_pins` all match scans of the arenas.

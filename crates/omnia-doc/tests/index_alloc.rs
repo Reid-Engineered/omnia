@@ -154,6 +154,8 @@ fn doc_query_and_net_wires_allocate_nothing_after_commands() {
             },
             local_pins: vec![Pt::ZERO, Pt { x: 20, y: 0 }],
             local_bounds: rect(-10, -10, 30, 10),
+            def: omnia_doc::PlaceDef::Unmodelled,
+            params: omnia_doc::Params::new(),
         })
         .unwrap();
     // A connected 64-wire staircase preserves the original net workload.
