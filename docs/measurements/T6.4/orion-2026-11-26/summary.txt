@@ -1,0 +1,204 @@
+Orion: Intel(R) Core(TM) i5-7300U CPU @ 2.60GHz, Linux orion-laptop 7.2.7-arch1-1 #1 SMP PREEMPT_DYNAMIC Mon, 21 Sep 2026 18:51:14 +0000 x86_64 GNU/Linux, wayland, eDP-1, source fecb2c1c81f40ba7ab1f9791487f3ce424c64e02, binary SHA-256 bdbbffb57c52799887b1cd765bf4880f494a8d4dde62817add9896cfdd0b667c
+Vulkan device and driver: [('Intel(R) HD Graphics 620 (KBL GT2)', 'Intel open-source Mesa driver')]
+
+s100: scale 1.0, [1920, 1080], native 1920x1080 at 60 Hz, AC power
+CPU governors, power profile and platform profile: [(('performance',), None, ())]
+PASS B2 startup delta 39.937 [32.406, 47.215] ms (< 300)
+PASS B6 1k-drag-wire dirty-to-present p99 1.905 [1.829, 1.971] ms (<= 16.664)
+PASS B3 1k-drag-wire frame p99 0.995 [0.973, 1.013] ms (< 16.7)
+PASS B3 1k-drag-wire attribution 10/10 passed
+PASS B5 1k-drag-wire worst frame 1.563 ms (<= 33.3)
+PASS INV5 1k-drag-wire max revision changes 0 (= 0)
+PASS INV11 1k-drag-wire max SheetView paints 0 (= 0)
+PASS INV11 1k-drag-wire max press SheetView paints 0 (= 0)
+PASS INV11 1k-drag-wire max warm-up SheetView paints 0 (= 0)
+PASS B10 1k-drag-wire max Omnia allocations/frame 0 (= 0)
+PASS B6 dense-drag-wire dirty-to-present p99 2.103 [2.086, 2.196] ms (<= 16.664)
+PASS B3 dense-drag-wire frame p99 1.135 [1.117, 1.163] ms (< 16.7)
+PASS B3 dense-drag-wire attribution 10/10 passed
+PASS B5 dense-drag-wire worst frame 1.823 ms (<= 33.3)
+PASS INV5 dense-drag-wire max revision changes 0 (= 0)
+PASS INV11 dense-drag-wire max SheetView paints 0 (= 0)
+PASS INV11 dense-drag-wire max press SheetView paints 0 (= 0)
+PASS INV11 dense-drag-wire max warm-up SheetView paints 0 (= 0)
+PASS B10 dense-drag-wire max Omnia allocations/frame 0 (= 0)
+PASS B3 1k-pan frame p99 1.671 [1.613, 1.715] ms (< 16.7)
+PASS B3 1k-pan attribution 10/10 passed
+PASS B5 1k-pan worst frame 2.388 ms (<= 33.3)
+PASS B10 1k-pan max Omnia allocations/frame 0 (= 0)
+PASS B3 1k-zoom frame p99 2.740 [2.675, 2.841] ms (< 16.7)
+PASS B3 1k-zoom attribution 10/10 passed
+PASS B5 1k-zoom worst frame 4.030 ms (<= 33.3)
+PASS B10 1k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B4 10k-pan frame p99 2.104 [1.994, 2.140] ms (< 33.3)
+PASS B4 10k-pan attribution 10/10 passed
+PASS B5 10k-pan worst frame 5.419 ms (<= 50)
+PASS B10 10k-pan max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan private memory 146.070 [144.113, 146.356] MB (all < 300)
+PASS B4 10k-zoom frame p99 5.194 [5.165, 5.235] ms (< 33.3)
+PASS B4 10k-zoom attribution 10/10 passed
+PASS B5 10k-zoom worst frame 12.427 ms (<= 50)
+PASS B10 10k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-zoom private memory 166.506 [165.481, 168.242] MB (all < 300)
+
+s125: scale 1.25, [1536, 864], native 1920x1080 at 60 Hz, AC power
+CPU governors, power profile and platform profile: [(('performance',), None, ())]
+PASS B2 startup delta 44.802 [40.828, 54.813] ms (< 300)
+PASS B6 1k-drag-wire dirty-to-present p99 1.422 [1.402, 1.829] ms (<= 16.664)
+PASS B3 1k-drag-wire frame p99 0.763 [0.746, 0.894] ms (< 16.7)
+PASS B3 1k-drag-wire attribution 10/10 passed
+PASS B5 1k-drag-wire worst frame 1.151 ms (<= 33.3)
+PASS INV5 1k-drag-wire max revision changes 0 (= 0)
+PASS INV11 1k-drag-wire max SheetView paints 0 (= 0)
+PASS INV11 1k-drag-wire max press SheetView paints 0 (= 0)
+PASS INV11 1k-drag-wire max warm-up SheetView paints 0 (= 0)
+PASS B10 1k-drag-wire max Omnia allocations/frame 0 (= 0)
+PASS B6 dense-drag-wire dirty-to-present p99 1.588 [1.539, 1.932] ms (<= 16.664)
+PASS B3 dense-drag-wire frame p99 0.845 [0.821, 0.982] ms (< 16.7)
+PASS B3 dense-drag-wire attribution 10/10 passed
+PASS B5 dense-drag-wire worst frame 1.313 ms (<= 33.3)
+PASS INV5 dense-drag-wire max revision changes 0 (= 0)
+PASS INV11 dense-drag-wire max SheetView paints 0 (= 0)
+PASS INV11 dense-drag-wire max press SheetView paints 0 (= 0)
+PASS INV11 dense-drag-wire max warm-up SheetView paints 0 (= 0)
+PASS B10 dense-drag-wire max Omnia allocations/frame 0 (= 0)
+PASS B3 1k-pan frame p99 1.157 [1.128, 1.774] ms (< 16.7)
+PASS B3 1k-pan attribution 10/10 passed
+PASS B5 1k-pan worst frame 3.928 ms (<= 33.3)
+PASS B10 1k-pan max Omnia allocations/frame 0 (= 0)
+PASS B3 1k-zoom frame p99 2.177 [2.142, 2.236] ms (< 16.7)
+PASS B3 1k-zoom attribution 10/10 passed
+PASS B5 1k-zoom worst frame 3.168 ms (<= 33.3)
+PASS B10 1k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B4 10k-pan frame p99 1.529 [1.503, 1.629] ms (< 33.3)
+PASS B4 10k-pan attribution 10/10 passed
+PASS B5 10k-pan worst frame 2.277 ms (<= 50)
+PASS B10 10k-pan max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan private memory 144.051 [142.879, 145.027] MB (all < 300)
+PASS B4 10k-zoom frame p99 5.112 [5.087, 5.157] ms (< 33.3)
+PASS B4 10k-zoom attribution 10/10 passed
+PASS B5 10k-zoom worst frame 10.396 ms (<= 50)
+PASS B10 10k-zoom max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-zoom private memory 164.256 [164.012, 166.406] MB (all < 300)
+
+Missed-refresh attribution
+s100/1k-drag-wire-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-drag-wire-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-drag-wire-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-drag-wire-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-drag-wire-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-drag-wire-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-drag-wire-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-drag-wire-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-drag-wire-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/dense-drag-wire-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/1k-drag-wire-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/dense-drag-wire-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-zoom-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/1k-drag-wire-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
