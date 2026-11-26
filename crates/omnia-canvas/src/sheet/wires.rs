@@ -2,12 +2,13 @@
 
 use crate::{
     camera::Camera,
-    snap_px::{device_rect, round_device, stroke_device_px, to_device},
+    snap_px::{device_rect, round_device, stroke_device_px_ties_even, to_device},
 };
 use gpui::{Bounds, Pixels};
 use omnia_doc::{Pt, Wire};
 
-pub(super) const WIDTH_NM: f64 = 228_600.0;
+/// K5 wire stroke width in world nanometres (2.0 px at 100% zoom, matching `symbols.rs`).
+pub(crate) const WIDTH_NM: f64 = 254_000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Segment {
@@ -91,8 +92,8 @@ impl Segment {
     }
 }
 
-pub(super) fn width(camera: &Camera, sf: f32) -> u32 {
-    stroke_device_px(WIDTH_NM * camera.scale(), sf)
+pub(crate) fn width(camera: &Camera, sf: f32) -> u32 {
+    stroke_device_px_ties_even(WIDTH_NM * camera.scale(), sf)
 }
 
 // Keep world coordinates so every frame still uses the current camera and stroke.
@@ -122,6 +123,21 @@ impl MergedSegments {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn k5_wire_stroke_matches_symbol_stroke() {
+        assert_eq!(WIDTH_NM, super::super::symbols::SYMBOL_STROKE_NM);
+        let cam_100 = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+        assert_eq!(width(&cam_100, 1.0), 2);
+        assert_eq!(width(&cam_100, 1.25), 2);
+        assert_eq!(width(&cam_100, 1.5), 3);
+        assert_eq!(width(&cam_100, 1.75), 4);
+        assert_eq!(width(&cam_100, 2.0), 4);
+        let cam_3200 = Camera::new(Pt::ZERO, 32.0, Bounds::default());
+        assert_eq!(width(&cam_3200, 1.0), 64);
+        assert_eq!(width(&cam_3200, 1.25), 80);
+        assert_eq!(width(&cam_3200, 1.5), 96);
+    }
 
     #[test]
     fn d4_visible_runs_follow_geometry_and_view_changes() {

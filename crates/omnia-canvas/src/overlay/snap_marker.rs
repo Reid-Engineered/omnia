@@ -15,13 +15,15 @@
 //! - [`Snap::Grid`]: subtle small square dot.
 
 use super::{
-    DevRect, OverlayPaintScope, WIRE_WIDTH_NM, gpui_color, paint_quad_scoped, paint_solid_outline,
-    run_omnia, wire_rect_dev,
+    DevRect, OverlayPaintScope, gpui_color, paint_quad_scoped, paint_solid_outline, run_omnia,
+    wire_rect_dev,
 };
 use crate::{
     camera::Camera,
+    sheet::wires,
     snap_px::{
-        centered_square, device_rect, device_to_logical, round_device, stroke_device_px, to_device,
+        centered_square, device_rect, device_to_logical, match_parity, round_device,
+        stroke_device_px, to_device,
     },
     tool::WireGesture,
 };
@@ -82,17 +84,6 @@ fn wire_bounds(wire: Wire) -> Rect {
             x: wire.a.x.max(wire.b.x),
             y: wire.a.y.max(wire.b.y),
         },
-    }
-}
-
-/// Adjusts `size_dev` by at most `+1` device pixel so its parity matches `reference_dev`,
-/// keeping concentric markers centred on the exact same device pixel at fractional scale factors.
-#[inline]
-fn match_parity(size_dev: u32, reference_dev: u32) -> u32 {
-    if size_dev % 2 == reference_dev % 2 {
-        size_dev
-    } else {
-        size_dev.saturating_add(1)
     }
 }
 
@@ -213,9 +204,13 @@ pub(super) fn paint_wire_preview(
         .snap
         .filter(|s| params.visible_padded.contains(s.at()));
 
-    let wire_base_px = WIRE_WIDTH_NM * params.camera.scale();
-    let wire_width_dev = stroke_device_px(wire_base_px, params.sf);
-    let wire_halo_dev = stroke_device_px(wire_base_px + WIRE_PREVIEW_HALO_EXTRA_PX, params.sf);
+    let wire_width_dev = wires::width(params.camera, params.sf);
+    let wire_base_px = wires::WIDTH_NM * params.camera.scale();
+    let wire_halo_dev = match_parity(
+        stroke_device_px(wire_base_px + WIRE_PREVIEW_HALO_EXTRA_PX, params.sf)
+            .max(wire_width_dev.saturating_add(2)),
+        wire_width_dev,
+    );
 
     let pin_ring_dev = stroke_device_px(PIN_RING_DIAMETER_PX, params.sf);
     let pin_stroke_dev = stroke_device_px(PIN_RING_STROKE_PX, params.sf);

@@ -169,7 +169,7 @@ All from `build-omnia.mjs` unless marked "chosen". Screen sizes are logical pixe
 | K2 | Grid; pin lattice | 2,540,000 nm; 1,270,000 nm |
 | K3 | 100% zoom | 20 px per grid step: `scale = 20.0 / 2_540_000.0` px per nm |
 | K4 | Zoom range; wheel step | 5% to 3200%; one notch multiplies by 2^(1/4) (chosen). A notch is 3 `ScrollDelta::Lines`, Windows' default wheel setting, which GPUI multiplies in (T0.5, T1.5); merged or fractional notches zoom by the matching power. |
-| K5 | Wire stroke; symbol stroke | 1.8 px (228,600 nm); 2 px (254,000 nm). Floor: 1 device pixel (Q1). |
+| K5 | Wire stroke (chosen); symbol stroke | 2 px (254,000 nm) for both wires and symbols (unified 2026-11-26 from `build-omnia.mjs`'s 1.8 px wires so wire and symbol strokes match in world units; wire device-pixel width breaks exact half-pixel ties to even so 125% wires stay centred with anti-aliased pins and junctions, while odd whole-pixel widths remain quantized per D4/G3). Floor: 1 device pixel (Q1). |
 | K6 | Junction dot; grid dot | 8 px diameter (1,016,000 nm); 1.2 px, constant on screen, at least 1 device pixel |
 | K7 | Symbol art box | 150 units square. Placed size: resistor, capacitor, diode 80 px (4 grid steps); op-amp 180 px (9); ground 48 px (2.4, anchored by its pin). |
 | K8 | Text | Designator and value: Inter SemiBold 17 px (Q3), stacked on a shared left edge. Net label and pin number: Inter Medium 13 px (single-pin symbols such as ground omit pin numbers; multi-pin symbols show every pin number). Secondary value text: Inter Medium 12 px (reserved for future multi-field parts; `Part` currently holds one `value` field). |

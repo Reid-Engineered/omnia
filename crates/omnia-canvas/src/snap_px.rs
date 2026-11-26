@@ -42,6 +42,33 @@ pub fn stroke_device_px(logical: f64, scale_factor: f32) -> u32 {
     }
 }
 
+/// Like [`stroke_device_px`], breaking exact half-pixel ties to the nearest even integer.
+///
+/// Used by K5 wires so exact ties at fractional scales (e.g. `2.0 × 1.25 = 2.5 → 2`,
+/// `2.0 × 1.75 = 3.5 → 4`) stay even and centre symmetrically on integer device-pixel pin
+/// and junction coordinates.
+#[inline]
+pub fn stroke_device_px_ties_even(logical: f64, scale_factor: f32) -> u32 {
+    let device = to_device(logical.max(0.0), scale_factor).round_ties_even();
+    if device >= f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        (device as u32).max(1)
+    }
+}
+
+/// Adjusts `size_dev` by at most `+1` device pixel so its parity matches `reference_dev`,
+/// keeping concentric strokes and markers centred on the exact same device pixel at fractional
+/// scale factors.
+#[inline]
+pub fn match_parity(size_dev: u32, reference_dev: u32) -> u32 {
+    if size_dev % 2 == reference_dev % 2 {
+        size_dev
+    } else {
+        size_dev.saturating_add(1)
+    }
+}
+
 /// The logical value GPUI's own snap maps back to `device` exactly.
 #[inline]
 pub fn device_to_logical(device: f64, scale_factor: f32) -> Pixels {
@@ -111,10 +138,20 @@ mod tests {
         assert_eq!(stroke_device_px(1.2, 1.0), 1);
         assert_eq!(stroke_device_px(1.2, 1.25), 2);
         assert_eq!(stroke_device_px(1.2, 1.5), 2);
-        // K5 wire, 1.8 px.
-        assert_eq!(stroke_device_px(1.8, 1.0), 2);
-        assert_eq!(stroke_device_px(1.8, 1.25), 2);
-        assert_eq!(stroke_device_px(1.8, 1.5), 3);
+        // K5 wire and symbol stroke, 2.0 px (ties-to-even keeps 125% and 175% even-width).
+        assert_eq!(stroke_device_px(2.0, 1.0), 2);
+        assert_eq!(stroke_device_px(2.0, 1.25), 3);
+        assert_eq!(stroke_device_px(2.0, 1.5), 3);
+        assert_eq!(stroke_device_px_ties_even(2.0, 1.0), 2);
+        assert_eq!(stroke_device_px_ties_even(2.0, 1.25), 2);
+        assert_eq!(stroke_device_px_ties_even(2.0, 1.5), 3);
+        assert_eq!(stroke_device_px_ties_even(2.0, 1.75), 4);
+        assert_eq!(stroke_device_px_ties_even(2.0, 2.0), 4);
+        assert_eq!(stroke_device_px_ties_even(0.0, 1.0), 1);
+        assert_eq!(match_parity(4, 2), 4);
+        assert_eq!(match_parity(3, 2), 4);
+        assert_eq!(match_parity(4, 3), 5);
+        assert_eq!(match_parity(5, 3), 5);
     }
 
     #[test]

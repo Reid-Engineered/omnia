@@ -29,8 +29,10 @@ use crate::{
     },
     input::wheel_factor,
     selection::{RubberBand, SelectionState, SelectionUpdate, hit_tolerance_nm, item_exists},
-    sheet::{SheetDocument, SheetView},
-    snap_px::{centered_square, device_rect, round_device, stroke_device_px, to_device},
+    sheet::{SheetDocument, SheetView, wires},
+    snap_px::{
+        centered_square, device_rect, match_parity, round_device, stroke_device_px, to_device,
+    },
     tool::{self, ToolHost, ToolMachine, ToolRequest},
 };
 use gpui::{
@@ -48,8 +50,6 @@ use omnia_doc::{
 };
 use omnia_theme::Theme;
 
-/// K5 wire stroke width in world nanometres, matching `sheet/wires.rs`.
-const WIRE_WIDTH_NM: f64 = 228_600.0;
 /// Logical padding around a part body for hover/selection frames.
 const PART_FRAME_PAD_PX: f64 = 4.0;
 /// Logical outline thickness for selected items.
@@ -2040,9 +2040,16 @@ fn paint_overlay(
     let halo_color = gpui_color(theme.stage_select_halo);
     let hover_color = gpui_color(theme.stage_hover);
 
-    let wire_base_px = WIRE_WIDTH_NM * camera.scale();
-    let wire_halo_dev = stroke_device_px(wire_base_px + WIRE_HALO_EXTRA_PX, sf);
-    let wire_select_dev = stroke_device_px(wire_base_px + WIRE_SELECT_EXTRA_PX, sf);
+    let wire_dev = wires::width(camera, sf);
+    let wire_base_px = wires::WIDTH_NM * camera.scale();
+    let wire_halo_dev = match_parity(
+        stroke_device_px(wire_base_px + WIRE_HALO_EXTRA_PX, sf).max(wire_dev.saturating_add(2)),
+        wire_dev,
+    );
+    let wire_select_dev = match_parity(
+        stroke_device_px(wire_base_px + WIRE_SELECT_EXTRA_PX, sf).max(wire_dev.saturating_add(2)),
+        wire_dev,
+    );
     let select_outline_dev = stroke_device_px(SELECT_OUTLINE_PX, sf);
     let hover_outline_dev = stroke_device_px(HOVER_OUTLINE_PX, sf);
     let band_border_dev = stroke_device_px(1.0, sf);
@@ -3386,5 +3393,75 @@ mod tests {
             gpui_calls.get() > gpui_before,
             "B10/T4.6: OverlayPaintScope::gpui must wrap GPUI notify/paint calls"
         );
+    }
+
+    #[test]
+    fn wire_select_and_halo_widths_match_wire_parity_and_are_symmetric() {
+        let clip = (-10_000.0, -10_000.0, 10_000.0, 10_000.0);
+        let h_wire = Wire {
+            a: Pt { x: 0, y: 0 },
+            b: Pt {
+                x: omnia_doc::GRID_NM * 4,
+                y: 0,
+            },
+        };
+        let v_wire = Wire {
+            a: Pt { x: 0, y: 0 },
+            b: Pt {
+                x: 0,
+                y: omnia_doc::GRID_NM * 4,
+            },
+        };
+        for sf in [1.0f32, 1.25, 1.5, 1.75, 2.0] {
+            for zoom in [0.5, 1.0, 1.5, 2.0, 8.0, 32.0] {
+                let camera = Camera::new(
+                    Pt::ZERO,
+                    zoom,
+                    Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(800.0), px(600.0))),
+                );
+                let wire_dev = wires::width(&camera, sf);
+                let wire_base_px = wires::WIDTH_NM * camera.scale();
+                let select_dev = match_parity(
+                    stroke_device_px(wire_base_px + WIRE_SELECT_EXTRA_PX, sf)
+                        .max(wire_dev.saturating_add(2)),
+                    wire_dev,
+                );
+                let halo_dev = match_parity(
+                    stroke_device_px(wire_base_px + WIRE_HALO_EXTRA_PX, sf)
+                        .max(wire_dev.saturating_add(2)),
+                    wire_dev,
+                );
+                for overlay_dev in [select_dev, halo_dev] {
+                    assert_eq!(
+                        overlay_dev % 2,
+                        wire_dev % 2,
+                        "sf={sf}, zoom={zoom}: overlay width {overlay_dev} must match wire parity {wire_dev}"
+                    );
+                    assert!(
+                        overlay_dev >= wire_dev + 2,
+                        "sf={sf}, zoom={zoom}: overlay width {overlay_dev} must extend at least 1 px on both sides of {wire_dev}"
+                    );
+                    for wire in [h_wire, v_wire] {
+                        let base = wire_rect_dev(wire, &camera, sf, wire_dev, clip).unwrap();
+                        let over = wire_rect_dev(wire, &camera, sf, overlay_dev, clip).unwrap();
+                        let pad = f64::from((overlay_dev - wire_dev) / 2);
+                        assert_eq!(base.left - over.left, pad, "left pad sf={sf} zoom={zoom}");
+                        assert_eq!(base.top - over.top, pad, "top pad sf={sf} zoom={zoom}");
+                        assert_eq!(
+                            (over.left + f64::from(over.width))
+                                - (base.left + f64::from(base.width)),
+                            pad,
+                            "right pad sf={sf} zoom={zoom}"
+                        );
+                        assert_eq!(
+                            (over.top + f64::from(over.height))
+                                - (base.top + f64::from(base.height)),
+                            pad,
+                            "bottom pad sf={sf} zoom={zoom}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
