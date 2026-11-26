@@ -118,17 +118,19 @@ fn encode_str_list(out: &mut Vec<u8>, items: &[String]) {
     }
 }
 
-fn decode_str_list(input: &[u8], pos: &mut usize) -> io::Result<Vec<String>> {
+fn decode_str_list(input: &[u8], pos: &mut usize, max_items: usize) -> io::Result<Vec<String>> {
     let count = read_u32(input, pos)? as usize;
     let remaining = input.len().saturating_sub(*pos);
     // Each string needs at least its 4-byte length prefix in the remaining payload.
     let min_bytes = count
         .checked_mul(4)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "string list count overflow"))?;
-    if count > MAX_STR_LIST_ITEMS || min_bytes > remaining {
+    if count > max_items || min_bytes > remaining {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("string list count {count} exceeds bounds (remaining {remaining} bytes)"),
+            format!(
+                "string list count {count} exceeds bounds (max {max_items}, remaining {remaining} bytes)"
+            ),
         ));
     }
     let mut out = Vec::with_capacity(count);
@@ -247,32 +249,14 @@ pub fn read_request(r: &mut impl Read, buf: &mut Vec<u8>) -> io::Result<Option<R
     let req = match tag {
         TAG_PING => Request::Ping,
         TAG_RUN_OP => {
-            let probes = decode_str_list(buf, &mut pos)?;
-            if probes.len() > MAX_CHANNELS as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "probe count {} exceeds MAX_CHANNELS ({MAX_CHANNELS})",
-                        probes.len()
-                    ),
-                ));
-            }
-            let netlist = decode_str_list(buf, &mut pos)?;
+            let probes = decode_str_list(buf, &mut pos, MAX_CHANNELS as usize)?;
+            let netlist = decode_str_list(buf, &mut pos, MAX_STR_LIST_ITEMS)?;
             Request::RunOp { probes, netlist }
         }
         TAG_RUN_TRAN => {
             let batch_size = validate_batch_size(read_u32(buf, &mut pos)?)?;
-            let probes = decode_str_list(buf, &mut pos)?;
-            if probes.len() > MAX_CHANNELS as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "probe count {} exceeds MAX_CHANNELS ({MAX_CHANNELS})",
-                        probes.len()
-                    ),
-                ));
-            }
-            let netlist = decode_str_list(buf, &mut pos)?;
+            let probes = decode_str_list(buf, &mut pos, MAX_CHANNELS as usize)?;
+            let netlist = decode_str_list(buf, &mut pos, MAX_STR_LIST_ITEMS)?;
             Request::RunTran {
                 probes,
                 netlist,

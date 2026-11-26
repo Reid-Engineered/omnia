@@ -3,12 +3,16 @@
 //!
 //! Safety & concurrency invariants:
 //! - `libngspice` keeps process-global C state, so `ACTIVE_INSTANCE` enforces a single live
-//!   `NgspiceLib` per process (`InstanceGuard` refuses any second load until the first drops).
+//!   `NgspiceLib` per process (`InstanceGuard` refuses any second load until cleanly dropped).
 //! - `NgspiceLib` is `!Sync` and requires `&mut self` for all FFI calls, preventing concurrent
 //!   FFI entry across threads.
-//! - `Drop` stops and joins any running background solver thread (`bg_halt` + wait), marks
-//!   callbacks detached, unloads `libloading::Library` first, and only then drops the pinned
-//!   `CallbackState` and releases `ACTIVE_INSTANCE`.
+//! - `Drop` stops and waits for any active background solver thread (`bg_halt` + wait) and
+//!   detaches callbacks. Because ngspice invokes `cb_bg_thread_running` before its solver
+//!   thread returns (and spawns detached pthreads on Unix), `Drop` unloads `libloading::Library`,
+//!   frees `CallbackState`, and releases `ACTIVE_INSTANCE` only when no background solver thread
+//!   was ever started (`!self.bg_ever_started && !self.is_running()`); otherwise it pins the
+//!   library, callback state, and singleton guard for the process lifetime so no background
+//!   thread can execute unloaded code or access freed callback state.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::marker::PhantomData;
@@ -412,8 +416,8 @@ unsafe extern "C" fn cb_bg_thread_running(
 /// Intentionally `!Sync` (`PhantomData<*const ()>` + no `Sync` impl) so every FFI call is
 /// strictly serialized through `&mut self`.
 pub struct NgspiceLib {
-    // Dropped first (explicitly in `Drop::drop`) so `libngspice` is unloaded while `state`
-    // is still live and `ACTIVE_INSTANCE` is still held.
+    // Dropped first when safe (`!bg_ever_started`) so `libngspice` unloads while `state`
+    // is still live and `guard` still holds `ACTIVE_INSTANCE`.
     lib: Option<Library>,
     fn_command: NgSpiceCommandFn,
     fn_circ: NgSpiceCircFn,
@@ -421,7 +425,8 @@ pub struct NgspiceLib {
     fn_get_vec_info: NgGetVecInfoFn,
     state: Option<Box<CallbackState>>,
     bg_active: bool,
-    _guard: InstanceGuard,
+    bg_ever_started: bool,
+    guard: Option<InstanceGuard>,
     _not_sync: PhantomData<std::cell::Cell<()>>,
 }
 
@@ -491,7 +496,8 @@ impl NgspiceLib {
                 fn_get_vec_info,
                 state: Some(state),
                 bg_active: false,
-                _guard: guard,
+                bg_ever_started: false,
+                guard: Some(guard),
                 _not_sync: PhantomData,
             })
         }
@@ -599,6 +605,7 @@ impl NgspiceLib {
         }
         self.load_circuit(netlist)?;
         self.bg_active = true;
+        self.bg_ever_started = true;
         if let Err(e) = self.command("bg_run") {
             self.bg_active = false;
             self.state_ref().wakeup.mark_bg_finished();
@@ -612,6 +619,7 @@ impl NgspiceLib {
     pub fn wait_tran_bg_cancellable(&mut self, timeout: Duration) -> Result<TranRunStats, String> {
         let deadline = Instant::now() + timeout;
         let wakeup = self.state_ref().wakeup.clone();
+        let mut cancel_attempted = false;
         let mut halted_by_cancel = false;
 
         loop {
@@ -621,7 +629,7 @@ impl NgspiceLib {
                     if g.bg_finished {
                         break (true, false);
                     }
-                    if g.cancel_requested && !halted_by_cancel {
+                    if g.cancel_requested && !cancel_attempted {
                         break (false, true);
                     }
                     let now = Instant::now();
@@ -639,9 +647,12 @@ impl NgspiceLib {
             };
 
             if want_cancel {
-                halted_by_cancel = true;
-                // Called strictly on the single `&mut self` owner thread.
-                let _ = self.bg_halt();
+                cancel_attempted = true;
+                // Only credit cancellation when `bg_run` is still running and `bg_halt` succeeds.
+                let already_finished = wakeup.inner.0.lock().map(|g| g.bg_finished).unwrap_or(true);
+                if !already_finished && self.is_running() && self.bg_halt().is_ok() {
+                    halted_by_cancel = true;
+                }
                 continue;
             }
             if bg_done {
@@ -725,9 +736,9 @@ impl NgspiceLib {
 
 impl Drop for NgspiceLib {
     fn drop(&mut self) {
-        // 1. Stop and wait for any active ngspice background thread BEFORE detaching or unloading.
+        // 1. Stop and wait for any active ngspice background thread BEFORE detaching.
         if self.bg_active || self.is_running() {
-            let _ = self.bg_halt();
+            let _halt_ok = self.bg_halt().is_ok();
             let deadline = Instant::now() + Duration::from_secs(2);
             if let Some(state) = self.state.as_deref() {
                 let wakeup = &state.wakeup;
@@ -759,9 +770,19 @@ impl Drop for NgspiceLib {
             }
         }
 
-        // 3. Unload libloading::Library BEFORE dropping CallbackState or releasing InstanceGuard.
-        drop(self.lib.take());
-        drop(self.state.take());
-        // 4. `_guard` drops automatically after `Drop::drop` returns, releasing ACTIVE_INSTANCE.
+        // 3. Only unload `libngspice`, free `CallbackState`, and release `ACTIVE_INSTANCE`
+        //    when no background solver thread was ever started (`!self.bg_ever_started`).
+        //    Upstream ngspice-47 fires `cb_bg_thread_running` before the solver thread returns
+        //    and spawns detached pthreads on Unix without a join API, so pinning avoids any
+        //    possibility of unloading code or freeing state beneath an exiting thread.
+        if !self.bg_ever_started && !self.is_running() {
+            drop(self.lib.take());
+            drop(self.state.take());
+            drop(self.guard.take());
+        } else {
+            std::mem::forget(self.lib.take());
+            std::mem::forget(self.state.take());
+            std::mem::forget(self.guard.take());
+        }
     }
 }

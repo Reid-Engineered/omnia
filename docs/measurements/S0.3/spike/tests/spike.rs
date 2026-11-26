@@ -12,8 +12,9 @@ use std::time::Duration;
 use omnia_s03_spike::circuits;
 use omnia_s03_spike::ngspice::{InstanceGuard, NgspiceLib, SampleSink};
 use omnia_s03_spike::protocol::{
-    MAX_BATCH_POINTS, Request, Response, TAG_OP_RESULT, TAG_RUN_OP, TAG_RUN_TRAN, TAG_SAMPLE_BATCH,
-    read_request, read_response, write_request, write_response, write_sample_batch_raw,
+    MAX_BATCH_POINTS, MAX_CHANNELS, Request, Response, TAG_OP_RESULT, TAG_RUN_OP, TAG_RUN_TRAN,
+    TAG_SAMPLE_BATCH, read_request, read_response, write_request, write_response,
+    write_sample_batch_raw,
 };
 use omnia_s03_spike::worker_client::{CancelMode, WorkerClient, is_pid_alive};
 
@@ -163,6 +164,39 @@ fn protocol_rejects_oversized_counts_and_batch_sizes() {
         let err = read_request(&mut Cursor::new(frame), &mut buf).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
+
+    fn push_str_list(out: &mut Vec<u8>, items: &[String]) {
+        out.extend_from_slice(&(items.len() as u32).to_le_bytes());
+        for s in items {
+            let b = s.as_bytes();
+            out.extend_from_slice(&(b.len() as u32).to_le_bytes());
+            out.extend_from_slice(b);
+        }
+    }
+
+    let too_many_probes: Vec<String> = (0..=(MAX_CHANNELS as usize))
+        .map(|i| format!("v{i}"))
+        .collect();
+    let dummy_net = vec!["* net".to_string(), ".end".to_string()];
+
+    // 6. Complete RunOp payload declaring 65 (> MAX_CHANNELS) valid probes.
+    let mut op_65 = Vec::new();
+    push_str_list(&mut op_65, &too_many_probes);
+    push_str_list(&mut op_65, &dummy_net);
+    let err = read_request(&mut Cursor::new(raw_frame(TAG_RUN_OP, &op_65)), &mut buf).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+    // 7. Complete RunTran payload declaring 65 (> MAX_CHANNELS) valid probes.
+    let mut tran_65 = Vec::new();
+    tran_65.extend_from_slice(&64u32.to_le_bytes());
+    push_str_list(&mut tran_65, &too_many_probes);
+    push_str_list(&mut tran_65, &dummy_net);
+    let err = read_request(
+        &mut Cursor::new(raw_frame(TAG_RUN_TRAN, &tran_65)),
+        &mut buf,
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
 }
 
 #[test]
@@ -245,14 +279,22 @@ fn live_worker_op_tran_missing_probe_cancel_and_lifecycle() {
         outcome.cancel_elapsed
     );
 
-    // 4. In-process singleton guard + Drop while bg_run is active must safely halt & reload.
+    // 4. Sync-only instance drops cleanly and can reload; after `bg_run` starts, `Drop`
+    //    halts & detaches and pins the library + singleton guard for the process lifetime.
     {
-        let mut ng = NgspiceLib::load(&lib_path).expect("load first in-proc instance");
+        let mut ng_sync = NgspiceLib::load(&lib_path).expect("load sync-only instance");
         let second = NgspiceLib::load(&lib_path);
         assert!(
             second.is_err(),
             "second concurrent NgspiceLib load must fail"
         );
+        let op = ng_sync
+            .run_op(&circuits::simple_op_netlist(), &["n1".into(), "n2".into()])
+            .expect("sync op");
+        assert!((op[0] - 20.0 / 3.0).abs() < 1e-6);
+    }
+    {
+        let mut ng = NgspiceLib::load(&lib_path).expect("reload after sync-only Drop must succeed");
         let count = Arc::new(AtomicU64::new(0));
         ng.start_tran_bg(
             &circuits::heavy_cancel_tran_netlist(),
@@ -263,11 +305,10 @@ fn live_worker_op_tran_missing_probe_cancel_and_lifecycle() {
         while count.load(Ordering::Relaxed) < 10 {
             std::thread::sleep(Duration::from_millis(1));
         }
-        // Drop `ng` while bg_run is actively streaming — Drop must bg_halt, join, detach, unload.
+        // Drop `ng` while bg_run is actively streaming — Drop halts & pins library + guard.
     }
-    let mut ng2 = NgspiceLib::load(&lib_path).expect("reload after clean Drop must succeed");
-    let op2 = ng2
-        .run_op(&circuits::simple_op_netlist(), &["n1".into(), "n2".into()])
-        .expect("op after reload");
-    assert!((op2[0] - 20.0 / 3.0).abs() < 1e-6);
+    assert!(
+        NgspiceLib::load(&lib_path).is_err(),
+        "background thread usage pins library and singleton guard safely"
+    );
 }

@@ -63,6 +63,8 @@ BATCH_SIZE=256
 
 label="${1:-orion}"
 work_dir="${2:-/tmp/omnia-s03-ngspice}"
+mkdir -p "$work_dir"
+work_dir="$(cd "$work_dir" && pwd)"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Claim an atomic run directory; plain mkdir (no -p) fails if it already exists so no
@@ -75,7 +77,6 @@ echo "==> S0.3 / SS1 campaign (label=${label})"
 echo "    work_dir: ${work_dir}"
 echo "    results:  ${results}"
 
-mkdir -p "$work_dir"
 tarball="$work_dir/ngspice-${NGSPICE_VER}.tar.gz"
 if [ ! -f "$tarball" ]; then
   echo "==> Downloading ngspice-${NGSPICE_VER}..."

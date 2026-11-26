@@ -258,24 +258,24 @@ impl WorkerClient {
             });
 
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let mut reaped_cleanly = false;
+            let mut reaped_within_grace = false;
+            let mut child_reaped = false;
             match rx.recv_timeout(remaining) {
                 Ok(StopSignal::Cancelled) => {
                     let _ = write_request(&mut self.stdin, &Request::Shutdown);
                     drop(self.stdin);
                     // Enforce the SAME `deadline` over clean worker exit + reap.
                     loop {
+                        if Instant::now() >= deadline {
+                            break;
+                        }
                         match self.child.try_wait() {
                             Ok(Some(_)) => {
-                                reaped_cleanly = true;
+                                child_reaped = true;
+                                reaped_within_grace = Instant::now() <= deadline;
                                 break;
                             }
-                            Ok(None) => {
-                                if Instant::now() >= deadline {
-                                    break;
-                                }
-                                std::thread::sleep(Duration::from_millis(1));
-                            }
+                            Ok(None) => std::thread::sleep(Duration::from_millis(1)),
                             Err(_) => break,
                         }
                     }
@@ -301,12 +301,14 @@ impl WorkerClient {
                 }
             }
 
-            if reaped_cleanly {
+            if reaped_within_grace {
                 mode = CancelMode::CooperativeReaped;
             } else {
                 mode = CancelMode::HardKilled;
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+                if !child_reaped {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                }
             }
             let _ = reader.join();
         } else {

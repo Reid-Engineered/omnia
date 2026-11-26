@@ -439,4 +439,17 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        in ss1-windows.txt, rebuilt libngspice-0.dll and
                        re-measured Windows diagnostics (0 coop stops, 50/50
                        hard-kill fallbacks, 0 orphans). Status stays needs-human.
+2026-11-25 S0.3 second review fixes — Addressed PR #141 second Codex review
+                       findings (all 5): updated `NgspiceLib::Drop` to pin library,
+                       callback state, and singleton guard for the process lifetime
+                       whenever a background solver thread was ever started (avoiding
+                       unload of detached/unjoined solver threads); required `bg_halt`
+                       success and live running state before crediting
+                       `halted_by_cancel`; checked total 50 ms `SK11` deadline before
+                       and after `child.try_wait()` before crediting cooperative reap;
+                       enforced `MAX_CHANNELS` pre-allocation inside `decode_str_list`
+                       with complete 65-probe tests; resolved relative `work_dir` to an
+                       absolute path in `run-orion.sh`; removed redundant OS vendor word
+                       in `S0.3.md` and qualified PR #141 `SB4` claim cleanly. Status
+                       stays needs-human.
 ```
