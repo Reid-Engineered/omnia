@@ -9,8 +9,9 @@
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 mod windows {
     use gpui::{
-        App, AppContext, Bounds, Context, Element, ElementId, Entity, GlobalElementId,
-        InspectorElementId, IntoElement, LayoutId, ParentElement, Pixels, Render, Scene, Styled,
+        App, AppContext, Background, Bounds, ContentMask, Context, Corners, DevicePixels, Edges,
+        Element, ElementId, Entity, GlobalElementId, Hsla, InspectorElementId, IntoElement,
+        LayoutId, ParentElement, Pixels, Render, ScaledPixels, Scene, Size, Styled,
         TransformationMatrix, Window, WindowBounds, WindowHandle, WindowOptions, div, point, px,
         size,
     };
@@ -74,6 +75,248 @@ mod windows {
             paint();
             IN_OMNIA.with(|flag| flag.set(prev));
         }
+
+        fn gpui(&self, paint: impl FnOnce()) {
+            let prev = IN_OMNIA.with(|flag| flag.replace(false));
+            paint();
+            IN_OMNIA.with(|flag| flag.set(prev));
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct QuadSnapshot {
+        order: u32,
+        border_style: String,
+        bounds: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
+        background: Background,
+        border_color: Hsla,
+        corner_radii: Corners<ScaledPixels>,
+        border_widths: Edges<ScaledPixels>,
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct MonoSnapshot {
+        order: u32,
+        bounds: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
+        color: Hsla,
+        transformation: TransformationMatrix,
+        tile_size: Size<DevicePixels>,
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct SubpixelSnapshot {
+        order: u32,
+        bounds: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
+        color: Hsla,
+        transformation: TransformationMatrix,
+        tile_size: Size<DevicePixels>,
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct PolychromeSnapshot {
+        order: u32,
+        bounds: Bounds<ScaledPixels>,
+        content_mask: ContentMask<ScaledPixels>,
+        corner_radii: Corners<ScaledPixels>,
+        opacity: f32,
+        tile_size: Size<DevicePixels>,
+    }
+
+    /// Every primitive field in a GPUI `Scene` except allocator-chosen `AtlasTile` coordinates.
+    #[derive(Clone, Debug, PartialEq)]
+    struct SceneSnapshot {
+        shadows: usize,
+        paths: usize,
+        underlines: usize,
+        surfaces: usize,
+        quads: Vec<QuadSnapshot>,
+        monochrome_sprites: Vec<MonoSnapshot>,
+        subpixel_sprites: Vec<SubpixelSnapshot>,
+        polychrome_sprites: Vec<PolychromeSnapshot>,
+    }
+
+    fn bounds_key(b: Bounds<ScaledPixels>) -> (u32, u32, u32, u32) {
+        (
+            b.origin.x.0.to_bits(),
+            b.origin.y.0.to_bits(),
+            b.size.width.0.to_bits(),
+            b.size.height.0.to_bits(),
+        )
+    }
+
+    fn color_key(c: Hsla) -> (u32, u32, u32, u32) {
+        (c.h.to_bits(), c.s.to_bits(), c.l.to_bits(), c.a.to_bits())
+    }
+
+    fn transform_key(t: TransformationMatrix) -> [u32; 6] {
+        [
+            t.rotation_scale[0][0].to_bits(),
+            t.rotation_scale[0][1].to_bits(),
+            t.rotation_scale[1][0].to_bits(),
+            t.rotation_scale[1][1].to_bits(),
+            t.translation[0].to_bits(),
+            t.translation[1].to_bits(),
+        ]
+    }
+
+    fn snapshot_scene(scene: &Scene) -> SceneSnapshot {
+        let mut monochrome_sprites: Vec<_> = scene
+            .monochrome_sprites
+            .iter()
+            .map(|s| MonoSnapshot {
+                order: s.order,
+                bounds: s.bounds,
+                content_mask: s.content_mask,
+                color: s.color,
+                transformation: s.transformation,
+                tile_size: s.tile.bounds.size,
+            })
+            .collect();
+        let mut subpixel_sprites: Vec<_> = scene
+            .subpixel_sprites
+            .iter()
+            .map(|s| SubpixelSnapshot {
+                order: s.order,
+                bounds: s.bounds,
+                content_mask: s.content_mask,
+                color: s.color,
+                transformation: s.transformation,
+                tile_size: s.tile.bounds.size,
+            })
+            .collect();
+        let mut polychrome_sprites: Vec<_> = scene
+            .polychrome_sprites
+            .iter()
+            .map(|s| PolychromeSnapshot {
+                order: s.order,
+                bounds: s.bounds,
+                content_mask: s.content_mask,
+                corner_radii: s.corner_radii,
+                opacity: s.opacity,
+                tile_size: s.tile.bounds.size,
+            })
+            .collect();
+        // GPUI `scene.rs` `Scene::finish` sorts sprites by `(order, tile.texture_id.index)` for
+        // batching, so atlas page splits reorder sprites within an order layer without changing pixels.
+        monochrome_sprites.sort_by_key(|s| {
+            (
+                s.order,
+                bounds_key(s.bounds),
+                s.tile_size.width.0,
+                s.tile_size.height.0,
+                color_key(s.color),
+                transform_key(s.transformation),
+            )
+        });
+        subpixel_sprites.sort_by_key(|s| {
+            (
+                s.order,
+                bounds_key(s.bounds),
+                s.tile_size.width.0,
+                s.tile_size.height.0,
+                color_key(s.color),
+                transform_key(s.transformation),
+            )
+        });
+        polychrome_sprites.sort_by_key(|s| {
+            (
+                s.order,
+                bounds_key(s.bounds),
+                s.tile_size.width.0,
+                s.tile_size.height.0,
+                s.opacity.to_bits(),
+            )
+        });
+        SceneSnapshot {
+            shadows: scene.shadows.len(),
+            paths: scene.paths.len(),
+            underlines: scene.underlines.len(),
+            surfaces: scene.surfaces.len(),
+            quads: scene
+                .quads
+                .iter()
+                .map(|q| QuadSnapshot {
+                    order: q.order,
+                    border_style: format!("{:?}", q.border_style),
+                    bounds: q.bounds,
+                    content_mask: q.content_mask,
+                    background: q.background,
+                    border_color: q.border_color,
+                    corner_radii: q.corner_radii,
+                    border_widths: q.border_widths,
+                })
+                .collect(),
+            monochrome_sprites,
+            subpixel_sprites,
+            polychrome_sprites,
+        }
+    }
+
+    fn first_diff_msg<T: PartialEq + std::fmt::Debug>(
+        kind: &str,
+        a: &[T],
+        b: &[T],
+    ) -> Option<String> {
+        if a.len() != b.len() {
+            return Some(format!("{kind} len {} vs {}", a.len(), b.len()));
+        }
+        for (idx, (lhs, rhs)) in a.iter().zip(b.iter()).enumerate() {
+            if lhs != rhs {
+                return Some(format!(
+                    "{kind}[{idx}]:\n  left:  {lhs:?}\n  right: {rhs:?}"
+                ));
+            }
+        }
+        None
+    }
+
+    fn assert_scenes_identical(
+        a: &SceneSnapshot,
+        b: &SceneSnapshot,
+        label: &str,
+    ) -> Result<(), String> {
+        if a.shadows != b.shadows
+            || a.paths != b.paths
+            || a.underlines != b.underlines
+            || a.surfaces != b.surfaces
+        {
+            return Err(format!(
+                "{label}: non-sprite counts differ (shadows {} vs {}, paths {} vs {}, underlines {} vs {}, surfaces {} vs {})",
+                a.shadows,
+                b.shadows,
+                a.paths,
+                b.paths,
+                a.underlines,
+                b.underlines,
+                a.surfaces,
+                b.surfaces
+            ));
+        }
+        if let Some(diff) = first_diff_msg("quads", &a.quads, &b.quads)
+            .or_else(|| {
+                first_diff_msg(
+                    "monochrome_sprites",
+                    &a.monochrome_sprites,
+                    &b.monochrome_sprites,
+                )
+            })
+            .or_else(|| {
+                first_diff_msg("subpixel_sprites", &a.subpixel_sprites, &b.subpixel_sprites)
+            })
+            .or_else(|| {
+                first_diff_msg(
+                    "polychrome_sprites",
+                    &a.polychrome_sprites,
+                    &b.polychrome_sprites,
+                )
+            })
+        {
+            return Err(format!("{label}: {diff}"));
+        }
+        Ok(())
     }
 
     #[derive(Clone)]
@@ -159,33 +402,35 @@ mod windows {
 
     struct SheetProbe {
         camera: Camera,
-        document: SheetDocument,
+        document: Option<SheetDocument>,
     }
 
     impl Render for SheetProbe {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .w(px(CONTENT_W))
-                .h(px(CONTENT_H))
-                .overflow_hidden()
-                .child(SheetElement {
+            let root = div().w(px(CONTENT_W)).h(px(CONTENT_H)).overflow_hidden();
+            if let Some(document) = self.document.clone() {
+                root.child(SheetElement {
                     camera: self.camera.clone(),
-                    document: self.document.clone(),
+                    document,
                 })
+            } else {
+                root
+            }
         }
     }
 
     struct OverlayHost {
-        overlay: Entity<OverlayView>,
+        overlay: Option<Entity<OverlayView>>,
     }
 
     impl Render for OverlayHost {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .w(px(CONTENT_W))
-                .h(px(CONTENT_H))
-                .overflow_hidden()
-                .child(self.overlay.clone())
+            let root = div().w(px(CONTENT_W)).h(px(CONTENT_H)).overflow_hidden();
+            if let Some(overlay) = self.overlay.clone() {
+                root.child(overlay)
+            } else {
+                root
+            }
         }
     }
 
@@ -348,26 +593,28 @@ mod windows {
         zoom: f64,
         pan: (f64, f64),
         label: &str,
-    ) -> Result<(CroppedRgba, SceneCounts), String> {
+    ) -> Result<(CroppedRgba, SceneCounts, SceneSnapshot), String> {
         let cam = camera_at(zoom, pan);
         win.update(cx, |probe, _window, cx| {
             probe.camera = cam;
             cx.notify();
         })
         .map_err(|e| format!("{label}: update probe: {e}"))?;
-        let (image, counts) = cx
+        let (image, counts, snapshot) = cx
             .update_window(win.into(), |_, window, cx| {
                 window.set_scale_factor(sf);
                 window.draw(cx).clear(cx);
                 assert_eq!(window.scale_factor(), sf, "{label}: scale factor reset");
-                let counts = count_scene(window.rendered_scene());
+                let scene = window.rendered_scene();
+                let counts = count_scene(scene);
+                let snapshot = snapshot_scene(scene);
                 let image = window.render_to_image().map_err(|e| e.to_string());
-                (image, counts)
+                (image, counts, snapshot)
             })
             .map_err(|e| format!("{label}: draw: {e}"))?;
         let image = image.map_err(|e| format!("{label}: render_to_image: {e}"))?;
         let cropped = crop_content(image.as_raw(), image.width(), image.height(), sf, label)?;
-        Ok((cropped, counts))
+        Ok((cropped, counts, snapshot))
     }
 
     pub(super) fn run() {
@@ -422,6 +669,14 @@ mod windows {
                     return;
                 }
             };
+            let fresh_far_golden = match load_golden_doc() {
+                Ok(doc) => doc,
+                Err(err) => {
+                    *slot.borrow_mut() = Some(Err(err));
+                    cx.quit();
+                    return;
+                }
+            };
             let migrated_overlay_golden = match load_golden_doc() {
                 Ok(doc) => doc,
                 Err(err) => {
@@ -444,7 +699,7 @@ mod windows {
                 window.resize(size(px(WINDOW_W), px(WINDOW_H)));
                 cx.new(|_| SheetProbe {
                     camera: camera_at(1.0, (0.3, 0.7)),
-                    document: SheetDocument::new(sheet_doc_entity.clone()),
+                    document: Some(SheetDocument::new(sheet_doc_entity.clone())),
                 })
             }) {
                 Ok(win) => win,
@@ -460,12 +715,28 @@ mod windows {
                 window.resize(size(px(WINDOW_W), px(WINDOW_H)));
                 cx.new(|_| SheetProbe {
                     camera: camera_at(1.0, (0.3, 0.7)),
-                    document: SheetDocument::new(fresh_doc_entity),
+                    document: None,
                 })
             }) {
                 Ok(win) => win,
                 Err(e) => {
                     *slot.borrow_mut() = Some(Err(format!("open fresh sheet window: {e}")));
+                    cx.quit();
+                    return;
+                }
+            };
+
+            let fresh_far_doc_entity = cx.new(|_| fresh_far_golden);
+            let fresh_far_sheet = match cx.open_window(hidden_window_options(), |window, cx| {
+                window.resize(size(px(WINDOW_W), px(WINDOW_H)));
+                cx.new(|_| SheetProbe {
+                    camera: camera_at(0.2, (0.3, 0.7)),
+                    document: None,
+                })
+            }) {
+                Ok(win) => win,
+                Err(e) => {
+                    *slot.borrow_mut() = Some(Err(format!("open fresh far sheet window: {e}")));
                     cx.quit();
                     return;
                 }
@@ -484,7 +755,9 @@ mod windows {
                 });
                 let focus = overlay.read(cx).focus_handle().clone();
                 window.focus(&focus, cx);
-                cx.new(|_| OverlayHost { overlay })
+                cx.new(|_| OverlayHost {
+                    overlay: Some(overlay),
+                })
             }) {
                 Ok(win) => win,
                 Err(e) => {
@@ -497,20 +770,7 @@ mod windows {
             let fresh_overlay_doc = cx.new(|_| fresh_overlay_golden);
             let fresh_overlay = match cx.open_window(hidden_window_options(), |window, cx| {
                 window.resize(size(px(WINDOW_W), px(WINDOW_H)));
-                let overlay = cx.new(|cx| {
-                    let mut view = OverlayView::new(
-                        fresh_overlay_doc,
-                        camera_at(1.0, (0.3, 0.7)),
-                        &GRAPHITE,
-                        cx,
-                    );
-                    view.set_selection([first_part], cx);
-                    view.set_hovered(Some(first_wire), cx);
-                    view
-                });
-                let focus = overlay.read(cx).focus_handle().clone();
-                window.focus(&focus, cx);
-                cx.new(|_| OverlayHost { overlay })
+                cx.new(|_| OverlayHost { overlay: None })
             }) {
                 Ok(win) => win,
                 Err(e) => {
@@ -525,7 +785,7 @@ mod windows {
                 window.resize(size(px(WINDOW_W), px(WINDOW_H)));
                 cx.new(|_| SheetProbe {
                     camera: camera_at(1.0, (0.0, 0.0)),
-                    document: SheetDocument::new(dense_doc),
+                    document: Some(SheetDocument::new(dense_doc)),
                 })
             }) {
                 Ok(win) => win,
@@ -541,7 +801,7 @@ mod windows {
             cx.spawn(async move |cx| {
                 let outcome = cx.update(|cx| -> Result<(), String> {
                     // 1. Mid-run 1.25 -> 1.5 migration on SheetView (near & far zoom) vs fresh 1.5 window.
-                    let (_warm_near_125, near_125_counts) = draw_sheet_at(
+                    let (_warm_near_125, near_125_counts, _) = draw_sheet_at(
                         migrated_sheet,
                         cx,
                         1.25,
@@ -549,7 +809,7 @@ mod windows {
                         (0.3, 0.7),
                         "migrated near 1.25",
                     )?;
-                    let (_warm_far_125, _) = draw_sheet_at(
+                    let (_warm_far_125, _, _) = draw_sheet_at(
                         migrated_sheet,
                         cx,
                         1.25,
@@ -568,7 +828,7 @@ mod windows {
                         near_125_counts.text_sprites
                     );
 
-                    let (migrated_near_15, near_counts_15) = draw_sheet_at(
+                    let (migrated_near_15, near_counts_15, migrated_near_scene) = draw_sheet_at(
                         migrated_sheet,
                         cx,
                         1.5,
@@ -576,7 +836,7 @@ mod windows {
                         (0.3, 0.7),
                         "migrated near 1.5",
                     )?;
-                    let (migrated_far_15, far_counts_15) = draw_sheet_at(
+                    let (migrated_far_15, far_counts_15, migrated_far_scene) = draw_sheet_at(
                         migrated_sheet,
                         cx,
                         1.5,
@@ -594,32 +854,96 @@ mod windows {
                         near_counts_15.symbol_sprites,
                         near_counts_15.text_sprites
                     );
-                    assert!(far_counts_15.quads > 0, "expected quads at far zoom 0.2");
+                    assert!(
+                        far_counts_15.quads > 1,
+                        "expected paper plus sheet geometry quads at far zoom 0.2, got {}",
+                        far_counts_15.quads
+                    );
 
-                    let (fresh_near_15, _) =
+                    // Create each fresh 1.5 SheetDocument only after its comparison window is already at
+                    // 1.5 so its DocumentCache has never drawn at another scale factor. Give far zoom
+                    // its own dedicated fresh window because pinned GPUI's DirectXAtlas packs tiles with
+                    // padding=0 and linear filtering: rendering near-zoom glyphs into the same atlas
+                    // before far-zoom small symbol sprites can pack a glyph edge next to a 26x26 sprite.
+                    fresh_sheet
+                        .update(cx, |probe, window, cx| {
+                            window.set_scale_factor(1.5);
+                            assert_eq!(window.scale_factor(), 1.5, "fresh sheet initial scale factor");
+                            probe.document = Some(SheetDocument::new(fresh_doc_entity.clone()));
+                            cx.notify();
+                        })
+                        .map_err(|e| format!("init fresh sheet at 1.5: {e}"))?;
+                    fresh_far_sheet
+                        .update(cx, |probe, window, cx| {
+                            window.set_scale_factor(1.5);
+                            assert_eq!(
+                                window.scale_factor(),
+                                1.5,
+                                "fresh far sheet initial scale factor"
+                            );
+                            probe.document = Some(SheetDocument::new(fresh_far_doc_entity.clone()));
+                            cx.notify();
+                        })
+                        .map_err(|e| format!("init fresh far sheet at 1.5: {e}"))?;
+
+                    let (fresh_near_15, _, fresh_near_scene) =
                         draw_sheet_at(fresh_sheet, cx, 1.5, 1.0, (0.3, 0.7), "fresh near 1.5")?;
-                    let (fresh_far_15, _) =
-                        draw_sheet_at(fresh_sheet, cx, 1.5, 0.2, (0.3, 0.7), "fresh far 1.5")?;
+                    let (fresh_far_15, _, fresh_far_scene) = draw_sheet_at(
+                        fresh_far_sheet,
+                        cx,
+                        1.5,
+                        0.2,
+                        (0.3, 0.7),
+                        "fresh far 1.5",
+                    )?;
 
-                    assert_images_identical(
-                        &migrated_near_15,
-                        &fresh_near_15,
-                        "sheet near zoom 1.0 (1.25->1.5 vs fresh 1.5)",
-                    )?;
-                    assert_images_identical(
-                        &migrated_far_15,
-                        &fresh_far_15,
-                        "sheet far zoom 0.2 (1.25->1.5 vs fresh 1.5)",
-                    )?;
+                    let mut sheet_errors = Vec::new();
+                    for check in [
+                        assert_scenes_identical(
+                            &migrated_near_scene,
+                            &fresh_near_scene,
+                            "sheet near zoom 1.0 scene (1.25->1.5 vs fresh 1.5)",
+                        ),
+                        assert_scenes_identical(
+                            &migrated_far_scene,
+                            &fresh_far_scene,
+                            "sheet far zoom 0.2 scene (1.25->1.5 vs fresh 1.5)",
+                        ),
+                        assert_images_identical(
+                            &migrated_near_15,
+                            &fresh_near_15,
+                            "sheet near zoom 1.0 (1.25->1.5 vs fresh 1.5)",
+                        ),
+                        assert_images_identical(
+                            &migrated_far_15,
+                            &fresh_far_15,
+                            "sheet far zoom 0.2 (1.25->1.5 vs fresh 1.5)",
+                        ),
+                    ] {
+                        if let Err(err) = check {
+                            sheet_errors.push(err);
+                        }
+                    }
+                    if !sheet_errors.is_empty() {
+                        return Err(sheet_errors.join("\n"));
+                    }
                     let paper_px: [u8; 4] = migrated_near_15.2[0..4].try_into().unwrap();
                     assert!(
                         migrated_near_15.2.as_chunks::<4>().0.iter().any(|px| *px != paper_px),
                         "migrated near 1.5 frame must contain non-paper rendered content"
                     );
+                    assert!(
+                        migrated_far_15.2.as_chunks::<4>().0.iter().any(|px| *px != paper_px),
+                        "migrated far 1.5 frame must contain non-paper rendered content"
+                    );
 
                     // 2. Mid-run 1.25 -> 1.5 migration on OverlayView (.cached() CachedSheet + selection + hover).
                     let overlay_entity = migrated_overlay
-                        .read_with(cx, |host, _| host.overlay.clone())
+                        .read_with(cx, |host, _| {
+                            host.overlay
+                                .clone()
+                                .expect("migrated overlay should be initialized")
+                        })
                         .map_err(|e| format!("read migrated overlay entity: {e}"))?;
 
                     cx.update_window(migrated_overlay.into(), |_, window, cx| {
@@ -649,14 +973,17 @@ mod windows {
                     );
 
                     // Switch 1.25 -> 1.5 via window.set_scale_factor without calling cx.notify().
-                    let migrated_overlay_img = cx
+                    let (migrated_overlay_img, migrated_overlay_scene) = cx
                         .update_window(migrated_overlay.into(), |_, window, cx| {
                             window.set_scale_factor(1.5);
                             window.draw(cx).clear(cx);
                             assert_eq!(window.scale_factor(), 1.5, "overlay migrated scale factor");
-                            window.render_to_image().map_err(|e| e.to_string())
+                            let scene = snapshot_scene(window.rendered_scene());
+                            let image = window.render_to_image().map_err(|e| e.to_string());
+                            (image, scene)
                         })
-                        .map_err(|e| format!("draw overlay after 1.25->1.5: {e}"))?
+                        .map_err(|e| format!("draw overlay after 1.25->1.5: {e}"))?;
+                    let migrated_overlay_img = migrated_overlay_img
                         .map_err(|e| format!("migrated overlay render_to_image: {e}"))?;
                     let paints_15 = overlay_entity.read(cx).sheet_paint_count(cx);
                     assert_eq!(
@@ -671,6 +998,15 @@ mod windows {
                         1.5,
                         "migrated overlay 1.5",
                     )?;
+                    assert!(
+                        migrated_overlay_crop
+                            .2
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
+                            .any(|px| *px != paper_px),
+                        "migrated overlay 1.5 frame must contain non-paper rendered content"
+                    );
 
                     // Subsequent hover at 1.5 still keeps CachedSheet cached (INV11).
                     overlay_entity.update(cx, |view, cx| view.set_hovered(None, cx));
@@ -684,21 +1020,63 @@ mod windows {
                         "INV11: hover at 1.5 must not repaint CachedSheet"
                     );
 
-                    let fresh_overlay_img = cx
+                    // Construct the fresh 1.5 OverlayView only after the comparison window is at 1.5.
+                    let fresh_overlay_entity = fresh_overlay
+                        .update(cx, |host, window, cx| {
+                            window.set_scale_factor(1.5);
+                            assert_eq!(
+                                window.scale_factor(),
+                                1.5,
+                                "fresh overlay initial scale factor"
+                            );
+                            let doc_ref = fresh_overlay_doc.clone();
+                            let overlay = cx.new(|cx| {
+                                let mut view = OverlayView::new(
+                                    doc_ref,
+                                    camera_at(1.0, (0.3, 0.7)),
+                                    &GRAPHITE,
+                                    cx,
+                                );
+                                view.set_selection([first_part], cx);
+                                view.set_hovered(Some(first_wire), cx);
+                                view
+                            });
+                            let focus = overlay.read(cx).focus_handle().clone();
+                            window.focus(&focus, cx);
+                            host.overlay = Some(overlay.clone());
+                            cx.notify();
+                            overlay
+                        })
+                        .map_err(|e| format!("init fresh overlay at 1.5: {e}"))?;
+
+                    let (fresh_overlay_img, fresh_overlay_scene) = cx
                         .update_window(fresh_overlay.into(), |_, window, cx| {
                             window.set_scale_factor(1.5);
                             window.draw(cx).clear(cx);
                             assert_eq!(window.scale_factor(), 1.5, "fresh overlay scale factor");
-                            window.render_to_image().map_err(|e| e.to_string())
+                            let scene = snapshot_scene(window.rendered_scene());
+                            let image = window.render_to_image().map_err(|e| e.to_string());
+                            (image, scene)
                         })
-                        .map_err(|e| format!("draw fresh overlay 1.5: {e}"))?
+                        .map_err(|e| format!("draw fresh overlay 1.5: {e}"))?;
+                    let fresh_overlay_img = fresh_overlay_img
                         .map_err(|e| format!("fresh overlay render_to_image: {e}"))?;
+                    assert_eq!(
+                        fresh_overlay_entity.read(cx).sheet_paint_count(cx),
+                        1,
+                        "fresh 1.5 OverlayView must have painted CachedSheet exactly once"
+                    );
                     let fresh_overlay_crop = crop_content(
                         fresh_overlay_img.as_raw(),
                         fresh_overlay_img.width(),
                         fresh_overlay_img.height(),
                         1.5,
                         "fresh overlay 1.5",
+                    )?;
+                    assert_scenes_identical(
+                        &migrated_overlay_scene,
+                        &fresh_overlay_scene,
+                        "OverlayView scene (1.25->1.5 vs fresh 1.5)",
                     )?;
                     assert_images_identical(
                         &migrated_overlay_crop,
@@ -708,7 +1086,7 @@ mod windows {
 
                     // 3. B10 real-backend zero-allocation proof at 1.5 after switching from 1.25.
                     let _ = draw_sheet_at(b10_win, cx, 1.25, 1.0, (0.0, 0.0), "B10 warm 1.25")?;
-                    let (_, b10_counts) =
+                    let (_, b10_counts, _) =
                         draw_sheet_at(b10_win, cx, 1.5, 1.0, (0.5, 0.5), "B10 warm 1.5a")?;
                     assert!(
                         b10_counts.text_sprites > 0

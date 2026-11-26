@@ -2590,21 +2590,20 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        and archived a later post-test governor/source check. Existing
                        Linux-only unused window warning in spike/shell_cache.rs:1657
                        is a separate fix follow-up; no code changed for this gate.
-2026-11-26 T7.4 done — Added scale-factor tracking (`scale_factor_bits: Cell<Option<u32>>`) and
-                       `DocumentCache::sync_scale_factor` / `Scratch::clear_for_scale_change` in
-                       `crates/omnia-canvas/src/sheet.rs` (`DocumentCache::draw`) so mid-run scale
-                       factor changes clear cached frame items, junction points, and merged wire
-                       runs while preserving allocated `Vec` capacities (`B10`, `D4`, `G12`, `S8`).
-                       Kept `TextCache` base-size `ShapedLine` entries intact across scale changes
-                       (`D6`, `G15`), relying on existing open-question defaults (`Q1`, `Q2`, `Q3`,
-                       `Q5`), `INV6`, `INV7`, `INV11`, `D7`, `G4`, `G6`, `G14`, `K5`, `K6`, `K11`.
-                       Minimal ownership widening beyond `sheet.rs`: `MergedSegments::clear` in
-                       `crates/omnia-canvas/src/sheet/wires.rs`, plus integration test
-                       `crates/omnia-canvas/tests/scale_factor.rs` registered in
-                       `crates/omnia-canvas/Cargo.toml`. Verified on Windows dev hardware (non-
-                       reference, Q4): `t7_4_scale_factor_change_drops_cached_runs_and_preserves_b10`,
-                       `t7_4_cached_sheet_repaints_on_scale_factor_change` (`#[gpui::test]` for
-                       `.cached()` `CachedSheet` repaint on scale change without manual notify), and
-                       `scale_factor` (`render_to_image` 1.25 -> 1.5 pixel-for-pixel identical to a
-                       fresh 1.5 window across `SheetView` zoom 1.0/0.2 and `OverlayView` with
-                       selection/hover, plus 0 warm Omnia heap allocs across 20 pan frames at 1.5).
+2026-11-26 T7.4 done — Audited all scale-factor caches across `sheet.rs` and
+                       `sheet/{lod,symbols,text,wires}.rs` (`S8`, `D4`, `D6`, `G12`, `G15`):
+                       confirmed no Omnia-side cache retains stale scale-dependent state
+                       (`Scratch` refills per frame, `MergedSegments` stores world nm,
+                       `symbols::Masks` keys by live device-pixel bucket, `TextCache` keys
+                       `ShapedLine`s in logical units with GPUI keying rasterized glyphs by
+                       `scale_factor`, and `Window::set_scale_factor` calls `refresh()` so
+                       `.cached()` `CachedSheet` repaints automatically). Dropped the no-op
+                       cache reset and `wires.rs` helper; kept regression tests in `sheet.rs`
+                       (`t7_4_scale_factor_change_matches_fresh_cache_and_preserves_b10`,
+                       `t7_4_cached_sheet_repaints_on_scale_factor_change`) and
+                       `crates/omnia-canvas/tests/scale_factor.rs` (`Cargo.toml`) proving exact
+                       `render_to_image` parity (`1.25 -> 1.5` vs a true fresh `1.5` window
+                       across near/far zoom and `OverlayView`), `CachedSheet` repaint without
+                       manual notify, `INV11`, and `B10` (`0` warm Omnia heap allocs at `1.25`
+                       and `1.5`, with `TestScope::gpui` separated) on Windows dev hardware
+                       (non-reference, `Q4`).

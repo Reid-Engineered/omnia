@@ -22,10 +22,7 @@ pub(crate) mod symbols;
 mod text;
 pub(crate) mod wires;
 
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use std::{cell::RefCell, rc::Rc};
 
 use crate::camera::Camera;
 use crate::snap_px::{centered_square, stroke_device_px};
@@ -217,9 +214,6 @@ struct DocumentCache {
     masks: symbols::Masks,
     text: RefCell<text::TextCache>,
     scratch: RefCell<Scratch>,
-    scale_factor_bits: Cell<Option<u32>>,
-    #[cfg(test)]
-    scale_factor_resets: Cell<u64>,
 }
 
 impl Default for DocumentCache {
@@ -228,9 +222,6 @@ impl Default for DocumentCache {
             masks: symbols::Masks::new(),
             text: RefCell::new(text::TextCache::new()),
             scratch: RefCell::default(),
-            scale_factor_bits: Cell::new(None),
-            #[cfg(test)]
-            scale_factor_resets: Cell::new(0),
         }
     }
 }
@@ -242,17 +233,6 @@ struct Scratch {
     wires_end: usize,
     segments: wires::MergedSegments,
     junctions: Vec<Pt>,
-}
-
-impl Scratch {
-    /// Drops cached geometry/run state on scale-factor changes while retaining capacities (B10).
-    fn clear_for_scale_change(&mut self) {
-        self.items.clear();
-        self.parts_end = 0;
-        self.wires_end = 0;
-        self.segments.clear();
-        self.junctions.clear();
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -309,32 +289,6 @@ fn paint_mark(
 type EmitMarks<'sprite, 'emit> = dyn FnMut(&mut dyn FnMut(Mark<'sprite>)) + 'emit;
 
 impl DocumentCache {
-    /// Clears cached frame state when `sf` changes without affecting fixed-scale warm frames.
-    fn sync_scale_factor(&self, sf: f32) -> bool {
-        assert!(
-            sf.is_finite() && sf > 0.0,
-            "scale factor must be positive and finite, got {sf}"
-        );
-        let bits = sf.to_bits();
-        if self.scale_factor_bits.get() == Some(bits) {
-            return false;
-        }
-        let previous = self.scale_factor_bits.replace(Some(bits));
-        if previous.is_some() {
-            self.scratch.borrow_mut().clear_for_scale_change();
-            #[cfg(test)]
-            self.scale_factor_resets
-                .set(self.scale_factor_resets.get() + 1);
-            return true;
-        }
-        false
-    }
-
-    #[cfg(test)]
-    fn scale_factor_resets(&self) -> u64 {
-        self.scale_factor_resets.get()
-    }
-
     fn draw<'a>(
         &'a self,
         doc: &Doc,
@@ -343,7 +297,6 @@ impl DocumentCache {
         hidden: &[ItemId],
         mut layer: impl FnMut(Layer, &mut EmitMarks<'a, '_>),
     ) {
-        self.sync_scale_factor(sf);
         let mut scratch = self.scratch.borrow_mut();
         let Scratch {
             items,
@@ -1461,7 +1414,7 @@ mod tests {
     }
 
     #[test]
-    fn t7_4_scale_factor_change_drops_cached_runs_and_preserves_b10() {
+    fn t7_4_scale_factor_change_matches_fresh_cache_and_preserves_b10() {
         type FrameSnapshot = (
             Vec<[f32; 4]>,
             Vec<([f32; 4], gpui::TransformationMatrix, gpui::SharedString)>,
@@ -1505,9 +1458,8 @@ mod tests {
         // Warm buffers at 1.25 across near and far zoom levels.
         let _ = collect(&cache, &near_cam, 1.25);
         let _ = collect(&cache, &far_cam, 1.25);
-        assert_eq!(cache.scale_factor_resets(), 0);
 
-        // Fixed scale factor at 1.25 must keep B10 zero-allocation invariant and trigger 0 resets.
+        // Fixed scale factor at 1.25 must keep B10 zero-allocation invariant.
         ALLOCS.set(Some(0));
         for step in 0..20 {
             let mut pan_cam = near_cam.clone();
@@ -1517,13 +1469,10 @@ mod tests {
             });
         }
         assert_eq!(ALLOCS.replace(None), Some(0));
-        assert_eq!(cache.scale_factor_resets(), 0);
 
         // Switch 1.25 -> 1.5 and verify emitted geometry and sprites match a fresh cache at 1.5.
         let near_after = collect(&cache, &near_cam, 1.5);
-        assert_eq!(cache.scale_factor_resets(), 1);
         let far_after = collect(&cache, &far_cam, 1.5);
-        assert_eq!(cache.scale_factor_resets(), 1);
 
         let fresh_15 = DocumentCache::default();
         assert_eq!(near_after, collect(&fresh_15, &near_cam, 1.5));
@@ -1546,11 +1495,9 @@ mod tests {
             });
         }
         assert_eq!(ALLOCS.replace(None), Some(0));
-        assert_eq!(cache.scale_factor_resets(), 1);
 
         // Switch back 1.5 -> 1.25 and verify parity with a fresh cache at 1.25.
         let back_near = collect(&cache, &near_cam, 1.25);
-        assert_eq!(cache.scale_factor_resets(), 2);
         let fresh_125 = DocumentCache::default();
         assert_eq!(back_near, collect(&fresh_125, &near_cam, 1.25));
     }
@@ -1602,8 +1549,13 @@ mod tests {
             "CachedSheet must repaint on initial change to 1.25x"
         );
 
-        // Hover at 1.25x must repaint only the overlay (INV11).
+        // Hover at 1.25x must change hovered item while keeping SheetView cached (INV11).
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).hovered()), None);
         cx.simulate_mouse_move(wire_px, None::<MouseButton>, Modifiers::none());
+        assert!(
+            cx.update(|_, cx| overlay.read(cx).hovered()).is_some(),
+            "hovering wire at 1.25x must set hovered item"
+        );
         assert_eq!(
             cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
             paints_at_125
@@ -1623,8 +1575,9 @@ mod tests {
             "CachedSheet must repaint once when scale factor changes 1.25 -> 1.5"
         );
 
-        // Hover at 1.5x must still reuse the cached sheet without notifying SheetView (INV11).
+        // Hover clear at 1.5x must clear hovered item without notifying SheetView (INV11).
         cx.simulate_mouse_move(empty_px, None::<MouseButton>, Modifiers::none());
+        assert_eq!(cx.update(|_, cx| overlay.read(cx).hovered()), None);
         assert_eq!(
             cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
             paints_at_15
