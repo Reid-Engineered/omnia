@@ -1,0 +1,11 @@
+SS1 complete (reps=10, batch=256, inproc_dlopen=5.07 ms, spawn_ready p50=11.27 ms p99=14.84 ms, coop_stops=50, hard_fallbacks=0, orphans=0)
+worker-cold-op             median run p99   14.059 ms  range  12.589-16.533  ms  p50  12.622 ms
+worker-cold-wien-first     median run p99   15.171 ms  range  13.300-17.599  ms  p50  13.576 ms
+worker-warm-wien-first     median run p99    1.000 ms  range   0.864-1.305   ms  p50   0.828 ms
+inproc-wien-first          median run p99    0.592 ms  range   0.536-0.928   ms  p50   0.541 ms
+worker-stream-tran         median run p99  138.641 ms  p50 133.625 ms  rate    748450 pts/s (1496900 ch-S/s)
+inproc-stream-tran         median run p99  131.688 ms  p50 128.157 ms  rate    780385 pts/s (1560769 ch-S/s)
+worker-cancel-coop-kill    median run p99  114.488 ms  range 112.740-120.781 ms  p50 111.646 ms
+worker-cancel-hard-kill    median run p99    2.253 ms  range   1.959-9.622   ms  p50   1.892 ms
+inproc-cancel-bghalt       median run p99  109.004 ms  range 106.806-111.403 ms  p50 106.062 ms
+

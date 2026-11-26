@@ -1,0 +1,23 @@
+timestamp: 2026-11-25T19:18:36.0063531-05:00
+os: Microsoft Windows 11 Home 10.0.26200 (build 26200), 64-bit
+memory_total_gb: 31.6
+memory_free_gb: 22.6
+cpu: Intel(R) Core(TM) i7-14650HX (16 cores / 24 logical, max 2200 MHz, current 2200 MHz)
+gpu: NVIDIA GeForce RTX 5060 Laptop GPU (driver 32.0.15.9191), 1920x1080 @ 60 Hz
+gpu: Intel(R) UHD Graphics (driver 32.0.101.7088), 1920x1200 @ 165 Hz
+power_source: AC (BatteryStatus=2, charge=100%)
+power_scheme: Power Scheme GUID: 64a64f24-65b9-4b56-befd-5ec1eaced9b3  (Silent)
+governor: n/a on Windows (power scheme above)
+process_count: 392
+top_cpu_processes (name = first 8 hex digits of SHA-256(name)):
+  proc-28741e13 cpu_s=1,137.0 ws_mb=343
+  proc-9a213344 cpu_s=961.5 ws_mb=18
+  proc-28741e13 cpu_s=581.3 ws_mb=275
+  proc-cd60e220 cpu_s=340.2 ws_mb=16
+  proc-f215f00f cpu_s=293.6 ws_mb=43
+  proc-28741e13 cpu_s=283.3 ws_mb=196
+  proc-2af7dc9d cpu_s=268.4 ws_mb=15
+  proc-4f57a32a cpu_s=257.6 ws_mb=65
+disk_c_free_gb: 20.8
+rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+gcc: gcc.exe (Rev8, Built by MSYS2 project) 15.2.0

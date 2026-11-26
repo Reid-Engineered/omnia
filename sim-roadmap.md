@@ -135,7 +135,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
 - Do: present `SQ1`–`SQ10` and `SD6`–`SD14` to the owner at `HS1`; record dated answers in `sim-plan.md` and turn all `PROPOSED` decisions into `DECIDED` (only `SD5` stays `HYPOTHESIS` until `SS1`); apply every cross-plan decision `XD1`–`XD9` that touches the simulation plan and roadmap.
 - Done when: `HS1` is signed off by the owner and no `PROPOSED` entries remain in `sim-plan.md`.
 
-### S0.3 Spike SS1: `ngspice` worker isolation & BSD-3-Clause build · todo
+### S0.3 Spike SS1: `ngspice` worker isolation & BSD-3-Clause build · needs-human
 - Lane: sim-ngspice · Depends: S0.2 · Read: `sim-plan.md` SD5, SD12, SB3, SB4, SINV11, SQ1
 - Owns: `docs/measurements/S0.3.md`, spike harness in `docs/measurements/S0.3/`
 - Do: build BSD-3-Clause `libngspice` (no GPL/LGPL libraries bundled or statically linked; system C/compiler runtimes excepted) on Windows and Orion Linux; benchmark worker-process IPC vs in-process `libngspice` for startup latency (`SB3`), binary double streaming rate, and kill-on-cancel reliability (`SB4`); audit linked shared libs and record exact configure flags.
@@ -404,4 +404,25 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        should use per-channel rings or update the plans if it
                        adopts the shared ring. The Windows notes explain the 60 Hz
                        empty updates and preserve the rationale for the rerun.
+2026-11-25 S0.3 SS1 needs-human — Built ngspice-47 libngspice-0.dll on Windows
+                       (MSYS2 UCRT64 GCC 15.2.0, tarball SHA-256 894e6496...675f)
+                       with --with-ngshared --disable-debug --enable-xspice
+                       --disable-cider --disable-klu --disable-osdi
+                       --disable-openmp --without-x --with-readline=no
+                       --with-editline=no --with-fftw3=no and skipped
+                       src/xspice/icm (no table.cm). Dynamic audit (objdump/ldd):
+                       zero third-party GPL/LGPL DLLs (only OS/UCRT/MinGW
+                       runtimes). Static source audit found upstream ngspice-47
+                       unconditionally links src/frontend/numparam (LGPLv2+)
+                       into libngspice (flagged in S0.3.md for owner decision
+                       on SD12/SINV11 before S1.6/HS2; neither weakened here).
+                       Windows diagnostics (non-certifying, 10 rotating reps):
+                       cold worker Wien first-sample 15.17 ms p99 (cold OP
+                       14.06 ms, warm 1.00 ms vs 0.59 ms in-proc; SB3 < 150 ms);
+                       binary IPC streaming 748k pts/s / 1.50 MS/s vs 780k pts/s
+                       in-proc (~4.3% overhead, ~15x over 100 kS/s); worker hard
+                       kill 2.25 ms p99 with 0 orphans (SINV5) whereas upstream
+                       Windows bg_halt Sleep(100) makes in-proc cancel 109.00 ms
+                       and coop+wait 114.49 ms (exceeding SB4 100 ms). SD5 stays
+                       HYPOTHESIS pending Orion run via docs/measurements/S0.3/run-orion.sh.
 ```
