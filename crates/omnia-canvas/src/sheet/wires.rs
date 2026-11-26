@@ -105,6 +105,12 @@ pub(super) struct MergedSegments {
 }
 
 impl MergedSegments {
+    /// Clears cached source segments and merged runs while keeping allocated capacity.
+    pub(super) fn clear(&mut self) {
+        self.source.clear();
+        self.runs.clear();
+    }
+
     pub(super) fn visible(
         &mut self,
         segments: impl Iterator<Item = Segment> + Clone,

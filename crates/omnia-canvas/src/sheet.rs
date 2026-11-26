@@ -22,7 +22,10 @@ pub(crate) mod symbols;
 mod text;
 pub(crate) mod wires;
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use crate::camera::Camera;
 use crate::snap_px::{centered_square, stroke_device_px};
@@ -214,6 +217,9 @@ struct DocumentCache {
     masks: symbols::Masks,
     text: RefCell<text::TextCache>,
     scratch: RefCell<Scratch>,
+    scale_factor_bits: Cell<Option<u32>>,
+    #[cfg(test)]
+    scale_factor_resets: Cell<u64>,
 }
 
 impl Default for DocumentCache {
@@ -222,6 +228,9 @@ impl Default for DocumentCache {
             masks: symbols::Masks::new(),
             text: RefCell::new(text::TextCache::new()),
             scratch: RefCell::default(),
+            scale_factor_bits: Cell::new(None),
+            #[cfg(test)]
+            scale_factor_resets: Cell::new(0),
         }
     }
 }
@@ -233,6 +242,17 @@ struct Scratch {
     wires_end: usize,
     segments: wires::MergedSegments,
     junctions: Vec<Pt>,
+}
+
+impl Scratch {
+    /// Drops cached geometry/run state on scale-factor changes while retaining capacities (B10).
+    fn clear_for_scale_change(&mut self) {
+        self.items.clear();
+        self.parts_end = 0;
+        self.wires_end = 0;
+        self.segments.clear();
+        self.junctions.clear();
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -289,6 +309,32 @@ fn paint_mark(
 type EmitMarks<'sprite, 'emit> = dyn FnMut(&mut dyn FnMut(Mark<'sprite>)) + 'emit;
 
 impl DocumentCache {
+    /// Clears cached frame state when `sf` changes without affecting fixed-scale warm frames.
+    fn sync_scale_factor(&self, sf: f32) -> bool {
+        assert!(
+            sf.is_finite() && sf > 0.0,
+            "scale factor must be positive and finite, got {sf}"
+        );
+        let bits = sf.to_bits();
+        if self.scale_factor_bits.get() == Some(bits) {
+            return false;
+        }
+        let previous = self.scale_factor_bits.replace(Some(bits));
+        if previous.is_some() {
+            self.scratch.borrow_mut().clear_for_scale_change();
+            #[cfg(test)]
+            self.scale_factor_resets
+                .set(self.scale_factor_resets.get() + 1);
+            return true;
+        }
+        false
+    }
+
+    #[cfg(test)]
+    fn scale_factor_resets(&self) -> u64 {
+        self.scale_factor_resets.get()
+    }
+
     fn draw<'a>(
         &'a self,
         doc: &Doc,
@@ -297,6 +343,7 @@ impl DocumentCache {
         hidden: &[ItemId],
         mut layer: impl FnMut(Layer, &mut EmitMarks<'a, '_>),
     ) {
+        self.sync_scale_factor(sf);
         let mut scratch = self.scratch.borrow_mut();
         let Scratch {
             items,
@@ -1349,5 +1396,239 @@ mod tests {
             assert_eq!(count_marks(&[p1]), 6);
         }
         assert_eq!(ALLOCS.replace(None), Some(0));
+    }
+
+    fn t7_4_rich_doc() -> Doc {
+        let lib = omnia_symbols::SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let cap = lib.by_name("Capacitor-IEEE-NonPolarized").unwrap();
+        let res_def = lib.get(res);
+        let cap_def = lib.get(cap);
+        let g = omnia_doc::GRID_NM;
+
+        let parts = [
+            (
+                Part {
+                    symbol: res,
+                    at: Pt { x: -4 * g, y: 0 },
+                    orient: Orient::IDENTITY,
+                    designator: "R1".into(),
+                    value: "10k".into(),
+                },
+                res_def.pins.iter().map(|pin| pin.at).collect::<Vec<_>>(),
+                res_def.bounds,
+            ),
+            (
+                Part {
+                    symbol: cap,
+                    at: Pt { x: 4 * g, y: 0 },
+                    orient: Orient::IDENTITY,
+                    designator: "C1".into(),
+                    value: "100n".into(),
+                },
+                cap_def.pins.iter().map(|pin| pin.at).collect::<Vec<_>>(),
+                cap_def.bounds,
+            ),
+        ];
+        let wires = [
+            Wire {
+                a: Pt { x: -2 * g, y: 0 },
+                b: Pt { x: 2 * g, y: 0 },
+            },
+            Wire {
+                a: Pt::ZERO,
+                b: Pt { x: 0, y: 3 * g },
+            },
+            Wire {
+                a: Pt { x: 2 * g, y: 0 },
+                b: Pt { x: 2 * g, y: 3 * g },
+            },
+        ];
+        let labels = [
+            omnia_doc::Label {
+                at: Pt {
+                    x: -6 * g,
+                    y: -3 * g,
+                },
+                text: "IN".into(),
+            },
+            omnia_doc::Label {
+                at: Pt { x: 0, y: 4 * g },
+                text: "OUT".into(),
+            },
+        ];
+        Doc::from_items(parts, wires, labels).unwrap()
+    }
+
+    #[test]
+    fn t7_4_scale_factor_change_drops_cached_runs_and_preserves_b10() {
+        type FrameSnapshot = (
+            Vec<[f32; 4]>,
+            Vec<([f32; 4], gpui::TransformationMatrix, gpui::SharedString)>,
+        );
+
+        let doc = t7_4_rich_doc();
+        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let near_cam = Camera::new(Pt::ZERO, 1.0, bounds);
+        let far_cam = Camera::new(Pt::ZERO, 0.2, bounds);
+
+        let collect = |cache: &DocumentCache, camera: &Camera, sf: f32| -> FrameSnapshot {
+            let mut quads = Vec::new();
+            let mut sprites = Vec::new();
+            cache.draw(&doc, camera, sf, &[], |_, emit| {
+                emit(&mut |mark| match mark {
+                    Mark::Quad(rect) => quads.push([
+                        f32::from(rect.origin.x),
+                        f32::from(rect.origin.y),
+                        f32::from(rect.size.width),
+                        f32::from(rect.size.height),
+                    ]),
+                    Mark::Sprite(shape) => {
+                        let (rect, transform) = shape.sprite(sf);
+                        sprites.push((
+                            [
+                                f32::from(rect.origin.x),
+                                f32::from(rect.origin.y),
+                                f32::from(rect.size.width),
+                                f32::from(rect.size.height),
+                            ],
+                            transform,
+                            shape.mask.key.clone(),
+                        ));
+                    }
+                });
+            });
+            (quads, sprites)
+        };
+
+        let cache = DocumentCache::default();
+        // Warm buffers at 1.25 across near and far zoom levels.
+        let _ = collect(&cache, &near_cam, 1.25);
+        let _ = collect(&cache, &far_cam, 1.25);
+        assert_eq!(cache.scale_factor_resets(), 0);
+
+        // Fixed scale factor at 1.25 must keep B10 zero-allocation invariant and trigger 0 resets.
+        ALLOCS.set(Some(0));
+        for step in 0..20 {
+            let mut pan_cam = near_cam.clone();
+            pan_cam.pan_by(point(f64::from(step) * 0.25, f64::from(step) * 0.15));
+            cache.draw(&doc, &pan_cam, 1.25, &[], |_, emit| {
+                emit(&mut |_| {});
+            });
+        }
+        assert_eq!(ALLOCS.replace(None), Some(0));
+        assert_eq!(cache.scale_factor_resets(), 0);
+
+        // Switch 1.25 -> 1.5 and verify emitted geometry and sprites match a fresh cache at 1.5.
+        let near_after = collect(&cache, &near_cam, 1.5);
+        assert_eq!(cache.scale_factor_resets(), 1);
+        let far_after = collect(&cache, &far_cam, 1.5);
+        assert_eq!(cache.scale_factor_resets(), 1);
+
+        let fresh_15 = DocumentCache::default();
+        assert_eq!(near_after, collect(&fresh_15, &near_cam, 1.5));
+        assert_eq!(far_after, collect(&fresh_15, &far_cam, 1.5));
+        assert!(!near_after.0.is_empty());
+        assert!(!near_after.1.is_empty());
+
+        // Fixed scale factor at 1.5 preserves B10 zero-allocation warm drawing.
+        let _ = collect(&cache, &near_cam, 1.5);
+        ALLOCS.set(Some(0));
+        for step in 0..40 {
+            let mut cam = if step % 2 == 0 {
+                near_cam.clone()
+            } else {
+                far_cam.clone()
+            };
+            cam.pan_by(point(f64::from(step) * 0.3, f64::from(step) * 0.2));
+            cache.draw(&doc, &cam, 1.5, &[], |_, emit| {
+                emit(&mut |_| {});
+            });
+        }
+        assert_eq!(ALLOCS.replace(None), Some(0));
+        assert_eq!(cache.scale_factor_resets(), 1);
+
+        // Switch back 1.5 -> 1.25 and verify parity with a fresh cache at 1.25.
+        let back_near = collect(&cache, &near_cam, 1.25);
+        assert_eq!(cache.scale_factor_resets(), 2);
+        let fresh_125 = DocumentCache::default();
+        assert_eq!(back_near, collect(&fresh_125, &near_cam, 1.25));
+    }
+
+    #[gpui::test]
+    fn t7_4_cached_sheet_repaints_on_scale_factor_change(cx: &mut gpui::TestAppContext) {
+        use gpui::{AppContext, Modifiers, MouseButton};
+
+        let doc = cx.new(|_| t7_4_rich_doc());
+        let doc_clone = doc.clone();
+        let sheet_notifies = Rc::new(Cell::new(0u32));
+        let sn = sheet_notifies.clone();
+
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = crate::OverlayView::new(doc_clone, camera, &omnia_theme::GRAPHITE, cx);
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+        cx.update(|_, cx| {
+            let sheet = overlay.read(cx).sheet_entity().clone();
+            cx.observe(&sheet, move |_, _| sn.set(sn.get() + 1))
+                .detach();
+        });
+
+        let g = omnia_doc::GRID_NM;
+        let wire_px = cx.update(|_, cx| overlay.read(cx).camera().world_to_pixels(Pt::ZERO));
+        let empty_px = cx.update(|_, cx| {
+            overlay
+                .read(cx)
+                .camera()
+                .world_to_pixels(Pt { x: 0, y: -6 * g })
+        });
+
+        // Initial draw happens during add_window_view (test window defaults to 2.0x).
+        let base_paints = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        assert_eq!(base_paints, 1);
+
+        // Move to 1.25x without manually calling cx.notify().
+        cx.simulate_scale_factor_change(1.25);
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(window.scale_factor(), 1.25);
+            window.draw(cx).clear(cx);
+        });
+        let paints_at_125 = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        assert!(
+            paints_at_125 > base_paints,
+            "CachedSheet must repaint on initial change to 1.25x"
+        );
+
+        // Hover at 1.25x must repaint only the overlay (INV11).
+        cx.simulate_mouse_move(wire_px, None::<MouseButton>, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints_at_125
+        );
+
+        // Switch 1.25 -> 1.5 without manually calling cx.notify() and verify CachedSheet repaints.
+        cx.simulate_scale_factor_change(1.5);
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(window.scale_factor(), 1.5);
+            window.draw(cx).clear(cx);
+        });
+        let paints_at_15 = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        assert_eq!(
+            paints_at_15,
+            paints_at_125 + 1,
+            "CachedSheet must repaint once when scale factor changes 1.25 -> 1.5"
+        );
+
+        // Hover at 1.5x must still reuse the cached sheet without notifying SheetView (INV11).
+        cx.simulate_mouse_move(empty_px, None::<MouseButton>, Modifiers::none());
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            paints_at_15
+        );
+        assert_eq!(sheet_notifies.get(), 0);
     }
 }
