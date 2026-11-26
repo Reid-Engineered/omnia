@@ -23,8 +23,8 @@ use std::{cell::Cell, rc::Rc};
 use crate::{
     camera::Camera,
     camera_anim::{
-        CameraAnimation, ViewAnimation, fit_rect_camera, fit_sheet_camera, viewport_center,
-        zoom_to_selection_camera,
+        CameraAnimation, ViewAnimation, fit_area_camera, fit_rect_camera, fit_sheet_camera,
+        viewport_center, zoom_to_selection_camera,
     },
     input::wheel_factor,
     selection::{RubberBand, SelectionState, SelectionUpdate, hit_tolerance_nm, item_exists},
@@ -601,6 +601,11 @@ impl OverlayView {
         self.animate_to(fit_rect_camera(rect, self.viewport), cx);
     }
 
+    /// Animates the camera to fit `rect` edge-to-edge in the current viewport (K13, T5.6).
+    pub fn fit_area(&mut self, rect: Rect, cx: &mut Context<Self>) {
+        self.animate_to(fit_area_camera(rect, self.viewport), cx);
+    }
+
     /// Animates the camera to fit all items in the sheet (or origin at 100% if empty).
     pub fn fit_sheet(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let target = fit_sheet_camera(Some(self.doc.read(cx)), self.viewport);
@@ -766,7 +771,7 @@ impl OverlayView {
             } => {
                 if self.tools.routes_pointer() {
                     let world = self.camera.screen_to_world(to_f64(event.position));
-                    let outcome = if self.tools.is_dragging() && !owns_capture {
+                    let outcome = if self.tools.holds_capture() && !owns_capture {
                         self.tools.pointer_lost()
                     } else {
                         self.tools.pointer_up(world, event.modifiers.alt)
@@ -904,7 +909,7 @@ impl OverlayView {
             self.sync_hidden_items(cx);
         }
 
-        if !self.tools.is_dragging()
+        if !self.tools.holds_capture()
             && !self.state.is_rubber_banding()
             && let Some(record) = self.capture.take()
         {
@@ -951,7 +956,7 @@ impl OverlayView {
         // T5.2: a drag, band or pending press still live at a fresh press lost its release.
         // End it immediately through `end_gesture` so its capture is released before the press
         // runs (including a Shift-click while a band is live).
-        if self.tools.is_dragging()
+        if self.tools.holds_capture()
             || self.state.is_rubber_banding()
             || matches!(self.tools.state(), tool::ToolState::Placing(p) if p.pressed)
         {
@@ -980,6 +985,12 @@ impl OverlayView {
                     update.visual_changed = true;
                 }
                 self.apply_update(update, cx);
+            } else if matches!(
+                self.tools.state(),
+                tool::ToolState::ZoomingArea(zoom) if zoom.is_dragging()
+            ) {
+                // Cancel any active animation so the zoom rectangle stays anchored to the sheet.
+                self.cancel_animation();
             }
             let capture = tool::finish(self, outcome, cx).capture;
             if capture {
@@ -1013,7 +1024,7 @@ impl OverlayView {
             self.camera.set_viewport(bounds);
             let world = self.camera.screen_to_world(to_f64(event.position));
             let left_held = event.pressed_button == Some(MouseButton::Left);
-            if self.tools.is_dragging() && (!owns_capture || !left_held) {
+            if self.tools.holds_capture() && (!owns_capture || !left_held) {
                 let reason = if hovered {
                     GestureEndReason::LostCapture
                 } else {
@@ -1202,6 +1213,13 @@ impl ToolHost for OverlayView {
                     tool::apply(self, tool::Commit { command, base }, cx);
                 }
             }
+            ToolRequest::ZoomArea(rect) => {
+                self.fit_area(rect, cx);
+                cx.emit(tool::CanvasZoomArea {
+                    doc: tool::doc_key(&self.doc),
+                    area: rect,
+                });
+            }
         }
     }
 }
@@ -1273,7 +1291,7 @@ impl Render for OverlayView {
                 camera: self.camera.clone(),
                 theme: self.theme,
                 focus: self.focus.clone(),
-                dragging: self.state.is_rubber_banding() || self.tools.is_dragging(),
+                dragging: self.state.is_rubber_banding() || self.tools.holds_capture(),
                 paints: self.paints.clone(),
                 scope: self.scope.clone(),
                 capture: self.capture.clone(),
@@ -1393,6 +1411,12 @@ impl Element for OverlayLayer {
                     }
                     _ => ghosts::GhostPreview::None,
                 };
+                let zoom_area = match view.tools.state() {
+                    tool::ToolState::ZoomingArea(zoom) => {
+                        zoom.world_rect().filter(|_| zoom.is_visible())
+                    }
+                    _ => None,
+                };
                 let ctx = OverlayPaintContext {
                     doc,
                     camera: &camera,
@@ -1406,6 +1430,7 @@ impl Element for OverlayLayer {
                     &view.state,
                     &view.net_highlight,
                     ghost_preview,
+                    zoom_area,
                     &ctx,
                     window,
                     cx,
@@ -1465,7 +1490,7 @@ impl Element for OverlayLayer {
             // leaving the sheet.
             let lost = overlay
                 .read_with(cx, |overlay, _| {
-                    (!owns && (overlay.tools.is_dragging() || overlay.state.is_rubber_banding()))
+                    (!owns && (overlay.tools.holds_capture() || overlay.state.is_rubber_banding()))
                         || (!left_held
                             && matches!(
                                 overlay.tools.state(),
@@ -1817,6 +1842,7 @@ fn paint_overlay(
     state: &SelectionState,
     net_highlight: &NetHighlight,
     ghost_preview: ghosts::GhostPreview<'_>,
+    zoom_area: Option<Rect>,
     ctx: &OverlayPaintContext<'_>,
     window: &mut Window,
     cx: &App,
@@ -1845,6 +1871,7 @@ fn paint_overlay(
     if hovered.is_none()
         && selection.is_empty()
         && band.is_none()
+        && zoom_area.is_none()
         && (is_dragging_ghosts || net_highlight.is_empty())
         && !ghost_preview.is_active()
     {
@@ -1982,6 +2009,17 @@ fn paint_overlay(
                     if let Some(band) = band
                         && let Some(rect) =
                             padded_rect_dev(band.world_rect(), 0.0, camera, sf, clip)
+                    {
+                        paint_quad_scoped(
+                            window,
+                            fill(rect.bounds(sf), halo_color.opacity(0.22)),
+                            scope,
+                        );
+                    }
+
+                    // Zoom-area translucent fill (T5.6).
+                    if let Some(area) = zoom_area
+                        && let Some(rect) = padded_rect_dev(area, 0.0, camera, sf, clip)
                     {
                         paint_quad_scoped(
                             window,
@@ -2160,6 +2198,13 @@ fn paint_overlay(
                                 );
                             }
                         }
+                    }
+
+                    // Zoom-area solid border (T5.6).
+                    if let Some(area) = zoom_area
+                        && let Some(rect) = padded_rect_dev(area, 0.0, camera, sf, clip)
+                    {
+                        paint_solid_outline(rect, band_border_dev, select_color, sf, scope, window);
                     }
                 });
             });

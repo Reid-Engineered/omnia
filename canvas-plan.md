@@ -666,11 +666,12 @@ impl Camera {
     pub fn scale(&self) -> f64;
     pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
-pub enum Tool { Select, Wire, Place(SymbolId), Label, ZoomArea } // T5.2 (tool.rs); ZoomArea owned by T5.6 (T4.5 follow-up, not yet in code)
+pub enum Tool { Select, Wire, Place(SymbolId), Label, ZoomArea } // T5.2 (tool.rs); ZoomArea delivered in T5.6
+pub enum ToolPhase { Idle, Hovering, Dragging, Placing, Wiring, ZoomingArea }
 // T5.2 (tool.rs): pure tool state machine. One gesture owner, OverlayView, holds it; the owner
 // applies a gesture's one Command only to the document and revision it was planned on (INV5).
 pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture), Placing(PlaceGesture),
-                     Wiring(WireGesture) }
+                     Wiring(WireGesture), ZoomingArea(ZoomAreaGesture) }
 pub struct DocStamp { pub key: u64, pub revision: u64 }   // key: doc_key(&Entity<Doc>)
 pub fn doc_key(doc: &Entity<Doc>) -> u64;
 pub struct DragGesture { pub items: Vec<ItemId>, pub pressed: ItemId, pub anchor: Pt,
@@ -687,8 +688,9 @@ impl DragGesture {
 pub struct PlaceGesture { pub symbol: SymbolId, pub at: Option<Pt>, pub orient: Orient,
                           pub pressed: bool, /* private raw_cursor */ } // only a press made in Place places
 pub struct WireGesture { pub start: Option<Pt>, pub cursor: Option<Pt> } // T6.2 extends
+pub struct ZoomAreaGesture { pub anchor: Option<Pt>, pub current: Option<Pt> } // T5.6
 pub enum ToolRequest { Click { item: ItemId, base: DocStamp }, Place { symbol: SymbolId, at: Pt, orient: Orient },
-                       ReorientSelection(Orient), DeleteSelection } // T5.3: handled by OverlayView
+                       ReorientSelection(Orient), DeleteSelection, ZoomArea(Rect) } // T5.3, T5.6: handled by OverlayView
 pub struct Commit { pub command: Command, pub base: DocStamp }
 pub struct ToolOutcome { pub handled: bool, pub preview_changed: bool, pub capture: bool,
                          pub release: bool, pub commit: Option<Commit>,
@@ -698,6 +700,7 @@ impl ToolMachine {
     pub fn with_prefs(prefs: WiringPrefs) -> Self;
     pub fn tool(&self) -> Tool;
     pub fn state(&self) -> &ToolState;
+    pub fn holds_capture(&self) -> bool;                 // T5.6: Dragging or active ZoomArea
     pub fn set_tool(&mut self, tool: Tool) -> ToolOutcome;  // cancels any gesture first
     pub fn document_replaced(&mut self) -> ToolOutcome;     // drops every gesture, keeps the tool
     pub fn pointer_lost(&mut self) -> ToolOutcome;          // window deactivated
@@ -805,6 +808,7 @@ impl OverlayView {
     pub fn cancel_animation(&mut self) -> bool;
     pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>);
     pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>);
+    pub fn fit_area(&mut self, rect: Rect, cx: &mut Context<Self>); // T5.6
     pub fn fit_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>);
     pub fn zoom_to_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
     pub fn zoom_step(&mut self, steps: i32, window: &mut Window, cx: &mut Context<Self>);
@@ -851,6 +855,7 @@ impl SheetCanvas {
     pub fn cancel_animation(&mut self) -> bool;
     pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>);
     pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>);
+    pub fn fit_area(&mut self, rect: Rect, cx: &mut Context<Self>); // T5.6
     pub fn fit_doc(&mut self, doc: &Doc, cx: &mut Context<Self>);
     pub fn zoom_to_selection_in(&mut self, doc: &Doc, selection: &[ItemId], cx: &mut Context<Self>) -> bool;
     // T5.2 (tool.rs): tool calls delegate to the attached gesture owner only while it shows this
@@ -876,7 +881,7 @@ impl SheetCanvas {
     // defaults to SymbolLibrary::place_command when None.
     pub fn set_place_provider(&mut self, provider: Option<PlaceProvider>, cx: &mut Context<Self>); // T5.3
     pub fn delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.3 (ui-plan §14)
-    pub fn select_all(&mut self, cx: &mut Context<Self>); // T5.6 (T4.3 follow-up, ui-plan §14; OverlayView has it)
+    pub fn select_all(&mut self, cx: &mut Context<Self>); // T5.6 (T4.3 follow-up, ui-plan §14; forwards to OverlayView::select_all)
     pub fn cut(&mut self, cx: &mut Context<Self>);        // T7.1 (ui-plan §14)
     pub fn copy(&self, cx: &mut Context<Self>);           // T7.1 (ui-plan §14)
     pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>); // T7.1 (ui-plan §14)

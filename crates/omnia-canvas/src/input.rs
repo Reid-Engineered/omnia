@@ -20,12 +20,12 @@
 
 use crate::camera::Camera;
 use crate::camera_anim::{
-    CameraAnimation, ViewAnimation, fit_rect_camera, fit_sheet_camera, viewport_center,
-    zoom_to_selection_camera,
+    CameraAnimation, ViewAnimation, fit_area_camera, fit_rect_camera, fit_sheet_camera,
+    viewport_center, zoom_to_selection_camera,
 };
 use crate::overlay::{GestureEndReason, OverlayView};
 use crate::sheet::{SheetDocument, SheetView, grid_level};
-use crate::tool::{self, CanvasEdit, CanvasHistoryEvent};
+use crate::tool::{self, CanvasEdit, CanvasHistoryEvent, CanvasZoomArea};
 use gpui::{
     App, Bounds, Context, DispatchPhase, Element, ElementId, Entity, EntityId, EventEmitter,
     FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
@@ -386,6 +386,14 @@ impl SheetCanvas {
                     }
                 },
             ));
+            self.overlay_subscriptions.push(cx.subscribe(
+                overlay,
+                |this, overlay, zoom: &CanvasZoomArea, cx| {
+                    if this.accepts(zoom.doc, &overlay, cx) {
+                        this.fit_area(zoom.area, cx);
+                    }
+                },
+            ));
         }
         self.overlay = overlay;
         self.sync_overlay_doc(cx);
@@ -504,6 +512,19 @@ impl SheetCanvas {
     /// Animates the camera to fit `rect` in the current viewport with default margins.
     pub fn fit_rect(&mut self, rect: Rect, cx: &mut Context<Self>) {
         self.animate_to(fit_rect_camera(rect, self.viewport), cx);
+    }
+
+    /// Animates the camera to fit `rect` edge-to-edge in the current viewport (K13, T5.6).
+    pub fn fit_area(&mut self, rect: Rect, cx: &mut Context<Self>) {
+        self.animate_to(fit_area_camera(rect, self.viewport), cx);
+    }
+
+    /// Selects every live item on the active document through the attached gesture owner
+    /// (`ui-plan.md` section 14, T4.3 follow-up; never notifies `SheetView`, INV11).
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        if let Some(overlay) = self.gesture_owner(cx) {
+            overlay.update(cx, |o, cx| o.select_all(cx));
+        }
     }
 
     /// Animates the camera to fit all items in `doc` (or origin at 100% if empty).
