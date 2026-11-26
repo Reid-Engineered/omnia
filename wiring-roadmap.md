@@ -299,8 +299,9 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   segment-drag accepted/refused/`Blocker` ghost rendering in
   `crates/omnia-canvas/src/overlay/ghosts.rs`, the `drag-segment` bench script in
   `crates/omnia-bench/src/{drag_segment.rs,driver.rs,harness.rs,lib.rs,main.rs,scripts.rs}`,
-  and the refused-state golden case/PNGs in `tests/golden/tests/overlay.rs` and
-  `tests/golden/overlay-segment-drag-refused-*.png`)
+  the refused-state golden case/PNGs in `tests/golden/tests/overlay.rs` and
+  `tests/golden/overlay-segment-drag-refused-*.png`, and plan signature/layout updates in
+  `canvas-plan.md` and `wiring-plan.md`)
 - Do: dragging one selected wire segment in the select tool starts a segment drag, not a
   move; the overlay shows the planned wires; a refusal shows `mark/conflict` and the
   outlined blocker; Esc cancels. Add the `drag-segment` bench script.
@@ -910,3 +911,14 @@ assertions (`t5_2_a_drag_does_not_survive_a_document_swap` now verifies `Draggin
 `revision_changes: 0`, `allocs_per_frame.ours.max: 0.0`. No `omnia-doc` signatures changed; WB6
 remains to be certified on Orion at W3.7. All five standard checks, wiki unit tests,
 `git diff --check`, and Rule-1 scan pass locally on Windows.
+
+2026-11-25 W3.3 review fixes - done. Addressed independent review findings on PR #143: updated
+`canvas-plan.md` (`ToolState::DraggingSegment`, `SegmentDragGesture`, `SegmentPreview`,
+`segment_offset`, `ToolMachine::{pointer_move_with_doc,pointer_up_with_doc}`, and
+`OverlayView::set_segment_drag_preview` under rule 16) and `wiring-plan.md` (listing
+`drag_segment.rs` for `drag-segment` under W3.3); added `DraggingSegment` to the `tool.rs` state
+table, documented doc-less `pointer_move`/`pointer_up` behavior, documented the fixed hidden-set
+trade-off (`INV11` vs collinear merge partners) in `tool/segment.rs`, removed leftover
+`middle` in `w3_3_segment_drag_esc_and_c4_end_paths_cancel_cleanly`, and added
+`t5_2_a_part_drag_does_not_survive_a_document_swap` so `ToolState::Dragging` retains document-swap
+coverage. Local checks re-verified after merging `origin/main` (`16615cd`).

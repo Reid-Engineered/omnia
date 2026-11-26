@@ -14,7 +14,8 @@
 //! | --- | --- | --- |
 //! | [`ToolState::Idle`] | `Tool::Select` or `Tool::Label` with nothing under the pointer | hover, press on an item, tool change |
 //! | [`ToolState::Hovering`] | the pointer over an item in `Tool::Select` | pointer off the item, press |
-//! | [`ToolState::Dragging`] | a left press on an item in `Tool::Select` without Shift | release (commit); Esc, a lost release, a fresh press, window deactivation, a document swap or a tool change (no edit) |
+//! | [`ToolState::Dragging`] | a left press on a part, label or multi-item selection in `Tool::Select` without Shift | release (commit); Esc, a lost release, a fresh press, window deactivation, a document swap or a tool change (no edit) |
+//! | [`ToolState::DraggingSegment`] | a left press on a single wire segment in `Tool::Select` without Shift | release (commits one `Command::DragSegment` if accepted or cancels if refused); Esc, a lost release, a fresh press, window deactivation, a document swap or a tool change (no edit) |
 //! | [`ToolState::Placing`] | `Tool::Place(symbol)` | Esc or a tool change; a press and release in the tool request a placement and stay |
 //! | [`ToolState::Wiring`] | `Tool::Wire` (W) | Esc (first drops the start, then leaves the tool) or a tool change |
 //!
@@ -493,6 +494,10 @@ impl ToolMachine {
 
     /// Pointer motion at world point `at`; `left_held` is whether the left button is down.
     /// Hover is not handled here (see [`Self::hover`]).
+    ///
+    /// Without `&Doc`, an active `DraggingSegment` previews attempted wires as
+    /// [`SegmentPreview::Accepted`] without calling [`omnia_doc::route::plan_segment_drag`];
+    /// use [`Self::pointer_move_with_doc`] for live planning.
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome {
         self.pointer_move_inner(None, at, left_held)
     }
@@ -562,6 +567,10 @@ impl ToolMachine {
 
     /// A left release at world point `at`. `alt` is read from the release event, which
     /// decides the follow policy at commit (WK3).
+    ///
+    /// Without `&Doc`, an active `DraggingSegment` re-plans its release offset without calling
+    /// [`omnia_doc::route::plan_segment_drag`] (`Doc::apply` still validates on commit); use
+    /// [`Self::pointer_up_with_doc`] for live planning and refusal handling.
     pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome {
         self.pointer_up_inner(None, at, alt)
     }
@@ -1986,6 +1995,35 @@ mod tests {
         assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
         assert!(!captured(cx), "the swap releases the drag's capture");
         up(&overlay, cx, pt(0, 2));
+        assert!(
+            cx.update(|_, cx| doc_b.read(cx).content_eq(&b0)),
+            "doc B untouched"
+        );
+        assert_eq!(revision(&doc_b, cx), b0.revision());
+        assert!(
+            cx.update(|_, cx| doc_a.read(cx).content_eq(&a0)),
+            "doc A untouched"
+        );
+    }
+
+    /// Review finding 1: a part drag (`ToolState::Dragging`) never survives a document swap.
+    #[gpui::test]
+    fn t5_2_a_part_drag_does_not_survive_a_document_swap(cx: &mut TestAppContext) {
+        let (overlay, doc_a, cx) = open_overlay(cx);
+        let doc_b = cx.update(|_, cx| cx.new(|_| test_doc()));
+        let (a0, b0) = cx.update(|_, cx| (snapshot(doc_a.read(cx)), snapshot(doc_b.read(cx))));
+        down(&overlay, cx, pt(-6, 0));
+        assert!(matches!(
+            cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Dragging(ref drag) if drag.pressed == R1
+        ));
+        drag_to(&overlay, cx, pt(-4, 2));
+        assert!(captured(cx));
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_document(doc_b.clone(), cx)));
+        cx.run_until_parked();
+        assert_eq!(phase(&overlay, cx), ToolPhase::Idle);
+        assert!(!captured(cx), "the swap releases the drag's capture");
+        up(&overlay, cx, pt(-4, 2));
         assert!(
             cx.update(|_, cx| doc_b.read(cx).content_eq(&b0)),
             "doc B untouched"
@@ -4779,7 +4817,6 @@ mod tests {
         let mut rig = open_del_rig(cx, w3_3_segment_doc(), false);
         let original = rig.snapshot();
         let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
-        let middle = WireId(1);
         let rev0 = revision(&doc, rig.cx);
 
         let assert_cancelled = |rig: &mut DelRig<'_>, label: &str| {
@@ -4831,7 +4868,6 @@ mod tests {
         rig.cx.simulate_mouse_move(p, None, Modifiers::none());
         rig.cx.run_until_parked();
         assert_cancelled(&mut rig, "lost release");
-        let _ = middle;
 
         // 4. Window deactivation cancels cleanly (C4).
         down(&overlay, rig.cx, pt(0, 2));

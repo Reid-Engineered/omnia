@@ -243,8 +243,10 @@ pub struct SegmentDragGesture {
     pub base: DocStamp,
     end_a: SegmentEnd,
     end_b: SegmentEnd,
-    /// Canonically sorted items (`wire` plus any directly attached corner neighbours) hidden on
-    /// `SheetView` once the drag lifts and kept fixed until drag end (D7, INV11).
+    /// Canonically sorted items (`wire` plus directly attached corner neighbours) hidden on
+    /// `SheetView` once the drag lifts and kept fixed until drag end (D7, INV11). Intentionally
+    /// excludes collinear merge partners that `plan.remove` may absorb when a corner shrinks to
+    /// zero, keeping the hidden set constant so `SheetView` paints strictly twice per drag.
     hidden: Vec<ItemId>,
     /// Current snapped perpendicular offset in nm.
     offset: i32,
@@ -376,8 +378,13 @@ impl SegmentDragGesture {
         matches!(self.preview, SegmentPreview::Refused(_))
     }
 
-    /// Canonically sorted items (`wire` and its stretching corner neighbours) hidden on
-    /// `SheetView` once lifted (D7, INV11).
+    /// Canonically sorted items (`wire` and its directly attached stretching corner neighbours)
+    /// hidden on `SheetView` once lifted (D7, INV11).
+    ///
+    /// Collinear merge partners that [`plan_segment_drag`] may also place in `plan.remove` when a
+    /// corner shrinks to zero stay visible on `SheetView` until commit so the hidden set remains
+    /// fixed for the whole drag and `SheetView` paints strictly twice per drag (`INV11`), narrower
+    /// than WD11's general phrasing.
     pub fn hidden_items(&self) -> &[ItemId] {
         &self.hidden
     }
