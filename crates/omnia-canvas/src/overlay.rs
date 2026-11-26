@@ -44,7 +44,7 @@ use gpui::{
     relative,
 };
 use omnia_doc::{
-    Change, Doc, ItemId, NetId, Pt, Rect, Snap, Wire, WireId,
+    Change, Command, Doc, ItemId, NetId, Pt, Rect, Snap, Wire, WireId,
     prefs::{SelectMode, WiringPrefs},
     route::Axis,
 };
@@ -572,6 +572,70 @@ impl OverlayView {
         }
     }
 
+    /// Returns `true` when the in-app clipboard holds a non-empty [`omnia_doc::Clip`] (T7.1).
+    pub fn has_clip(cx: &App) -> bool {
+        tool::paste::has_clip(cx)
+    }
+
+    /// Copies the live selection into the in-app clipboard (`D2`, `INV5`, `INV11`, `UD3`).
+    ///
+    /// Leaves any existing clipboard content intact when nothing live is selected. Never modifies
+    /// the document or notifies `SheetView`.
+    pub fn copy(&self, cx: &mut Context<Self>) -> bool {
+        let clip = self.doc.read(cx).copy(self.state.selection());
+        tool::paste::write_clip(clip, cx)
+    }
+
+    /// Cuts the live selection into the in-app clipboard via one [`Command::Delete`] honouring
+    /// `WiringPrefs::delete_wires_with_part` (`WD10`, `W3.5` handoff, `INV5`, `UD3`).
+    ///
+    /// Ignored while a gesture or rubber band is live, or when nothing live is selected.
+    pub fn cut(&mut self, cx: &mut Context<Self>) -> bool {
+        if !matches!(
+            self.tools.state(),
+            tool::ToolState::Idle | tool::ToolState::Hovering(_)
+        ) || self.state.is_rubber_banding()
+        {
+            return false;
+        }
+        let clip = self.doc.read(cx).copy(self.state.selection());
+        if clip.is_empty() {
+            return false;
+        }
+        let base = tool::DocStamp {
+            key: tool::doc_key(&self.doc),
+            revision: self.doc.read(cx).revision(),
+        };
+        let with_wires = self.tools.prefs().delete_wires_with_part;
+        let Some(command) = tool::move_::delete_selection_command(
+            self.doc.read(cx),
+            self.state.selection(),
+            with_wires,
+        ) else {
+            return false;
+        };
+        if tool::apply(self, tool::Commit { command, base }, cx) {
+            tool::paste::write_clip(clip, cx);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Enters interactive ghost placement for the current clipboard content (`D2`, `INV5`,
+    /// `INV11`, `UD3`). Returns `false` when the clipboard is empty.
+    pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(clip) = tool::paste::read_clip(cx) else {
+            return false;
+        };
+        self.end_gesture(GestureEndReason::Cancel, Some(window), Some(cx));
+        let cursor = self.pointer_screen.map(|p| self.camera.screen_to_world(p));
+        let outcome = self.tools.start_paste(clip, cursor);
+        let handled = outcome.handled;
+        tool::finish(self, outcome, cx);
+        handled
+    }
+
     /// Cancels an active rubber-band drag (never notifies `SheetView`).
     pub fn cancel_rubber_band(&mut self, cx: &mut Context<Self>) {
         self.end_gesture(GestureEndReason::CancelRubberBand, None, Some(cx));
@@ -1057,7 +1121,7 @@ impl OverlayView {
         // runs (including a Shift-click while a band is live).
         if self.tools.holds_capture()
             || self.state.is_rubber_banding()
-            || matches!(self.tools.state(), tool::ToolState::Placing(p) if p.pressed)
+            || self.tools.has_pending_press()
         {
             self.end_gesture(GestureEndReason::FreshPress, Some(window), Some(cx));
         }
@@ -1149,8 +1213,7 @@ impl OverlayView {
                 });
                 return;
             }
-            if !left_held && matches!(self.tools.state(), tool::ToolState::Placing(p) if p.pressed)
-            {
+            if !left_held && self.tools.has_pending_press() {
                 let reason = if hovered {
                     GestureEndReason::LostCapture
                 } else {
@@ -1290,6 +1353,25 @@ impl ToolHost for OverlayView {
                 );
                 if let Some(command) = command {
                     tool::apply(self, tool::Commit { command, base }, cx);
+                }
+            }
+            ToolRequest::Paste { clip, at, orient } => {
+                let base = tool::DocStamp {
+                    key: tool::doc_key(&self.doc),
+                    revision: self.doc.read(cx).revision(),
+                };
+                let oriented = clip.reoriented(orient);
+                let pasted_wires: Vec<Wire> = oriented
+                    .wires()
+                    .iter()
+                    .filter_map(|&w| offset_wire_in_bounds(at, w))
+                    .collect();
+                let command = Command::Paste { clip: oriented, at };
+                if let Some(change) = tool::apply_change(self, tool::Commit { command, base }, cx) {
+                    let pasted = pasted_selection(self.doc.read(cx), &change.added, &pasted_wires);
+                    if !pasted.is_empty() {
+                        self.set_selection(pasted, cx);
+                    }
                 }
             }
             ToolRequest::ReorientSelection(by) => {
@@ -1531,6 +1613,14 @@ impl Element for OverlayLayer {
                         },
                         None => ghosts::GhostPreview::None,
                     },
+                    tool::ToolState::Pasting(paste) => match paste.at {
+                        Some(at) if !paste.clip.is_empty() => ghosts::GhostPreview::Paste {
+                            clip: &paste.clip,
+                            at,
+                            orient: paste.orient,
+                        },
+                        _ => ghosts::GhostPreview::None,
+                    },
                     tool::ToolState::Dragging(drag)
                         if drag.is_lifted() && !drag.items.is_empty() =>
                     {
@@ -1634,11 +1724,7 @@ impl Element for OverlayLayer {
             let lost = overlay
                 .read_with(cx, |overlay, _| {
                     (!owns && (overlay.tools.holds_capture() || overlay.state.is_rubber_banding()))
-                        || (!left_held
-                            && matches!(
-                                overlay.tools.state(),
-                                tool::ToolState::Placing(p) if p.pressed
-                            ))
+                        || (!left_held && overlay.tools.has_pending_press())
                 })
                 .unwrap_or(false);
             if hovered || lost {
@@ -2410,6 +2496,70 @@ fn paint_overlay(
             }
         });
     });
+}
+
+/// Offsets a clip wire by `at` using `i64` arithmetic, returning `None` if outside K1.
+fn offset_wire_in_bounds(at: Pt, w: Wire) -> Option<Wire> {
+    let ax = i32::try_from(i64::from(at.x) + i64::from(w.a.x)).ok()?;
+    let ay = i32::try_from(i64::from(at.y) + i64::from(w.a.y)).ok()?;
+    let bx = i32::try_from(i64::from(at.x) + i64::from(w.b.x)).ok()?;
+    let by = i32::try_from(i64::from(at.y) + i64::from(w.b.y)).ok()?;
+    Some(Wire {
+        a: Pt::new(ax, ay).ok()?,
+        b: Pt::new(bx, by).ok()?,
+    })
+}
+
+/// Returns `true` when axis-aligned wires `a` and `b` are collinear and share positive length.
+fn wire_overlaps_collinear(a: Wire, b: Wire) -> bool {
+    if a.a.y == a.b.y && b.a.y == b.b.y && a.a.y == b.a.y {
+        let lo = a.a.x.min(a.b.x).max(b.a.x.min(b.b.x));
+        let hi = a.a.x.max(a.b.x).min(b.a.x.max(b.b.x));
+        lo < hi
+    } else if a.a.x == a.b.x && b.a.x == b.b.x && a.a.x == b.a.x {
+        let lo = a.a.y.min(a.b.y).max(b.a.y.min(b.b.y));
+        let hi = a.a.y.max(a.b.y).min(b.a.y.max(b.b.y));
+        lo < hi
+    } else {
+        false
+    }
+}
+
+/// Selects only the pasted parts/labels and live wires overlapping the pasted clip wire
+/// geometry, excluding unrelated split pieces of pre-existing wires while including pasted
+/// wires that collinearly merged into pre-existing segments (`T7.1`).
+fn pasted_selection(doc: &Doc, added: &[ItemId], pasted_wires: &[Wire]) -> Vec<ItemId> {
+    let mut selected = Vec::with_capacity(added.len() + pasted_wires.len());
+    for &id in added {
+        match id {
+            ItemId::Part(pid) if doc.part(pid).is_some() => selected.push(id),
+            ItemId::Label(lid) if doc.label(lid).is_some() => selected.push(id),
+            _ => {}
+        }
+    }
+    if !pasted_wires.is_empty() {
+        let mut hits = Vec::new();
+        let mut wids = Vec::new();
+        for &pw in pasted_wires {
+            let Ok(bounds) = Rect::from_points(pw.a, pw.b) else {
+                continue;
+            };
+            doc.query(bounds, &mut hits);
+            for &hit in &hits {
+                if let ItemId::Wire(wid) = hit
+                    && doc
+                        .wire(wid)
+                        .is_some_and(|&live| wire_overlaps_collinear(live, pw))
+                {
+                    wids.push(wid);
+                }
+            }
+        }
+        wids.sort_unstable_by_key(|wid| wid.0);
+        wids.dedup();
+        selected.extend(wids.into_iter().map(ItemId::Wire));
+    }
+    selected
 }
 
 #[cfg(test)]

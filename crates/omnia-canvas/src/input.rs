@@ -538,6 +538,41 @@ impl SheetCanvas {
         }
     }
 
+    /// Returns `true` when the in-app clipboard holds a non-empty [`omnia_doc::Clip`] (T7.1).
+    pub fn has_clip(cx: &App) -> bool {
+        tool::paste::has_clip(cx)
+    }
+
+    /// Copies the active selection to the in-app clipboard through the gesture owner
+    /// (`ui-plan.md` section 14, `D2`, `UD3`, `INV11`).
+    pub fn copy(&self, cx: &mut Context<Self>) {
+        if let Some(overlay) = self.gesture_owner(cx) {
+            overlay.update(cx, |o, cx| {
+                o.copy(cx);
+            });
+        }
+    }
+
+    /// Cuts the active selection to the in-app clipboard through the gesture owner (`ui-plan.md`
+    /// section 14, `WD10`, `W3.5` handoff, `UD3`).
+    pub fn cut(&mut self, cx: &mut Context<Self>) {
+        if let Some(overlay) = self.gesture_owner(cx) {
+            overlay.update(cx, |o, cx| {
+                o.cut(cx);
+            });
+        }
+    }
+
+    /// Enters interactive ghost placement for the clipboard content through the gesture owner
+    /// (`ui-plan.md` section 14, `D2`, `UD3`, `INV11`).
+    pub fn paste(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(overlay) = self.gesture_owner(cx) {
+            overlay.update(cx, |o, cx| {
+                o.paste(window, cx);
+            });
+        }
+    }
+
     /// Animates the camera to fit all items in `doc` (or origin at 100% if empty).
     pub fn fit_doc(&mut self, doc: &Doc, cx: &mut Context<Self>) {
         self.animate_to(fit_sheet_camera(Some(doc), self.viewport), cx);

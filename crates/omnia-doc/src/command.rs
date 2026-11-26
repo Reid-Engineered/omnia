@@ -65,6 +65,10 @@ pub enum Command {
         field: TextField,
         text: Arc<str>,
     },
+    Paste {
+        clip: crate::Clip,
+        at: Pt,
+    },
     Batch(Vec<Command>),
 }
 
@@ -375,6 +379,7 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
                 text: old_text,
             })
         }
+        Command::Paste { clip, at } => crate::clip::apply_paste(doc, clip, at, acc),
         Command::Batch(cmds) => apply_batch(doc, cmds, acc),
     }
 }
@@ -1338,7 +1343,11 @@ fn apply_transform_raw(
     ])
 }
 
-fn apply_wire_plan(doc: &mut Doc, plan: crate::route::AddWiresPlan, acc: &mut ChangeAcc) -> UndoOp {
+pub(crate) fn apply_wire_plan(
+    doc: &mut Doc,
+    plan: crate::route::AddWiresPlan,
+    acc: &mut ChangeAcc,
+) -> UndoOp {
     if plan.remove.is_empty() && plan.insert.is_empty() {
         return UndoOp::Batch(Vec::new());
     }
