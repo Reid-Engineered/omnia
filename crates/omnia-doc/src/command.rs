@@ -241,9 +241,6 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
             Ok(apply_wire_plan(doc, plan, acc))
         }
         Command::AddLabel(label) => {
-            if !label.at.is_in_bounds() {
-                return Err(CommandError::OutOfBounds);
-            }
             let label_at = label.at;
             let (id, bounds) = doc.insert_label_raw(label)?;
             acc.record_dirty(bounds);
@@ -384,7 +381,15 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
                     }
                 }
             }
-            let mut points: Vec<_> = wires.iter().flat_map(|(_, w)| [w.a, w.b]).collect();
+            // WINV3 / WD3 / WD9: vacated wire endpoints, deleted part pins, and deleted
+            // label positions may now hold two collinear wires with nothing else there;
+            // merge them back to normal form (matching `apply_isometry`).
+            let mut points: Vec<_> = wires
+                .iter()
+                .flat_map(|(_, w)| [w.a, w.b])
+                .chain(parts.iter().flat_map(|(_, p)| p.pins.iter().copied()))
+                .chain(labels.iter().map(|(_, l)| l.at))
+                .collect();
             let plan = crate::route::plan_delete_merges(doc, &mut points);
             let merge_inverse = apply_wire_plan(doc, plan, acc);
             // Undo batches execute in reverse: undo merges before restoring items.
@@ -4338,6 +4343,23 @@ mod tests {
         doc.redo().unwrap();
         assert!(doc.content_eq(&after_cross));
 
+        // Deleting the crossing label keeps the 4-way junction intact in normal form (`WINV3`).
+        let cross_lbl = doc
+            .labels()
+            .find(|(_, l)| l.at == del_point(0, 0))
+            .map(|(id, _)| ItemId::Label(id))
+            .unwrap();
+        follow_roundtrip(
+            &mut doc,
+            Command::Delete {
+                items: vec![cross_lbl],
+                with_wires: false,
+            },
+        )
+        .unwrap();
+        doc.assert_normal_form();
+        assert_eq!(doc.wires().count(), 4);
+
         // Placing a label on an existing endpoint or empty space splits nothing.
         let before_end = doc.fork();
         let end_change = follow_roundtrip(
@@ -4445,6 +4467,46 @@ mod tests {
         .unwrap();
         assert_ne!(doc.net_at(w1_a), doc.net_at(w2_a));
         assert_doc_consistent(&doc);
+        doc.assert_normal_form();
+        assert_eq!(doc.wires().count(), 3);
+
+        // Two stacked labels on a wire body: deleting one preserves the split; deleting the second
+        // merges the wire back into normal form (`WINV3`, `WD9`, `INV4`).
+        let l3 = doc
+            .apply(Command::AddLabel(Label {
+                at: del_point(-2, 0),
+                text: "S1".into(),
+            }))
+            .unwrap()
+            .added[0];
+        let l4 = doc
+            .apply(Command::AddLabel(Label {
+                at: del_point(-2, 0),
+                text: "S2".into(),
+            }))
+            .unwrap()
+            .added[0];
+        assert_eq!(doc.wires().count(), 4);
+        follow_roundtrip(
+            &mut doc,
+            Command::Delete {
+                items: vec![l3],
+                with_wires: false,
+            },
+        )
+        .unwrap();
+        doc.assert_normal_form();
+        assert_eq!(doc.wires().count(), 4);
+        follow_roundtrip(
+            &mut doc,
+            Command::Delete {
+                items: vec![l4],
+                with_wires: false,
+            },
+        )
+        .unwrap();
+        doc.assert_normal_form();
+        assert_eq!(doc.wires().count(), 3);
     }
 
     proptest! {
@@ -4512,6 +4574,7 @@ mod tests {
                 },
             )
             .unwrap();
+            doc.assert_normal_form();
             prop_assert_ne!(doc.net_at(a1), doc.net_at(a2));
         }
     }

@@ -638,7 +638,7 @@ of the `canvas` lane.
 
 ### T7.2 Net labels · done
 - Lane: canvas · Depends: T6.4 · Read: D2, wiring-plan.md WD9
-- Owns: `crates/omnia-canvas/src/tool/label.rs` (coordinator-widened 2026-11-26: `crates/omnia-doc/src/{command.rs, clip.rs}`, `crates/omnia-canvas/src/{tool.rs, overlay.rs, overlay/snap_marker.rs, input.rs, lib.rs}`, `canvas-plan.md` §9/`C4`, and `canvas-roadmap.md`)
+- Owns: `crates/omnia-canvas/src/tool/label.rs` (coordinator-widened 2026-11-26: `crates/omnia-doc/src/{command.rs, clip.rs}`, `crates/omnia-canvas/src/{tool.rs, overlay.rs, overlay/snap_marker.rs, input.rs, lib.rs}`, `wiring-plan.md` (`WD9`/`WD10` clarifications), `canvas-plan.md` §9/`C4`, and `canvas-roadmap.md`)
 - Do: `Tool::Label` places a label on a wire or pin (placing a label on a wire body splits
   the wire there per WD9, and the merge rule keeps that point); text entry through GPUI's
   input handling (read `crates/gpui/examples/input.rs` at the pinned revision first); editing
@@ -2673,34 +2673,41 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
 2026-11-26 T7.2 done — Implemented net-label placement, `WD9` wire-body splitting, and inline GPUI
                        text editing across `omnia-doc` and `omnia-canvas` (`D2`, `INV2`, `INV4`,
                        `INV5`, `INV6`, `INV10`, `INV11`, `B10`, `C4`, `K8`, `K14`, `WD5`, `WD9`,
-                       `UD3`). Updated `Command::AddLabel` in `crates/omnia-doc/src/command.rs`
-                       (reusing `pub(crate) fn point_in_wire_strict_interior` from
-                       `crates/omnia-doc/src/clip.rs`) to pre-validate `K1` bounds (`INV4`) and
-                       split any wire whose strict interior receives `label.at` via
-                       `plan_add_wires`/`apply_wire_plan`, recording a reverse-ordered
-                       `UndoOp::Batch` so undo restores unsplit wires before removing the label
-                       (`INV4`, `INV10`). Added `crates/omnia-canvas/src/tool/label.rs`
+                       `WINV3`, `UD3`). Updated `Command::AddLabel` and `Command::Delete` in
+                       `crates/omnia-doc/src/command.rs` (reusing `pub(crate) fn
+                       point_in_wire_strict_interior` from `crates/omnia-doc/src/clip.rs`):
+                       `AddLabel` splits any wire whose strict interior receives `label.at` via
+                       `plan_add_wires`/`apply_wire_plan` (including both crossing wires,
+                       clarified in `wiring-plan.md` `WD9` for owner confirmation) and records a
+                       reverse-ordered `UndoOp::Batch` so undo restores unsplit wires before
+                       removing the label (`INV4`, `INV10`), while `Command::Delete` passes deleted
+                       part pins and label positions into `plan_delete_merges` so deleting a
+                       wire-splitting part or label restores `WINV3` normal form (`WD10` clarified
+                       in `wiring-plan.md`; updated `t7_1_post_paste_selection_...` in `tool.rs` to
+                       assert `assert_normal_form()` and the healed wire `(0, 10)-(10, 10)`). Added
+                       `crates/omnia-canvas/src/tool/label.rs`
                        (`LabelTarget`, `LabelEditTarget`, `LabelGesture`, `find_existing_label`,
-                       `find_label_target`, `label_commit_command`, `TEXT_FIELD_CONTEXT`,
-                       `LabelEditor` implementing `EntityInputHandler`, keystroke interception, IME
-                       marked text, UTF-16 conversion via stdlib boundaries, clipboard copy/cut/
-                       paste, and pointer selection without adding new crates), re-exporting
-                       `LabelTarget`/`LabelEditTarget`/`LabelGesture` in `tool.rs` and `lib.rs`.
-                       Wired `ToolPhase::Labeling`, `ToolState::Labeling`,
-                       `ToolRequest::OpenLabelEditor`, `ToolMachine::pointer_move_with_radii`,
-                       and updated `t5_2_each_tool_enters_its_rest_state` /
+                       `find_label_target` preventing duplicate stacked labels inside `radii.snap`,
+                       `label_commit_command` keeping spaced existing labels unchanged on `Enter`,
+                       `TEXT_FIELD_CONTEXT`, `LabelEditor` implementing `EntityInputHandler`,
+                       keystroke interception, IME marked text, UTF-16 conversion via stdlib
+                       boundaries, clipboard copy/cut/paste, and pointer selection without adding
+                       new crates), re-exporting `LabelTarget`/`LabelEditTarget`/`LabelGesture` in
+                       `tool.rs` and `lib.rs`. Wired `ToolPhase::Labeling`, `ToolState::Labeling`,
+                       `ToolRequest::OpenLabelEditor`, `ToolMachine::{pointer_move_with_radii,
+                       find_existing_label}`, and updated `t5_2_each_tool_enters_its_rest_state` /
                        `t5_2_press_on_an_item_drags_the_selection_or_that_item` in `tool.rs`; added
                        two-layer `stage/snap` / `stage/hover` label target and anchor rendering in
                        `overlay/snap_marker.rs` (`INV6`, `B10`); integrated `OverlayView` and
                        `SheetCanvas::is_editing_label` in `overlay.rs`/`input.rs` reusing
                        `OverlayView::focus` (`INV11`), switching root context between `Sheet` and
-                       `TextField` (`UD3`), supporting double-click editing in `Tool::Select`,
-                       cancelling unchanged/empty/Esc/C4 paths with zero edits (`INV5`), and
-                       updating `canvas-plan.md` §9 and `C4`. Verified locally on Windows (non-
-                       reference, `Q4`): `cargo fmt --all --check`, `cargo clippy --workspace
-                       --all-targets -- -D warnings`, `cargo clippy -p omnia-bench --all-targets
-                       --features scene-counts,readback -- -D warnings`, `cargo deny check`, and
-                       `cargo test --workspace` all passed (`omnia-doc` 217/217 lib + integration
-                       checks; `omnia-canvas` 209/209 lib + integration & 2/2 doc-tests; all
-                       workspace crates including `omnia-app`, `omnia-agent`, `omnia-theme`, and
-                       `omnia-golden` green).
+                       `TextField` (`UD3`), keeping `Tool::Label` active when `HistoryStep` closes
+                       the editor, supporting double-click editing in `Tool::Select`, cancelling
+                       unchanged/empty/Esc/`C4` paths (`FreshPress`, `ToolChange`, `HistoryStep`,
+                       `DocumentSwitch`, `Attach`, `Detach`, `Drop`, `WindowDeactivated`, external
+                       `on_doc_change`) with zero edits (`INV5`), and updating `canvas-plan.md` §9
+                       and `C4`. Verified locally on Windows (non-reference, `Q4`) after review
+                       fixes: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+                       -- -D warnings`, `cargo clippy -p omnia-bench --all-targets --features
+                       scene-counts,readback -- -D warnings`, `cargo deny check`, and `cargo test
+                       --workspace` all passed.

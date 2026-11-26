@@ -260,7 +260,13 @@ pub fn find_label_target(
         radii.snap.max(0),
         scratch,
     );
-    is_valid_label_snap(snapped).then_some(LabelTarget::Attach(snapped))
+    if !is_valid_label_snap(snapped) {
+        return None;
+    }
+    if let Some((id, at)) = find_existing_label(doc, snapped.at(), 0, scratch) {
+        return Some(LabelTarget::ExistingLabel { id, at });
+    }
+    Some(LabelTarget::Attach(snapped))
 }
 
 /// Converts committed inline editor text into one [`Command`], or `None` when cancelled (`INV5`).
@@ -278,11 +284,15 @@ pub fn label_commit_command(target: &LabelEditTarget, raw_text: &str) -> Option<
             text: Arc::from(trimmed),
         })),
         LabelEditTarget::Existing { id, original, .. } => {
-            (trimmed != original.as_ref()).then(|| Command::SetText {
-                item: ItemId::Label(*id),
-                field: TextField::Label,
-                text: Arc::from(trimmed),
-            })
+            if raw_text == original.as_ref() || trimmed == original.as_ref() {
+                None
+            } else {
+                Some(Command::SetText {
+                    item: ItemId::Label(*id),
+                    field: TextField::Label,
+                    text: Arc::from(trimmed),
+                })
+            }
         }
     }
 }
@@ -440,8 +450,8 @@ impl LabelEditor {
                     self.paste(item, window, cx);
                 }
             }
-            // Swallow Undo/Redo while inline editing is open (UD3).
-            (true, _, "z" | "y") => {}
+            // Swallow Undo/Redo and modified delete/backspace while inline editing is open (`UD3`).
+            (true, _, "z" | "y" | "backspace" | "delete") => {}
             (false, extend, "left" | "right" | "home" | "end") => {
                 self.unmark_text(window, cx);
                 let selection = self.selection();
@@ -456,7 +466,7 @@ impl LabelEditor {
                 let anchor = if extend { self.anchor } else { offset };
                 self.set_selection(anchor, offset, window, cx);
             }
-            (false, false, "backspace" | "delete") => {
+            (false, _, "backspace" | "delete") => {
                 let mut range = self.replacement_range(None);
                 if range.is_empty() {
                     range = if key == "backspace" {
@@ -1117,6 +1127,55 @@ mod tests {
             find_label_target(&doc, pt(10, 10), radii, &mut scratch),
             None
         );
+
+        // Between hit radius (G/4) and snap radius (G/2) of an existing label sitting on a wire
+        // end (`(4, 0)`), snapping onto that point still edits the existing label rather than
+        // stacking a duplicate. Meanwhile an unlabeled pin 7 px away still accepts a new label.
+        let lib = SymbolLibrary::builtin();
+        let end_doc = Doc::from_items(
+            doc.parts().map(|(_, p)| {
+                let def = lib.get(p.symbol);
+                (
+                    p.clone(),
+                    def.pins.iter().map(|pin| pin.at).collect(),
+                    def.bounds,
+                )
+            }),
+            [Wire {
+                a: pt(-4, 0),
+                b: pt(4, 0),
+            }],
+            [Label {
+                at: pt(4, 0),
+                text: "END".into(),
+            }],
+        )
+        .unwrap();
+        // Cursor at (4*G + 7*G/20, 0): outside hit (0.25*G = 5px at 100%) and inside snap (0.5*G = 10px).
+        let near_end = Pt {
+            x: 4 * G + G * 7 / 20,
+            y: 0,
+        };
+        assert_eq!(
+            find_label_target(&end_doc, near_end, radii, &mut scratch),
+            Some(LabelTarget::ExistingLabel {
+                id: LabelId(0),
+                at: pt(4, 0),
+            })
+        );
+        // Unlabeled pin at (-8, 0) with another label 7/20*G away from a different point won't steal (-8, 0).
+        let near_pin = Pt {
+            x: -8 * G + G * 7 / 20,
+            y: 0,
+        };
+        assert_eq!(
+            find_label_target(&end_doc, near_pin, radii, &mut scratch),
+            Some(LabelTarget::Attach(Snap::Pin {
+                part: PartId(0),
+                pin: 0,
+                at: pt(-8, 0),
+            }))
+        );
     }
 
     #[test]
@@ -1146,6 +1205,21 @@ mod tests {
                 item: ItemId::Label(LabelId(0)),
                 field: TextField::Label,
                 text: "MOSI".into(),
+            })
+        );
+
+        let spaced_existing = LabelEditTarget::Existing {
+            id: LabelId(1),
+            at: pt(4, 0),
+            original: " VCC ".into(),
+        };
+        assert_eq!(label_commit_command(&spaced_existing, " VCC "), None);
+        assert_eq!(
+            label_commit_command(&spaced_existing, "VCC"),
+            Some(Command::SetText {
+                item: ItemId::Label(LabelId(1)),
+                field: TextField::Label,
+                text: "VCC".into(),
             })
         );
     }

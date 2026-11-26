@@ -67,6 +67,12 @@ const LABEL_HALF_PX: f64 = 6.0;
 /// Logical dash and gap lengths for Intersecting-mode rubber-band borders.
 const BAND_DASH_PX: f64 = 5.0;
 const BAND_GAP_PX: f64 = 4.0;
+/// Logical anchor offsets and clamp bounds for the floating inline net-label editor (`T7.2`).
+const LABEL_EDITOR_OFFSET_X_PX: f64 = 6.0;
+const LABEL_EDITOR_OFFSET_Y_PX: f64 = 14.0;
+const LABEL_EDITOR_MARGIN_PX: f64 = 4.0;
+const LABEL_EDITOR_CLAMP_WIDTH_PX: f64 = 140.0;
+const LABEL_EDITOR_CLAMP_HEIGHT_PX: f64 = 30.0;
 
 /// Converts an `omnia-theme` token into GPUI's colour type (INV6).
 pub(crate) fn gpui_color(c: omnia_theme::Rgba) -> Hsla {
@@ -474,6 +480,11 @@ impl OverlayView {
         self.label_editor
             .as_ref()
             .map(|active| active.editor.read(cx).shared_text())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn label_editor(&self) -> Option<&Entity<tool::label::LabelEditor>> {
+        self.label_editor.as_ref().map(|active| &active.editor)
     }
 
     pub fn selection(&self) -> &[ItemId] {
@@ -1231,20 +1242,28 @@ impl OverlayView {
                 true
             }
             GestureEndReason::HistoryStep => {
-                let closed_editor = self.close_label_editor(cx.as_deref_mut());
                 let had_band = self.state.is_rubber_banding();
                 let band_vis = if had_band {
                     self.state.cancel_rubber_band()
                 } else {
                     false
                 };
-                let mut outcome = self.tools.cancel();
-                outcome.preview_changed |= band_vis || had_band || closed_editor;
-                let handled = outcome.handled || had_band || band_vis || closed_editor;
-                if let Some(cx) = cx.as_deref_mut() {
-                    tool::finish(self, outcome, cx);
+                if self.close_label_editor(cx.as_deref_mut()) {
+                    if let Some(cx) = cx.as_deref_mut() {
+                        self.refresh_label_target(cx);
+                        self.sync_hidden_items(cx);
+                        cx.notify();
+                    }
+                    true
+                } else {
+                    let mut outcome = self.tools.cancel();
+                    outcome.preview_changed |= band_vis || had_band;
+                    let handled = outcome.handled || had_band || band_vis;
+                    if let Some(cx) = cx.as_deref_mut() {
+                        tool::finish(self, outcome, cx);
+                    }
+                    handled
                 }
-                handled
             }
         };
 
@@ -1316,27 +1335,25 @@ impl OverlayView {
         if self.tools.tool() == tool::Tool::Select
             && event.click_count == 2
             && !event.modifiers.shift
+            && let Some((id, at)) =
+                self.tools
+                    .find_existing_label(self.doc.read(cx), world, radii.hit)
+            && let Some(label) = self.doc.read(cx).label(id)
         {
-            let mut scratch = Vec::new();
-            if let Some((id, at)) =
-                tool::label::find_existing_label(self.doc.read(cx), world, radii.hit, &mut scratch)
-                && let Some(label) = self.doc.read(cx).label(id)
-            {
-                let base = tool::DocStamp {
-                    key: tool::doc_key(&self.doc),
-                    revision: self.doc.read(cx).revision(),
-                };
-                let target = tool::LabelEditTarget::Existing {
-                    id,
-                    at,
-                    original: Arc::clone(&label.text),
-                };
-                if !self.state.is_selected(ItemId::Label(id)) {
-                    self.set_selection([ItemId::Label(id)], cx);
-                }
-                self.open_label_editor(target, base, cx);
-                return false;
+            let base = tool::DocStamp {
+                key: tool::doc_key(&self.doc),
+                revision: self.doc.read(cx).revision(),
+            };
+            let target = tool::LabelEditTarget::Existing {
+                id,
+                at,
+                original: Arc::clone(&label.text),
+            };
+            if !self.state.is_selected(ItemId::Label(id)) {
+                self.set_selection([ItemId::Label(id)], cx);
             }
+            self.open_label_editor(target, base, cx);
+            return false;
         }
         let outcome = self.tools.pointer_down_with_radii(
             self.doc.read(cx),
@@ -1748,11 +1765,17 @@ fn label_editor_offset(camera: &Camera, viewport: Bounds<Pixels>, at: Pt) -> (Pi
     let vp_top = f64::from(viewport.top());
     let vp_w = f64::from(viewport.size.width);
     let vp_h = f64::from(viewport.size.height);
-    let mut local_x = screen.x - vp_left + 2.0 * camera.zoom();
-    let mut local_y = screen.y - vp_top - 14.0;
+    let mut local_x = screen.x - vp_left + LABEL_EDITOR_OFFSET_X_PX;
+    let mut local_y = screen.y - vp_top - LABEL_EDITOR_OFFSET_Y_PX;
     if vp_w > 0.0 && vp_h > 0.0 {
-        local_x = local_x.clamp(4.0, (vp_w - 140.0).max(4.0));
-        local_y = local_y.clamp(4.0, (vp_h - 30.0).max(4.0));
+        local_x = local_x.clamp(
+            LABEL_EDITOR_MARGIN_PX,
+            (vp_w - LABEL_EDITOR_CLAMP_WIDTH_PX).max(LABEL_EDITOR_MARGIN_PX),
+        );
+        local_y = local_y.clamp(
+            LABEL_EDITOR_MARGIN_PX,
+            (vp_h - LABEL_EDITOR_CLAMP_HEIGHT_PX).max(LABEL_EDITOR_MARGIN_PX),
+        );
     }
     (px(local_x as f32), px(local_y as f32))
 }

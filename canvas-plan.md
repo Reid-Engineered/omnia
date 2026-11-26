@@ -502,12 +502,12 @@ pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
 pub enum Command {
     PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect }, // P2.2 adds def: PlaceDef and params: Params (parts-plan.md PD8)
     AddWires(Vec<Wire>),
-    AddLabel(Label), // T7.2 (WD9): splits wires whose strict interior holds label.at; undo restores wires first (INV4)
+    AddLabel(Label), // T7.2 (WD9): splits wire interiors containing label.at; undo restores wires first (INV4)
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
     Reorient { items: Vec<ItemId>, pivot: Pt, by: Orient, follow: FollowPolicy }, // follow added in W2.2 (WD3)
     Transform { items: Vec<ItemId>, delta: Pt, pivot: Pt, by: Orient, follow: FollowPolicy }, // T5.5: pivot + by(p - pivot) + delta, planned and normalised once
     DragSegment { wire: WireId, offset: i32 }, // wiring-plan.md WD7 (W3.2); nm, signed
-    Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false)
+    Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false); merges at vacated wire ends, deleted part pins & deleted label points (WINV3)
     SetText { item: ItemId, field: TextField, text: Arc<str> },
     // P2.2 (parts-plan.md PD8): SetParam { part, name, value } and UpdatePartDef { from, to }
     Paste { clip: Clip, at: Pt },

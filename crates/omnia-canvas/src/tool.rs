@@ -468,6 +468,16 @@ impl ToolMachine {
         }
     }
 
+    /// Resolves an existing label near `raw_at` reusing `self.scratch` (T7.2).
+    pub(crate) fn find_existing_label(
+        &mut self,
+        doc: &Doc,
+        raw_at: Pt,
+        hit_tol: i32,
+    ) -> Option<(omnia_doc::LabelId, Pt)> {
+        label::find_existing_label(doc, raw_at, hit_tol, &mut self.scratch)
+    }
+
     /// Space while wiring (T6.2, WD6): flips the active L-preview's first corner.
     /// Returns an unhandled outcome when not actively drawing a wire segment.
     pub fn flip_wire_corner(&mut self) -> ToolOutcome {
@@ -7511,10 +7521,13 @@ mod tests {
             (pasted_pid, pasted_lid)
         });
 
-        // Deleting the post-paste selection removes only pasted items and keeps all 3 split pieces.
+        // Deleting the post-paste selection removes only pasted items; the existing wire at
+        // y=10g is preserved and heals back into one normal-form segment across the vacated
+        // pin and label points (`WINV3`).
         rig.delete(DelPath::Key);
         rig.cx.update(|_, cx| {
             let d = doc.read(cx);
+            d.assert_normal_form();
             assert!(match pasted_part.0 {
                 ItemId::Part(id) => d.part(id).is_none(),
                 _ => false,
@@ -7523,12 +7536,12 @@ mod tests {
                 ItemId::Label(id) => d.label(id).is_none(),
                 _ => false,
             });
-            assert_eq!(
-                d.wires()
-                    .filter(|(_, w)| w.a.y == pt(0, 10).y && w.b.y == pt(0, 10).y)
-                    .count(),
-                3
-            );
+            let healed: Vec<Wire> = d
+                .wires()
+                .filter(|(_, w)| w.a.y == pt(0, 10).y && w.b.y == pt(0, 10).y)
+                .map(|(_, &w)| w)
+                .collect();
+            assert_eq!(healed, vec![del_wire((0, 10), (10, 10))]);
         });
 
         // 2. Existing wire (0, 20)-(4, 20) collinearly extended by pasting (4, 20)-(8, 20):
@@ -7758,6 +7771,15 @@ mod tests {
         rig.delete(DelPath::Key);
 
         let separated = rig.snapshot();
+        separated.assert_normal_form();
+        assert!(
+            separated.wires().any(|(_, &w)| w
+                == Wire {
+                    a: pt(-6, 0),
+                    b: pt(0, 0)
+                }),
+            "WINV3: deleting the only label on a split wire merges it back into one segment"
+        );
         assert_ne!(
             separated.net_at(pt(-6, 0)),
             separated.net_at(pt(10, 0)),
@@ -8143,7 +8165,8 @@ mod tests {
             "stale editor must never commit over external change"
         );
 
-        // C4: Undo/HistoryStep cancels active editor without committing buffered text.
+        // C4: Undo/HistoryStep closes active editor in one step without committing buffered text
+        // and stays in Tool::Label (matching single-step Esc).
         click_world(&overlay, rig.cx, pt(-3, 0));
         rig.cx.simulate_input("STALE");
         rig.cx.run_until_parked();
@@ -8154,12 +8177,13 @@ mod tests {
         });
         rig.cx.run_until_parked();
         assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool()),
+            Tool::Label,
+            "undo while inline editor is open must close only the editor and stay in Tool::Label"
+        );
 
         // C4: WindowDeactivated cancels active editor.
-        rig.cx.update(|_, cx| {
-            overlay.update(cx, |o, cx| o.set_tool(Tool::Label, cx));
-        });
-        rig.cx.run_until_parked();
         click_world(&overlay, rig.cx, pt(-3, 0));
         rig.cx.simulate_input("STALE");
         rig.cx.run_until_parked();
@@ -8187,5 +8211,175 @@ mod tests {
         rig.cx.run_until_parked();
         assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
         assert_eq!(revision(&doc, rig.cx), rev_before_swap);
+    }
+
+    /// T7.2 / C4: `Attach`, `Detach`, and `Drop` cleanly cancel active inline editing without
+    /// mutating the document or leaking entities (`INV5`).
+    #[gpui::test]
+    fn t7_2_c4_attach_detach_and_drop_cancel_label_editor(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.bind_keys(standalone_bindings()));
+        let doc = cx.new(|_| t7_2_label_doc());
+        let doc_clone = doc.clone();
+        let (host, vcx) = cx.add_window_view(move |window, cx| {
+            window.activate_window();
+            let overlay = cx.new(|cx| {
+                let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+                OverlayView::new(doc_clone, camera, &GRAPHITE, cx)
+            });
+            Host {
+                overlay: Some(overlay),
+            }
+        });
+        vcx.run_until_parked();
+        let orig = vcx.update(|_, cx| snapshot(doc.read(cx)));
+        let rev0 = revision(&doc, vcx);
+        let overlay = vcx.update(|window, cx| {
+            let overlay = host.read(cx).overlay.clone().unwrap();
+            let focus = overlay.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Label, cx));
+            overlay
+        });
+        vcx.run_until_parked();
+
+        // Attach: open editor on unattached overlay, then attach it to a SheetCanvas.
+        click_world(&overlay, vcx, pt(-3, 0));
+        vcx.simulate_input("STALE_ATTACH");
+        vcx.run_until_parked();
+        assert!(vcx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        let canvas = canvas_for(vcx, Some(doc.clone()), None);
+        vcx.update(|_, cx| {
+            canvas.update(cx, |c, cx| c.set_overlay(Some(overlay.clone()), cx));
+        });
+        vcx.run_until_parked();
+        assert!(!vcx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(revision(&doc, vcx), rev0);
+
+        // Detach: open editor on attached overlay, then detach it from SheetCanvas.
+        vcx.update(|window, cx| {
+            let focus = overlay.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+        });
+        click_world(&overlay, vcx, pt(-3, 0));
+        vcx.simulate_input("STALE_DETACH");
+        vcx.run_until_parked();
+        assert!(vcx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        vcx.update(|_, cx| {
+            canvas.update(cx, |c, cx| c.set_overlay(None, cx));
+        });
+        vcx.run_until_parked();
+        assert!(!vcx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(revision(&doc, vcx), rev0);
+
+        // Drop: open editor, then drop the OverlayView host with buffered text.
+        vcx.update(|window, cx| {
+            let focus = overlay.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+        });
+        click_world(&overlay, vcx, pt(-3, 0));
+        vcx.simulate_input("STALE_DROP");
+        vcx.run_until_parked();
+        let weak_overlay = overlay.downgrade();
+        let weak_editor = vcx.update(|_, cx| {
+            overlay
+                .read(cx)
+                .label_editor()
+                .expect("active editor entity")
+                .downgrade()
+        });
+        drop(overlay);
+        drop(canvas);
+        vcx.update(|_, cx| unmount(&host, cx));
+        vcx.run_until_parked();
+        assert!(weak_overlay.upgrade().is_none());
+        assert!(weak_editor.upgrade().is_none());
+        assert_eq!(revision(&doc, vcx), rev0);
+        assert!(vcx.update(|_, cx| doc.read(cx).content_eq(&orig)));
+    }
+
+    /// T7.2: dragging past the right edge of `LabelEditor` inside `OverlayView` extends text
+    /// selection cleanly without starting a rubber band or closing the editor, and commits one
+    /// `Command::SetText`.
+    #[gpui::test]
+    fn t7_2_overlay_label_editor_drag_selection_past_edge(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler;
+
+        let mut start_doc = t7_2_label_doc();
+        start_doc
+            .apply(Command::AddLabel(Label {
+                at: pt(-3, 0),
+                text: "SIGNAL_123".into(),
+            }))
+            .unwrap();
+        let rig = open_del_rig(cx, start_doc, false);
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Label, cx));
+        });
+        rig.cx.run_until_parked();
+
+        click_world(&overlay, rig.cx, pt(-3, 0));
+        rig.cx.run_until_parked();
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+
+        let (start_pos, far_right) = rig.cx.update(|window, cx| {
+            let editor = overlay
+                .read(cx)
+                .label_editor()
+                .expect("active editor")
+                .clone();
+            let b = editor.update(cx, |ed, cx| {
+                ed.bounds_for_range(7..7, Bounds::default(), window, cx)
+                    .expect("bounds at split index")
+            });
+            let pos = b.center();
+            (pos, gpui::point(pos.x + gpui::px(220.0), pos.y))
+        });
+
+        rig.cx
+            .simulate_mouse_down(start_pos, MouseButton::Left, Modifiers::none());
+        rig.cx.simulate_mouse_move(
+            gpui::point(start_pos.x + gpui::px(20.0), start_pos.y),
+            Some(MouseButton::Left),
+            Modifiers::none(),
+        );
+        rig.cx
+            .simulate_mouse_move(far_right, Some(MouseButton::Left), Modifiers::none());
+        rig.cx
+            .simulate_mouse_up(far_right, MouseButton::Left, Modifiers::none());
+        rig.cx.run_until_parked();
+
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).rubber_band().is_none())
+        );
+        rig.cx.update(|window, cx| {
+            let editor = overlay.read(cx).label_editor().unwrap().clone();
+            let sel = editor
+                .update(cx, |ed, cx| ed.selected_text_range(false, window, cx))
+                .unwrap();
+            assert_eq!(sel.range, 7..10);
+        });
+
+        let rev_before = revision(&doc, rig.cx);
+        let hist_before = rig.history.borrow().len();
+        rig.cx.simulate_input("NEW");
+        rig.cx.simulate_keystrokes("enter");
+        rig.cx.run_until_parked();
+
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(revision(&doc, rig.cx), rev_before + 1);
+        assert_eq!(rig.history.borrow().len(), hist_before + 1);
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            d.assert_normal_form();
+            let updated = d
+                .labels()
+                .find(|(_, l)| l.at == pt(-3, 0))
+                .map(|(_, l)| l.text.as_ref());
+            assert_eq!(updated, Some("SIGNAL_NEW"));
+        });
     }
 }

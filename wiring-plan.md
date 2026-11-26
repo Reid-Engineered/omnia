@@ -339,7 +339,10 @@ label is never merged away.
   that point. There is no name ranking on a net split: the label stays on the side its point
   is on.
 - Placing a label on a wire body splits the wire there, so a label always sits on an end or
-  a pin. The merge rule never removes that point.
+  a pin; if two crossing wires both contain that point in their interiors, both split there
+  (matching a landed pin and a moved label under WD3; clarified at T7.2, 2026-11-26, for owner
+  confirmation). The merge rule never removes a labelled point, and deleting a label merges
+  collinear halves at the vacated point when nothing else remains there (WINV3).
 - When a run is translated rigidly, labels on its corners move with it.
 - When a run is re-routed, each label that sat on one of its corners is placed on the new
   run at the lattice point nearest (Manhattan) to its old position; a tie goes to the point
@@ -353,7 +356,7 @@ label is never merged away.
 - Preference `delete_wires_with_part`. When on, deleting a part also deletes every run that
   starts at one of its pins, up to that run's far anchor. Runs beyond a junction stay.
 - When off, Delete removes only the selection (T5.3 as written), and the wires keep free
-  ends.
+  ends (collinear halves meeting at a vacated pin or label merge to normal form per WINV3).
 - Either way it is one command and one undo step. Cut behaves like Delete.
 
 ### WD11 Preview and feedback. DECIDED
