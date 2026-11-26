@@ -310,14 +310,18 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 - Done when: TC-band-01 to TC-band-09 pass as simulated-input tests; a property test shows
   `query_within` equal to a brute-force scan; the INV11 test still passes.
 
-### W3.5 Delete with wires · doing (doc half: Delete with_wires done; tool half waits T5.3)
+### W3.5 Delete with wires · done
 - Lane: doc, canvas · Depends: W1.2, T5.3 · Read: WD10, WQ4
 - Owns: `crates/schematic-doc/src/command.rs` (the `with_wires` flag), the Del and Cut handlers
-  in `crates/schematic-canvas/src/tool.rs`
+  in `crates/schematic-canvas/src/tool.rs` (coordinator-widened 2026-11-25: `DeleteSelection`
+  gesture/rubber-band guard and removed-hover prune in `crates/schematic-canvas/src/overlay.rs`)
 - Do: with the flag set, `Delete` also removes every run starting at a deleted part's pin,
   then normalises what is left. The tool sets the flag from the preference.
 - Done when: TC-del-01 to TC-del-03 pass; undo restores parts and wires with their ids
   (INV4); INV10 holds after delete and after undo.
+- Handoff: Cut does not exist yet; canvas T7.1 (Ctrl+X) owns it. Its delete half must pass
+  `delete_wires_with_part` the way `ToolRequest::DeleteSelection` does (WD10: Cut behaves
+  like Delete; one command, one undo step).
 
 ### W3.6 Labels ride their runs · todo
 - Lane: doc, canvas · Depends: T7.2, W2.2 · Read: WD9, WINV9
@@ -823,3 +827,54 @@ paragraph, and brought `wiring-plan.md`'s `RouteScratch` and view-allocation wor
 to date (wiring rule 16). The roadmap scope line now records the 2026-11-23 extension.
 `cargo fmt --all --check`, `cargo clippy -p omnia-doc --all-targets -- -D warnings` and
 `cargo test -p omnia-doc` pass locally on Orion; workspace checks run in CI.
+
+2026-11-25 W3.5 done - tool half of Delete with wires (WD10, WQ4 default No). T5.3 had
+already wired `ToolRequest::DeleteSelection` in `overlay.rs` to read
+`prefs().delete_wires_with_part` when it builds `Command::Delete`. The audit traced every
+canvas Delete path: the Del key (`ToolMachine::delete`, then
+`OverlayView::action_delete`), `OverlayView::delete_selection` and
+`SheetCanvas::delete_selection` (through the gesture owner). All of them reach that one
+request, so each reads the preference current at the Delete, and a change made through
+`OverlayView::apply_prefs` reaches all of them. Del during a drag, a placement or the
+wire tool is still ignored. A stale or empty selection still gives no command. One gap
+was found and fixed in `OverlayView::on_doc_change`: when a Delete with wires removed the
+wire under the pointer, the overlay cleared its hover but the tool kept
+`ToolState::Hovering` on the removed id. The tool's hover mirror is now cleared only when
+the hovered item no longer exists, so a drag commit still ends in `Idle` as before (INV5
+test unchanged). The rest is doc comments on `ToolRequest::DeleteSelection`,
+`ToolMachine::set_prefs` and `OverlayView::apply_prefs`. `omnia-doc` is unchanged.
+New simulated-input GPUI tests in `tool.rs` go through the Del key on a focused
+`OverlayView` with a `SheetCanvas` attached:
+- `tc_del_01_*` (flag on): R1 and both runs from its pins are removed, up to C1's pin and
+  a free end. W3 beyond C1 and the label stay with their ids.
+- `tc_del_02_*` (flag off): only R1 is removed, and every wire keeps its id.
+- `tc_del_03_*`: a run that ends on a junction is removed, and the two collinear wires left
+  there merge into (-6,6)-(6,6) with no junction.
+Each test checks one revision step, exactly one `CanvasHistory` event, an empty
+selection, exact live wires, INV10 (an independent `Connectivity::rebuild_with_parts`
+oracle plus brute-force junctions) after delete, undo and redo, and INV4 exact-id
+`content_eq` through Ctrl+Z and Ctrl+Y. `w3_5_every_delete_path_reads_the_current_preference`
+toggles the preference with `apply_prefs` across the key, overlay and canvas paths.
+`w3_5_del_mid_drag_is_ignored_and_hover_on_a_removed_run_clears` covers Del mid-drag and
+the hover regression; with the fix removed, it fails with `Hovering(Wire(WireId(1)))`.
+Handoff: Cut does not exist yet, because canvas T7.1 creates Ctrl+X. Its delete half must
+pass `delete_wires_with_part` the same way (WD10: Cut behaves like Delete, as one command
+and one undo step). This is recorded on W3.5 above. All five standard checks pass locally
+on Windows: fmt; workspace all-target clippy; bench clippy with scene-counts,readback;
+cargo test --workspace (647 passed, 0 failed, 3 ignored); cargo deny check. The first test
+attempt hit transient "can't find crate" build errors, and a clean re-run fixed them. Diff
+check and the rule-1 scan pass. Nothing was measured, and no thresholds, ranges, lints or
+budgets were weakened.
+
+2026-11-25 W3.5 review fixes - done. Addressed independent review findings B1-B4 and N1-N2
+under coordinator-widened ownership of `crates/omnia-canvas/src/overlay.rs` (`is_rubber_banding`,
+`ToolHost::request(ToolRequest::DeleteSelection)` gesture/rubber-band guard, and removed-hover
+prune in `on_doc_change`). Guarded direct `OverlayView::request(ToolRequest::DeleteSelection)`
+against non-`Idle`/`Hovering` tool states (B1) and both `OverlayView::action_delete` and
+`ToolRequest::DeleteSelection` against live pointer rubber-band drags (`is_rubber_banding()`,
+B2, preserving `INV5`). Updated `assert_inv10` and `DelRig::delete_roundtrip` in `tool.rs` to
+verify deleted `WireId`s return `net_of == None` and to compare `net_at` over the union of
+pre- and post-Delete fixture points (N1); tightened `tc_del_02_*` to assert surviving `PartId(1)`
+and labels match `original` by id and value (N2); added `w3_5_direct_delete_request_is_ignored_during_active_gestures`
+and `w3_5_delete_is_ignored_during_rubber_band_drag`; removed the attribution footer from PR
+#139 (B4). Local checks passed (recorded in PR #139).
