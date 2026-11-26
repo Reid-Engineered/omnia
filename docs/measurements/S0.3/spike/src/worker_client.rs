@@ -594,6 +594,7 @@ mod tests {
             }
             let rc = unsafe { WaitForSingleObject(child.as_raw_handle(), INFINITE) };
             assert_eq!(rc, 0, "WaitForSingleObject failed: {rc}");
+            child
         }
         #[cfg(unix)]
         {
@@ -604,10 +605,8 @@ mod tests {
                 let _ = stdout.read_to_end(&mut sink);
             }
             std::thread::sleep(Duration::from_millis(50));
-            return child;
+            child
         }
-        #[cfg(not(unix))]
-        child
     }
 
     #[test]
