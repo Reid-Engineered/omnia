@@ -1,0 +1,31 @@
+mode: remote: tailscaled and the starting SSH link kept running
+commit 99e122cd0408e6efb2f43fdc9c56825d6bc87854
+governors before: /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor:powersave /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor:powersave /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor:powersave /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor:powersave 
+tailscaled before: kept running (active)
+kernel 7.2.7-arch1-1; started 2026-11-26T19:08:59Z
+baloo before:
+Baloo File Indexer is running
+Indexer state: Idle
+Total files indexed: 84240
+Files waiting for content indexing: 0
+Files failed to index: 0
+Current size of index is 2.83 GiB
+SimulateUserActivity before inhibit: exit 0
+finished 2026-11-26T19:24:53Z, gate exit 0
+inhibition 6 s into the inhibitor:
+PowerManagement.HasInhibit: true
+PolicyAgent.HasInhibition(1): true
+PolicyAgent.HasInhibition(4): true
+Brightness/dimming:
+[01;33m	Brightness control: [0;0msupported, set to 30% and dimming to 100%
+[01;33m	Automatic brightness: [0;0munsupported
+brightness/dimming after:
+[01;33m	Brightness control: [0;0msupported, set to 30% and dimming to 100%
+[01;33m	Automatic brightness: [0;0munsupported
+baloo after:
+Baloo File Indexer is running
+Indexer state: Idle
+Total files indexed: 84241
+Files waiting for content indexing: 0
+Files failed to index: 0
+Current size of index is 2.83 GiB

@@ -646,7 +646,7 @@ of the `canvas` lane.
 - Done when: two unconnected wires given the same label share a `NetId`, and separate again
   when one label is deleted (INV10 holds).
 
-### T7.3 Instrument window stub · needs-human
+### T7.3 Instrument window stub · done
 - Lane: canvas · Depends: T6.4 · Read: plan section 6 (last paragraph), G6, ui-plan.md UD5
 - Owns: `crates/omnia-canvas/src/instrument_host.rs` (coordinator-widened 2026-11-26: re-exports in `crates/omnia-canvas/src/lib.rs`, `bench --instrument` CLI/harness/headless across `crates/omnia-bench/src/{harness.rs,main.rs,scripts.rs,drag_part.rs,drag_wire.rs,spike/mod.rs}`, `canvas-plan.md` §9, and Orion gate/diagnostics under `docs/measurements/T7.3.md` and `docs/measurements/T7.3/`)
 - Do: the floating frame, drag, stacking and focus come from [ui-roadmap.md](ui-roadmap.md)
@@ -2711,3 +2711,25 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        -- -D warnings`, `cargo clippy -p omnia-bench --all-targets --features
                        scene-counts,readback -- -D warnings`, `cargo deny check`, and `cargo test
                        --workspace` all passed.
+2026-11-26 T7.3 done — Certified T7.3 on the Orion reference machine (`Q4`, `B4`, `B5`, `B9`, `B10`;
+                       `INV11` stub-only zero-sheet-repaint proven by PR #152 tests; Core i5-7300U,
+                       HD Graphics 620 Mesa ANV, Linux 7.2.7-arch1-1, KDE Wayland, native
+                       `eDP-1` 1920×1080 @ 60.008 Hz, AC power, `performance` governor on all 4 CPUs) at
+                       clean `origin/main` `99e122c` (binary SHA-256
+                       `2c429c3d5e4ddff211a03920c62a520bd092a0aabb6ce3a67ca6f072e544cc96`) via
+                       `docs/measurements/T7.3/owner-run.sh --remote` (40/40 interleaved runs, 10× per
+                       case at 100% and 125%). Frozen `gate.py` exited 0 (`pass`), and offline archive
+                       replay matched `summary.txt` byte-for-byte. `10k-pan-inst60` (60 Hz, stride 1, 600
+                       stub paints/run): frame p99 `2.243 [2.191, 2.316] ms` at 100% and `1.717 [1.634,
+                       1.878] ms` at 125% (limit `< 16.0 ms`), worst frame `3.811` / `3.721 ms` (`B5 <=
+                       50.0`), `10/10` `2.5R` and `1.5R` attribution (`0` over-limit), private memory
+                       `152.268 [151.531, 156.402]` / `151.367 [150.508, 152.602] MB` (`B9 < 300`), and
+                       `0` Omnia allocs/frame (`B10`). `10k-pan-inst30` (30 Hz comparison, stride 2, 300
+                       paints/run): frame p99 `2.218 [2.179, 2.322] ms` at 100% and `1.645 [1.622,
+                       1.721] ms` at 125%, worst frame `3.420` / `3.940 ms`, `10/10` attribution, private
+                       memory `152.324` / `150.654 MB`, `0` Omnia allocs/frame. All 80 condition records
+                       clean; governors restored to `powersave` and verified post-run. Evidence archived
+                       under `docs/measurements/T7.3/orion-2026-11-26/` and summarized in
+                       `docs/measurements/T7.3.md`; unblocks `T7.5`. Local results-PR checks:
+                       `cargo fmt --all --check`, `git diff --check`, `test_gate.py` (6/6), and archive
+                       replay; Clippy, `cargo test --workspace`, and `cargo deny check` left to CI.
