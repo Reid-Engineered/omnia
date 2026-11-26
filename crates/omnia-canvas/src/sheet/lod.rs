@@ -9,7 +9,7 @@ const MIN_JUNCTION_PX: f64 = 2.5;
 pub(super) const MIN_WIRE_RUN_PX: f64 = 2.5;
 const MIN_SYMBOL_PX: f64 = 8.0;
 
-pub(super) fn junction_diameter(camera: &Camera) -> Option<f64> {
+pub(crate) fn junction_diameter(camera: &Camera) -> Option<f64> {
     let diameter = JUNCTION_DIAMETER_NM * camera.scale();
     (diameter >= MIN_JUNCTION_PX).then_some(diameter)
 }

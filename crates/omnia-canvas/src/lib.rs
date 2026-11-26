@@ -25,6 +25,6 @@ pub use overlay::{CachedSheet, NetHighlight, OverlayEvent, OverlayPaintScope, Ov
 pub use selection::{RubberBand, Selection, SelectionState};
 pub use sheet::SheetView;
 pub use tool::{
-    CanvasClipboard, LabelEditTarget, LabelGesture, LabelTarget, PasteGesture, PlaceProvider,
-    PlaceRequest,
+    CanvasClipboard, CanvasNotice, FOLLOW_PREVIEW_CAP, FollowPreview, LabelEditTarget,
+    LabelGesture, LabelTarget, PasteGesture, PlaceProvider, PlaceRequest,
 };

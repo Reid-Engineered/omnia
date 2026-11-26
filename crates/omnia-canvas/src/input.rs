@@ -29,11 +29,12 @@ use crate::tool::{self, CanvasEdit, CanvasHistoryEvent, CanvasZoomArea};
 use gpui::{
     App, Bounds, Context, DispatchPhase, Element, ElementId, Entity, EntityId, EventEmitter,
     FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    KeyDownEvent, KeyUpEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, PinchEvent, Pixels, Point, Render, ScrollDelta, ScrollEvent, ScrollSource,
-    Styled, Subscription, TouchPhase, WeakEntity, Window, div, point, prelude::*,
+    KeyDownEvent, KeyUpEvent, LayoutId, ModifiersChangedEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, PinchEvent, Pixels, Point, Render, ScrollDelta,
+    ScrollEvent, ScrollSource, SharedString, Styled, Subscription, TouchPhase, WeakEntity, Window,
+    div, point, prelude::*,
 };
-use omnia_doc::{Doc, ItemId, Pt, Rect};
+use omnia_doc::{Doc, ItemId, Pt, Rect, prefs::WiringPrefs};
 use omnia_theme::Theme;
 use std::{
     cell::Cell,
@@ -248,6 +249,15 @@ pub struct SheetCanvas {
     /// T5.3: shell-supplied placement provider (`parts-plan.md` section 14), forwarded to the
     /// attached gesture owner regardless of `set_place_provider`/`set_overlay` call order.
     place_provider: Option<tool::PlaceProvider>,
+    /// W2.3: user wiring preferences (`WD12`, `ui-plan.md` §14), forwarded to any attached or
+    /// future overlay without notifying `SheetView`.
+    wiring_prefs: WiringPrefs,
+    /// Tracks whether `set_wiring_prefs` was called on this canvas so attaching an overlay that
+    /// already carries custom prefs (`OverlayView::with_prefs`) adopts those prefs instead of
+    /// clobbering them with defaults.
+    has_wiring_prefs: bool,
+    /// W2.3: latest status notice forwarded from the active overlay under C2 (`WD11`, `UD11`).
+    last_notice: Option<SharedString>,
     focus: FocusHandle,
     /// Last pointer position over the sheet, window logical px.
     pointer: Option<Point<f64>>,
@@ -286,6 +296,9 @@ impl SheetCanvas {
             overlay: None,
             overlay_subscriptions: Vec::new(),
             place_provider: None,
+            wiring_prefs: WiringPrefs::default(),
+            has_wiring_prefs: false,
+            last_notice: None,
             focus: cx.focus_handle(),
             pointer: None,
             viewport: Bounds::default(),
@@ -319,6 +332,7 @@ impl SheetCanvas {
     /// dropping every gesture, or is detached when the document is cleared).
     pub fn set_doc(&mut self, doc: Option<Entity<Doc>>, cx: &mut Context<Self>) {
         self.anim = None;
+        self.last_notice = None;
         self.current_doc_key.set(doc.as_ref().map(tool::doc_key));
         self.sheet_doc = doc.as_ref().map(|d| SheetDocument::new(d.clone()));
         self.doc = doc;
@@ -354,6 +368,7 @@ impl SheetCanvas {
     /// re-emitted here for the shell (UD6, C2), only while both show one document.
     pub fn set_overlay(&mut self, overlay: Option<Entity<OverlayView>>, cx: &mut Context<Self>) {
         self.overlay_subscriptions.clear();
+        self.last_notice = None;
         // T5.2: an outgoing owner keeps no gesture that could still commit (C4).
         if let Some(old) = self.overlay.take()
             && overlay.as_ref() != Some(&old)
@@ -386,7 +401,25 @@ impl SheetCanvas {
                 overlay,
                 |this, overlay, edit: &CanvasEdit, cx| {
                     if this.accepts(edit.doc, &overlay, cx) {
+                        this.last_notice = None;
                         this.repaint_if_visible(edit.dirty, cx);
+                    }
+                },
+            ));
+            self.overlay_subscriptions.push(cx.subscribe(
+                overlay,
+                |this, overlay, notice: &tool::CanvasNotice, cx| {
+                    if this.accepts(notice.doc, &overlay, cx) {
+                        this.last_notice = Some(notice.message.clone());
+                        cx.emit(notice.clone());
+                    }
+                },
+            ));
+            self.overlay_subscriptions.push(cx.subscribe(
+                overlay,
+                |this, overlay, cleared: &tool::CanvasNoticeCleared, cx| {
+                    if this.accepts(cleared.doc, &overlay, cx) {
+                        this.last_notice = None;
                     }
                 },
             ));
@@ -408,11 +441,44 @@ impl SheetCanvas {
         }
         self.overlay = overlay;
         self.sync_overlay_doc(cx);
-        if let Some(provider) = self.place_provider.clone()
-            && let Some(overlay) = self.overlay.clone()
-        {
-            overlay.update(cx, |o, _| o.set_place_provider(Some(provider)));
+        if let Some(overlay) = self.overlay.clone() {
+            let prefs = self.wiring_prefs;
+            let push_prefs = self.has_wiring_prefs;
+            let provider = self.place_provider.clone();
+            let adopted = overlay.update(cx, |o, cx| {
+                if push_prefs {
+                    o.apply_prefs(&prefs, cx);
+                }
+                if provider.is_some() {
+                    o.set_place_provider(provider);
+                }
+                o.wiring_prefs()
+            });
+            if !push_prefs {
+                self.wiring_prefs = adopted;
+            }
         }
+    }
+
+    /// Current user wiring preferences stored on the canvas (`WD12`, `ui-plan.md` §14).
+    pub fn wiring_prefs(&self) -> WiringPrefs {
+        self.wiring_prefs
+    }
+
+    /// Updates user wiring preferences (`WD12`, `ui-plan.md` §14), forwarding to any attached or
+    /// future overlay without notifying `SheetView` (`INV11`). Mid-drag live gestures retain their
+    /// captured preferences until completion (`WINV5`).
+    pub fn set_wiring_prefs(&mut self, prefs: WiringPrefs, cx: &mut Context<Self>) {
+        self.wiring_prefs = prefs;
+        self.has_wiring_prefs = true;
+        if let Some(overlay) = self.overlay.clone() {
+            overlay.update(cx, |o, cx| o.apply_prefs(&prefs, cx));
+        }
+    }
+
+    /// Latest status notice forwarded from the active overlay under C2 (`WD11`, `UD11`).
+    pub fn last_notice(&self) -> Option<&str> {
+        self.last_notice.as_deref()
     }
 
     /// T5.3: installs or clears the shell-supplied placement provider (`parts-plan.md` section 14).
@@ -752,6 +818,13 @@ impl Render for SheetCanvas {
         tool::sheet_key_context(div(), cx)
             .size_full()
             .track_focus(&self.focus)
+            .on_modifiers_changed(
+                cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
+                    if let Some(overlay) = this.gesture_owner(cx) {
+                        overlay.update(cx, |o, cx| o.on_modifiers_changed(event, window, cx));
+                    }
+                }),
+            )
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "space" {
                     if this.is_editing_label(cx) {

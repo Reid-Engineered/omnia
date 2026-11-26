@@ -13,6 +13,7 @@
 //! - All overlay colours come exclusively from `omnia-theme` tokens (`stage/select`,
 //!   `stage/select-halo`, `stage/hover`, `stage/net-highlight`, INV6).
 
+mod follow;
 mod ghosts;
 mod net;
 mod snap_marker;
@@ -39,12 +40,12 @@ use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, ContentMask, Context, DispatchPhase, Edges, Element,
     ElementId, Entity, EventEmitter, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior,
     HitboxId, Hsla, InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position,
-    Render, SharedString, Style, StyleRefinement, Styled, Subscription, WeakEntity, Window, div,
-    fill, point, px, relative,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Position, Render, SharedString, Style, StyleRefinement, Styled,
+    Subscription, WeakEntity, Window, div, fill, point, px, relative,
 };
 use omnia_doc::{
-    Change, Command, Doc, ItemId, NetId, Pt, Rect, Snap, Wire, WireId,
+    Change, Command, CommandError, Doc, ItemId, NetId, Orient, Pt, Rect, Snap, Wire, WireId,
     prefs::{SelectMode, WiringPrefs},
     route::Axis,
 };
@@ -346,6 +347,8 @@ pub struct OverlayView {
     window_handle: Option<AnyWindowHandle>,
     /// T7.2: active inline net-label text editor and its commit metadata.
     label_editor: Option<ActiveLabelEditor>,
+    /// W2.3: latest refusal notice for the status bar (`WD11`, `UD11`).
+    last_notice: Option<SharedString>,
 }
 
 impl EventEmitter<OverlayEvent> for OverlayView {}
@@ -391,6 +394,28 @@ impl OverlayView {
             activation: None,
             window_handle: None,
             label_editor: None,
+            last_notice: None,
+        }
+    }
+
+    /// Latest status notice raised by a refused move or command (`WD11`, `UD11`).
+    pub fn last_notice(&self) -> Option<&str> {
+        self.last_notice.as_deref()
+    }
+
+    fn set_notice(&mut self, message: SharedString, cx: &mut Context<Self>) {
+        self.last_notice = Some(message.clone());
+        cx.emit(tool::CanvasNotice {
+            doc: tool::doc_key(&self.doc),
+            message,
+        });
+    }
+
+    pub(crate) fn clear_notice(&mut self, cx: &mut Context<Self>) {
+        if self.last_notice.take().is_some() {
+            cx.emit(tool::CanvasNoticeCleared {
+                doc: tool::doc_key(&self.doc),
+            });
         }
     }
 
@@ -417,8 +442,10 @@ impl OverlayView {
     /// Plain clicks that never lift leave `hidden == None` (0 `SheetView` paints, INV11).
     fn sync_hidden_items(&mut self, cx: &mut Context<Self>) {
         let lifted_items: Option<&[ItemId]> = match self.tools.state() {
-            tool::ToolState::Dragging(drag) if drag.is_lifted() && !drag.items.is_empty() => {
-                Some(drag.items.as_slice())
+            tool::ToolState::Dragging(drag)
+                if drag.is_lifted() && !drag.hidden_items().is_empty() =>
+            {
+                Some(drag.hidden_items())
             }
             tool::ToolState::DraggingSegment(seg)
                 if seg.is_lifted() && !seg.hidden_items().is_empty() =>
@@ -513,6 +540,11 @@ impl OverlayView {
 
     pub fn select_mode(&self) -> SelectMode {
         self.state.select_mode()
+    }
+
+    /// Current user wiring preferences held by this overlay (`WD12`).
+    pub fn wiring_prefs(&self) -> WiringPrefs {
+        *self.tools.prefs()
     }
 
     /// The underlying cached sheet entity (for INV11 tests and observation).
@@ -695,6 +727,47 @@ impl OverlayView {
         }
     }
 
+    /// Sets a lifted move-drag follow preview directly for golden rendering or programmatic
+    /// inspection (`WD11`, `W2.3`; never notifies `SheetView`, `INV11`). Ends any active gesture
+    /// first through [`Self::end_gesture`] (`C4`). Returns `false` if no live items match.
+    pub fn set_move_preview(
+        &mut self,
+        items: impl IntoIterator<Item = ItemId>,
+        delta: Pt,
+        by: Orient,
+        alt: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.tools.holds_capture()
+            || self.state.is_rubber_banding()
+            || matches!(
+                self.tools.state(),
+                tool::ToolState::Dragging(_) | tool::ToolState::DraggingSegment(_)
+            )
+        {
+            self.end_gesture(GestureEndReason::Cancel, None, Some(cx));
+        }
+        let base = tool::DocStamp {
+            key: tool::doc_key(&self.doc),
+            revision: self.doc.read(cx).revision(),
+        };
+        let Some(gesture) = tool::DragGesture::for_preview(
+            self.doc.read(cx),
+            items.into_iter().collect(),
+            delta,
+            by,
+            base,
+            *self.tools.prefs(),
+            alt,
+        ) else {
+            return false;
+        };
+        self.tools.set_move_preview(gesture);
+        self.sync_hidden_items(cx);
+        cx.notify();
+        true
+    }
+
     /// Sets a lifted segment-drag preview directly for golden rendering or programmatic
     /// inspection (WD7, WD11, W3.3). Does not capture the pointer; ends any active gesture first
     /// through [`Self::end_gesture`] (C4). Returns `false` if `wire` does not exist.
@@ -706,7 +779,10 @@ impl OverlayView {
     ) -> bool {
         if self.tools.holds_capture()
             || self.state.is_rubber_banding()
-            || matches!(self.tools.state(), tool::ToolState::DraggingSegment(_))
+            || matches!(
+                self.tools.state(),
+                tool::ToolState::Dragging(_) | tool::ToolState::DraggingSegment(_)
+            )
         {
             self.end_gesture(GestureEndReason::Cancel, None, Some(cx));
         }
@@ -737,7 +813,10 @@ impl OverlayView {
     ) {
         if self.tools.holds_capture()
             || self.state.is_rubber_banding()
-            || matches!(self.tools.state(), tool::ToolState::DraggingSegment(_))
+            || matches!(
+                self.tools.state(),
+                tool::ToolState::Dragging(_) | tool::ToolState::DraggingSegment(_)
+            )
         {
             self.end_gesture(GestureEndReason::Cancel, None, Some(cx));
         }
@@ -753,7 +832,10 @@ impl OverlayView {
     pub fn set_label_preview(&mut self, target: Option<tool::LabelTarget>, cx: &mut Context<Self>) {
         if self.tools.holds_capture()
             || self.state.is_rubber_banding()
-            || matches!(self.tools.state(), tool::ToolState::DraggingSegment(_))
+            || matches!(
+                self.tools.state(),
+                tool::ToolState::Dragging(_) | tool::ToolState::DraggingSegment(_)
+            )
             || self.is_editing_label()
         {
             self.end_gesture(GestureEndReason::Cancel, None, Some(cx));
@@ -990,6 +1072,7 @@ impl OverlayView {
         let had_selection = !self.state.selection().is_empty();
         self.state = SelectionState::new(self.state.select_mode());
         self.net_highlight.clear();
+        self.clear_notice(cx);
         self.sheet.update(cx, |sheet, cx| {
             sheet.document = Some(document);
             cx.notify();
@@ -1004,6 +1087,7 @@ impl OverlayView {
     /// notifies `SheetView` only when `change.dirty` intersects the visible viewport, prunes
     /// any removed items from hover/selection, and re-resolves net highlights (T4.4).
     pub fn on_doc_change(&mut self, change: &Change, cx: &mut Context<Self>) {
+        self.clear_notice(cx);
         let visible = self.camera.visible();
         if change.dirty.is_some_and(|dirty| dirty.intersects(visible)) {
             self.sheet.update(cx, |_, cx| cx.notify());
@@ -1129,6 +1213,11 @@ impl OverlayView {
                 }
             }
             GestureEndReason::Cancel => {
+                if let Some(cx) = cx.as_deref_mut() {
+                    self.clear_notice(cx);
+                } else {
+                    self.last_notice = None;
+                }
                 if self.close_label_editor(cx.as_deref_mut()) {
                     if let Some(cx) = cx.as_deref_mut() {
                         self.refresh_label_target(cx);
@@ -1326,6 +1415,7 @@ impl OverlayView {
             self.end_gesture(GestureEndReason::FreshPress, Some(window), Some(cx));
         }
         // T5.2: the tool sees the press first; a press it leaves goes to selection.
+        self.clear_notice(cx);
         let screen_pos = to_f64(event.position);
         self.pointer_screen = Some(screen_pos);
         let world = self.camera.screen_to_world(screen_pos);
@@ -1355,13 +1445,13 @@ impl OverlayView {
             self.open_label_editor(target, base, cx);
             return false;
         }
-        let outcome = self.tools.pointer_down_with_radii(
+        let outcome = self.tools.pointer_down_with_radii_and_modifiers(
             self.doc.read(cx),
             tool::doc_key(&self.doc),
             world,
             radii,
             self.state.selection(),
-            event.modifiers.shift,
+            event.modifiers,
         );
         if outcome.handled {
             let pressed = match self.tools.state() {
@@ -1457,8 +1547,13 @@ impl OverlayView {
             let outcome = run_omnia(scope.as_deref(), || {
                 let doc = self.doc.read(cx);
                 let radii = self.pointer_radii();
-                self.tools
-                    .pointer_move_with_radii(doc, world, radii, left_held)
+                self.tools.pointer_move_with_radii_and_alt(
+                    doc,
+                    world,
+                    radii,
+                    left_held,
+                    event.modifiers.alt,
+                )
             });
             run_gpui(scope.as_deref(), || {
                 tool::finish(self, outcome, cx);
@@ -1524,6 +1619,28 @@ impl OverlayView {
             Some(window),
             Some(cx),
         );
+    }
+
+    pub(crate) fn on_modifiers_changed(
+        &mut self,
+        event: &ModifiersChangedEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.tools.is_dragging() {
+            return;
+        }
+        let owns_capture = self.capture.get().is_some_and(|rec| {
+            rec.window == window.window_handle() && window.captured_hitbox() == Some(rec.hitbox)
+        });
+        if !(owns_capture || self.focus.is_focused(window)) {
+            return;
+        }
+        let outcome = self
+            .tools
+            .set_drag_modifier(Some(self.doc.read(cx)), event.modifiers.alt);
+        tool::finish(self, outcome, cx);
+        cx.stop_propagation();
     }
 }
 
@@ -1654,6 +1771,23 @@ impl ToolHost for OverlayView {
                     area: rect,
                 });
             }
+            ToolRequest::Notice { base, message } => {
+                if tool::doc_key(&self.doc) == base.key {
+                    self.set_notice(message, cx);
+                }
+            }
+        }
+    }
+
+    fn command_refused(
+        &mut self,
+        base: tool::DocStamp,
+        verb: tool::move_::RefusalVerb,
+        error: CommandError,
+        cx: &mut Context<Self>,
+    ) {
+        if tool::doc_key(&self.doc) == base.key {
+            self.set_notice(tool::move_::format_command_refusal(verb, error), cx);
         }
     }
 }
@@ -1738,6 +1872,11 @@ impl Render for OverlayView {
         root.relative()
             .size_full()
             .track_focus(&self.focus)
+            .on_modifiers_changed(
+                cx.listener(|this, event: &ModifiersChangedEvent, window, cx| {
+                    this.on_modifiers_changed(event, window, cx);
+                }),
+            )
             .child(
                 self.sheet
                     .clone()
@@ -1892,9 +2031,26 @@ impl Element for OverlayLayer {
                     tool::ToolState::Dragging(drag)
                         if drag.is_lifted() && !drag.items.is_empty() =>
                     {
-                        ghosts::GhostPreview::Drag {
-                            items: &drag.items,
-                            transform: drag.isometry(),
+                        if drag.affected_wires().is_empty()
+                            && drag.affected_labels().is_empty()
+                            && !drag.is_refused()
+                        {
+                            ghosts::GhostPreview::Drag {
+                                items: &drag.items,
+                                transform: drag.isometry(),
+                            }
+                        } else {
+                            ghosts::GhostPreview::Follow {
+                                items: &drag.items,
+                                transform: drag.isometry(),
+                                affected_wires: drag.affected_wires(),
+                                affected_labels: drag.affected_labels(),
+                                plan_add: drag.plan_add(),
+                                plan_remove_sorted: drag.plan_remove_sorted(),
+                                plan_labels_sorted: drag.plan_labels_sorted(),
+                                preview_junctions: drag.preview_junctions(),
+                                refusal: drag.refusal(),
+                            }
                         }
                     }
                     tool::ToolState::DraggingSegment(seg) if seg.is_lifted() => {
@@ -2036,7 +2192,7 @@ impl Element for OverlayLayer {
 
 /// Device-pixel rectangle `(left, top, width, height)` clipped safely near the viewport.
 #[derive(Clone, Copy)]
-struct DevRect {
+pub(super) struct DevRect {
     left: f64,
     top: f64,
     width: u32,
@@ -2376,7 +2532,9 @@ fn paint_overlay(
     } = *ctx;
     let is_dragging_ghosts = matches!(
         ghost_preview,
-        ghosts::GhostPreview::Drag { .. } | ghosts::GhostPreview::Segment { .. }
+        ghosts::GhostPreview::Drag { .. }
+            | ghosts::GhostPreview::Follow { .. }
+            | ghosts::GhostPreview::Segment { .. }
     );
     let hovered = if is_dragging_ghosts {
         None
