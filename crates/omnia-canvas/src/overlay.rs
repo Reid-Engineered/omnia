@@ -1034,6 +1034,9 @@ impl OverlayView {
             ) {
                 // Cancel any active animation so the zoom rectangle stays anchored to the sheet.
                 self.cancel_animation();
+                cx.emit(tool::CanvasZoomArea::Cancel {
+                    doc: tool::doc_key(&self.doc),
+                });
             }
             let capture = tool::finish(self, outcome, cx).capture;
             if capture {
@@ -1259,7 +1262,7 @@ impl ToolHost for OverlayView {
             }
             ToolRequest::ZoomArea(rect) => {
                 self.fit_area(rect, cx);
-                cx.emit(tool::CanvasZoomArea {
+                cx.emit(tool::CanvasZoomArea::Fit {
                     doc: tool::doc_key(&self.doc),
                     area: rect,
                 });

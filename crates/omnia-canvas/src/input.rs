@@ -388,9 +388,16 @@ impl SheetCanvas {
             ));
             self.overlay_subscriptions.push(cx.subscribe(
                 overlay,
-                |this, overlay, zoom: &CanvasZoomArea, cx| {
-                    if this.accepts(zoom.doc, &overlay, cx) {
-                        this.fit_area(zoom.area, cx);
+                |this, overlay, zoom: &CanvasZoomArea, cx| match *zoom {
+                    CanvasZoomArea::Cancel { doc } => {
+                        if this.accepts(doc, &overlay, cx) {
+                            this.cancel_animation();
+                        }
+                    }
+                    CanvasZoomArea::Fit { doc, area } => {
+                        if this.accepts(doc, &overlay, cx) {
+                            this.fit_area(area, cx);
+                        }
                     }
                 },
             ));

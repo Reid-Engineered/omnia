@@ -722,7 +722,7 @@ impl ToolMachine {
     pub fn with_prefs(prefs: WiringPrefs) -> Self;
     pub fn tool(&self) -> Tool;
     pub fn state(&self) -> &ToolState;
-    pub fn holds_capture(&self) -> bool;                 // T5.6: Dragging or active ZoomArea
+    pub fn holds_capture(&self) -> bool;                 // T5.6: Dragging, pointer-driven DraggingSegment, or active ZoomArea
     pub fn set_tool(&mut self, tool: Tool) -> ToolOutcome;  // cancels any gesture first
     pub fn document_replaced(&mut self) -> ToolOutcome;     // drops every gesture, keeps the tool
     pub fn pointer_lost(&mut self) -> ToolOutcome;          // window deactivated

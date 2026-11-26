@@ -854,12 +854,14 @@ pub struct CanvasEdit {
     pub dirty: Option<Rect>,
 }
 
-/// A completed `Tool::ZoomArea` rectangle from the gesture owner (K13, T5.6).
+/// View-animation sync emitted by the gesture owner during `Tool::ZoomArea` (K13, T5.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CanvasZoomArea {
-    /// The document active when the drag ran (`doc_key`), checked on delivery.
-    pub doc: u64,
-    pub area: Rect,
+pub(crate) enum CanvasZoomArea {
+    /// A `Tool::ZoomArea` drag started: cancel any in-flight camera animation so both views
+    /// stay anchored to the sheet.
+    Cancel { doc: u64 },
+    /// A `Tool::ZoomArea` drag completed with a 2D rectangle: animate the camera to fit it.
+    Fit { doc: u64, area: Rect },
 }
 
 impl gpui::EventEmitter<CanvasHistoryEvent> for OverlayView {}
@@ -5537,22 +5539,62 @@ mod tests {
 
     #[gpui::test]
     fn t5_6_zoom_area_mid_animation_and_doc_switch_guards(cx: &mut TestAppContext) {
-        // 1. Starting a ZoomArea drag cancels an in-flight view animation so the box stays anchored.
+        // 1. Starting a ZoomArea drag cancels in-flight view animations on BOTH OverlayView and
+        // SheetCanvas so cancelling or clicking never leaves the two cameras out of sync.
         let rig = open_canvas_host(cx);
         let (canvas, overlay, doc_a) = (rig.canvas, rig.overlay, rig.doc);
-        rig.cx
-            .update(|window, cx| overlay.update(cx, |o, cx| o.fit_sheet(window, cx)));
+        rig.cx.update(|window, cx| {
+            overlay.update(cx, |o, cx| o.fit_sheet(window, cx));
+            canvas.update(cx, |c, cx| c.fit_sheet(window, cx));
+        });
         rig.cx.run_until_parked();
         assert!(pump_anim_frame(rig.cx, std::time::Duration::from_millis(40)) > 0);
         assert!(rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert!(rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
 
         rig.cx
             .update(|_, cx| canvas.update(cx, |c, cx| c.set_tool(Tool::ZoomArea, cx)));
         down(&overlay, rig.cx, pt(-6, -4));
         assert!(
             !rig.cx.update(|_, cx| overlay.read(cx).is_animating()),
-            "starting ZoomArea drag cancels active view animation"
+            "starting ZoomArea drag cancels active overlay animation"
         );
+        assert!(
+            !rig.cx.update(|_, cx| canvas.read(cx).is_animating()),
+            "starting ZoomArea drag cancels active SheetCanvas animation"
+        );
+
+        // Cancelling with Esc leaves both animations stopped and cameras in sync.
+        rig.cx.simulate_keystrokes("escape");
+        up(&overlay, rig.cx, pt(-6, -4));
+        let _ = pump_anim_frame(rig.cx, std::time::Duration::from_millis(200));
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert!(!rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+        rig.cx.update(|_, cx| {
+            let o_cam = overlay.read(cx).camera();
+            let c_cam = canvas.read(cx).camera();
+            assert_eq!(o_cam.zoom(), c_cam.zoom());
+            assert_eq!(
+                o_cam.world_to_screen(Pt::ZERO),
+                c_cam.world_to_screen(Pt::ZERO)
+            );
+            assert_eq!(o_cam.visible(), c_cam.visible());
+        });
+
+        // A valid drag after cancelling a SheetCanvas animation starts a new synchronized fit.
+        rig.cx.update(|window, cx| {
+            canvas.update(cx, |c, cx| {
+                c.set_tool(Tool::ZoomArea, cx);
+                c.fit_sheet(window, cx);
+            });
+            overlay.update(cx, |o, cx| o.fit_sheet(window, cx));
+        });
+        rig.cx.run_until_parked();
+        assert!(pump_anim_frame(rig.cx, std::time::Duration::from_millis(40)) > 0);
+        assert!(rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
+        down(&overlay, rig.cx, pt(-6, -4));
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_animating()));
+        assert!(!rig.cx.update(|_, cx| canvas.read(cx).is_animating()));
         drag_to(&overlay, rig.cx, pt(2, 3));
         up(&overlay, rig.cx, pt(2, 3));
         assert!(rig.cx.update(|_, cx| overlay.read(cx).is_animating()));

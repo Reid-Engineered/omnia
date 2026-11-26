@@ -2479,3 +2479,12 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
                        `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
                        `cargo test --workspace`, and `cargo deny check`.
+2026-11-25  T5.6 review fixes  done  Addressed independent review findings on PR #144
+                       (`gemini-4-neon`): converted `CanvasZoomArea` into `{ Cancel { doc },
+                       Fit { doc, area } }` so starting a `ZoomArea` drag cancels any in-flight
+                       `SheetCanvas` camera animation alongside `OverlayView` (extended
+                       `t5_6_zoom_area_mid_animation_and_doc_switch_guards` to assert both views
+                       stop animating and stay synced on `Esc` cancel), and updated
+                       `holds_capture`'s comment in `canvas-plan.md` §9 to list pointer-driven
+                       `DraggingSegment`. Merged `origin/main` and re-ran all five standard
+                       checks locally on Windows.
