@@ -62,7 +62,8 @@ Tasks in different lanes own different files and can run at the same time.
 | --- | --- | --- |
 | `doc` | `crates/omnia-doc/` | No |
 | `assets` | `crates/omnia-symbols/`, `crates/omnia-theme/`, `xtask/` | No |
-| `canvas` | `crates/omnia-canvas/`, `crates/omnia-app/` | Yes |
+| `canvas` | `crates/omnia-canvas/` | Yes |
+| `shell` | `crates/omnia-app/` ([ui-roadmap.md](ui-roadmap.md)) | Yes |
 | `bench` | `crates/omnia-bench/`, `.github/`, `tests/golden/`, `docs/` | Yes |
 | `agent` | `crates/omnia-agent/`, `crates/omnia-cli/`, `docs/agent/`, `mcp-plan.md`, `mcp-roadmap.md` ([mcp-roadmap.md](mcp-roadmap.md)) | No |
 | `circuit` | `crates/omnia-circuit/`, `context-plan.md`, `context-roadmap.md` ([context-roadmap.md](context-roadmap.md)) | No |
@@ -99,6 +100,7 @@ T2.5 -> T3.2 -+
 T2.2 -> T4.1, T4.2 (doc)    T3.4 + T4.2 -> T4.3 -> T4.4, T4.5 -> T4.6
 T2.2 + T2.4 + T4.1 + T4.2 -> T2.8 (doc) -> T2.5
 T4.1 -> T5.1 (doc)          T4.6 + T5.1 -> T5.2 -> T5.3 -> T5.4
+T5.3 -> T5.6 (SheetCanvas::select_all, Tool::ZoomArea; UI U5.1 follow-up)
 T5.1 -> T6.1 (doc)          T5.4 + T6.1 -> T6.2 -> T6.4      T6.3 -> wiring-roadmap.md W2.1..W2.5
 T6.4 -> T7.1, T7.2, T7.3, T7.4 -> T7.5 [H4]
 ```
@@ -419,6 +421,7 @@ of the `canvas` lane.
   If S8 showed `render_to_image` fails without a GPU, mark the test to run only on the
   reference machine and log that.
 - Done when: the test passes on unchanged code and fails when a wire is moved one pixel.
+- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 planned the shared golden harness under [ui-roadmap.md](ui-roadmap.md) U1.9; T3.2 landed first and created `xtask/src/golden.rs` and `tests/golden/`, which U1.9 extends for shell goldens.
 
 ### T3.3 Wien oscillator fixture · done → H2
 - Lane: bench · Depends: T3.1, T3.2 · Read: `build-omnia.mjs` lines 159 to 234
@@ -483,6 +486,7 @@ of the `canvas` lane.
 - Done when: the INV11 test passes: a paint counter on `SheetView` does not move during 100
   simulated hover moves, a selection change and a rubber-band drag; goldens for selected
   and hovered states exist in both themes.
+- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 requests `SheetCanvas::select_all` (Ctrl+A is bound by the shell, UD3). `OverlayView::select_all` landed in T4.3; exposing `SheetCanvas::select_all` is owned by follow-up task T5.6 before [ui-roadmap.md](ui-roadmap.md) U5.1.
 
 ### T4.4 Net highlight · done
 - Lane: canvas · Depends: T4.1, T4.3 · Read: D7
@@ -500,6 +504,7 @@ of the `canvas` lane.
   position.
 - Done when: tests show the animation ends exactly on the target, input mid-way stops it
   with no jump, and `bench idle` still reports 0 frames one second after it ends.
+- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 requests `SheetCanvas::zoom_step` and `Tool::ZoomArea` (drag a rectangle, zoom to it with the same animation, used by View and the toolbar). `zoom_step` landed in T4.5; `Tool::ZoomArea` (`T5.2` left it out of `Tool`) is owned by follow-up task T5.6.
 
 ### T4.6 Gate: milestone 4 · done
 - Lane: bench · Depends: T4.4, T4.5
@@ -525,6 +530,7 @@ of the `canvas` lane.
   `10k` applies in under 1 ms.
 - Note (W0.3): T5.1's code is merged without `follow: FollowPolicy`; [wiring-roadmap.md](wiring-roadmap.md)
   W2.2 adds `FollowPolicy` to `Move` and `Reorient` (WD3; until W2.2, every run detaches).
+- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 follow-up for doc-lane task [ui-roadmap.md](ui-roadmap.md) U2.1 (`history_cursor`, `can_undo`, `can_redo`, `part_count`, `net_count`) landed in PR #70 (U2.1 `done`).
 
 ### T5.5 Combined move and reorient command · done
 - Lane: doc · Depends: T5.1 · Read: D2, INV4, INV10, wiring-plan.md WD3
@@ -549,6 +555,7 @@ of the `canvas` lane.
   key contexts work in `crates/gpui/docs/key_dispatch.md` at the pinned revision.
 - Done when: the INV5 test passes: the revision is unchanged through a simulated drag until
   mouse-up, one undo reverts the whole drag, and Esc mid-drag leaves the revision unchanged.
+- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 alignment (delivered in T5.2): declares R, X, Y and W actions in key context `Sheet` for reuse by the shell's `ACTIONS` table (UD3); provides `SheetCanvas::cancel` (called by the shell's Esc/`NavCancel`, UD3, UQ14), `undo`, `redo` and `CanvasHistory` sealed in opaque `CanvasHistoryEvent` via `SheetCanvas::subscribe_history` under `canvas-plan.md` §9 contract C1–C4; Ctrl+Z, Ctrl+Y and Del are bound by the shell, and `UINV4` checks the combined shell keymap.
 
 ### T5.3 Place, move, rotate, mirror, delete · done
 - Lane: canvas · Depends: T5.2, T5.5 · Read: D7, K2; parts-plan.md §14 (placement provider)
@@ -562,6 +569,7 @@ of the `canvas` lane.
   `SymbolLibrary::place_command` when none is installed.
 - Done when: simulated-input tests cover place, move, rotate during drag, mirror, delete
   and undo of each, and a stub provider's command is what placement commits; `SheetView` paints exactly twice per drag (start and end).
+- Note (2026-11-25, U0.2): [ui-plan.md](ui-plan.md) §14 request for `SheetCanvas::delete_selection` was delivered in T5.3.
 
 ### T5.4 Gate: milestone 5 · needs-human
 - Lane: bench · Depends: T5.3
@@ -569,6 +577,17 @@ of the `canvas` lane.
   `--sheet 10k`: dirty-to-present p99 ≤ one refresh interval (B6) and frame p99 within B3
   and B4. Re-run the T2.7 table.
 - Done when: all pass on the reference machine; otherwise record and set `needs-human`.
+
+### T5.6 Shell canvas hooks: select_all and ZoomArea · todo
+- Lane: canvas · Depends: T5.3 · Read: K13, D7, ui-plan.md UD3, section 10
+- Owns: `SheetCanvas::select_all` in `crates/omnia-canvas/src/input.rs`; `Tool::ZoomArea` in
+  `crates/omnia-canvas/src/tool.rs`, `overlay.rs` and `input.rs`
+- Do: expose `SheetCanvas::select_all` forwarding to `OverlayView::select_all` (`ui-plan.md`
+  §14, `T4.3` follow-up); add `Tool::ZoomArea` (drag a rectangle and zoom to it with the K13
+  ease-out animation, `ui-plan.md` §14, `T4.5` follow-up).
+- Done when: simulated-input tests verify `SheetCanvas::select_all` selects every live item on
+  the active document without repainting `SheetView` (INV11) and `Tool::ZoomArea` drags a
+  rectangle to animate the camera to fit it, with Esc cancelling cleanly (INV5).
 
 ## Milestone 6: wiring
 
@@ -607,10 +626,11 @@ of the `canvas` lane.
 ## Milestone 7: finish
 
 ### T7.1 Copy and paste · todo
-- Lane: doc, canvas · Depends: T6.4
-- Owns: `crates/omnia-doc/src/clip.rs`, `crates/omnia-canvas/src/tool/paste.rs`
-- Do: `Doc::copy`, the `Paste` command, Ctrl+C, Ctrl+X, Ctrl+V. A paste is placed with
-  ghosts like a move. Designators of pasted parts are made unique.
+- Lane: doc, canvas · Depends: T6.4 · Read: D2, INV4, ui-plan.md UD3
+- Owns: `crates/omnia-doc/src/clip.rs`, `crates/omnia-canvas/src/tool/paste.rs`, and `SheetCanvas::{cut, copy, paste}` in `input.rs`/`overlay.rs`
+- Do: `Doc::copy`, the `Paste` command, and `SheetCanvas::cut`, `copy` and `paste` (Ctrl+C,
+  Ctrl+X and Ctrl+V are bound by the shell, [ui-plan.md](ui-plan.md) UD3). A paste is placed
+  with ghosts like a move. Designators of pasted parts are made unique.
 - Done when: paste then undo satisfies INV4; a pasted group has the same internal
   connectivity as its source and no connection to it.
 
@@ -625,11 +645,13 @@ of the `canvas` lane.
   when one label is deleted (INV10 holds).
 
 ### T7.3 Instrument window stub · todo
-- Lane: canvas · Depends: T6.4 · Read: plan section 6 (last paragraph), G6
+- Lane: canvas · Depends: T6.4 · Read: plan section 6 (last paragraph), G6, ui-plan.md UD5
 - Owns: `crates/omnia-canvas/src/instrument_host.rs`
-- Do: a draggable floating view above the sheet, styled from `bg/card`, `rule` and `shadow`,
-  whose content is an animated trace notifying itself at 60 Hz. Add
-  `bench run --script pan --instrument`.
+- Do: the floating frame, drag, stacking and focus come from [ui-roadmap.md](ui-roadmap.md)
+  U4.1 (which `ui-roadmap.md` U5.5 mounts inside the frame); `instrument_host.rs` holds only
+  the animated stub content (an animated trace notifying itself at 60 Hz). Add
+  `bench run --script pan --instrument`, hosting that stub content directly without U4.1's
+  shell frame.
 - Done when: `SheetView`'s paint count stays 0 while only the stub animates;
   `bench run --sheet 10k --script pan --instrument` gives p99 < 16 ms on the reference
   machine (otherwise record; then measure again at 30 Hz).
