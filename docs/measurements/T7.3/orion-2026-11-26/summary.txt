@@ -1,0 +1,79 @@
+Orion: Intel(R) Core(TM) i5-7300U CPU @ 2.60GHz, Linux orion-laptop 7.2.7-arch1-1 #1 SMP PREEMPT_DYNAMIC Mon, 21 Sep 2026 18:51:14 +0000 x86_64 GNU/Linux, wayland, eDP-1, source 99e122cd0408e6efb2f43fdc9c56825d6bc87854, binary SHA-256 2c429c3d5e4ddff211a03920c62a520bd092a0aabb6ce3a67ca6f072e544cc96
+Vulkan device and driver: [('Intel(R) HD Graphics 620 (KBL GT2)', 'Intel open-source Mesa driver')]
+
+s100: scale 1.0, [1920, 1080], native 1920x1080 at 60 Hz, AC power
+CPU governors, power profile and platform profile: [(('performance',), None, ())]
+PASS T7.3 10k-pan-inst60 frame p99 2.243 [2.191, 2.316] ms (< 16.0)
+PASS B4 10k-pan-inst60 2.5R attribution 10/10 passed
+INFO 10k-pan-inst60 1.5R attribution 10/10 passed
+PASS B5 10k-pan-inst60 worst frame 3.811 ms (<= 50.0)
+PASS B10 10k-pan-inst60 max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan-inst60 private memory 152.268 [151.531, 156.402] MB (all < 300.0)
+PASS T7.3 10k-pan-inst30 frame p99 2.218 [2.179, 2.322] ms (< 16.0)
+PASS B4 10k-pan-inst30 2.5R attribution 10/10 passed
+INFO 10k-pan-inst30 1.5R attribution 10/10 passed
+PASS B5 10k-pan-inst30 worst frame 3.420 ms (<= 50.0)
+PASS B10 10k-pan-inst30 max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan-inst30 private memory 152.324 [151.938, 155.723] MB (all < 300.0)
+
+s125: scale 1.25, [1536, 864], native 1920x1080 at 60 Hz, AC power
+CPU governors, power profile and platform profile: [(('performance',), None, ())]
+PASS T7.3 10k-pan-inst60 frame p99 1.717 [1.634, 1.878] ms (< 16.0)
+PASS B4 10k-pan-inst60 2.5R attribution 10/10 passed
+INFO 10k-pan-inst60 1.5R attribution 10/10 passed
+PASS B5 10k-pan-inst60 worst frame 3.721 ms (<= 50.0)
+PASS B10 10k-pan-inst60 max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan-inst60 private memory 151.367 [150.508, 152.602] MB (all < 300.0)
+PASS T7.3 10k-pan-inst30 frame p99 1.645 [1.622, 1.721] ms (< 16.0)
+PASS B4 10k-pan-inst30 2.5R attribution 10/10 passed
+INFO 10k-pan-inst30 1.5R attribution 10/10 passed
+PASS B5 10k-pan-inst30 worst frame 3.940 ms (<= 50.0)
+PASS B10 10k-pan-inst30 max Omnia allocations/frame 0 (= 0)
+PASS B9 10k-pan-inst30 private memory 150.654 [150.422, 152.449] MB (all < 300.0)
+
+Missed-refresh attribution (2.5R)
+s100/10k-pan-inst60-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst60-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst60-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst60-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst60-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst60-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst60-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst60-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst60-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst30-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s100/10k-pan-inst60-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-1: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-2: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-3: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-4: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-5: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-6: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-7: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-8: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-9: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst30-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+s125/10k-pan-inst60-10: PASS; over limit 0 traced, 0 untraced; compositor-side 0, counted 0
+
+T7.3 done-when (60 Hz p99 < 16 ms): PASS
+T7.3 done-when (30 Hz p99 < 16 ms): PASS
+Additional budgets (B4/B5/B9/B10, 60 Hz): PASS
+Additional budgets (B4/B5/B9/B10, 30 Hz): PASS
