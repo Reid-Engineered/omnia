@@ -9,6 +9,7 @@ use crate::{
     Change, Command, CommandError, Connectivity, GeomError, NetId, Orient, Pt, Rect, SpatialIndex,
     TextField,
     arena::Arena,
+    part_def::{DefArena, EmbeddedPartDef, ParamValue, Params, PartDefId},
     points::{End, Points},
     undo::History,
 };
@@ -94,6 +95,10 @@ pub(crate) struct StoredPart {
     pub(crate) part: Part,
     pub(crate) pins: Vec<Pt>,
     pub(crate) local_bounds: Rect,
+    /// The part's definition in [`Doc::part_defs`] (`PD8`; `XD1` calls it `Part::def`).
+    pub(crate) def: PartDefId,
+    /// Override-only parameters (`PD6`).
+    pub(crate) params: Params,
 }
 
 #[derive(Debug, Default)]
@@ -105,7 +110,23 @@ pub struct Doc {
     pub(crate) index: SpatialIndex,
     pub(crate) connectivity: Connectivity,
     pub(crate) history: History,
+    /// Definition table (`PD8`): referenced and retained records, never renumbered.
+    pub(crate) part_defs: DefArena,
     revision: u64,
+}
+
+/// Test-only in-memory snapshot (`P2.1`, `PD8`): every persistent slot, the revision and the
+/// whole definition arena, retained records and reference counts included, without history.
+/// Transaction tests compare these instead of a save/load round trip, which cannot represent
+/// retained records.
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Snapshot {
+    revision: u64,
+    parts: Arena<StoredPart>,
+    wires: Arena<Wire>,
+    labels: Arena<Label>,
+    part_defs: DefArena,
 }
 
 impl Doc {
@@ -127,7 +148,20 @@ impl Doc {
             index: self.index.clone(),
             connectivity: self.connectivity.clone(),
             history: History::default(),
+            part_defs: self.part_defs.clone(),
             revision: self.revision,
+        }
+    }
+
+    /// See [`Snapshot`].
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            revision: self.revision,
+            parts: self.parts.clone(),
+            wires: self.wires.clone(),
+            labels: self.labels.clone(),
+            part_defs: self.part_defs.clone(),
         }
     }
 
@@ -284,6 +318,37 @@ impl Doc {
             .filter_map(|(i, slot)| slot.as_ref().map(|l| (LabelId(i as u32), l)))
     }
 
+    /// The definition record at `id`, whether a live part references it or it is retained
+    /// for undo and redo (`PD8`).
+    pub fn part_def(&self, id: PartDefId) -> Option<&EmbeddedPartDef> {
+        self.part_defs.get(id)
+    }
+
+    /// Referenced definitions in id order (`PD8`): those at least one live part uses.
+    pub fn part_defs(&self) -> impl Iterator<Item = (PartDefId, &EmbeddedPartDef)> {
+        self.part_defs.referenced()
+    }
+
+    /// The definition a live part uses.
+    pub fn part_def_id(&self, part: PartId) -> Option<PartDefId> {
+        self.parts.get(part.0).map(|stored| stored.def)
+    }
+
+    /// A live part's parameter overrides (`PD6`): only values that differ from the defaults.
+    pub fn part_params(&self, part: PartId) -> Option<&Params> {
+        self.parts.get(part.0).map(|stored| &stored.params)
+    }
+
+    /// A live part's value of parameter `name`: its override, else the definition's default.
+    /// `None` when the part is missing or its definition declares no such parameter.
+    pub fn resolved_param(&self, part: PartId, name: &str) -> Option<&ParamValue> {
+        let stored = self.parts.get(part.0)?;
+        if let Some(value) = stored.params.get(name) {
+            return Some(value);
+        }
+        Some(&self.part_defs.get(stored.def)?.param(name)?.default)
+    }
+
     /// Replaces `out` with points inside `area` having at least three ends/pins.
     /// Ordering is unspecified. Dots are always derived from the incidence map.
     pub fn junctions(&self, area: Rect, out: &mut Vec<Pt>) {
@@ -347,10 +412,17 @@ impl Doc {
             .collect::<Result<Vec<_>, _>>()?;
         let area = Self::part_envelope_raw(part.at, part.orient, local_bounds, &pins)
             .map_err(|_| StoreError::OutOfBounds)?;
+        // Every fallible check precedes interning, so a refused insert allocates nothing.
+        let def = self
+            .part_defs
+            .intern_unmodelled(part.symbol, local_pins, local_bounds);
+        self.part_defs.acquire(def);
         let id = PartId(self.parts.insert(StoredPart {
             part,
             pins,
             local_bounds,
+            def,
+            params: Params::new(),
         }));
         self.index.insert(ItemId::Part(id), area).unwrap();
         let pins_slice = &self.parts.get(id.0).unwrap().pins;
@@ -379,9 +451,11 @@ impl Doc {
             &stored.pins,
         )
         .map_err(|_| StoreError::OutOfBounds)?;
+        let def = stored.def;
         self.parts
             .restore(id.0, stored)
             .map_err(|_| StoreError::InvalidId)?;
+        self.part_defs.acquire(def);
         self.index.insert(ItemId::Part(id), area).unwrap();
         let pins_slice = &self.parts.get(id.0).unwrap().pins;
         self.connectivity.add_part(id, pins_slice);
@@ -393,6 +467,7 @@ impl Doc {
 
     pub(crate) fn remove_stored_part_raw(&mut self, id: PartId) -> Option<(StoredPart, Rect)> {
         let stored = self.parts.remove(id.0)?;
+        self.part_defs.release(stored.def);
         let bounds = self
             .index
             .remove(ItemId::Part(id))
@@ -558,6 +633,60 @@ impl Doc {
         Ok(id)
     }
 
+    /// Test-only crate-private insert carrying an explicit definition and parameter override map
+    /// (`P2.1`, `PD8`). Calls [`crate::part_def::validate`] and
+    /// [`crate::part_def::validate_instance`] before mutating the document.
+    #[cfg(test)]
+    pub(crate) fn insert_part_with_def(
+        &mut self,
+        part: Part,
+        def: Arc<EmbeddedPartDef>,
+        params: Params,
+    ) -> Result<PartId, String> {
+        crate::part_def::validate(&def).map_err(|e| e.to_string())?;
+        crate::part_def::validate_instance(
+            &def,
+            part.symbol,
+            &def.local_pins,
+            def.local_bounds,
+            &part.value,
+            &params,
+        )
+        .map_err(|e| e.to_string())?;
+        check_point(part.at).map_err(|e| e.to_string())?;
+        let pins = def
+            .local_pins
+            .iter()
+            .map(|&pin| {
+                check_point(pin)?;
+                part.at
+                    .checked_add(part.orient.apply(pin))
+                    .map_err(|_| StoreError::OutOfBounds)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        let local_bounds = def.local_bounds;
+        let area = Self::part_envelope_raw(part.at, part.orient, local_bounds, &pins)
+            .map_err(|e| e.to_string())?;
+        let def_id = self.part_defs.intern(def);
+        self.part_defs.acquire(def_id);
+        let id = PartId(self.parts.insert(StoredPart {
+            part,
+            pins,
+            local_bounds,
+            def: def_id,
+            params,
+        }));
+        self.index.insert(ItemId::Part(id), area).unwrap();
+        let pins_slice = &self.parts.get(id.0).unwrap().pins;
+        self.connectivity.add_part(id, pins_slice);
+        for (pin, &at) in pins_slice.iter().enumerate() {
+            self.points.insert(at, End::Pin { part: id, pin });
+        }
+        self.bump_revision();
+        Ok(id)
+    }
+
     #[cfg(test)]
     pub(crate) fn restore_part(
         &mut self,
@@ -577,14 +706,24 @@ impl Doc {
                     .map_err(|_| StoreError::OutOfBounds)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        self.restore_stored_part_raw(
+        let defs_len = self.part_defs.len();
+        let def = self
+            .part_defs
+            .intern_unmodelled(part.symbol, local_pins, local_bounds);
+        let restored = self.restore_stored_part_raw(
             id,
             StoredPart {
                 part,
                 pins,
                 local_bounds,
+                def,
+                params: Params::new(),
             },
-        )?;
+        );
+        if restored.is_err() {
+            self.part_defs.truncate(defs_len);
+        }
+        restored?;
         self.bump_revision();
         Ok(id)
     }
@@ -809,8 +948,8 @@ mod tests {
         let mut doc = Doc::new();
         let id = doc.insert_part(p.clone(), &[Pt::ZERO], bounds).unwrap();
         doc.remove_part(id).unwrap();
-        let mut before = Vec::new();
-        doc.save(&mut before).unwrap();
+        // In-memory snapshots include the definition arena (`P2.1`, `PD8`).
+        let before = doc.snapshot();
         for bad in [
             Rect {
                 min: Pt { x: 10, y: 0 },
@@ -840,18 +979,28 @@ mod tests {
                 Doc::from_items([(p.clone(), vec![Pt::ZERO], bad)], [], []).unwrap_err(),
                 StoreError::OutOfBounds
             );
-            let mut after = Vec::new();
-            doc.save(&mut after).unwrap();
-            assert_eq!(before, after);
+            assert_eq!(before, doc.snapshot());
             let mut hits = Vec::new();
             doc.query(sheet(), &mut hits);
             assert!(hits.is_empty());
             crate::connectivity::tests::assert_invariants(&doc.connectivity);
         }
         doc.restore_part(id, p, &[Pt::ZERO], bounds).unwrap();
+        assert_v2_round_trip(&doc);
+    }
+
+    /// v2 save/load is byte-stable. Version 2 stores no definition ids (`PD8`), so the reload
+    /// is compared by re-saving it, which covers every slot, reserved ones included, and the
+    /// revision; in-memory snapshots cover the ids.
+    fn assert_v2_round_trip(doc: &Doc) -> Doc {
         let mut saved = Vec::new();
         doc.save(&mut saved).unwrap();
-        assert_eq!(doc, Doc::load(saved.as_slice()).unwrap());
+        let loaded = Doc::load(saved.as_slice()).unwrap();
+        let mut again = Vec::new();
+        loaded.save(&mut again).unwrap();
+        assert_eq!(saved, again);
+        assert_eq!(doc.revision(), loaded.revision());
+        loaded
     }
 
     #[test]
@@ -870,8 +1019,7 @@ mod tests {
         let pid = doc.insert_part(p.clone(), &[Pt::ZERO], bounds).unwrap();
         let wid = doc.insert_wire(w).unwrap();
         let lid = doc.insert_label(l.clone()).unwrap();
-        let mut before = Vec::new();
-        doc.save(&mut before).unwrap();
+        let before = doc.snapshot();
         for raw in [0, 100] {
             assert_eq!(
                 doc.restore_part(PartId(raw), p.clone(), &[Pt::ZERO], bounds),
@@ -890,9 +1038,7 @@ mod tests {
             }),
             Err(StoreError::InvalidWire)
         );
-        let mut after = Vec::new();
-        doc.save(&mut after).unwrap();
-        assert_eq!(before, after);
+        assert_eq!(before, doc.snapshot());
         doc.remove_part(pid);
         doc.restore_part(pid, p, &[Pt::ZERO], bounds).unwrap();
         doc.remove_wire(wid);
@@ -955,7 +1101,7 @@ mod tests {
                 let area=Rect::from_points(at,Pt{x:x+2,y:y+2}).unwrap(); let mut found=Vec::new(); doc.query(area,&mut found);
                 let mut expected:Vec<_>=doc.parts().filter_map(|(id,_)| {let mut b=doc.part_body(id).unwrap();for &p in doc.pins(id).unwrap(){b=b.union(Rect{min:p,max:p});} b.intersects(area).then_some(ItemId::Part(id))}).chain(doc.wires().filter_map(|(id,w)|Rect::from_points(w.a,w.b).unwrap().intersects(area).then_some(ItemId::Wire(id)))).chain(doc.labels().filter_map(|(id,l)|area.contains(l.at).then_some(ItemId::Label(id)))).collect();
                 found.sort_by_key(|&id|crate::hit::item_key(id)); expected.sort_by_key(|&id|crate::hit::item_key(id)); prop_assert_eq!(found,expected);
-                let mut bytes=Vec::new(); doc.save(&mut bytes).unwrap(); let loaded=Doc::load(bytes.as_slice()).unwrap(); prop_assert_eq!(&loaded,&doc); crate::connectivity::tests::assert_partitions(&loaded.connectivity,&oracle);
+                let loaded=assert_v2_round_trip(&doc); crate::connectivity::tests::assert_partitions(&loaded.connectivity,&oracle);
             }
         }
     }

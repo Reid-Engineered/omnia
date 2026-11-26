@@ -197,7 +197,10 @@ impl ChangeAcc {
 
 pub(crate) fn apply_command(doc: &mut Doc, cmd: Command) -> Result<Change, CommandError> {
     let mut acc = ChangeAcc::default();
-    let undo_op = apply_inner(doc, cmd, &mut acc)?;
+    // PD8/PINV7: a refused command leaves the definition arena at its prior length.
+    let defs_len = doc.part_defs.len();
+    let undo_op =
+        apply_inner(doc, cmd, &mut acc).inspect_err(|_| doc.part_defs.truncate(defs_len))?;
     if acc.dirty.is_some() {
         doc.history.push_undo(undo_op);
         doc.bump_revision();
@@ -825,6 +828,7 @@ fn apply_batch(
     let parts_len = doc.parts.slots.len();
     let wires_len = doc.wires.slots.len();
     let labels_len = doc.labels.slots.len();
+    let defs_len = doc.part_defs.len();
     let mut undo_ops = Vec::with_capacity(cmds.len());
     for cmd in cmds {
         match apply_inner(doc, cmd, acc) {
@@ -839,6 +843,8 @@ fn apply_batch(
                 doc.parts.slots.truncate(parts_len);
                 doc.wires.slots.truncate(wires_len);
                 doc.labels.slots.truncate(labels_len);
+                // PD8: definitions interned by rolled-back steps were never issued either.
+                doc.part_defs.truncate(defs_len);
                 return Err(err);
             }
         }
@@ -1455,10 +1461,15 @@ mod tests {
         expected_junctions.sort_by_key(|p| (p.x, p.y));
         assert_eq!(junctions, expected_junctions);
 
+        // v2 save/load stays byte-compatible for unmodelled sheets. Version 2 stores no
+        // definition ids (`PD8`), so the reload is compared by re-saving it, which covers every
+        // slot, reserved ones included, and the revision; in-memory snapshots cover the ids.
         let mut bytes = Vec::new();
         doc.save(&mut bytes).unwrap();
         let loaded = Doc::load(bytes.as_slice()).unwrap();
-        assert_eq!(&loaded, doc);
+        let mut again = Vec::new();
+        loaded.save(&mut again).unwrap();
+        assert_eq!(again, bytes);
         assert_eq!(loaded.revision(), doc.revision());
     }
 
@@ -1485,8 +1496,10 @@ mod tests {
         Wire { a, b }
     }
 
+    /// In-memory copy without history (`P2.1`): every slot, the revision and the whole
+    /// definition arena, which a v2 save/load round trip cannot carry (`PD8`).
     fn del_snapshot(doc: &Doc) -> Doc {
-        Doc::load(doc.save_to_vec_for_test().as_slice()).unwrap()
+        doc.fork()
     }
 
     fn follow_policy(on: bool) -> FollowPolicy {
@@ -1508,11 +1521,11 @@ mod tests {
 
     fn follow_roundtrip(doc: &mut Doc, command: Command) -> Result<Change, CommandError> {
         let before = del_snapshot(doc);
-        let bytes = doc.save_to_vec_for_test();
+        let state = doc.snapshot();
         let result = doc.apply(command);
         match &result {
             Err(_) => {
-                assert_eq!(doc.save_to_vec_for_test(), bytes); // WINV4 includes revision/reservations.
+                assert_eq!(doc.snapshot(), state); // WINV4 includes revision/reservations.
             }
             Ok(change) if change.dirty.is_some() => {
                 assert_eq!(doc.revision(), before.revision() + 1);
@@ -1524,7 +1537,7 @@ mod tests {
                 doc.redo().unwrap();
                 assert!(doc.content_eq(&after));
             }
-            Ok(_) => assert_eq!(doc.save_to_vec_for_test(), bytes),
+            Ok(_) => assert_eq!(doc.snapshot(), state),
         }
         assert_doc_consistent(doc);
         result
@@ -2084,7 +2097,7 @@ mod tests {
             follow: follow_policy(true),
         };
         let before = del_snapshot(&doc);
-        let before_bytes = doc.save_to_vec_for_test();
+        let before_snap = doc.snapshot();
 
         // Case C: same non-degenerate split+merge Transform inside a failing Batch rolls back
         // completely (WINV4), including arena slot counts, revision, and redo stack.
@@ -2096,7 +2109,7 @@ mod tests {
             }]),
         ]));
         assert_eq!(batch_err, Err(CommandError::InvalidWire));
-        assert_eq!(doc.save_to_vec_for_test(), before_bytes);
+        assert_eq!(doc.snapshot(), before_snap);
         assert!(doc.content_eq(&before));
         assert_doc_consistent(&doc);
 
@@ -3201,7 +3214,7 @@ mod tests {
         )]))
         .unwrap();
         let wire = ItemId::Wire(doc.wires().next().unwrap().0);
-        let before = doc.save_to_vec_for_test();
+        let before = doc.snapshot();
         for items in [vec![a, a], vec![a, ItemId::Wire(WireId(999))]] {
             assert!(
                 doc.apply(Command::Delete {
@@ -3210,7 +3223,7 @@ mod tests {
                 })
                 .is_err()
             );
-            assert_eq!(doc.save_to_vec_for_test(), before);
+            assert_eq!(doc.snapshot(), before);
         }
         assert_delete_roundtrip(&mut doc, vec![b, wire, a], true);
         assert_eq!(doc.parts().count(), 0);
@@ -3273,7 +3286,7 @@ mod tests {
         }))
         .unwrap();
         doc.undo().unwrap(); // Keep a live label and an available redo operation.
-        let before = doc.save_to_vec_for_test();
+        let before = doc.snapshot();
         let revision = doc.revision();
         let item = ItemId::Label(crate::LabelId(0));
         for cmd in [
@@ -3327,7 +3340,7 @@ mod tests {
             assert_eq!(change.dirty, None);
             assert!(change.added.is_empty() && change.removed.is_empty());
             assert!(!change.nets_changed);
-            assert_eq!(doc.save_to_vec_for_test(), before);
+            assert_eq!(doc.snapshot(), before);
             assert_doc_consistent(&doc);
         }
         assert!(doc.redo().is_some(), "no-op must not consume redo history");
@@ -3398,7 +3411,7 @@ mod tests {
 
         // Undo one step then redo to verify non-empty redo stack survives invalid commands.
         doc.undo().unwrap();
-        let before_invalid = doc.save_to_vec_for_test();
+        let before_invalid = doc.snapshot();
         let rev_before = doc.revision();
 
         // Failure case 1: 100th item is out-of-bounds after delta.
@@ -3424,7 +3437,8 @@ mod tests {
         }))
         .unwrap();
         doc.undo().unwrap();
-        let snap_bytes = doc.save_to_vec_for_test();
+        let snap_state = doc.snapshot();
+        let snap_doc = doc.fork();
         let rev_snap = doc.revision();
 
         let err = doc.apply(Command::Move {
@@ -3434,7 +3448,7 @@ mod tests {
         });
         assert_eq!(err, Err(CommandError::OutOfBounds));
         assert_eq!(doc.revision(), rev_snap);
-        assert_eq!(doc.save_to_vec_for_test(), snap_bytes);
+        assert_eq!(doc.snapshot(), snap_state);
         assert_doc_consistent(&doc);
 
         // Failure case 2: duplicate ID at the end of a 100-item move.
@@ -3449,7 +3463,7 @@ mod tests {
             Err(CommandError::DuplicateItem(items[0]))
         );
         assert_eq!(doc.revision(), rev_snap);
-        assert_eq!(doc.save_to_vec_for_test(), snap_bytes);
+        assert_eq!(doc.snapshot(), snap_state);
 
         // Failure case 3: missing ID at the end of a 100-item move.
         let mut missing_items = items[..99].to_vec();
@@ -3464,7 +3478,7 @@ mod tests {
             Err(CommandError::MissingItem(missing))
         );
         assert_eq!(doc.revision(), rev_snap);
-        assert_eq!(doc.save_to_vec_for_test(), snap_bytes);
+        assert_eq!(doc.snapshot(), snap_state);
 
         // Redo stack was NOT cleared by the failed commands.
         assert!(doc.redo().is_some());
@@ -3494,17 +3508,17 @@ mod tests {
         assert!(ch.dirty.unwrap().contains(Pt { x: -10, y: -20 }));
         assert_doc_consistent(&doc);
 
-        let moved_snap = doc.save_to_vec_for_test();
+        let moved_snap = doc.fork();
         let undo_ch = doc.undo().unwrap();
         assert_eq!(undo_ch.dirty, ch.dirty);
         assert_eq!(doc.revision(), pre_move_rev + 2);
         assert_doc_consistent(&doc);
-        let loaded_snap = Doc::load(snap_bytes.as_slice()).unwrap();
+        let loaded_snap = snap_doc;
         assert!(doc.content_eq(&loaded_snap));
 
         let redo_ch = doc.redo().unwrap();
         assert_eq!(redo_ch.dirty, ch.dirty);
-        assert!(doc.content_eq(&Doc::load(moved_snap.as_slice()).unwrap()));
+        assert!(doc.content_eq(&moved_snap));
         assert_doc_consistent(&doc);
     }
 
@@ -3632,7 +3646,7 @@ mod tests {
             let pre_wire = *doc.wire(w0).unwrap();
             let pre_label = doc.label(l0).unwrap().at;
             let pre_bounds = rect(80, -10, 200, 10);
-            let before_orient = doc.save_to_vec_for_test();
+            let before_orient = doc.snapshot();
             let ch = doc
                 .apply(Command::Reorient {
                     follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
@@ -3643,7 +3657,7 @@ mod tests {
                 .unwrap();
             if by == Orient::IDENTITY {
                 assert_eq!(ch.dirty, None);
-                assert_eq!(doc.save_to_vec_for_test(), before_orient);
+                assert_eq!(doc.snapshot(), before_orient);
                 assert_doc_consistent(&doc);
                 continue; // Identity adds no undo step.
             }
@@ -3715,7 +3729,7 @@ mod tests {
 
         // Batch failure rollback (nested Batch with PlacePart + AddWires + AddLabel + Move + Invalid).
         doc.undo().unwrap(); // put something on redo? no, this adds to redo!
-        let before_batch_bytes = doc.save_to_vec_for_test();
+        let before_batch_snap = doc.snapshot();
         let before_batch_rev = doc.revision();
         let bad_batch = Command::Batch(vec![
             Command::PlacePart {
@@ -3745,7 +3759,7 @@ mod tests {
         ]);
         assert_eq!(doc.apply(bad_batch), Err(CommandError::InvalidWire));
         assert_eq!(doc.revision(), before_batch_rev);
-        assert_eq!(doc.save_to_vec_for_test(), before_batch_bytes);
+        assert_eq!(doc.snapshot(), before_batch_snap);
         assert_doc_consistent(&doc);
         // Redo stack survived the failed batch.
         assert!(doc.redo().is_some());
@@ -3850,14 +3864,6 @@ mod tests {
         assert_eq!(p1, ItemId::Part(PartId(1)));
         assert!(doc.redo().is_none());
         assert_doc_consistent(&doc);
-    }
-
-    impl Doc {
-        fn save_to_vec_for_test(&self) -> Vec<u8> {
-            let mut bytes = Vec::new();
-            self.save(&mut bytes).unwrap();
-            bytes
-        }
     }
 
     #[derive(Debug, Clone)]
@@ -3996,20 +4002,19 @@ mod tests {
                 match step {
                     GenStep::Undo => {
                         let pre_rev = doc.revision();
-                        let snap_before = doc.save_to_vec_for_test();
+                        let snap_before = doc.fork();
                         if doc.undo().is_some() {
                             prop_assert_eq!(doc.revision(), pre_rev + 1);
                             assert_doc_consistent(&doc);
-                            let snap_after_undo = doc.save_to_vec_for_test();
+                            let snap_after_undo = doc.fork();
                             // INV4: undo then redo recovers document equal to pre-undo (IDs included).
                             prop_assert!(doc.redo().is_some());
                             prop_assert_eq!(doc.revision(), pre_rev + 2);
-                            let before_doc = Doc::load(snap_before.as_slice()).unwrap();
-                            prop_assert!(doc.content_eq(&before_doc));
+                            prop_assert!(doc.content_eq(&snap_before));
                             assert_doc_consistent(&doc);
                             // Undo back so history state stays at the undone point.
                             prop_assert!(doc.undo().is_some());
-                            prop_assert!(doc.content_eq(&Doc::load(snap_after_undo.as_slice()).unwrap()));
+                            prop_assert!(doc.content_eq(&snap_after_undo));
                         } else {
                             prop_assert_eq!(doc.revision(), pre_rev);
                         }
@@ -4164,14 +4169,14 @@ mod tests {
                             GenStep::Undo | GenStep::Redo => unreachable!(),
                         };
 
-                        let before_bytes = doc.save_to_vec_for_test();
-                        let before_doc = Doc::load(before_bytes.as_slice()).unwrap();
+                        let before_snap = doc.snapshot();
+                        let before_doc = doc.fork();
                         let pre_rev = doc.revision();
                         match doc.apply(cmd) {
                             Ok(change) if change.dirty.is_none() => {
                                 prop_assert_eq!(change.revision, pre_rev);
                                 prop_assert_eq!(doc.revision(), pre_rev);
-                                prop_assert_eq!(doc.save_to_vec_for_test(), before_bytes);
+                                prop_assert_eq!(doc.snapshot(), before_snap);
                                 prop_assert_eq!(&doc, &before_doc);
                                 prop_assert!(change.added.is_empty() && change.removed.is_empty());
                                 prop_assert!(!change.nets_changed);
@@ -4181,8 +4186,7 @@ mod tests {
                                 prop_assert_eq!(change.revision, pre_rev + 1);
                                 prop_assert_eq!(doc.revision(), pre_rev + 1);
                                 assert_doc_consistent(&doc);
-                                let after_doc_bytes = doc.save_to_vec_for_test();
-                                let after_doc = Doc::load(after_doc_bytes.as_slice()).unwrap();
+                                let after_doc = doc.fork();
 
                                 // INV4: apply(c) then undo() gives a document equal to original, IDs included.
                                 let undo_change = doc.undo();
@@ -4200,7 +4204,7 @@ mod tests {
                             }
                             Err(_) => {
                                 prop_assert_eq!(doc.revision(), pre_rev);
-                                prop_assert_eq!(doc.save_to_vec_for_test(), before_bytes);
+                                prop_assert_eq!(doc.snapshot(), before_snap);
                                 prop_assert_eq!(&doc, &before_doc);
                                 assert_doc_consistent(&doc);
                             }

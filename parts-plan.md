@@ -899,10 +899,19 @@ pub enum ScreenError { ByteOrderMark { line }, CarriageReturn { line }, Nul { li
 // Re-exported at the crate root: omnia_doc::{ScreenError, screen_embedded, subckt_ports}.
 
 // ---- omnia-doc: part_def.rs (P2.1) ----
+pub const MAX_PARAMS: usize = 64;                          // PK7
+pub const MAX_PARAM_STRING_BYTES: usize = 256;             // PK7
+pub const MAX_DESCRIPTION_BYTES: usize = 2048;             // PK7
+pub const MAX_PINS: usize = 256;                           // PK7
+pub const MAX_SPICE_BYTES: usize = 2 * 1024 * 1024;        // PK7 / PK3
+pub const LEGACY_SOURCE_PREFIX: &str = "legacy:";          // PD8
+pub const MODEL_TERMINALS: [(char, &[usize]); 9];          // PD5: C, D, J, L, M, Q, R, S, Z
+pub fn model_terminals(spice_prefix: char) -> Option<&'static [usize]>;
+
 pub struct PartDefId(pub u32);
 
 pub enum ParamValue {
-    Real { raw: Arc<str>, value: FiniteF64 },  // PD6
+    Real { raw: Arc<str>, value: FiniteF64 },  // PD6; kind_name(), display_text()
     Int(i64),
     Bool(bool),
     Enum(Arc<str>),
@@ -925,12 +934,12 @@ pub struct EmbeddedParamSpec {
     pub default: ParamValue, pub optional: bool,
 }
 
-pub enum PrimitiveKind {
+pub enum PrimitiveKind {                       // arity() -> usize (PD5)
     Resistor, Capacitor, Inductor, Potentiometer,
     VSource, ISource, Vcvs, Cccs, Vccs, Ccvs, Ground, Switch, Rail,
 }
 
-pub enum EmbeddedSimBinding {
+pub enum EmbeddedSimBinding {                  // terminals(), spice(), supply()
     None,
     Primitive { kind: PrimitiveKind, terminals: Vec<u16> },               // stored pin indices
     Model { spice_prefix: char, entry: Arc<str>, terminals: Vec<u16>, spice: Arc<str>,
@@ -942,7 +951,7 @@ pub struct SupplyDecl {                    // PD5: read by sim lowering and ERC0
     pub implicit: Option<(FiniteF64, FiniteF64)>, // fallback volts (pos, neg), pos > neg
 }
 
-pub struct EmbeddedPartDef {               // Eq; validated by validate() on every ingress (PD10)
+pub struct EmbeddedPartDef {               // Eq; unmodelled(), is_unmodelled(), param()
     pub source_id: Arc<str>,
     pub content_hash: Option<[u8; 32]>,    // None: no library provenance (v2 migration, Unmodelled)
     pub name: Arc<str>,
@@ -952,15 +961,21 @@ pub struct EmbeddedPartDef {               // Eq; validated by validate() on eve
     pub symbol: SymbolId,                  // built-in only in v1 (PQ3)
     pub local_pins: Vec<Pt>,
     pub local_bounds: Rect,
-    pub pins: Vec<EmbeddedPin>,            // stored-pin-index order (PD5); empty only for unmodelled defs
+    pub pins: Vec<EmbeddedPin>,            // stored-pin-index order (PD5); empty only for unmodelled/zero-pin defs
     pub params: Vec<EmbeddedParamSpec>,    // sorted by name
     pub primary_param: Option<Arc<str>>,
     pub sim: EmbeddedSimBinding,
 }
+pub enum ParamFault { /* Kind, BelowMin, AboveMax, UnknownVariant, TooLong, Unparseable, RawMismatch */ }
+pub enum DefError { /* typed PD10/PD5/PK7/PK10/PK12 definition validation errors */ }
+pub enum InstanceError { /* typed PD8/PD6/PINV12 instance validation errors */ }
 pub fn validate(def: &EmbeddedPartDef) -> Result<(), DefError>;
 pub fn validate_instance(def: &EmbeddedPartDef, symbol: SymbolId, local_pins: &[Pt],
                          local_bounds: Rect, value: &str, params: &Params)
                          -> Result<(), InstanceError>; // PD8
+// Re-exported at the crate root: omnia_doc::{DefError, EmbeddedParamSpec, EmbeddedPartDef,
+// EmbeddedPin, EmbeddedSimBinding, InstanceError, ParamFault, ParamKind, ParamValue, Params,
+// PartDefId, PinRole, PrimitiveKind, SupplyDecl}.
 
 // ---- omnia-doc: command.rs (P2.2) ----
 pub enum PlaceDef { Unmodelled, Existing(PartDefId), Embed(Arc<EmbeddedPartDef>) }
