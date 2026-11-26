@@ -709,6 +709,15 @@ impl Render for SheetCanvas {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "space" {
+                    if !event.is_held
+                        && !event.keystroke.modifiers.modified()
+                        && this.gesture_owner(cx).is_some_and(|overlay| {
+                            overlay.update(cx, |o, cx| o.flip_wire_corner(cx))
+                        })
+                    {
+                        cx.stop_propagation();
+                        return;
+                    }
                     this.nav.set_space(true);
                     cx.stop_propagation();
                 }

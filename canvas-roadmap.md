@@ -602,7 +602,7 @@ of the `canvas` lane.
   nets; a wire ending on another's body joins its net) and INV10; undo restores the
   pre-split wires with their ids (INV4).
 
-### T6.2 Wire tool · todo
+### T6.2 Wire tool · done
 - Lane: canvas · Depends: T5.4, T6.1 · Read: K14, D7, wiring-plan.md WD5, WD6
 - Owns: `crates/omnia-canvas/src/tool/wire.rs`, `overlay/snap_marker.rs`
 - Do: W starts wiring; an L-shaped preview follows the cursor with its first corner chosen
@@ -2488,3 +2488,26 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `holds_capture`'s comment in `canvas-plan.md` §9 to list pointer-driven
                        `DraggingSegment`. Merged `origin/main` and re-ran all five standard
                        checks locally on Windows.
+2026-11-25  T6.2  done  Implemented the interactive wire tool (`K14`, `D7`, `INV2`, `INV4`,
+                       `INV5`, `INV6`, `INV9`, `INV10`, `INV11`, `B10`, `WK1`, `WK3`, `WK4`,
+                       `WD5`, `WD6`, `TC-corner-01..04`, `TC-snap-09`). Added
+                       `crates/omnia-canvas/src/tool/wire.rs` (`WireGesture`, `SNAP_RADIUS_PX`,
+                       `snap_radius_nm`, `choose_first_leg`, `is_terminating_snap`) and
+                       `crates/omnia-canvas/src/overlay/snap_marker.rs` (`paint_wire_preview`
+                       drawing the L-route preview and distinct `stage/snap` markers for `Pin`,
+                       `WireEnd`, `Junction`, `WireBody`, and `Grid` with device-pixel-snapped
+                       quads and zero warm Omnia heap allocations). Integration hooks: `tool.rs`
+                       (`pub mod wire;`, `PointerRadii`, `pointer_down_with_radii`,
+                       `pointer_move_with_snap`, `flip_wire_corner`, `set_wire_preview`, and
+                       simulated-input GPUI tests), `overlay.rs` (`mod snap_marker;`, live
+                       camera snap radius routing, Space flip listener, `set_wire_preview`,
+                       `flip_wire_corner`, and overlay painting), `input.rs` (Space delegates to
+                       `flip_wire_corner` while wiring and keeps Space-pan otherwise),
+                       `tests/golden/tests/overlay.rs` plus 30 new wire preview and snap-marker
+                       goldens (`overlay-wire-{preview-pin,snap-wire-end,snap-junction,snap-wire-body,snap-grid}-{graphite,gray}-{100,125,150}.png`,
+                       all 60 overlay goldens matching with 0 pixel differences on Windows), and
+                       `canvas-plan.md` §9 signature updates. Local Windows checks passed:
+                       `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+                       `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
+                       `cargo test --workspace`, `cargo deny check`, `git diff --check`, and
+                       Rule-1 scan.

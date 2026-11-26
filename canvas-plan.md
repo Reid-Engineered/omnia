@@ -714,7 +714,23 @@ impl SegmentDragGesture {
 }
 pub struct PlaceGesture { pub symbol: SymbolId, pub at: Option<Pt>, pub orient: Orient,
                           pub pressed: bool, /* private raw_cursor */ } // only a press made in Place places
-pub struct WireGesture { pub start: Option<Pt>, pub cursor: Option<Pt> } // T6.2 extends
+// T6.2 (tool/wire.rs, re-exported from tool.rs): interactive wire tool with K14/WD5 snapping and WD6 first-corner routing.
+pub const SNAP_RADIUS_PX: f64;                            // 10.0 logical px (K14, WK4)
+pub fn snap_radius_nm(camera: &Camera) -> i32;
+pub fn choose_first_leg(start: Pt, to: Pt) -> Option<Axis>; // WD6: vertical if |dy| > |dx|, else horizontal
+pub fn is_terminating_snap(target: Snap) -> bool;         // Pin | WireEnd | Junction | WireBody
+pub struct WireGesture { pub start: Option<Pt>, pub cursor: Option<Pt>,
+                         pub snap: Option<Snap>, pub first_leg: Option<Axis> }
+impl WireGesture {
+    pub fn for_preview(start: Option<Pt>, snap: Snap, first_leg: Option<Axis>) -> Self;
+    pub fn target_point(&self) -> Option<Pt>;
+    pub fn preview_wires(&self) -> [Option<Wire>; 2];
+    pub fn update_cursor(&mut self, doc: Option<&Doc>, raw_at: Pt, snap_radius: i32, scratch: &mut Vec<ItemId>) -> bool;
+    pub fn flip_corner(&mut self) -> bool;
+    pub fn drop_start(&mut self) -> bool;
+    pub fn click(&mut self, doc: &Doc, doc_key: u64, raw_at: Pt, snap_radius: i32, scratch: &mut Vec<ItemId>) -> (Option<Commit>, bool);
+}
+pub struct PointerRadii { pub hit: i32, pub snap: i32 }   // K14/WK4 hit tolerance and snap radius in nm
 pub struct ZoomAreaGesture { pub anchor: Option<Pt>, pub current: Option<Pt> } // T5.6
 pub enum ToolRequest { Click { item: ItemId, base: DocStamp }, Place { symbol: SymbolId, at: Pt, orient: Orient },
                        ReorientSelection(Orient), DeleteSelection, ZoomArea(Rect) } // T5.3, T5.6: handled by OverlayView
@@ -734,10 +750,14 @@ impl ToolMachine {
     pub fn hover(&mut self, item: Option<ItemId>) -> ToolOutcome;
     pub fn pointer_down(&mut self, doc: &Doc, doc_key: u64, at: Pt, tolerance: i32,
                         selection: &[ItemId], shift: bool) -> ToolOutcome; // ends a stale drag
+    pub fn pointer_down_with_radii(&mut self, doc: &Doc, doc_key: u64, at: Pt, radii: PointerRadii,
+                                   selection: &[ItemId], shift: bool) -> ToolOutcome; // T6.2
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome;
     pub fn pointer_move_with_doc(&mut self, doc: &Doc, at: Pt, left_held: bool) -> ToolOutcome; // W3.3
+    pub fn pointer_move_with_snap(&mut self, doc: &Doc, at: Pt, snap_radius: i32, left_held: bool) -> ToolOutcome; // T6.2
     pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome; // alt: WK3 at commit
     pub fn pointer_up_with_doc(&mut self, doc: &Doc, at: Pt, alt: bool) -> ToolOutcome;       // W3.3
+    pub fn flip_wire_corner(&mut self) -> ToolOutcome;    // T6.2: Space while wiring (WD6)
     pub fn cancel(&mut self) -> ToolOutcome;              // Esc; never a commit
     pub fn reorient(&mut self, by: Orient) -> ToolOutcome; // R, X, Y
     pub fn delete(&mut self) -> ToolOutcome;              // Del
@@ -829,6 +849,8 @@ impl OverlayView {
     pub fn cancel_rubber_band(&mut self, cx: &mut Context<Self>);
     pub fn set_rubber_band_preview(&mut self, anchor: Pt, current: Pt, mode: SelectMode, cx: &mut Context<Self>);
     pub fn set_segment_drag_preview(&mut self, wire: WireId, offset: i32, cx: &mut Context<Self>) -> bool; // W3.3
+    pub fn set_wire_preview(&mut self, start: Option<Pt>, snap: Snap, first_leg: Option<Axis>, cx: &mut Context<Self>); // T6.2
+    pub fn flip_wire_corner(&mut self, cx: &mut Context<Self>) -> bool; // T6.2: Space while wiring (WD6)
     pub fn set_camera(&mut self, camera: Camera, cx: &mut Context<Self>);
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>);

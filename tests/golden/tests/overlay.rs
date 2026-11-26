@@ -9,12 +9,23 @@ use std::path::Path;
 
 use gpui::{App, AppContext, Context, Entity, IntoElement, Render, Window, point, px, size};
 use omnia_canvas::{Camera, OverlayView};
-use omnia_doc::{Doc, GRID_NM, ItemId, LabelId, PartId, Pt, WireId, prefs::SelectMode};
+use omnia_doc::{
+    Doc, GRID_NM, ItemId, LabelId, PIN_LATTICE_NM, PartId, Pt, Snap, WireId, prefs::SelectMode,
+    route::Axis, snap,
+};
 use omnia_golden::{Hooks, SCALE_FACTORS, Shot, Suite, scale_tag};
 use omnia_theme::{GRAPHITE, GRAY, Theme};
 
 const CONTENT: (f32, f32) = (640.0, 400.0);
 const THEMES: [(&str, &Theme); 2] = [("graphite", &GRAPHITE), ("gray", &GRAY)];
+
+#[derive(Clone, Copy)]
+struct WirePreviewCase {
+    start: Option<Pt>,
+    cursor: Pt,
+    expected_snap: Snap,
+    first_leg: Option<Axis>,
+}
 
 #[derive(Clone)]
 struct OverlayCase {
@@ -23,6 +34,7 @@ struct OverlayCase {
     hovered: Option<ItemId>,
     rubber_band: Option<(Pt, Pt, SelectMode)>,
     segment_drag: Option<(WireId, i32)>,
+    wire_preview: Option<WirePreviewCase>,
 }
 
 const CASES: &[OverlayCase] = &[
@@ -37,6 +49,7 @@ const CASES: &[OverlayCase] = &[
         hovered: None,
         rubber_band: None,
         segment_drag: None,
+        wire_preview: None,
     },
     // Hovered state: resistor R1 hovered with nothing selected.
     OverlayCase {
@@ -45,6 +58,7 @@ const CASES: &[OverlayCase] = &[
         hovered: Some(ItemId::Part(PartId(1))),
         rubber_band: None,
         segment_drag: None,
+        wire_preview: None,
     },
     // Rubber-band state: R1 selected while dragging an Intersecting box across D1 and wires.
     OverlayCase {
@@ -63,6 +77,7 @@ const CASES: &[OverlayCase] = &[
             SelectMode::Intersecting,
         )),
         segment_drag: None,
+        wire_preview: None,
     },
     // Net-highlight state (T4.4): hovering Wire(0) highlights the entire 6-wire IN net.
     OverlayCase {
@@ -71,6 +86,7 @@ const CASES: &[OverlayCase] = &[
         hovered: Some(ItemId::Wire(WireId(0))),
         rubber_band: None,
         segment_drag: None,
+        wire_preview: None,
     },
     // Refused segment drag state (W3.3, WD7, WD11): dragging horizontal VCC wire WireId(21)
     // down by +2 grid steps across WireId(11)'s corner is refused in `mark/conflict` with
@@ -81,6 +97,126 @@ const CASES: &[OverlayCase] = &[
         hovered: None,
         rubber_band: None,
         segment_drag: Some((WireId(21), 2 * GRID_NM)),
+        wire_preview: None,
+    },
+    // Wire tool L-route preview ending on a Pin target (T6.2, WD5, WD6): horizontal-first L from
+    // (27.94 mm, -12.70 mm) snapped onto U1's output pin (19.05 mm, 0 mm).
+    OverlayCase {
+        name: "overlay-wire-preview-pin",
+        selection: &[],
+        hovered: None,
+        rubber_band: None,
+        segment_drag: None,
+        wire_preview: Some(WirePreviewCase {
+            start: Some(Pt {
+                x: 27_940_000,
+                y: -12_700_000,
+            }),
+            cursor: Pt {
+                x: 19_050_000,
+                y: 0,
+            },
+            expected_snap: Snap::Pin {
+                part: PartId(0),
+                pin: 2,
+                at: Pt {
+                    x: 19_050_000,
+                    y: 0,
+                },
+            },
+            first_leg: Some(Axis::Horizontal),
+        }),
+    },
+    // Wire tool WireEnd snap marker (T6.2, WD5): snapped onto the corner endpoint (-30.48 mm, -17.78 mm).
+    OverlayCase {
+        name: "overlay-wire-snap-wire-end",
+        selection: &[],
+        hovered: None,
+        rubber_band: None,
+        segment_drag: None,
+        wire_preview: Some(WirePreviewCase {
+            start: None,
+            cursor: Pt {
+                x: -30_480_000,
+                y: -17_780_000,
+            },
+            expected_snap: Snap::WireEnd {
+                wire: WireId(11),
+                at: Pt {
+                    x: -30_480_000,
+                    y: -17_780_000,
+                },
+            },
+            first_leg: None,
+        }),
+    },
+    // Wire tool Junction snap marker (T6.2, WD5): snapped onto the 3-wire junction at (25.40 mm, 0 mm).
+    OverlayCase {
+        name: "overlay-wire-snap-junction",
+        selection: &[],
+        hovered: None,
+        rubber_band: None,
+        segment_drag: None,
+        wire_preview: Some(WirePreviewCase {
+            start: None,
+            cursor: Pt {
+                x: 25_400_000,
+                y: 0,
+            },
+            expected_snap: Snap::Junction {
+                at: Pt {
+                    x: 25_400_000,
+                    y: 0,
+                },
+            },
+            first_leg: None,
+        }),
+    },
+    // Wire tool WireBody snap marker (T6.2, WD5): snapped onto vertical wire 18's interior at (25.40 mm, 10.16 mm).
+    OverlayCase {
+        name: "overlay-wire-snap-wire-body",
+        selection: &[],
+        hovered: None,
+        rubber_band: None,
+        segment_drag: None,
+        wire_preview: Some(WirePreviewCase {
+            start: None,
+            cursor: Pt {
+                x: 25_400_000,
+                y: 10_160_000,
+            },
+            expected_snap: Snap::WireBody {
+                wire: WireId(18),
+                at: Pt {
+                    x: 25_400_000,
+                    y: 10_160_000,
+                },
+            },
+            first_leg: None,
+        }),
+    },
+    // Wire tool flipped vertical-first L-preview with Grid snap marker (T6.2, WD5, WD6).
+    OverlayCase {
+        name: "overlay-wire-snap-grid",
+        selection: &[],
+        hovered: None,
+        rubber_band: None,
+        segment_drag: None,
+        wire_preview: Some(WirePreviewCase {
+            start: Some(Pt {
+                x: 22_860_000,
+                y: -15_240_000,
+            }),
+            cursor: Pt {
+                x: 33_020_000,
+                y: -7_620_000,
+            },
+            expected_snap: Snap::Grid(Pt {
+                x: 33_020_000,
+                y: -7_620_000,
+            }),
+            first_leg: Some(Axis::Vertical),
+        }),
     },
 ];
 
@@ -126,6 +262,22 @@ impl Render for Probe {
                         "golden segment drag case {} must be refused with WireEnd(11)",
                         case.name
                     );
+                }
+                if let Some(wp) = case.wire_preview {
+                    let mut scratch = Vec::new();
+                    let resolved = snap(
+                        overlay.doc().read(cx),
+                        wp.cursor,
+                        GRID_NM,
+                        PIN_LATTICE_NM,
+                        &mut scratch,
+                    );
+                    assert_eq!(
+                        resolved, wp.expected_snap,
+                        "golden wire case {} must resolve expected WD5 snap",
+                        case.name
+                    );
+                    overlay.set_wire_preview(wp.start, resolved, wp.first_leg, cx);
                 }
                 overlay
             });

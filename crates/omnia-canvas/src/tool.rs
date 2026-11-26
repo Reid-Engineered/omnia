@@ -42,9 +42,13 @@
 pub mod move_;
 pub mod place;
 pub mod segment;
+pub mod wire;
 
 pub use place::{PlaceProvider, PlaceRequest};
 pub use segment::{SegmentDragGesture, SegmentPreview};
+pub use wire::{
+    SNAP_RADIUS_PX, WireGesture, choose_first_leg, is_terminating_snap, snap_radius_nm,
+};
 
 use crate::input::SheetCanvas;
 use crate::keymap::{
@@ -160,15 +164,6 @@ pub struct PlaceGesture {
     pub pressed: bool,
     /// Last raw world cursor position, kept so R/X/Y re-snaps `at` for the new orientation.
     raw_cursor: Option<Pt>,
-}
-
-/// `Tool::Wire` state. T6.2 adds the route preview, WD5 snapping and the commits.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct WireGesture {
-    /// The first click, once made.
-    pub start: Option<Pt>,
-    /// The world point under the pointer.
-    pub cursor: Option<Pt>,
 }
 
 /// `Tool::ZoomArea` state: a dragged world rectangle to fit into the viewport (K13, T5.6).
@@ -290,6 +285,15 @@ impl ToolOutcome {
     }
 }
 
+/// K14/WK4 pointer radii in world nanometres for [`ToolMachine::pointer_down_with_radii`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PointerRadii {
+    /// K14 hit-test tolerance (4 logical px converted to nm).
+    pub hit: i32,
+    /// K14 / WK4 wire snap radius (10 logical px converted to nm).
+    pub snap: i32,
+}
+
 /// The tool state machine. Pure: no GPUI, and it never edits the document.
 #[derive(Clone, Debug, Default)]
 pub struct ToolMachine {
@@ -367,6 +371,24 @@ impl ToolMachine {
     /// Installs a non-capturing segment-drag preview (golden rendering / programmatic inspection).
     pub(crate) fn set_segment_preview(&mut self, gesture: SegmentDragGesture) {
         self.state = ToolState::DraggingSegment(gesture);
+    }
+
+    /// Installs a wire-tool preview directly (golden rendering / programmatic inspection, T6.2).
+    pub(crate) fn set_wire_preview(&mut self, gesture: WireGesture) {
+        self.tool = Tool::Wire;
+        self.state = ToolState::Wiring(gesture);
+    }
+
+    /// Space while wiring (T6.2, WD6): flips the active L-preview's first corner.
+    /// Returns an unhandled outcome when not actively drawing a wire segment.
+    pub fn flip_wire_corner(&mut self) -> ToolOutcome {
+        if let ToolState::Wiring(wire) = &mut self.state
+            && wire.flip_corner()
+        {
+            ToolOutcome::preview()
+        } else {
+            ToolOutcome::default()
+        }
     }
 
     fn rest_state(tool: Tool) -> ToolState {
@@ -459,13 +481,33 @@ impl ToolMachine {
     /// that item alone if it is not selected; a Shift press or a press on empty sheet is
     /// left to selection (not `handled`). A press during a drag means its release was lost:
     /// the stale drag ends with no edit and the press is taken as a new one. `tolerance` is
-    /// the K14 hit radius in nm.
+    /// the K14 hit radius in nm; wiring derives the K14 snap radius as `tolerance * 5 / 2`
+    /// (`10 px / 4 px`). Call [`Self::pointer_down_with_snap`] when the exact camera-derived
+    /// [`snap_radius_nm`] is available.
     pub fn pointer_down(
         &mut self,
         doc: &Doc,
         doc_key: u64,
         at: Pt,
         tolerance: i32,
+        selection: &[ItemId],
+        shift: bool,
+    ) -> ToolOutcome {
+        let radii = PointerRadii {
+            hit: tolerance,
+            snap: tolerance.saturating_mul(5) / 2,
+        };
+        self.pointer_down_with_radii(doc, doc_key, at, radii, selection, shift)
+    }
+
+    /// Like [`Self::pointer_down`], with explicit K14/WK4 hit and snap radii in nanometres
+    /// (`hit_tolerance_nm` and `snap_radius_nm`, WD5, T6.2).
+    pub fn pointer_down_with_radii(
+        &mut self,
+        doc: &Doc,
+        doc_key: u64,
+        at: Pt,
+        radii: PointerRadii,
         selection: &[ItemId],
         shift: bool,
     ) -> ToolOutcome {
@@ -478,7 +520,7 @@ impl ToolMachine {
             ToolState::Idle | ToolState::Hovering(_) => {
                 if self.tool != Tool::Select || shift {
                     ToolOutcome::default()
-                } else if let Some(hit) = hit_test(doc, at, tolerance, &mut self.scratch) {
+                } else if let Some(hit) = hit_test(doc, at, radii.hit, &mut self.scratch) {
                     let items = if selection.contains(&hit.item) {
                         selection.to_vec()
                     } else {
@@ -535,13 +577,12 @@ impl ToolMachine {
                 }
             }
             ToolState::Wiring(wire) => {
-                wire.cursor = Some(at);
-                // T6.2 decides what later clicks commit; T5.2 records the first.
-                if wire.start.is_none() {
-                    wire.start = Some(at);
-                    ToolOutcome::preview()
-                } else {
-                    ToolOutcome::handled()
+                let (commit, changed) = wire.click(doc, doc_key, at, radii.snap, &mut self.scratch);
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: changed,
+                    commit,
+                    ..ToolOutcome::default()
                 }
             }
             ToolState::ZoomingArea(zoom) => {
@@ -564,19 +605,39 @@ impl ToolMachine {
     /// Hover is not handled here (see [`Self::hover`]).
     ///
     /// Without `&Doc`, an active `DraggingSegment` previews attempted wires as
-    /// [`SegmentPreview::Accepted`] without calling [`omnia_doc::route::plan_segment_drag`];
-    /// use [`Self::pointer_move_with_doc`] for live planning.
+    /// [`SegmentPreview::Accepted`] without calling [`omnia_doc::route::plan_segment_drag`], and
+    /// `Tool::Wire` records raw `cursor` without WD5 snapping; use [`Self::pointer_move_with_snap`]
+    /// for live planning and snapping.
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome {
-        self.pointer_move_inner(None, at, left_held)
+        self.pointer_move_inner(None, at, omnia_doc::PIN_LATTICE_NM, left_held)
     }
 
     /// Like [`Self::pointer_move`], with read access to `doc` so a live segment drag runs
-    /// [`omnia_doc::route::plan_segment_drag`] whenever its snapped offset changes (WD7, WD11).
+    /// [`omnia_doc::route::plan_segment_drag`] whenever its snapped offset changes (WD7, WD11),
+    /// and `Tool::Wire` runs WD5 snapping at the 100%-zoom K14 radius (`PIN_LATTICE_NM`).
     pub fn pointer_move_with_doc(&mut self, doc: &Doc, at: Pt, left_held: bool) -> ToolOutcome {
-        self.pointer_move_inner(Some(doc), at, left_held)
+        self.pointer_move_inner(Some(doc), at, omnia_doc::PIN_LATTICE_NM, left_held)
     }
 
-    fn pointer_move_inner(&mut self, doc: Option<&Doc>, at: Pt, left_held: bool) -> ToolOutcome {
+    /// Like [`Self::pointer_move_with_doc`], with an explicit K14/WK4 `snap_radius` in nanometres
+    /// for `Tool::Wire` (WD5, T6.2).
+    pub fn pointer_move_with_snap(
+        &mut self,
+        doc: &Doc,
+        at: Pt,
+        snap_radius: i32,
+        left_held: bool,
+    ) -> ToolOutcome {
+        self.pointer_move_inner(Some(doc), at, snap_radius, left_held)
+    }
+
+    fn pointer_move_inner(
+        &mut self,
+        doc: Option<&Doc>,
+        at: Pt,
+        snap_radius: i32,
+        left_held: bool,
+    ) -> ToolOutcome {
         match &mut self.state {
             ToolState::Idle | ToolState::Hovering(_) => ToolOutcome::default(),
             ToolState::Dragging(drag) => {
@@ -622,8 +683,7 @@ impl ToolMachine {
                 }
             }
             ToolState::Wiring(wire) => {
-                let changed = wire.cursor != Some(at);
-                wire.cursor = Some(at);
+                let changed = wire.update_cursor(doc, at, snap_radius, &mut self.scratch);
                 ToolOutcome {
                     handled: true,
                     preview_changed: changed,
@@ -757,7 +817,7 @@ impl ToolMachine {
         match &mut self.state {
             ToolState::Dragging(_) | ToolState::DraggingSegment(_) => self.reset(),
             ToolState::Wiring(wire) if wire.start.is_some() => {
-                wire.start = None;
+                wire.drop_start();
                 ToolOutcome::preview()
             }
             ToolState::Placing(_) | ToolState::Wiring(_) => {
@@ -1711,14 +1771,26 @@ mod tests {
         let mut m = ToolMachine::new();
         m.set_tool(Tool::Wire);
         assert!(m.pointer_move(pt(1, 1), false).preview_changed);
-        assert!(press(&mut m, &doc, pt(1, 1), &[]).preview_changed);
-        assert!(press(&mut m, &doc, pt(5, 1), &[]).handled);
+        let first = press(&mut m, &doc, pt(1, 1), &[]);
+        assert!(first.preview_changed && first.commit.is_none());
+        // T6.2: a second click on empty grid commits the segment and continues from its end.
+        let second = press(&mut m, &doc, pt(5, 1), &[]);
+        assert!(second.handled);
+        assert_eq!(
+            command(second),
+            Some(Command::AddWires(vec![Wire {
+                a: pt(1, 1),
+                b: pt(5, 1),
+            }]))
+        );
         assert!(m.pointer_up(pt(5, 1), false).commit.is_none());
         assert_eq!(
             m.state(),
             &ToolState::Wiring(WireGesture {
-                start: Some(pt(1, 1)),
+                start: Some(pt(5, 1)),
                 cursor: Some(pt(5, 1)),
+                snap: Some(omnia_doc::Snap::Grid(pt(5, 1))),
+                first_leg: None,
             })
         );
         assert!(m.cancel().handled);
@@ -6069,5 +6141,531 @@ mod tests {
         );
         assert!(hidden(rig.cx).is_empty());
         assert_eq!(middle, WireId(1));
+    }
+
+    // ---- T6.2: Wire tool simulated-input tests ----
+
+    /// Two unconnected resistors `R1` at (-6, 0) (pins (-8, 0), (-4, 0)) and `R2` at (6, 4)
+    /// (pins (4, 4), (8, 4)), plus a junction at (-6, -6) and a free horizontal wire
+    /// (4, -6)-(10, -6) for testing Pin, WireEnd, Junction, WireBody, and Grid snaps.
+    fn t6_2_wire_doc() -> Doc {
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let def = lib.get(res);
+        let pins: Vec<Pt> = def.pins.iter().map(|p| p.at).collect();
+        let part = |at: Pt, designator: &str| {
+            (
+                Part {
+                    symbol: res,
+                    at,
+                    orient: Orient::IDENTITY,
+                    designator: designator.into(),
+                    value: "1k".into(),
+                },
+                pins.clone(),
+                def.bounds,
+            )
+        };
+        Doc::from_items(
+            [part(pt(-6, 0), "R1"), part(pt(6, 4), "R2")],
+            [
+                // 3-wire junction at (-6, -6) with free ends at (-10, -6), (-6, -10), and (0, -6).
+                Wire {
+                    a: pt(-10, -6),
+                    b: pt(-6, -6),
+                },
+                Wire {
+                    a: pt(-6, -6),
+                    b: pt(-6, -10),
+                },
+                Wire {
+                    a: pt(-6, -6),
+                    b: pt(0, -6),
+                },
+                // Standalone horizontal wire from (4, -6) to (10, -6) for WireBody/WireEnd tests.
+                Wire {
+                    a: pt(4, -6),
+                    b: pt(10, -6),
+                },
+            ],
+            [],
+        )
+        .unwrap()
+    }
+
+    fn move_to(overlay: &Entity<OverlayView>, cx: &mut VisualTestContext, world: Pt) {
+        let p = screen(overlay, cx, world);
+        cx.simulate_mouse_move(p, None, Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    fn click_world(overlay: &Entity<OverlayView>, cx: &mut VisualTestContext, world: Pt) {
+        down(overlay, cx, world);
+        up(overlay, cx, world);
+    }
+
+    /// T6.2 done-when: W starts wiring, moving near a pin marks `Snap::Pin` before clicking,
+    /// clicking two resistors pin to pin commits one `Command::AddWires` putting both pins in one
+    /// net, ends the wire on the second pin, and supports exact-id undo/redo (`INV2`, `INV4`,
+    /// `INV5`, `INV10`).
+    #[gpui::test]
+    fn t6_2_wire_two_resistors_pin_to_pin_gives_one_net(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, t6_2_wire_doc(), false);
+        let original = rig.snapshot();
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        let pin1 = pt(-4, 0); // R1 right pin
+        let pin2 = pt(4, 4); // R2 left pin
+        let rev0 = revision(&doc, rig.cx);
+
+        // Before wiring, R1 and R2 pins are on distinct nets.
+        let (n1_before, n2_before) = rig
+            .cx
+            .update(|_, cx| (doc.read(cx).net_at(pin1), doc.read(cx).net_at(pin2)));
+        assert!(n1_before.is_some() && n2_before.is_some() && n1_before != n2_before);
+
+        // Press W to enter Tool::Wire.
+        rig.cx.simulate_keystrokes("w");
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Wire);
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Wiring);
+
+        // Move near pin1 (5 px offset, inside K14 10 px snap radius): Snap::Pin marked before click.
+        let near_pin1 = Pt {
+            x: pin1.x + G / 4,
+            y: pin1.y,
+        };
+        move_to(&overlay, rig.cx, near_pin1);
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                start: None,
+                snap: Some(omnia_doc::Snap::Pin {
+                    part: PartId(0),
+                    pin: 1,
+                    at,
+                }),
+                ..
+            }) if at == pin1
+        ));
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        // Click near pin1: anchors start at exact pin1 without editing the document (INV5).
+        click_world(&overlay, rig.cx, near_pin1);
+        assert_eq!(revision(&doc, rig.cx), rev0);
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                start: Some(s),
+                first_leg: None,
+                ..
+            }) if s == pin1
+        ));
+
+        // Move horizontally first (WD6 chooses Horizontal), then near pin2 (5 px off).
+        move_to(&overlay, rig.cx, pt(0, 0));
+        let near_pin2 = Pt {
+            x: pin2.x - G / 4,
+            y: pin2.y,
+        };
+        move_to(&overlay, rig.cx, near_pin2);
+        match rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()) {
+            ToolState::Wiring(w) => {
+                assert_eq!(w.start, Some(pin1));
+                assert_eq!(
+                    w.snap,
+                    Some(omnia_doc::Snap::Pin {
+                        part: PartId(1),
+                        pin: 0,
+                        at: pin2,
+                    })
+                );
+                assert_eq!(w.first_leg, Some(omnia_doc::route::Axis::Horizontal));
+                assert_eq!(
+                    w.preview_wires(),
+                    [
+                        Some(Wire {
+                            a: pin1,
+                            b: pt(4, 0),
+                        }),
+                        Some(Wire {
+                            a: pt(4, 0),
+                            b: pin2,
+                        }),
+                    ]
+                );
+            }
+            other => panic!("expected Wiring preview, got {other:?}"),
+        }
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        // Click near pin2: commits one AddWires, connects both resistors into one net, and ends wire.
+        click_world(&overlay, rig.cx, near_pin2);
+        assert_eq!(revision(&doc, rig.cx), rev0 + 1);
+        assert_eq!(rig.history.borrow().len(), 1);
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                start: None,
+                first_leg: None,
+                ..
+            })
+        ));
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Wire);
+
+        let after = rig.snapshot();
+        after.assert_normal_form();
+        let n1 = after.net_at(pin1);
+        let n2 = after.net_at(pin2);
+        assert!(
+            n1.is_some() && n1 == n2,
+            "R1 and R2 pins must share one net"
+        );
+        let live_wires: Vec<WireId> = after.wires().map(|(id, _)| id).collect();
+        assert_inv10(&after, &[pin1, pt(4, 0), pin2], &live_wires);
+
+        // One Ctrl+Z reverts the entire L-wire with exact ids (INV4, INV5); Ctrl+Y restores it.
+        rig.cx.simulate_keystrokes("ctrl-z");
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&original)));
+        rig.cx.simulate_keystrokes("ctrl-y");
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&after)));
+    }
+
+    /// T6.2 / WD5 / WD6: Space flips the L-corner; clicking empty grid commits and continues with
+    /// a fresh WD6 choice; clicking a wire body splits it and ends the wire (INV2); clicking a
+    /// junction or wire end ends the wire; Esc cancels start then leaves Tool::Wire (INV5).
+    #[gpui::test]
+    fn t6_2_space_flip_grid_chain_wire_body_junction_and_esc(cx: &mut TestAppContext) {
+        let mut rig = open_del_rig(cx, t6_2_wire_doc(), false);
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        let rev0 = revision(&doc, rig.cx);
+
+        rig.cx.simulate_keystrokes("w");
+        // Start on R1's right pin (-4, 0).
+        click_world(&overlay, rig.cx, pt(-4, 0));
+        // Leave upward to (-4, -3) -> Vertical first (TC-corner-02).
+        move_to(&overlay, rig.cx, pt(-4, -3));
+        // Move right to (2, -3) -> Vertical stays locked (TC-corner-04).
+        move_to(&overlay, rig.cx, pt(2, -3));
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                first_leg: Some(omnia_doc::route::Axis::Vertical),
+                ..
+            })
+        ));
+        // Press Space: flips corner to Horizontal without changing document revision.
+        rig.cx.simulate_keystrokes("space");
+        assert_eq!(revision(&doc, rig.cx), rev0);
+        match rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()) {
+            ToolState::Wiring(w) => {
+                assert_eq!(w.first_leg, Some(omnia_doc::route::Axis::Horizontal));
+                assert_eq!(
+                    w.preview_wires(),
+                    [
+                        Some(Wire {
+                            a: pt(-4, 0),
+                            b: pt(2, 0),
+                        }),
+                        Some(Wire {
+                            a: pt(2, 0),
+                            b: pt(2, -3),
+                        }),
+                    ]
+                );
+            }
+            other => panic!("expected flipped Wiring state, got {other:?}"),
+        }
+
+        // Click on empty Grid (2, -3): commits segment and continues from (2, -3) with fresh leg.
+        click_world(&overlay, rig.cx, pt(2, -3));
+        assert_eq!(revision(&doc, rig.cx), rev0 + 1);
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                start: Some(s),
+                first_leg: None,
+                ..
+            }) if s == pt(2, -3)
+        ));
+
+        // Move onto wire 3's interior at (6, -6) (Snap::WireBody) and click: commits, splits wire 3,
+        // joins R1 to wire 3's net (INV2), and ends the wire.
+        move_to(&overlay, rig.cx, pt(6, -6));
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                snap: Some(omnia_doc::Snap::WireBody {
+                    wire: WireId(3),
+                    at,
+                }),
+                ..
+            }) if at == pt(6, -6)
+        ));
+        click_world(&overlay, rig.cx, pt(6, -6));
+        assert_eq!(revision(&doc, rig.cx), rev0 + 2);
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture { start: None, .. })
+        ));
+        let snap1 = rig.snapshot();
+        snap1.assert_normal_form();
+        assert_eq!(snap1.net_at(pt(-4, 0)), snap1.net_at(pt(10, -6)));
+        let mut junctions = Vec::new();
+        snap1.junctions(
+            Rect {
+                min: pt(6, -6),
+                max: pt(6, -6),
+            },
+            &mut junctions,
+        );
+        assert!(
+            junctions.contains(&pt(6, -6)),
+            "ending on wire body splits it into a T-junction (INV2, INV3)"
+        );
+
+        // Start a second wire at Grid (-2, -8), end it on Junction (-6, -6).
+        click_world(&overlay, rig.cx, pt(-2, -8));
+        move_to(&overlay, rig.cx, pt(-6, -6));
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                snap: Some(omnia_doc::Snap::Junction { at }),
+                ..
+            }) if at == pt(-6, -6)
+        ));
+        click_world(&overlay, rig.cx, pt(-6, -6));
+        assert_eq!(revision(&doc, rig.cx), rev0 + 3);
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture { start: None, .. })
+        ));
+
+        // Start a third wire at Grid (0, -2), end it on WireEnd (0, -6).
+        click_world(&overlay, rig.cx, pt(0, -2));
+        move_to(&overlay, rig.cx, pt(0, -6));
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                snap: Some(omnia_doc::Snap::WireEnd { at, .. }),
+                ..
+            }) if at == pt(0, -6)
+        ));
+        click_world(&overlay, rig.cx, pt(0, -6));
+        assert_eq!(revision(&doc, rig.cx), rev0 + 4);
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture { start: None, .. })
+        ));
+
+        // Start a fourth wire, preview it, then Esc cancels start (rev unchanged) and second Esc
+        // exits Tool::Wire to Tool::Select.
+        let rev_before_esc = revision(&doc, rig.cx);
+        click_world(&overlay, rig.cx, pt(-2, 4));
+        move_to(&overlay, rig.cx, pt(2, 4));
+        rig.cx.simulate_keystrokes("escape");
+        assert_eq!(revision(&doc, rig.cx), rev_before_esc);
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Wire);
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture { start: None, .. })
+        ));
+        rig.cx.simulate_keystrokes("escape");
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Select);
+        assert_eq!(phase(&overlay, rig.cx), ToolPhase::Idle);
+    }
+
+    /// T6.2 done-when (`INV11`, `D7`): moving the cursor across every snap class (Pin, WireEnd,
+    /// Junction, WireBody, Grid), anchoring the start, previewing the L-route, flipping the corner,
+    /// and cancelling cost zero `SheetView` paints while updating `OverlayView`.
+    #[gpui::test]
+    fn t6_2_wire_preview_costs_no_sheet_view_paint(cx: &mut TestAppContext) {
+        let rig = open_del_rig(cx, t6_2_wire_doc(), false);
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        let rev0 = revision(&doc, rig.cx);
+        let sheet_paints =
+            |cx: &mut VisualTestContext| cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let overlay_paints =
+            |cx: &mut VisualTestContext| cx.update(|_, cx| overlay.read(cx).overlay_paint_count());
+
+        // Enter Tool::Wire programmatically so pointer-to-keyboard modality switching (G17) does
+        // not obscure pure pointer preview paints.
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Wire, cx));
+        });
+        rig.cx.run_until_parked();
+        let sp0 = sheet_paints(rig.cx);
+        let op0 = overlay_paints(rig.cx);
+
+        // Sweep across all 5 WD5 snap classes before clicking: 0 SheetView paints.
+        let targets = [
+            pt(-4, 0),  // Pin
+            pt(0, -6),  // WireEnd
+            pt(-6, -6), // Junction
+            pt(6, -6),  // WireBody
+            pt(2, 2),   // Grid
+        ];
+        let mut seen = [false; 5];
+        for &target in &targets {
+            move_to(&overlay, rig.cx, target);
+            if let ToolState::Wiring(w) =
+                rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone())
+            {
+                match w.snap {
+                    Some(omnia_doc::Snap::Pin { .. }) => seen[0] = true,
+                    Some(omnia_doc::Snap::WireEnd { .. }) => seen[1] = true,
+                    Some(omnia_doc::Snap::Junction { .. }) => seen[2] = true,
+                    Some(omnia_doc::Snap::WireBody { .. }) => seen[3] = true,
+                    Some(omnia_doc::Snap::Grid(_)) => seen[4] = true,
+                    None => {}
+                }
+            }
+        }
+        assert_eq!(
+            seen, [true; 5],
+            "preview sweep must visit all 5 WD5 snap classes"
+        );
+        assert_eq!(
+            sheet_paints(rig.cx),
+            sp0,
+            "INV11: pre-click snap sweep costs 0 sheet paints"
+        );
+        assert!(
+            overlay_paints(rig.cx) > op0,
+            "overlay must repaint for snap markers"
+        );
+
+        // Click to anchor start, sweep L-preview, flip corner, cancel: still 0 SheetView paints.
+        click_world(&overlay, rig.cx, pt(-4, 0));
+        assert_eq!(
+            sheet_paints(rig.cx),
+            sp0,
+            "INV11: start click costs 0 sheet paints"
+        );
+        for step in 1..=10 {
+            move_to(&overlay, rig.cx, pt(-4 + step, step / 2));
+        }
+        let op_before_flip = overlay_paints(rig.cx);
+        let flipped = rig
+            .cx
+            .update(|_, cx| overlay.update(cx, |o, cx| o.flip_wire_corner(cx)));
+        rig.cx.run_until_parked();
+        assert!(flipped);
+        assert!(overlay_paints(rig.cx) > op_before_flip);
+        assert_eq!(
+            sheet_paints(rig.cx),
+            sp0,
+            "INV11: L-route preview and Space flip cost 0 SheetView paints"
+        );
+        assert_eq!(
+            revision(&doc, rig.cx),
+            rev0,
+            "INV5: preview never edits doc"
+        );
+
+        // Cancel via OverlayView::cancel: still 0 SheetView paints.
+        rig.cx.update(|window, cx| {
+            overlay.update(cx, |o, cx| {
+                assert!(o.cancel(window, cx));
+            });
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(
+            sheet_paints(rig.cx),
+            sp0,
+            "INV11: cancelling preview costs 0 sheet paints"
+        );
+        assert_eq!(revision(&doc, rig.cx), rev0);
+    }
+
+    /// T6.2 / WK3: Space on a focused `SheetCanvas` with an attached `OverlayView` flips the wire
+    /// corner while drawing a wire, and still arms Space-pan otherwise.
+    #[gpui::test]
+    fn t6_2_space_flips_on_sheet_canvas_when_wiring_and_pans_otherwise(cx: &mut TestAppContext) {
+        cx.update(|cx| cx.bind_keys(standalone_bindings()));
+        let doc = cx.new(|_| t6_2_wire_doc());
+        let doc_init = doc.clone();
+        let viewport = Bounds::new(
+            gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            gpui::size(gpui::px(800.0), gpui::px(600.0)),
+        );
+        let overlay_slot: Rc<RefCell<Option<Entity<OverlayView>>>> = Rc::new(RefCell::new(None));
+        let overlay_slot_init = overlay_slot.clone();
+        let (canvas, cx) = cx.add_window_view(move |_, cx| {
+            let overlay = cx.new(|cx| {
+                OverlayView::new(
+                    doc_init.clone(),
+                    Camera::new(Pt::ZERO, 1.0, viewport),
+                    &GRAPHITE,
+                    cx,
+                )
+            });
+            *overlay_slot_init.borrow_mut() = Some(overlay.clone());
+            let mut canvas = SheetCanvas::new(Camera::new(Pt::ZERO, 1.0, viewport), &GRAPHITE, cx)
+                .with_doc(doc_init);
+            canvas.set_overlay(Some(overlay), cx);
+            canvas
+        });
+        cx.run_until_parked();
+        let overlay = overlay_slot.borrow().clone().unwrap();
+        cx.update(|window, cx| {
+            let focus = canvas.read(cx).focus_handle().clone();
+            window.focus(&focus, cx);
+        });
+        cx.run_until_parked();
+
+        // In Select tool, Space arms pan navigator.
+        let space = gpui::Keystroke::parse("space").unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: space.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| canvas.read(cx).navigator().space_held()));
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: space.clone(),
+        });
+        cx.run_until_parked();
+        assert!(!cx.update(|_, cx| canvas.read(cx).navigator().space_held()));
+
+        // In Wire tool with an active segment, Space flips the corner instead of arming pan.
+        cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                o.set_wire_preview(
+                    Some(pt(0, 0)),
+                    omnia_doc::Snap::Grid(pt(4, 2)),
+                    Some(omnia_doc::route::Axis::Horizontal),
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: space.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        assert!(!cx.update(|_, cx| canvas.read(cx).navigator().space_held()));
+        assert!(matches!(
+            cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                first_leg: Some(omnia_doc::route::Axis::Vertical),
+                ..
+            })
+        ));
+        // Key-repeat (is_held = true) must not rapidly flip-flop the corner.
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: space,
+            is_held: true,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        assert!(matches!(
+            cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                first_leg: Some(omnia_doc::route::Axis::Vertical),
+                ..
+            })
+        ));
     }
 }

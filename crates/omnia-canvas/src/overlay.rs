@@ -15,6 +15,7 @@
 
 mod ghosts;
 mod net;
+mod snap_marker;
 
 pub use net::NetHighlight;
 
@@ -35,13 +36,15 @@ use crate::{
 use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, ContentMask, Context, DispatchPhase, Edges, Element,
     ElementId, Entity, EventEmitter, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior,
-    HitboxId, Hsla, InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position, Render, Style,
-    StyleRefinement, Styled, Subscription, WeakEntity, Window, div, fill, point, px, relative,
+    HitboxId, Hsla, InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayoutId,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Position,
+    Render, Style, StyleRefinement, Styled, Subscription, WeakEntity, Window, div, fill, point, px,
+    relative,
 };
 use omnia_doc::{
-    Change, Doc, ItemId, NetId, Pt, Rect, Wire, WireId,
+    Change, Doc, ItemId, NetId, Pt, Rect, Snap, Wire, WireId,
     prefs::{SelectMode, WiringPrefs},
+    route::Axis,
 };
 use omnia_theme::Theme;
 
@@ -619,6 +622,37 @@ impl OverlayView {
         true
     }
 
+    /// Sets a wire-tool L-route / WD5 snap-marker preview directly for golden rendering or
+    /// programmatic inspection (T6.2, WD5, WD6; never notifies `SheetView`, INV11). Ends any
+    /// active capture or rubber band first through [`Self::end_gesture`] (C4).
+    pub fn set_wire_preview(
+        &mut self,
+        start: Option<Pt>,
+        snap: Snap,
+        first_leg: Option<Axis>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tools.holds_capture()
+            || self.state.is_rubber_banding()
+            || matches!(self.tools.state(), tool::ToolState::DraggingSegment(_))
+        {
+            self.end_gesture(GestureEndReason::Cancel, None, Some(cx));
+        }
+        self.tools
+            .set_wire_preview(tool::WireGesture::for_preview(start, snap, first_leg));
+        self.sync_hidden_items(cx);
+        cx.notify();
+    }
+
+    /// Space while wiring (T6.2, WD6): flips the active wire preview's first corner.
+    /// Returns `true` if a live wire preview handled it. Never notifies `SheetView` (INV11).
+    pub fn flip_wire_corner(&mut self, cx: &mut Context<Self>) -> bool {
+        let outcome = self.tools.flip_wire_corner();
+        let handled = outcome.handled;
+        tool::finish(self, outcome, cx);
+        handled
+    }
+
     /// Starts a 150 ms ease-out view animation (K13) from the current camera to `target`.
     pub fn animate_to(&mut self, target: Camera, cx: &mut Context<Self>) {
         let anim = CameraAnimation::new(self.camera.clone(), target, self.viewport);
@@ -1003,11 +1037,15 @@ impl OverlayView {
         }
         // T5.2: the tool sees the press first; a press it leaves goes to selection.
         let world = self.camera.screen_to_world(to_f64(event.position));
-        let outcome = self.tools.pointer_down(
+        let radii = tool::PointerRadii {
+            hit: hit_tolerance_nm(&self.camera),
+            snap: tool::snap_radius_nm(&self.camera),
+        };
+        let outcome = self.tools.pointer_down_with_radii(
             self.doc.read(cx),
             tool::doc_key(&self.doc),
             world,
-            hit_tolerance_nm(&self.camera),
+            radii,
             self.state.selection(),
             event.modifiers.shift,
         );
@@ -1095,8 +1133,12 @@ impl OverlayView {
                     return;
                 }
             }
-            let doc = self.doc.read(cx);
-            let outcome = self.tools.pointer_move_with_doc(doc, world, left_held);
+            let outcome = run_omnia(scope.as_deref(), || {
+                let doc = self.doc.read(cx);
+                let snap_radius = tool::snap_radius_nm(&self.camera);
+                self.tools
+                    .pointer_move_with_snap(doc, world, snap_radius, left_held)
+            });
             run_gpui(scope.as_deref(), || {
                 tool::finish(self, outcome, cx);
             });
@@ -1327,6 +1369,15 @@ impl Render for OverlayView {
             .relative()
             .size_full()
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if !event.is_held
+                    && !event.keystroke.modifiers.modified()
+                    && event.keystroke.key == "space"
+                    && this.flip_wire_corner(cx)
+                {
+                    cx.stop_propagation();
+                }
+            }))
             .child(
                 self.sheet
                     .clone()
@@ -1470,6 +1521,10 @@ impl Element for OverlayLayer {
                     }
                     _ => None,
                 };
+                let wire_preview = match view.tools.state() {
+                    tool::ToolState::Wiring(wire) => Some(*wire),
+                    _ => None,
+                };
                 let ctx = OverlayPaintContext {
                     doc,
                     camera: &camera,
@@ -1482,8 +1537,11 @@ impl Element for OverlayLayer {
                 paint_overlay(
                     &view.state,
                     &view.net_highlight,
-                    ghost_preview,
-                    zoom_area,
+                    OverlayPreviews {
+                        ghost: ghost_preview,
+                        wire: wire_preview,
+                        zoom_area,
+                    },
                     &ctx,
                     window,
                     cx,
@@ -1891,15 +1949,25 @@ struct OverlayPaintContext<'a> {
     scope: Option<&'a dyn OverlayPaintScope>,
 }
 
+struct OverlayPreviews<'a> {
+    ghost: ghosts::GhostPreview<'a>,
+    wire: Option<tool::WireGesture>,
+    zoom_area: Option<Rect>,
+}
+
 fn paint_overlay(
     state: &SelectionState,
     net_highlight: &NetHighlight,
-    ghost_preview: ghosts::GhostPreview<'_>,
-    zoom_area: Option<Rect>,
+    previews: OverlayPreviews<'_>,
     ctx: &OverlayPaintContext<'_>,
     window: &mut Window,
     cx: &App,
 ) {
+    let OverlayPreviews {
+        ghost: ghost_preview,
+        wire: wire_preview,
+        zoom_area,
+    } = previews;
     let OverlayPaintContext {
         doc,
         camera,
@@ -1924,12 +1992,14 @@ fn paint_overlay(
         state.selection()
     };
     let band = state.rubber_band().filter(|b| b.is_visible());
+    let has_wire_preview = wire_preview.is_some_and(|w| w.start.is_some() || w.snap.is_some());
     if hovered.is_none()
         && selection.is_empty()
         && band.is_none()
         && zoom_area.is_none()
         && (is_dragging_ghosts || net_highlight.is_empty())
         && !ghost_preview.is_active()
+        && !has_wire_preview
     {
         return;
     }
@@ -2281,6 +2351,23 @@ fn paint_overlay(
                     scope,
                 };
                 ghosts::paint_ghosts(ghost_preview, &ghost_params, window, cx);
+            }
+
+            // T6.2: wire-tool L-route preview and WD5 snap-target markers in `stage/snap`
+            // (D7, INV6, INV11, B10).
+            if let Some(wire) = wire_preview
+                && has_wire_preview
+            {
+                let wire_params = snap_marker::WirePaintParams {
+                    camera,
+                    bounds,
+                    visible_padded,
+                    sf,
+                    clip,
+                    theme,
+                    scope,
+                };
+                snap_marker::paint_wire_preview(&wire, &wire_params, window);
             }
         });
     });
