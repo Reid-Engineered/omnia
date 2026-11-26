@@ -669,8 +669,9 @@ impl Camera {
 pub enum Tool { Select, Wire, Place(SymbolId), Label, ZoomArea } // T5.2 (tool.rs); ZoomArea owned by T5.6 (T4.5 follow-up, not yet in code)
 // T5.2 (tool.rs): pure tool state machine. One gesture owner, OverlayView, holds it; the owner
 // applies a gesture's one Command only to the document and revision it was planned on (INV5).
-pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture), Placing(PlaceGesture),
-                     Wiring(WireGesture) }
+pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture),
+                     DraggingSegment(SegmentDragGesture), // W3.3
+                     Placing(PlaceGesture), Wiring(WireGesture) }
 pub struct DocStamp { pub key: u64, pub revision: u64 }   // key: doc_key(&Entity<Doc>)
 pub fn doc_key(doc: &Entity<Doc>) -> u64;
 pub struct DragGesture { pub items: Vec<ItemId>, pub pressed: ItemId, pub anchor: Pt,
@@ -684,6 +685,26 @@ impl DragGesture {
 }
 // T5.3/T5.5: R, X and Y during a drag compose into `DragGesture.by` (previewed as ghosts) and
 // commit as one `Command::Transform` so one undo reverts the whole gesture (INV5).
+// W3.3 (tool/segment.rs, re-exported from tool.rs): single-wire perpendicular segment drag.
+pub enum SegmentPreview { Accepted, Refused(Blocker) }
+pub fn segment_offset(horizontal: bool, anchor: Pt, current: Pt) -> i32;
+pub struct SegmentDragGesture { pub wire: WireId, pub original: Wire, pub horizontal: bool,
+                                pub anchor: Pt, pub current: Pt, pub base: DocStamp,
+                                /* private endpoints, hidden, offset, plan, fallback_wires, preview, lifted, preview_only */ }
+impl SegmentDragGesture {
+    pub fn start(doc: &Doc, wire: WireId, anchor: Pt, base: DocStamp) -> Option<Self>;
+    pub fn for_preview(doc: &Doc, wire: WireId, offset: i32, base: DocStamp) -> Option<Self>;
+    pub fn is_pointer_drag(&self) -> bool;
+    pub fn is_lifted(&self) -> bool;
+    pub fn offset(&self) -> i32;
+    pub fn preview(&self) -> SegmentPreview;
+    pub fn blocker(&self) -> Option<Blocker>;
+    pub fn is_refused(&self) -> bool;
+    pub fn hidden_items(&self) -> &[ItemId];
+    pub fn preview_wires(&self) -> &[Wire];
+    pub fn update(&mut self, doc: Option<&Doc>, at: Pt) -> bool;
+    pub fn command(&self) -> Option<Command>;
+}
 pub struct PlaceGesture { pub symbol: SymbolId, pub at: Option<Pt>, pub orient: Orient,
                           pub pressed: bool, /* private raw_cursor */ } // only a press made in Place places
 pub struct WireGesture { pub start: Option<Pt>, pub cursor: Option<Pt> } // T6.2 extends
@@ -705,7 +726,9 @@ impl ToolMachine {
     pub fn pointer_down(&mut self, doc: &Doc, doc_key: u64, at: Pt, tolerance: i32,
                         selection: &[ItemId], shift: bool) -> ToolOutcome; // ends a stale drag
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome;
+    pub fn pointer_move_with_doc(&mut self, doc: &Doc, at: Pt, left_held: bool) -> ToolOutcome; // W3.3
     pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome; // alt: WK3 at commit
+    pub fn pointer_up_with_doc(&mut self, doc: &Doc, at: Pt, alt: bool) -> ToolOutcome;       // W3.3
     pub fn cancel(&mut self) -> ToolOutcome;              // Esc; never a commit
     pub fn reorient(&mut self, by: Orient) -> ToolOutcome; // R, X, Y
     pub fn delete(&mut self) -> ToolOutcome;              // Del
@@ -796,6 +819,7 @@ impl OverlayView {
     pub fn select_all(&mut self, cx: &mut Context<Self>);
     pub fn cancel_rubber_band(&mut self, cx: &mut Context<Self>);
     pub fn set_rubber_band_preview(&mut self, anchor: Pt, current: Pt, mode: SelectMode, cx: &mut Context<Self>);
+    pub fn set_segment_drag_preview(&mut self, wire: WireId, offset: i32, cx: &mut Context<Self>) -> bool; // W3.3
     pub fn set_camera(&mut self, camera: Camera, cx: &mut Context<Self>);
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
     pub fn set_document(&mut self, doc: Entity<Doc>, cx: &mut Context<Self>);
