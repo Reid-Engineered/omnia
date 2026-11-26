@@ -24,6 +24,7 @@ use crate::{
         wires,
     },
     snap_px::{centered_square, match_parity, stroke_device_px},
+    tool::paste::apply_orient_i64,
 };
 use gpui::{App, Bounds, Hsla, Pixels, Window, fill, point, px};
 use omnia_doc::{
@@ -149,21 +150,6 @@ fn isometry_orient(transform: Isometry) -> Orient {
     match transform {
         Isometry::Translate(_) => Orient::IDENTITY,
         Isometry::Reorient { by, .. } | Isometry::Transform { by, .. } => by,
-    }
-}
-
-/// Applies `orient` to `(dx, dy)` in `i64`, matching `omnia_doc::Orient::apply` without overflow.
-#[inline]
-fn apply_orient_i64(orient: Orient, dx: i64, dy: i64) -> (i64, i64) {
-    match orient.to_raw() {
-        0 => (dx, dy),
-        1 => (-dy, dx),
-        2 => (-dx, -dy),
-        3 => (dy, -dx),
-        4 => (-dx, dy),
-        5 => (-dy, -dx),
-        6 => (dx, -dy),
-        _ => (dy, dx),
     }
 }
 
@@ -2051,34 +2037,47 @@ mod tests {
             }
         }
 
-        // K1 out-of-bounds checks: shifting pasted part, pin, bounds, wire, or label past limit sets in_bounds = false.
-        let oob_at = Pt {
-            x: SHEET_LIMIT_NM,
+        // K1 out-of-bounds checks: pushing each part, rotated/unrotated wire, or label past K1 sets in_bounds = false.
+        let p0 = &clip.parts()[0];
+        let p0_oob = Pt {
+            x: SHEET_LIMIT_NM - p0.part.at.x + g,
             y: 0,
         };
+        assert!(!resolve_paste_part(p0, p0_oob, Orient::IDENTITY, &masks).in_bounds);
+
+        let p1 = &clip.parts()[1];
+        let p1_oob = Pt {
+            x: SHEET_LIMIT_NM - p1.part.at.x + g,
+            y: 0,
+        };
+        assert!(!resolve_paste_part(p1, p1_oob, Orient::IDENTITY, &masks).in_bounds);
+
+        let cw = clip.wires()[0];
+        let cw_max_x = cw.a.x.max(cw.b.x);
+        let cw_oob = Pt {
+            x: SHEET_LIMIT_NM - cw_max_x + g,
+            y: 0,
+        };
+        assert!(!resolve_paste_wire(cw, cw_oob, Orient::IDENTITY).in_bounds);
+
         let rotated = clip.reoriented(Orient::ROT_90);
-        assert!(clip.parts().iter().any(|cp| {
-            let shifted_at = Pt {
-                x: SHEET_LIMIT_NM - cp.part.at.x + g,
-                y: 0,
-            };
-            !resolve_paste_part(cp, shifted_at, Orient::IDENTITY, &masks).in_bounds
-        }));
-        assert!(
-            rotated
-                .wires()
-                .iter()
-                .any(|&w| !resolve_paste_wire(w, oob_at, Orient::IDENTITY).in_bounds)
-                || clip
-                    .wires()
-                    .iter()
-                    .any(|&w| !resolve_paste_wire(w, oob_at, Orient::IDENTITY).in_bounds)
-        );
+        let rotated_w = rotated.wires()[0];
+        let rot_max_y = rotated_w.a.y.max(rotated_w.b.y);
+        let rot_oob = Pt {
+            x: 0,
+            y: SHEET_LIMIT_NM - rot_max_y + g,
+        };
+        assert!(!resolve_paste_wire(rotated_w, rot_oob, Orient::IDENTITY).in_bounds);
+
         let far_label = Label {
             at: Pt { x: 4 * g, y: 0 },
             text: "X".into(),
         };
-        assert!(!resolve_paste_label(&far_label, oob_at, Orient::IDENTITY).in_bounds);
+        let label_oob = Pt {
+            x: SHEET_LIMIT_NM,
+            y: 0,
+        };
+        assert!(!resolve_paste_label(&far_label, label_oob, Orient::IDENTITY).in_bounds);
     }
 
     #[gpui::test]

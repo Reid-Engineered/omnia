@@ -7318,4 +7318,178 @@ mod tests {
             assert_eq!(b.label(LabelId(0)).unwrap().text.as_ref(), "OUT");
         });
     }
+
+    #[gpui::test]
+    fn t7_1_post_paste_selection_excludes_split_existing_wires_and_includes_merged_pasted_wire(
+        cx: &mut TestAppContext,
+    ) {
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let res_def = lib.get(res);
+        let res_pins: Vec<Pt> = res_def.pins.iter().map(|p| p.at).collect();
+
+        // 1. Existing wire (0, 10)-(10, 10) split into 3 pieces by a pasted part + label at (5, 10).
+        //    Post-paste selection must contain ONLY the pasted part + pasted label (0 wires).
+        let split_base = Doc::from_items(
+            [
+                (
+                    Part {
+                        symbol: res,
+                        at: pt(0, 0),
+                        orient: Orient::IDENTITY,
+                        designator: "R1".into(),
+                        value: "1k".into(),
+                    },
+                    res_pins.clone(),
+                    res_def.bounds,
+                ),
+                // Source part for case 3 whose pin sits at (4, -10) blocking merge across (4, -10).
+                (
+                    Part {
+                        symbol: res,
+                        at: pt(4, -8),
+                        orient: Orient::ROT_90,
+                        designator: "R2".into(),
+                        value: "1k".into(),
+                    },
+                    res_pins,
+                    res_def.bounds,
+                ),
+            ],
+            [
+                del_wire((0, 10), (10, 10)),
+                del_wire((0, 20), (4, 20)),
+                del_wire((0, -10), (4, -10)),
+            ],
+            [Label {
+                at: pt(2, 0),
+                text: "SIG".into(),
+            }],
+        )
+        .unwrap();
+
+        let mut rig = open_del_rig(cx, split_base, false);
+        let (canvas, overlay, doc) = (rig.canvas.clone(), rig.overlay.clone(), rig.doc.clone());
+
+        let split_clip = rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            d.copy(&[ItemId::Part(PartId(0)), ItemId::Label(LabelId(0))])
+        });
+        rig.cx.update(|window, cx| {
+            crate::tool::paste::write_clip(split_clip, cx);
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+        });
+        move_to(&overlay, rig.cx, pt(5, 10));
+        click_world(&overlay, rig.cx, pt(5, 10));
+
+        let pasted_part = rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert_eq!(
+                d.wires()
+                    .filter(|(_, w)| w.a.y == pt(0, 10).y && w.b.y == pt(0, 10).y)
+                    .count(),
+                3,
+                "existing wire at y=10g must split into 3 pieces"
+            );
+            let pasted_pid = d
+                .parts()
+                .find(|(_, p)| p.designator.as_ref() == "R3")
+                .map(|(id, _)| ItemId::Part(id))
+                .expect("pasted part R3");
+            let pasted_lid = d
+                .labels()
+                .find(|(id, l)| *id != LabelId(0) && l.text.as_ref() == "SIG")
+                .map(|(id, _)| ItemId::Label(id))
+                .expect("pasted label");
+            assert_eq!(
+                overlay.read(cx).selection(),
+                &[pasted_pid, pasted_lid],
+                "post-paste selection must exclude unrelated split pieces of existing wire"
+            );
+            (pasted_pid, pasted_lid)
+        });
+
+        // Deleting the post-paste selection removes only pasted items and keeps all 3 split pieces.
+        rig.delete(DelPath::Key);
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert!(match pasted_part.0 {
+                ItemId::Part(id) => d.part(id).is_none(),
+                _ => false,
+            });
+            assert!(match pasted_part.1 {
+                ItemId::Label(id) => d.label(id).is_none(),
+                _ => false,
+            });
+            assert_eq!(
+                d.wires()
+                    .filter(|(_, w)| w.a.y == pt(0, 10).y && w.b.y == pt(0, 10).y)
+                    .count(),
+                3
+            );
+        });
+
+        // 2. Existing wire (0, 20)-(4, 20) collinearly extended by pasting (4, 20)-(8, 20):
+        //    the pasted wire merges into existing WireId(w_exist), so w_exist MUST be selected.
+        let (wire_clip, w_exist, w_pin_exist) = rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            let w_exist = d
+                .wires()
+                .find(|(_, w)| w.a.y == pt(0, 20).y)
+                .map(|(id, _)| id)
+                .expect("w_exist");
+            let w_pin = d
+                .wires()
+                .find(|(_, w)| w.a.y == pt(0, -10).y)
+                .map(|(id, _)| id)
+                .expect("w_pin");
+            // Copy a 4g horizontal wire from a temporary doc so copy origin aligns with (0, 0).
+            let mut src = Doc::new();
+            let sw = src
+                .apply(Command::AddWires(vec![del_wire((0, 0), (4, 0))]))
+                .unwrap()
+                .added[0];
+            (src.copy(&[sw]), w_exist, w_pin)
+        });
+        assert_eq!(wire_clip.wires()[0], del_wire((-2, 0), (2, 0)));
+        rig.cx.update(|window, cx| {
+            crate::tool::paste::write_clip(wire_clip.clone(), cx);
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+        });
+        move_to(&overlay, rig.cx, pt(6, 20));
+        click_world(&overlay, rig.cx, pt(6, 20));
+        rig.cx.update(|_, cx| {
+            assert_eq!(
+                overlay.read(cx).selection(),
+                &[ItemId::Wire(w_exist)],
+                "merged pasted wire must select its surviving WireId"
+            );
+        });
+
+        // 3. Pasting (4, -10)-(8, -10) next to pin at (4, -10): does NOT merge across pin,
+        //    so ONLY the newly pasted segment is selected (not `w_pin_exist`).
+        rig.cx.update(|window, cx| {
+            crate::tool::paste::write_clip(wire_clip, cx);
+            canvas.update(cx, |c, cx| c.paste(window, cx));
+        });
+        move_to(&overlay, rig.cx, pt(6, -10));
+        click_world(&overlay, rig.cx, pt(6, -10));
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert_eq!(
+                d.wires()
+                    .filter(|(_, w)| w.a.y == pt(0, -10).y && w.b.y == pt(0, -10).y)
+                    .count(),
+                2,
+                "existing wire and pasted wire must not merge across R2's pin"
+            );
+            let sel = overlay.read(cx).selection();
+            assert_eq!(sel.len(), 1);
+            assert_ne!(sel[0], ItemId::Wire(w_pin_exist));
+            let ItemId::Wire(new_wid) = sel[0] else {
+                panic!("expected newly pasted WireId, got {sel:?}");
+            };
+            assert_eq!(d.wire(new_wid).copied(), Some(del_wire((4, -10), (8, -10))));
+        });
+    }
 }

@@ -772,7 +772,7 @@ impl ToolMachine {
     pub fn phase(&self) -> ToolPhase;
     pub fn routes_pointer(&self) -> bool;                // T7.1: Placing, Pasting, Wiring, or ZoomingArea
     pub fn holds_capture(&self) -> bool;                 // T5.6: Dragging, pointer-driven DraggingSegment, or active ZoomArea
-    pub fn has_pending_press(&self) -> bool;             // T7.1: Placing or Pasting with pressed=true
+    pub(crate) fn has_pending_press(&self) -> bool;             // T7.1: Placing or Pasting with pressed=true
     pub fn start_paste(&mut self, clip: Arc<Clip>, raw_cursor: Option<Pt>) -> ToolOutcome; // T7.1
     pub fn set_tool(&mut self, tool: Tool) -> ToolOutcome;  // cancels any gesture first
     pub fn document_replaced(&mut self) -> ToolOutcome;     // drops every gesture, keeps the tool

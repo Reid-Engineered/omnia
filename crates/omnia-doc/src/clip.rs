@@ -276,6 +276,10 @@ fn offset_pt(base: Pt, rel: Pt) -> Result<Pt, CommandError> {
     Pt::new(x, y).map_err(|_| CommandError::OutOfBounds)
 }
 
+/// Returns the non-numeric designator stem used when allocating sequential collision names.
+///
+/// Strips trailing ASCII digits deterministically: `"U1A"` yields prefix `"U1A"` (`"U1A1"`),
+/// pure digits like `"10"` yield `""` (`"1"`), and `""` falls back to `"X"` (`"X1"`).
 fn designator_prefix(designator: &str) -> &str {
     let trimmed = designator.trim_end_matches(|c: char| c.is_ascii_digit());
     if trimmed.is_empty() {
@@ -285,16 +289,11 @@ fn designator_prefix(designator: &str) -> &str {
     }
 }
 
-fn unique_designator(
+fn next_unique_designator(
     raw: &Arc<str>,
     used: &mut FxHashSet<Arc<str>>,
     next_by_prefix: &mut FxHashMap<String, u32>,
 ) -> Arc<str> {
-    if !used.contains(raw) {
-        let kept = Arc::clone(raw);
-        used.insert(Arc::clone(&kept));
-        return kept;
-    }
     let prefix = designator_prefix(raw);
     let next = next_by_prefix.entry(prefix.to_owned()).or_insert(1);
     loop {
@@ -304,6 +303,16 @@ fn unique_designator(
             used.insert(Arc::clone(&candidate));
             return candidate;
         }
+    }
+}
+
+fn point_in_wire_strict_interior(p: Pt, w: Wire) -> bool {
+    if w.a.y == w.b.y {
+        p.y == w.a.y && w.a.x.min(w.b.x) < p.x && p.x < w.a.x.max(w.b.x)
+    } else if w.a.x == w.b.x {
+        p.x == w.a.x && w.a.y.min(w.b.y) < p.y && p.y < w.a.y.max(w.b.y)
+    } else {
+        false
     }
 }
 
@@ -361,14 +370,27 @@ pub(crate) fn apply_paste(
     }
 
     // Phase 2: ensure pasted part designators do not collide with existing parts or each other.
+    // Pass 1 reserves every non-colliding original designator first so later parts keep free names;
+    // Pass 2 assigns deterministic sequential fallback names only to colliding parts.
     if !resolved_parts.is_empty() {
         let mut used: FxHashSet<Arc<str>> = doc
             .parts()
             .map(|(_, part)| Arc::clone(&part.designator))
             .collect();
+        let mut needs_rename = vec![false; resolved_parts.len()];
+        for (i, (part, _, _)) in resolved_parts.iter().enumerate() {
+            if used.contains(&part.designator) {
+                needs_rename[i] = true;
+            } else {
+                used.insert(Arc::clone(&part.designator));
+            }
+        }
         let mut next_by_prefix: FxHashMap<String, u32> = FxHashMap::default();
-        for (part, _, _) in &mut resolved_parts {
-            part.designator = unique_designator(&part.designator, &mut used, &mut next_by_prefix);
+        for (i, (part, _, _)) in resolved_parts.iter_mut().enumerate() {
+            if needs_rename[i] {
+                part.designator =
+                    next_unique_designator(&part.designator, &mut used, &mut next_by_prefix);
+            }
         }
     }
 
@@ -404,8 +426,9 @@ pub(crate) fn apply_paste(
         landed.push(label_at);
     }
 
-    // Existing wires whose interiors receive a pasted pin or label must split into normal form
-    // (INV2, WD9); passing them alongside pasted wires runs one unified `plan_add_wires`.
+    // Existing wires whose strict interior receives a pasted pin or label must split into normal
+    // form (INV2, WD9); endpoint-only touches leave existing wires out so normalisation stays local
+    // (D2), while pasted wires themselves still pass through `plan_add_wires`.
     let wire_undo = if !landed.is_empty() || !resolved_wires.is_empty() {
         if !landed.is_empty() {
             landed.sort_unstable_by_key(|p| (p.x, p.y));
@@ -414,7 +437,12 @@ pub(crate) fn apply_paste(
             for p in landed {
                 doc.index
                     .visit_wires_unstamped(Rect { min: p, max: p }, |id, _| {
-                        touched.push(id);
+                        if doc
+                            .wire(id)
+                            .is_some_and(|w| point_in_wire_strict_interior(p, *w))
+                        {
+                            touched.push(id);
+                        }
                     });
             }
             touched.sort_unstable_by_key(|id| id.0);
@@ -911,6 +939,215 @@ mod tests {
         assert_eq!(doc.snapshot(), snap);
     }
 
+    #[test]
+    fn t7_1_two_pass_designators_preserve_free_names() {
+        let mut src = Doc::new();
+        let p1 = src
+            .apply(Command::PlacePart {
+                part: part(0, pt(0, 0), Orient::IDENTITY, "R1", "1k"),
+                local_pins: two_pin_pins(),
+                local_bounds: two_pin_bounds(),
+            })
+            .unwrap()
+            .added[0];
+        let p2 = src
+            .apply(Command::PlacePart {
+                part: part(0, pt(0, 4), Orient::IDENTITY, "R2", "2k"),
+                local_pins: two_pin_pins(),
+                local_bounds: two_pin_bounds(),
+            })
+            .unwrap()
+            .added[0];
+        let clip = src.copy(&[p1, p2]);
+
+        let mut doc = Doc::new();
+        doc.apply(Command::PlacePart {
+            part: part(0, pt(-10, 0), Orient::IDENTITY, "R1", "10k"),
+            local_pins: two_pin_pins(),
+            local_bounds: two_pin_bounds(),
+        })
+        .unwrap();
+
+        let change = doc
+            .apply(Command::Paste {
+                clip: clip.clone(),
+                at: pt(10, 0),
+            })
+            .unwrap();
+        let pasted_des: Vec<&str> = change
+            .added
+            .iter()
+            .filter_map(|&id| match id {
+                ItemId::Part(pid) => Some(&*doc.part(pid).unwrap().designator),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pasted_des, vec!["R3", "R2"]);
+
+        let mut fresh = Doc::new();
+        let cf = fresh.apply(Command::Paste { clip, at: Pt::ZERO }).unwrap();
+        let fresh_des: Vec<&str> = cf
+            .added
+            .iter()
+            .filter_map(|&id| match id {
+                ItemId::Part(pid) => Some(&*fresh.part(pid).unwrap().designator),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(fresh_des, vec!["R1", "R2"]);
+    }
+
+    #[test]
+    fn t7_1_endpoint_touched_wire_is_not_refed_or_split() {
+        let mut doc = Doc::new();
+        let existing_wire = Wire {
+            a: pt(0, 10),
+            b: pt(6, 10),
+        };
+        let ItemId::Wire(wid) = doc
+            .apply(Command::AddWires(vec![existing_wire]))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+
+        let p0 = doc
+            .apply(Command::PlacePart {
+                part: part(0, pt(0, 0), Orient::IDENTITY, "R1", "1k"),
+                local_pins: two_pin_pins(),
+                local_bounds: two_pin_bounds(),
+            })
+            .unwrap()
+            .added[0];
+        let clip = doc.copy(&[p0]);
+
+        let before = doc.fork();
+        // Right pin of R1 lands cleanly at `pt(0, 10)` (the endpoint of `wid`, not its interior).
+        let change = doc
+            .apply(Command::Paste {
+                clip,
+                at: pt(-2, 10),
+            })
+            .unwrap();
+        assert_eq!(change.added.len(), 1);
+        assert!(matches!(change.added[0], ItemId::Part(_)));
+        assert!(change.removed.is_empty());
+        assert_eq!(doc.wire(wid).copied(), Some(existing_wire));
+        assert_eq!(doc.wires().count(), 1);
+        assert_inv10_and_normal_form(&doc);
+
+        let after = doc.fork();
+        assert!(doc.undo().is_some());
+        assert!(doc.content_eq(&before));
+        assert_inv10_and_normal_form(&doc);
+        assert!(doc.redo().is_some());
+        assert!(doc.content_eq(&after));
+        assert_inv10_and_normal_form(&doc);
+    }
+
+    #[test]
+    fn t7_1_pasted_labelled_group_preserves_label_text_and_isolates_unlabelled_nets() {
+        let mut doc = Doc::new();
+        let r1 = doc
+            .apply(Command::PlacePart {
+                part: part(0, pt(-6, 0), Orient::IDENTITY, "R1", "10k"),
+                local_pins: two_pin_pins(),
+                local_bounds: two_pin_bounds(),
+            })
+            .unwrap()
+            .added[0];
+        let r2 = doc
+            .apply(Command::PlacePart {
+                part: part(0, pt(6, 0), Orient::IDENTITY, "R2", "22k"),
+                local_pins: two_pin_pins(),
+                local_bounds: two_pin_bounds(),
+            })
+            .unwrap()
+            .added[0];
+        let wires = doc
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: pt(-10, 0),
+                    b: pt(-8, 0),
+                },
+                Wire {
+                    a: pt(-4, 0),
+                    b: pt(4, 0),
+                },
+                Wire {
+                    a: pt(8, 0),
+                    b: pt(10, 0),
+                },
+            ]))
+            .unwrap()
+            .added;
+        let l_vcc = doc
+            .apply(Command::AddLabel(Label {
+                at: pt(-10, 0),
+                text: "VCC".into(),
+            }))
+            .unwrap()
+            .added[0];
+        let l_gnd = doc
+            .apply(Command::AddLabel(Label {
+                at: pt(10, 0),
+                text: "GND".into(),
+            }))
+            .unwrap()
+            .added[0];
+
+        let mut group = vec![r1, r2, l_vcc, l_gnd];
+        group.extend(wires);
+        let clip = doc.copy(&group);
+
+        let before = doc.fork();
+        let paste = doc
+            .apply(Command::Paste {
+                clip,
+                at: pt(0, 20),
+            })
+            .unwrap();
+        assert_inv10_and_normal_form(&doc);
+
+        // Unlabelled internal bridge (`(-4, 20)-(4, 20)`) is isolated from `(-4, 0)-(4, 0)`.
+        let src_internal = doc.net_at(pt(-4, 0)).expect("source internal net");
+        let pasted_internal = doc.net_at(pt(-4, 20)).expect("pasted internal net");
+        assert_ne!(src_internal, pasted_internal);
+        assert_eq!(doc.net_at(pt(4, 20)), Some(pasted_internal));
+
+        // Pasted labels retain their text verbatim and share NetIds with source labels (D2 / INV10).
+        let pasted_vcc_label = paste
+            .added
+            .iter()
+            .copied()
+            .find(|&id| match id {
+                ItemId::Label(lid) => doc.label(lid).is_some_and(|l| l.text.as_ref() == "VCC"),
+                _ => false,
+            })
+            .expect("pasted VCC label");
+        let vcc_net = doc.net_at(pt(-10, 0)).expect("source VCC net");
+        assert_eq!(doc.net_at(pt(-10, 20)), Some(vcc_net));
+        let gnd_net = doc.net_at(pt(10, 0)).expect("source GND net");
+        assert_eq!(doc.net_at(pt(10, 20)), Some(gnd_net));
+
+        // Removing the pasted VCC label separates the pasted VCC net from source VCC (INV10).
+        doc.apply(Command::Delete {
+            items: vec![pasted_vcc_label],
+            with_wires: false,
+        })
+        .unwrap();
+        let separated_vcc = doc.net_at(pt(-10, 20)).expect("local wire net");
+        assert_ne!(Some(vcc_net), Some(separated_vcc));
+        assert_eq!(doc.net_at(pt(-10, 0)), Some(vcc_net));
+        assert_inv10_and_normal_form(&doc);
+
+        assert!(doc.undo().is_some());
+        assert!(doc.undo().is_some());
+        assert!(doc.content_eq(&before));
+        assert_inv10_and_normal_form(&doc);
+    }
+
     #[derive(Clone, Debug)]
     enum GenStep {
         Place(i32, i32),
@@ -1017,10 +1254,11 @@ mod tests {
                     prop_assert!(doc.content_eq(&after));
                     assert_inv10_and_normal_form(&doc);
                 }
-                Err(_) => {
-                    prop_assert_eq!(doc.revision(), pre_rev);
-                    prop_assert_eq!(doc.snapshot(), before_snap);
-                    assert_inv10_and_normal_form(&doc);
+                Err(err) => {
+                    prop_assert!(
+                        false,
+                        "in-bounds paste of valid copied items must succeed, got {err:?}"
+                    );
                 }
             }
         }

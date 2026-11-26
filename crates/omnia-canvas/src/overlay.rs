@@ -1360,18 +1360,15 @@ impl ToolHost for OverlayView {
                     key: tool::doc_key(&self.doc),
                     revision: self.doc.read(cx).revision(),
                 };
-                let command = Command::Paste {
-                    clip: clip.reoriented(orient),
-                    at,
-                };
+                let oriented = clip.reoriented(orient);
+                let pasted_wires: Vec<Wire> = oriented
+                    .wires()
+                    .iter()
+                    .filter_map(|&w| offset_wire_in_bounds(at, w))
+                    .collect();
+                let command = Command::Paste { clip: oriented, at };
                 if let Some(change) = tool::apply_change(self, tool::Commit { command, base }, cx) {
-                    let doc = self.doc.read(cx);
-                    let pasted: Vec<ItemId> = change
-                        .added
-                        .iter()
-                        .copied()
-                        .filter(|&id| item_exists(doc, id))
-                        .collect();
+                    let pasted = pasted_selection(self.doc.read(cx), &change.added, &pasted_wires);
                     if !pasted.is_empty() {
                         self.set_selection(pasted, cx);
                     }
@@ -2499,6 +2496,70 @@ fn paint_overlay(
             }
         });
     });
+}
+
+/// Offsets a clip wire by `at` using `i64` arithmetic, returning `None` if outside K1.
+fn offset_wire_in_bounds(at: Pt, w: Wire) -> Option<Wire> {
+    let ax = i32::try_from(i64::from(at.x) + i64::from(w.a.x)).ok()?;
+    let ay = i32::try_from(i64::from(at.y) + i64::from(w.a.y)).ok()?;
+    let bx = i32::try_from(i64::from(at.x) + i64::from(w.b.x)).ok()?;
+    let by = i32::try_from(i64::from(at.y) + i64::from(w.b.y)).ok()?;
+    Some(Wire {
+        a: Pt::new(ax, ay).ok()?,
+        b: Pt::new(bx, by).ok()?,
+    })
+}
+
+/// Returns `true` when axis-aligned wires `a` and `b` are collinear and share positive length.
+fn wire_overlaps_collinear(a: Wire, b: Wire) -> bool {
+    if a.a.y == a.b.y && b.a.y == b.b.y && a.a.y == b.a.y {
+        let lo = a.a.x.min(a.b.x).max(b.a.x.min(b.b.x));
+        let hi = a.a.x.max(a.b.x).min(b.a.x.max(b.b.x));
+        lo < hi
+    } else if a.a.x == a.b.x && b.a.x == b.b.x && a.a.x == b.a.x {
+        let lo = a.a.y.min(a.b.y).max(b.a.y.min(b.b.y));
+        let hi = a.a.y.max(a.b.y).min(b.a.y.max(b.b.y));
+        lo < hi
+    } else {
+        false
+    }
+}
+
+/// Selects only the pasted parts/labels and live wires overlapping the pasted clip wire
+/// geometry, excluding unrelated split pieces of pre-existing wires while including pasted
+/// wires that collinearly merged into pre-existing segments (`T7.1`).
+fn pasted_selection(doc: &Doc, added: &[ItemId], pasted_wires: &[Wire]) -> Vec<ItemId> {
+    let mut selected = Vec::with_capacity(added.len() + pasted_wires.len());
+    for &id in added {
+        match id {
+            ItemId::Part(pid) if doc.part(pid).is_some() => selected.push(id),
+            ItemId::Label(lid) if doc.label(lid).is_some() => selected.push(id),
+            _ => {}
+        }
+    }
+    if !pasted_wires.is_empty() {
+        let mut hits = Vec::new();
+        let mut wids = Vec::new();
+        for &pw in pasted_wires {
+            let Ok(bounds) = Rect::from_points(pw.a, pw.b) else {
+                continue;
+            };
+            doc.query(bounds, &mut hits);
+            for &hit in &hits {
+                if let ItemId::Wire(wid) = hit
+                    && doc
+                        .wire(wid)
+                        .is_some_and(|&live| wire_overlaps_collinear(live, pw))
+                {
+                    wids.push(wid);
+                }
+            }
+        }
+        wids.sort_unstable_by_key(|wid| wid.0);
+        wids.dedup();
+        selected.extend(wids.into_iter().map(ItemId::Wire));
+    }
+    selected
 }
 
 #[cfg(test)]

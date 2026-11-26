@@ -58,7 +58,7 @@ pub fn clear_clip(cx: &mut App) {
 
 /// Applies `orient` to `(dx, dy)` in `i64` without overflow.
 #[inline]
-fn apply_orient_i64(orient: Orient, dx: i64, dy: i64) -> (i64, i64) {
+pub(crate) fn apply_orient_i64(orient: Orient, dx: i64, dy: i64) -> (i64, i64) {
     match orient.to_raw() {
         0 => (dx, dy),
         1 => (-dy, dx),
