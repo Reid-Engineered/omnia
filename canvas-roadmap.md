@@ -618,7 +618,7 @@ of the `canvas` lane.
 - Replaced by [wiring-roadmap.md](wiring-roadmap.md) W2.1 to W2.5 (Q6/WQ1 answered "yes"
   on 2026-11-16; no longer blocked). See [wiring-plan.md](wiring-plan.md) WD3.
 
-### T6.4 Gate: milestone 6 · needs-human
+### T6.4 Gate: milestone 6 · done
 - Lane: bench · Depends: T6.2
 - Do: add the `drag-wire` script. `bench run --sheet 1k --script drag-wire` and
   `--sheet dense`: B6 and B3. The INV2, INV9 and INV10 property tests at 10× the default
@@ -2564,3 +2564,21 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        gate test, `INV9` deviation wording, plus nits: `MouseUp`, `integer_count`
                        for `sheet_paints`, warm-up vs measured `INV5` wording). Left `needs-human`
                        awaiting Orion reference certification via `docs/measurements/T6.4/owner-run.sh`.
+
+2026-11-26 T6.4 done — Orion reference campaign on clean fecb2c1, frozen gate unchanged:
+                       all 160 invocations passed at 100% and 125% (43m 37s); all 120
+                       motion attribution checks passed with zero over-limit intervals.
+                       B6 1k/dense drag-wire median p99: 1.905/2.103 ms at 100%,
+                       1.422/1.588 ms at 125%; B3/B4/B5 and the full T2.7 table passed;
+                       B9 maximum 168.242 MB; B10, INV5 and INV11 zero in every drag run.
+                       Hardware: Orion i5-7300U, HD 620 Vulkan, Linux Wayland,
+                       1920x1080 at 60.008 Hz, AC, performance governor (restored).
+                       Owner-authorized remote wrapper; transport and monitoring SSH
+                       disclosed in docs/measurements/T6.4.md. No thresholds or defaults
+                       changed. Full omnia-doc library suite on the same commit after
+                       timing: PROPTEST_CASES=2560, 203/203 passed (978.13 s), covering
+                       INV2/INV9/INV10 at >=10x defaults. Raw reports, binary hashes,
+                       fixed order, conditions and test log archived under
+                       docs/measurements/T6.4/orion-2026-11-26/; summary replay matches.
+                       Results PR: fmt, diff check, 14 gate tests and replay passed
+                       locally; remaining standard Rust checks left to CI.
