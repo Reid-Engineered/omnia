@@ -439,7 +439,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        in ss1-windows.txt, rebuilt libngspice-0.dll and
                        re-measured Windows diagnostics (0 coop stops, 50/50
                        hard-kill fallbacks, 0 orphans). Status stays needs-human.
-2026-11-25 S0.3 second review fixes — Addressed PR #141 second Codex review
+2026-11-25 S0.3 second review fixes — Addressed PR #141 second independent review
                        findings (all 5): updated `NgspiceLib::Drop` to pin library,
                        callback state, and singleton guard for the process lifetime
                        whenever a background solver thread was ever started (avoiding
@@ -452,7 +452,7 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        absolute path in `run-orion.sh`; removed redundant OS vendor word
                        in `S0.3.md` and qualified PR #141 `SB4` claim cleanly. Status
                        stays needs-human.
-2026-11-25 S0.3 third review fixes — Addressed PR #141 third Codex review
+2026-11-25 S0.3 third review fixes — Addressed PR #141 third independent review
                        findings (all 4): latched background-run pinning across
                        `NgspiceLib::command`, `start_tran_bg`, `is_running`, and
                        `cb_bg_thread_running` (and aligned `S0.3.md` table);
@@ -463,4 +463,13 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        directory resolution in `run-orion.sh`; stripped the redundant
                        OS vendor prefix in `conditions.ps1` and both Windows
                        condition snapshots. Status stays needs-human.
+2026-11-25 S0.3 fourth review fixes — Addressed PR #141 fourth independent review
+                       findings (all 3): made raw `command`/`reset_circuit`/
+                       `load_circuit` helpers private in `ngspice.rs`, latched pinning
+                       before any `bg_*` (non-halt), `controlswait`, `source`, or
+                       `.control` call, and updated `S0.3.md` accordingly; checked
+                       `child.kill()` success and OS host-kill exit status in
+                       `worker_client.rs` so pre-kill exits cannot inflate `HardKilled`
+                       or hide nonzero exits; removed third-party review-tool names
+                       from the roadmap log. Status stays needs-human.
 ```

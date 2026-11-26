@@ -415,14 +415,21 @@ unsafe extern "C" fn cb_bg_thread_running(
     0
 }
 
-fn is_bg_command(cmd: &str) -> bool {
+fn may_spawn_ngspice_thread(cmd: &str) -> bool {
     cmd.split([';', '\n', '\r']).any(|stmt| {
         stmt.split_whitespace().next().is_some_and(|tok| {
-            matches!(
-                tok.to_ascii_lowercase().as_str(),
-                "bg_run" | "bg_resume" | "bg_step" | "bg_trun"
-            )
+            let lower = tok.to_ascii_lowercase();
+            (lower.starts_with("bg_") && !matches!(lower.as_str(), "bg_halt" | "bg_pstop"))
+                || matches!(lower.as_str(), "controlswait" | "source")
         })
+    })
+}
+
+fn netlist_has_control_block(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        line.trim_start()
+            .to_ascii_lowercase()
+            .starts_with(".control")
     })
 }
 
@@ -536,8 +543,8 @@ impl NgspiceLib {
         }
     }
 
-    pub fn command(&mut self, cmd: &str) -> Result<(), String> {
-        if is_bg_command(cmd) {
+    fn command(&mut self, cmd: &str) -> Result<(), String> {
+        if may_spawn_ngspice_thread(cmd) {
             self.mark_bg_ever_started();
         }
         let cstr = CString::new(cmd).map_err(|e| format!("invalid command string: {e}"))?;
@@ -559,13 +566,16 @@ impl NgspiceLib {
         self.command("bg_halt")
     }
 
-    pub fn reset_circuit(&mut self) -> Result<(), String> {
+    fn reset_circuit(&mut self) -> Result<(), String> {
         let _ = self.command("destroy all");
         let _ = self.command("remcirc");
         Ok(())
     }
 
-    pub fn load_circuit(&mut self, lines: &[String]) -> Result<(), String> {
+    fn load_circuit(&mut self, lines: &[String]) -> Result<(), String> {
+        if netlist_has_control_block(lines) {
+            self.mark_bg_ever_started();
+        }
         let cstrings: Vec<CString> = lines
             .iter()
             .map(|l| CString::new(l.as_str()).map_err(|e| format!("nul in netlist line: {e}")))
@@ -836,17 +846,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_bg_command_detects_bg_entry_points() {
-        assert!(is_bg_command("bg_run"));
-        assert!(is_bg_command("  BG_RUN "));
-        assert!(is_bg_command("bg_resume"));
-        assert!(is_bg_command("bg_step"));
-        assert!(is_bg_command("bg_trun"));
-        assert!(is_bg_command("echo start; bg_run"));
-        assert!(!is_bg_command("op"));
-        assert!(!is_bg_command("run"));
-        assert!(!is_bg_command("bg_halt"));
-        assert!(!is_bg_command("destroy all"));
+    fn may_spawn_and_control_detection() {
+        assert!(may_spawn_ngspice_thread("bg_run"));
+        assert!(may_spawn_ngspice_thread("  BG_OP "));
+        assert!(may_spawn_ngspice_thread("bg_ac"));
+        assert!(may_spawn_ngspice_thread("bg_resume"));
+        assert!(may_spawn_ngspice_thread("bg_step"));
+        assert!(may_spawn_ngspice_thread("bg_trun"));
+        assert!(may_spawn_ngspice_thread("controlswait"));
+        assert!(may_spawn_ngspice_thread("source helper.sp"));
+        assert!(may_spawn_ngspice_thread("echo start; bg_op"));
+        assert!(!may_spawn_ngspice_thread("op"));
+        assert!(!may_spawn_ngspice_thread("run"));
+        assert!(!may_spawn_ngspice_thread("bg_halt"));
+        assert!(!may_spawn_ngspice_thread("bg_pstop"));
+        assert!(!may_spawn_ngspice_thread("destroy all"));
+
+        assert!(netlist_has_control_block(&[
+            "* test".into(),
+            "  .CONTROL ".into(),
+            "op".into(),
+            ".endc".into()
+        ]));
+        assert!(!netlist_has_control_block(&[
+            "* comment".into(),
+            "R1 1 0 1k".into(),
+            ".end".into()
+        ]));
     }
 
     #[test]

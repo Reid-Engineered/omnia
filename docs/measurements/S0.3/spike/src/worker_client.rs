@@ -54,6 +54,53 @@ fn classify_cooperative_exit(
     }
 }
 
+#[cfg(unix)]
+fn is_host_kill_status(status: std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal() == Some(9)
+}
+
+#[cfg(windows)]
+fn is_host_kill_status(status: std::process::ExitStatus) -> bool {
+    status.code() == Some(1)
+}
+
+fn classify_post_kill_exit(
+    after_ack: bool,
+    kill_ok: bool,
+    status_success: bool,
+    host_kill_status: bool,
+    status_desc: impl std::fmt::Display,
+) -> Result<CancelMode, String> {
+    if status_success {
+        return if after_ack {
+            Ok(CancelMode::CooperativeLateReaped)
+        } else {
+            Err("worker exited cleanly without acknowledging Cancel".into())
+        };
+    }
+    if kill_ok && host_kill_status {
+        return Ok(CancelMode::HardKilled);
+    }
+    Err(format!(
+        "worker exited before host kill took effect (kill_ok={kill_ok}, status={status_desc})"
+    ))
+}
+
+fn kill_and_reap(child: &mut Child, after_ack: bool) -> Result<CancelMode, String> {
+    let kill_ok = child.kill().is_ok();
+    let status = child
+        .wait()
+        .map_err(|e| format!("wait after kill failed: {e}"))?;
+    classify_post_kill_exit(
+        after_ack,
+        kill_ok,
+        status.success(),
+        is_host_kill_status(status),
+        status,
+    )
+}
+
 #[derive(Debug)]
 pub struct CancelOutcome {
     pub pid: u32,
@@ -317,10 +364,9 @@ impl WorkerClient {
                                 mode = classify_cooperative_exit(status.success(), false, status)?;
                             }
                             Ok(None) => {
-                                let _ = self.child.kill();
-                                let _ = self.child.wait();
+                                let res = kill_and_reap(&mut self.child, true);
                                 let _ = reader.join();
-                                mode = CancelMode::HardKilled;
+                                mode = res?;
                             }
                             Err(e) => {
                                 let _ = self.child.kill();
@@ -366,10 +412,9 @@ impl WorkerClient {
                             ));
                         }
                         Ok(None) => {
-                            let _ = self.child.kill();
-                            let _ = self.child.wait();
+                            let res = kill_and_reap(&mut self.child, false);
                             let _ = reader.join();
-                            mode = CancelMode::HardKilled;
+                            mode = res?;
                         }
                         Err(e) => {
                             let _ = self.child.kill();
@@ -381,11 +426,9 @@ impl WorkerClient {
                 }
             }
         } else {
-            mode = CancelMode::HardKilled;
-            let _ = self.child.kill();
-            let _ = self.child.wait();
             drop(self.stdin);
             drop(self.stdout);
+            mode = kill_and_reap(&mut self.child, false)?;
         }
 
         let cancel_elapsed = t_cancel.elapsed();
@@ -475,5 +518,25 @@ mod tests {
         );
         assert!(classify_cooperative_exit(false, true, "1").is_err());
         assert!(classify_cooperative_exit(false, false, "1").is_err());
+    }
+
+    #[test]
+    fn post_kill_exit_classification_handles_late_clean_exits_and_kill_races() {
+        assert_eq!(
+            classify_post_kill_exit(true, false, true, false, "0"),
+            Ok(CancelMode::CooperativeLateReaped)
+        );
+        assert_eq!(
+            classify_post_kill_exit(true, true, true, false, "0"),
+            Ok(CancelMode::CooperativeLateReaped)
+        );
+        assert!(classify_post_kill_exit(false, false, true, false, "0").is_err());
+        assert_eq!(
+            classify_post_kill_exit(true, true, false, true, "1"),
+            Ok(CancelMode::HardKilled)
+        );
+        assert!(classify_post_kill_exit(true, false, false, true, "1").is_err());
+        assert!(classify_post_kill_exit(true, true, false, false, "2").is_err());
+        assert!(classify_post_kill_exit(false, true, false, false, "2").is_err());
     }
 }
