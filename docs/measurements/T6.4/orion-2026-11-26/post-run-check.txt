@@ -1,0 +1,8 @@
+2026-11-26T08:02:13Z
+fecb2c1c81f40ba7ab1f9791487f3ce424c64e02
+/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor:powersave
+/sys/devices/system/cpu/cpu1/cpufreq/scaling_governor:powersave
+/sys/devices/system/cpu/cpu2/cpufreq/scaling_governor:powersave
+/sys/devices/system/cpu/cpu3/cpufreq/scaling_governor:powersave
+ready
+restored governors and tailscaled (kept running (active)) 2026-11-26T07:40:22Z

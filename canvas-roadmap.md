@@ -2582,3 +2582,11 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        docs/measurements/T6.4/orion-2026-11-26/; summary replay matches.
                        Results PR: fmt, diff check, 14 gate tests and replay passed
                        locally; remaining standard Rust checks left to CI.
+
+2026-11-26 T6.4 review — Independent review approved the Orion certification evidence.
+                       Clarified that invariant command/env provenance is in the
+                       coordinating execution record rather than the bare cargo log;
+                       disclosed Baloo indexed-file growth (+142, 0.01 CPU seconds),
+                       and archived a later post-test governor/source check. Existing
+                       Linux-only unused window warning in spike/shell_cache.rs:1657
+                       is a separate fix follow-up; no code changed for this gate.
