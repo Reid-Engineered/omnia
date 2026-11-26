@@ -16,7 +16,8 @@
 //!   - `worker-stream-tran`: 100k+ points × 2 channels streamed over worker stdout binary IPC.
 //!   - `inproc-stream-tran`: exact same 100k+ points × 2 channels via in-process `SendData`.
 //! - Suite 3 (Cancel / SB4 < 100 ms, SK11 50 ms grace, 0 orphan processes):
-//!   - `worker-cancel-coop-kill`: cooperative `bg_halt` with 50 ms grace then hard kill + reap + PID check.
+//!   - `worker-cancel-coop-kill`: cooperative `bg_halt` with 50 ms total deadline covering
+//!     cancel + clean exit + reap; hard-kills and records hard-kill fallback if exceeded.
 //!   - `worker-cancel-hard-kill`: immediate hard kill + reap + PID check.
 //!   - `inproc-cancel-bghalt`: in-process `bg_halt` latency baseline.
 
@@ -28,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use omnia_s03_spike::circuits;
 use omnia_s03_spike::ngspice::{NgspiceLib, SampleSink};
-use omnia_s03_spike::worker_client::WorkerClient;
+use omnia_s03_spike::worker_client::{CancelMode, WorkerClient};
 
 struct Args {
     lib: PathBuf,
@@ -122,16 +123,29 @@ fn pct(sorted: &[u64], p: f64) -> u64 {
     sorted[rank.min(sorted.len()) - 1]
 }
 
-fn median(v: &mut [u64]) -> u64 {
+fn median_ns_as_ms(v: &mut [u64]) -> f64 {
     if v.is_empty() {
-        return 0;
+        return 0.0;
     }
     v.sort_unstable();
     let n = v.len();
     if n % 2 == 1 {
+        v[n / 2] as f64 / 1e6
+    } else {
+        (v[n / 2 - 1] as f64 + v[n / 2] as f64) / 2.0 / 1e6
+    }
+}
+
+fn median_f64(v: &mut [f64]) -> f64 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|x, y| x.total_cmp(y));
+    let n = v.len();
+    if n % 2 == 1 {
         v[n / 2]
     } else {
-        (v[n / 2 - 1] + v[n / 2]) / 2
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
     }
 }
 
@@ -226,7 +240,7 @@ fn run_startup_iter(
     worker_bin: &Path,
     lib_path: &Path,
     warm_worker: &mut WorkerClient,
-    inproc: &NgspiceLib,
+    inproc: &mut NgspiceLib,
     batch_size: u32,
 ) -> (u64, u64) {
     let op_net = circuits::simple_op_netlist();
@@ -300,7 +314,7 @@ fn main() {
 
     // Measure one-time in-process dlopen + ngSpice_Init cost.
     let t_dlopen = Instant::now();
-    let inproc = NgspiceLib::load(&a.lib).expect("load inproc libngspice");
+    let mut inproc = NgspiceLib::load(&a.lib).expect("load inproc libngspice");
     let inproc_dlopen_ns = t_dlopen.elapsed().as_nanos() as u64;
 
     // Sanity check OP accuracy on both modes before timing.
@@ -345,7 +359,6 @@ fn main() {
         );
         for &k in &order {
             let c = StartupCase::ALL[k];
-            // 1 untimed warmup for warm cases
             if matches!(
                 c,
                 StartupCase::WorkerWarmWienFirst | StartupCase::InprocWienFirst
@@ -355,7 +368,7 @@ fn main() {
                     &a.worker,
                     &a.lib,
                     &mut warm_worker,
-                    &inproc,
+                    &mut inproc,
                     a.batch_size,
                 );
             }
@@ -366,7 +379,7 @@ fn main() {
                     &a.worker,
                     &a.lib,
                     &mut warm_worker,
-                    &inproc,
+                    &mut inproc,
                     a.batch_size,
                 );
                 s.push(ns);
@@ -380,8 +393,7 @@ fn main() {
                 );
             }
             s1_all[k].extend_from_slice(&s);
-            s.sort_unstable();
-            let p50 = pct(&s, 50.0);
+            let p50_ms = median_ns_as_ms(&mut s);
             let p99 = pct(&s, 99.0);
             let max = *s.last().unwrap_or(&0);
             s1_p99s[k].push(p99);
@@ -389,7 +401,7 @@ fn main() {
                 per_run_json,
                 "      {{\"suite\": \"startup\", \"rep\": {rep}, \"case\": \"{}\", \"p50_ms\": {:.4}, \"p99_ms\": {:.4}, \"max_ms\": {:.4}}},",
                 c.name(),
-                ms(p50),
+                p50_ms,
                 ms(p99),
                 ms(max)
             );
@@ -457,8 +469,7 @@ fn main() {
                 );
             }
             s2_all_ns[k].extend_from_slice(&s);
-            s.sort_unstable();
-            let p50 = pct(&s, 50.0);
+            let p50_ms = median_ns_as_ms(&mut s);
             let p99 = pct(&s, 99.0);
             let max = *s.last().unwrap_or(&0);
             s2_p99s[k].push(p99);
@@ -466,7 +477,7 @@ fn main() {
                 per_run_json,
                 "      {{\"suite\": \"stream\", \"rep\": {rep}, \"case\": \"{}\", \"p50_ms\": {:.4}, \"p99_ms\": {:.4}, \"max_ms\": {:.4}}},",
                 c.name(),
-                ms(p50),
+                p50_ms,
                 ms(p99),
                 ms(max)
             );
@@ -519,11 +530,14 @@ fn main() {
                             .expect("worker cancel");
                         let ns = outcome.cancel_elapsed.as_nanos() as u64;
                         s.push(ns);
-                        if outcome.cooperative_stopped {
-                            coop_stops += 1;
-                        }
-                        if outcome.hard_killed && !hard_only {
-                            hard_kills += 1;
+                        let is_coop = outcome.mode == CancelMode::CooperativeReaped;
+                        let is_hard = outcome.mode == CancelMode::HardKilled;
+                        if !hard_only {
+                            if is_coop {
+                                coop_stops += 1;
+                            } else {
+                                hard_kills += 1;
+                            }
                         }
                         if outcome.pid_alive_after {
                             total_orphans += 1;
@@ -532,8 +546,8 @@ fn main() {
                             csv,
                             "cancel,{rep},{},{it},{ns},0,0,0,0,0,{},{},{}",
                             c.name(),
-                            u8::from(outcome.cooperative_stopped),
-                            u8::from(outcome.hard_killed),
+                            u8::from(is_coop),
+                            u8::from(is_hard),
                             u8::from(outcome.pid_alive_after)
                         );
                     }
@@ -567,8 +581,7 @@ fn main() {
                 }
             }
             s3_all_ns[k].extend_from_slice(&s);
-            s.sort_unstable();
-            let p50 = pct(&s, 50.0);
+            let p50_ms = median_ns_as_ms(&mut s);
             let p99 = pct(&s, 99.0);
             let max = *s.last().unwrap_or(&0);
             s3_p99s[k].push(p99);
@@ -576,7 +589,7 @@ fn main() {
                 per_run_json,
                 "      {{\"suite\": \"cancel\", \"rep\": {rep}, \"case\": \"{}\", \"p50_ms\": {:.4}, \"p99_ms\": {:.4}, \"max_ms\": {:.4}}},",
                 c.name(),
-                ms(p50),
+                p50_ms,
                 ms(p99),
                 ms(max)
             );
@@ -594,17 +607,17 @@ fn main() {
 
     for (k, c) in StartupCase::ALL.iter().enumerate() {
         let mut runs = s1_p99s[k].clone();
-        let med = median(&mut runs);
+        let med_ms = median_ns_as_ms(&mut runs);
         let (lo, hi) = (runs[0], *runs.last().unwrap_or(&0));
         let mut all = s1_all[k].clone();
-        all.sort_unstable();
+        let all_p50_ms = median_ns_as_ms(&mut all);
         summary_entries.push(format!(
             "    {{\"suite\": \"startup\", \"case\": \"{}\", \"median_run_p99_ms\": {:.4}, \"run_p99_min_ms\": {:.4}, \"run_p99_max_ms\": {:.4}, \"all_p50_ms\": {:.4}, \"all_p99_ms\": {:.4}, \"all_max_ms\": {:.4}, \"samples\": {}}}",
             c.name(),
-            ms(med),
+            med_ms,
             ms(lo),
             ms(hi),
-            ms(pct(&all, 50.0)),
+            all_p50_ms,
             ms(pct(&all, 99.0)),
             ms(*all.last().unwrap_or(&0)),
             all.len(),
@@ -613,33 +626,31 @@ fn main() {
             table,
             "{:<26} median run p99 {:>8.3} ms  range {:>7.3}-{:<7.3} ms  p50 {:>7.3} ms",
             c.name(),
-            ms(med),
+            med_ms,
             ms(lo),
             ms(hi),
-            ms(pct(&all, 50.0)),
+            all_p50_ms,
         );
     }
 
     for (k, c) in StreamCase::ALL.iter().enumerate() {
         let mut runs = s2_p99s[k].clone();
-        let med = median(&mut runs);
+        let med_ms = median_ns_as_ms(&mut runs);
         let (lo, hi) = (runs[0], *runs.last().unwrap_or(&0));
         let mut all = s2_all_ns[k].clone();
-        all.sort_unstable();
+        let all_p50_ms = median_ns_as_ms(&mut all);
         let mut pts_s = s2_pts_s[k].clone();
-        pts_s.sort_by(|x, y| x.total_cmp(y));
-        let med_pts_s = pts_s[pts_s.len() / 2];
+        let med_pts_s = median_f64(&mut pts_s);
         let mut ch_s = s2_ch_s[k].clone();
-        ch_s.sort_by(|x, y| x.total_cmp(y));
-        let med_ch_s = ch_s[ch_s.len() / 2];
+        let med_ch_s = median_f64(&mut ch_s);
         summary_entries.push(format!(
             "    {{\"suite\": \"stream\", \"case\": \"{}\", \"points\": {}, \"median_run_p99_ms\": {:.4}, \"run_p99_min_ms\": {:.4}, \"run_p99_max_ms\": {:.4}, \"all_p50_ms\": {:.4}, \"median_points_per_sec\": {:.1}, \"median_channel_samples_per_sec\": {:.1}, \"samples\": {}}}",
             c.name(),
             stream_points_seen,
-            ms(med),
+            med_ms,
             ms(lo),
             ms(hi),
-            ms(pct(&all, 50.0)),
+            all_p50_ms,
             med_pts_s,
             med_ch_s,
             all.len(),
@@ -648,8 +659,8 @@ fn main() {
             table,
             "{:<26} median run p99 {:>8.3} ms  p50 {:>7.3} ms  rate {:>9.0} pts/s ({:.0} ch-S/s)",
             c.name(),
-            ms(med),
-            ms(pct(&all, 50.0)),
+            med_ms,
+            all_p50_ms,
             med_pts_s,
             med_ch_s,
         );
@@ -657,17 +668,17 @@ fn main() {
 
     for (k, c) in CancelCase::ALL.iter().enumerate() {
         let mut runs = s3_p99s[k].clone();
-        let med = median(&mut runs);
+        let med_ms = median_ns_as_ms(&mut runs);
         let (lo, hi) = (runs[0], *runs.last().unwrap_or(&0));
         let mut all = s3_all_ns[k].clone();
-        all.sort_unstable();
+        let all_p50_ms = median_ns_as_ms(&mut all);
         summary_entries.push(format!(
             "    {{\"suite\": \"cancel\", \"case\": \"{}\", \"median_run_p99_ms\": {:.4}, \"run_p99_min_ms\": {:.4}, \"run_p99_max_ms\": {:.4}, \"all_p50_ms\": {:.4}, \"all_p99_ms\": {:.4}, \"all_max_ms\": {:.4}, \"samples\": {}}}",
             c.name(),
-            ms(med),
+            med_ms,
             ms(lo),
             ms(hi),
-            ms(pct(&all, 50.0)),
+            all_p50_ms,
             ms(pct(&all, 99.0)),
             ms(*all.last().unwrap_or(&0)),
             all.len(),
@@ -676,15 +687,14 @@ fn main() {
             table,
             "{:<26} median run p99 {:>8.3} ms  range {:>7.3}-{:<7.3} ms  p50 {:>7.3} ms",
             c.name(),
-            ms(med),
+            med_ms,
             ms(lo),
             ms(hi),
-            ms(pct(&all, 50.0)),
+            all_p50_ms,
         );
     }
 
-    s1_spawn_ready_all.sort_unstable();
-    let spawn_ready_p50_ms = ms(pct(&s1_spawn_ready_all, 50.0));
+    let spawn_ready_p50_ms = median_ns_as_ms(&mut s1_spawn_ready_all);
     let spawn_ready_p99_ms = ms(pct(&s1_spawn_ready_all, 99.0));
 
     let per_run_trimmed = per_run_json.trim_end().trim_end_matches(',');
@@ -715,7 +725,7 @@ fn main() {
     std::fs::write(format!("{stem}.csv"), csv).expect("write csv");
     std::fs::write(format!("{stem}-order.txt"), order_log).expect("write order");
 
-    println!(
+    print!(
         "SS1 complete (reps={}, batch={}, inproc_dlopen={:.2} ms, spawn_ready p50={:.2} ms p99={:.2} ms, coop_stops={}, hard_fallbacks={}, orphans={})\n{table}",
         a.reps,
         a.batch_size,

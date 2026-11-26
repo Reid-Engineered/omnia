@@ -425,4 +425,18 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        Windows bg_halt Sleep(100) makes in-proc cancel 109.00 ms
                        and coop+wait 114.49 ms (exceeding SB4 100 ms). SD5 stays
                        HYPOTHESIS pending Orion run via docs/measurements/S0.3/run-orion.sh.
+2026-11-25 S0.3 review fixes — Addressed PR #141 independent review findings
+                       (all 5): enforced process-global singleton InstanceGuard,
+                       removed Sync, serialized FFI via &mut self and safe Drop
+                       (bg_halt + join + detach before library unload); applied
+                       50 ms SK11 deadline across total cancel+exit+reap,
+                       distinguished RunDone from Cancelled, and surfaced OS
+                       PID liveness errors via io::Result<bool>; added pre-alloc
+                       IPC count/batch-size bounds and negative tests; stamped
+                       run-orion.sh source/build reuse by SHA-256 + flags and
+                       replaced head pipes with pipefail-safe awk; fixed even-N
+                       medians, scrubbed DLL paths, removed trailing blank line
+                       in ss1-windows.txt, rebuilt libngspice-0.dll and
+                       re-measured Windows diagnostics (0 coop stops, 50/50
+                       hard-kill fallbacks, 0 orphans). Status stays needs-human.
 ```

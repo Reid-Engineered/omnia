@@ -18,6 +18,42 @@ NGSPICE_VER="47"
 NGSPICE_URL="https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/${NGSPICE_VER}/ngspice-${NGSPICE_VER}.tar.gz"
 NGSPICE_SHA256="894e649651f1838a14095e5a5439e7d3aa63e87ede14d283173fda4fcdef675f"
 
+CONFIGURE_FLAGS=(
+  --disable-dependency-tracking
+  --with-ngshared
+  --disable-debug
+  --enable-xspice
+  --disable-cider
+  --disable-klu
+  --disable-osdi
+  --disable-openmp
+  --without-x
+  --with-readline=no
+  --with-editline=no
+  --with-fftw3=no
+)
+BUILD_SUBDIRS=(
+  src/misc
+  src/maths
+  src/frontend
+  src/spicelib
+  src/xspice/mif
+  src/xspice/cm
+  src/xspice/enh
+  src/xspice/evt
+  src/xspice/idn
+)
+BUILD_CFLAGS="-O2"
+
+# Deterministic stamp binding any reused source/build/install tree to the exact verified
+# tarball hash, configure flags, CFLAGS, and built subdirs.
+BUILD_STAMP="$(
+  printf 'ver=%s\nsha256=%s\ncflags=%s\nflags=%s\nsubdirs=%s\n' \
+    "$NGSPICE_VER" "$NGSPICE_SHA256" "$BUILD_CFLAGS" \
+    "${CONFIGURE_FLAGS[*]}" "${BUILD_SUBDIRS[*]}" \
+  | sha256sum | awk '{print $1}'
+)"
+
 # Fixed benchmark schedule (same as Windows diagnostic run).
 REPS=10
 STARTUP_ITERS=10
@@ -55,59 +91,55 @@ fi
 printf '%s  ngspice-%s.tar.gz\n' "$actual_sha" "$NGSPICE_VER" > "$results/tarball-${label}.sha256"
 
 src_dir="$work_dir/ngspice-${NGSPICE_VER}"
-if [ ! -d "$src_dir" ]; then
+src_stamp="$src_dir/.omnia-s03-src.stamp"
+if [ ! -f "$src_stamp" ] || [ "$(cat "$src_stamp")" != "$NGSPICE_SHA256" ]; then
+  echo "==> Extracting verified ngspice-${NGSPICE_VER} source tree..."
+  rm -rf "$src_dir"
   tar -xzf "$tarball" -C "$work_dir"
+  printf '%s\n' "$NGSPICE_SHA256" > "$src_stamp"
 fi
 
 build_dir="$work_dir/build-linux"
 install_dir="$work_dir/install-linux"
+build_stamp_file="$install_dir/.omnia-s03-build.stamp"
 lib_path="$install_dir/lib/libngspice.so"
 
-if [ ! -f "$lib_path" ]; then
-  echo "==> Configuring and building libngspice.so..."
+if [ ! -f "$build_stamp_file" ] || [ "$(cat "$build_stamp_file")" != "$BUILD_STAMP" ] || [ ! -f "$lib_path" ]; then
+  echo "==> Configuring and building libngspice.so (stamp=${BUILD_STAMP:0:12})..."
   rm -rf "$build_dir" "$install_dir"
   mkdir -p "$build_dir" "$install_dir"
   (
     cd "$build_dir"
     "$src_dir/configure" \
       --prefix="$install_dir" \
-      --disable-dependency-tracking \
-      --with-ngshared \
-      --disable-debug \
-      --enable-xspice \
-      --disable-cider \
-      --disable-klu \
-      --disable-osdi \
-      --disable-openmp \
-      --without-x \
-      --with-readline=no \
-      --with-editline=no \
-      --with-fftw3=no \
-      CFLAGS="-O2"
+      "${CONFIGURE_FLAGS[@]}" \
+      CFLAGS="$BUILD_CFLAGS"
     # Build only the libraries linked into libngspice.so; skip src/xspice/icm (external
     # .cm codemodels, including GPLv2+ table.cm and GCC 15 implicit-decl issues in
-    # xtradev/seegenerator). Omnia loads only libngspice.so with ngSpice_nospinit().
-    for sub in src/misc src/maths src/frontend src/spicelib \
-               src/xspice/mif src/xspice/cm src/xspice/enh src/xspice/evt src/xspice/idn; do
+    # xtradev/seegenerator). Omnia loads only libngspice.so without codemodels.
+    for sub in "${BUILD_SUBDIRS[@]}"; do
       make -C "$sub" -j"$(nproc)"
     done
     make -C src -j"$(nproc)" libngspice.la
     make -C src install-libLTLIBRARIES
   )
+  printf '%s\n' "$BUILD_STAMP" > "$build_stamp_file"
 fi
 
 if [ ! -f "$lib_path" ]; then
-  lib_path="$(find "$install_dir" -name 'libngspice.so*' -type f | head -n 1)"
+  lib_path="$(find "$install_dir" -name 'libngspice.so*' -type f | awk 'NR == 1 { print }')"
 fi
 if [ -z "$lib_path" ] || [ ! -f "$lib_path" ]; then
   echo "ERROR: libngspice.so not found under $install_dir" >&2
   exit 1
 fi
 
-echo "==> Auditing dynamic dependencies of $lib_path..."
+echo "==> Auditing dynamic dependencies of $(basename "$lib_path")..."
 {
   echo "=== library ==="
-  ls -la "$lib_path"
+  printf '%s bytes  %s\n' "$(stat -c '%s' "$lib_path")" "$(basename "$lib_path")"
+  echo "=== build stamp ==="
+  printf '%s\n' "$BUILD_STAMP"
   echo "=== ldd ==="
   ldd "$lib_path"
   if command -v readelf >/dev/null 2>&1; then
@@ -135,7 +167,7 @@ echo "==> Building and testing standalone spike crate..."
 (
   cd "$bin_dir"
   sha256sum omnia-ngspice-worker bench_ss1
-  sha256sum "$lib_path"
+  printf '%s  %s\n' "$(sha256sum "$lib_path" | awk '{print $1}')" "$(basename "$lib_path")"
 ) > "$results/binaries-${label}.sha256"
 
 snapshot() {
@@ -152,11 +184,12 @@ snapshot() {
   echo "memory: $(free -m | awk '/^Mem:/ {print "total_mb="$2" free_mb="$4}')"
   echo "load: $(cat /proc/loadavg)"
   echo "top_cpu_processes (name = first 8 hex digits of SHA-256(name)):"
-  ps -eo comm=,pcpu=,rss= --sort=-pcpu | head -8 | while read -r c p r; do
+  # Drain all ps output via awk instead of head so pipefail never aborts on SIGPIPE (141).
+  ps -eo comm=,pcpu=,rss= --sort=-pcpu | awk 'NR <= 8 { print }' | while read -r c p r; do
     echo "  proc-$(printf '%s' "$c" | sha256sum | cut -c1-8) pcpu=$p rss_kb=$r"
   done
   echo "rustc: $(rustc --version)"
-  echo "gcc: $(gcc --version | head -n 1)"
+  echo "gcc: $(gcc --version | awk 'NR == 1 { print }')"
 }
 
 snapshot > "$results/conditions-before-${label}.txt"

@@ -3,11 +3,18 @@
 //! Frame layout (all integers and `f64` little-endian):
 //! `[tag: u8][payload_len: u32][payload: payload_len bytes]`
 //!
-//! Payload cap (`MAX_FRAME_BYTES`) prevents unbounded allocation on corrupt frames.
+//! Payload cap (`MAX_FRAME_BYTES`) and per-field length validation prevent unbounded
+//! allocation on crafted or corrupt frames.
 
 use std::io::{self, Read, Write};
 
 pub const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
+/// Maximum probe channels per run (`sim-plan.md` `SK12`).
+pub const MAX_CHANNELS: u16 = 64;
+/// Maximum points buffered in a single streaming `SampleBatch`.
+pub const MAX_BATCH_POINTS: u32 = 16_384;
+/// Maximum items allowed in a single string-list field (e.g., netlist lines).
+pub const MAX_STR_LIST_ITEMS: usize = 65_536;
 
 pub const TAG_PING: u8 = 0x01;
 pub const TAG_RUN_OP: u8 = 0x02;
@@ -113,10 +120,21 @@ fn encode_str_list(out: &mut Vec<u8>, items: &[String]) {
 
 fn decode_str_list(input: &[u8], pos: &mut usize) -> io::Result<Vec<String>> {
     let count = read_u32(input, pos)? as usize;
-    let mut out = Vec::with_capacity(count.min(1024));
+    let remaining = input.len().saturating_sub(*pos);
+    // Each string needs at least its 4-byte length prefix in the remaining payload.
+    let min_bytes = count
+        .checked_mul(4)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "string list count overflow"))?;
+    if count > MAX_STR_LIST_ITEMS || min_bytes > remaining {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("string list count {count} exceeds bounds (remaining {remaining} bytes)"),
+        ));
+    }
+    let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         let len = read_u32(input, pos)? as usize;
-        if *pos + len > input.len() {
+        if len > input.len().saturating_sub(*pos) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "truncated string in frame",
@@ -131,7 +149,7 @@ fn decode_str_list(input: &[u8], pos: &mut usize) -> io::Result<Vec<String>> {
 }
 
 fn read_u16(input: &[u8], pos: &mut usize) -> io::Result<u16> {
-    if *pos + 2 > input.len() {
+    if input.len().saturating_sub(*pos) < 2 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "truncated u16"));
     }
     let v = u16::from_le_bytes([input[*pos], input[*pos + 1]]);
@@ -140,7 +158,7 @@ fn read_u16(input: &[u8], pos: &mut usize) -> io::Result<u16> {
 }
 
 fn read_u32(input: &[u8], pos: &mut usize) -> io::Result<u32> {
-    if *pos + 4 > input.len() {
+    if input.len().saturating_sub(*pos) < 4 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "truncated u32"));
     }
     let v = u32::from_le_bytes([
@@ -154,7 +172,7 @@ fn read_u32(input: &[u8], pos: &mut usize) -> io::Result<u32> {
 }
 
 fn read_u64(input: &[u8], pos: &mut usize) -> io::Result<u64> {
-    if *pos + 8 > input.len() {
+    if input.len().saturating_sub(*pos) < 8 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "truncated u64"));
     }
     let mut bytes = [0u8; 8];
@@ -164,7 +182,7 @@ fn read_u64(input: &[u8], pos: &mut usize) -> io::Result<u64> {
 }
 
 fn read_f64(input: &[u8], pos: &mut usize) -> io::Result<f64> {
-    if *pos + 8 > input.len() {
+    if input.len().saturating_sub(*pos) < 8 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "truncated f64"));
     }
     let mut bytes = [0u8; 8];
@@ -173,11 +191,27 @@ fn read_f64(input: &[u8], pos: &mut usize) -> io::Result<f64> {
     Ok(f64::from_le_bytes(bytes))
 }
 
+pub fn validate_batch_size(batch_size: u32) -> io::Result<u32> {
+    if batch_size == 0 || batch_size > MAX_BATCH_POINTS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("batch_size {batch_size} outside valid range 1..={MAX_BATCH_POINTS}"),
+        ));
+    }
+    Ok(batch_size)
+}
+
 pub fn write_request(w: &mut impl Write, req: &Request) -> io::Result<()> {
     let mut payload = Vec::new();
     match req {
         Request::Ping => write_raw_frame(w, TAG_PING, &[])?,
         Request::RunOp { probes, netlist } => {
+            if probes.len() > MAX_CHANNELS as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "probes exceed MAX_CHANNELS",
+                ));
+            }
             encode_str_list(&mut payload, probes);
             encode_str_list(&mut payload, netlist);
             write_raw_frame(w, TAG_RUN_OP, &payload)?;
@@ -187,6 +221,13 @@ pub fn write_request(w: &mut impl Write, req: &Request) -> io::Result<()> {
             netlist,
             batch_size,
         } => {
+            validate_batch_size(*batch_size)?;
+            if probes.len() > MAX_CHANNELS as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "probes exceed MAX_CHANNELS",
+                ));
+            }
             payload.extend_from_slice(&batch_size.to_le_bytes());
             encode_str_list(&mut payload, probes);
             encode_str_list(&mut payload, netlist);
@@ -207,12 +248,30 @@ pub fn read_request(r: &mut impl Read, buf: &mut Vec<u8>) -> io::Result<Option<R
         TAG_PING => Request::Ping,
         TAG_RUN_OP => {
             let probes = decode_str_list(buf, &mut pos)?;
+            if probes.len() > MAX_CHANNELS as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "probe count {} exceeds MAX_CHANNELS ({MAX_CHANNELS})",
+                        probes.len()
+                    ),
+                ));
+            }
             let netlist = decode_str_list(buf, &mut pos)?;
             Request::RunOp { probes, netlist }
         }
         TAG_RUN_TRAN => {
-            let batch_size = read_u32(buf, &mut pos)?;
+            let batch_size = validate_batch_size(read_u32(buf, &mut pos)?)?;
             let probes = decode_str_list(buf, &mut pos)?;
+            if probes.len() > MAX_CHANNELS as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "probe count {} exceeds MAX_CHANNELS ({MAX_CHANNELS})",
+                        probes.len()
+                    ),
+                ));
+            }
             let netlist = decode_str_list(buf, &mut pos)?;
             Request::RunTran {
                 probes,
@@ -240,10 +299,35 @@ pub fn write_sample_batch_raw(
     samples_f64: &[f64],
     scratch: &mut Vec<u8>,
 ) -> io::Result<()> {
-    let expected = points as usize * (1 + channels as usize);
-    debug_assert_eq!(samples_f64.len(), expected);
+    if channels > MAX_CHANNELS || points > MAX_BATCH_POINTS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sample batch exceeds MAX_CHANNELS or MAX_BATCH_POINTS",
+        ));
+    }
+    let stride = 1usize + channels as usize;
+    let expected = (points as usize)
+        .checked_mul(stride)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "batch size overflow"))?;
+    if samples_f64.len() != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "samples_f64 length does not match points * (1 + channels)",
+        ));
+    }
+    let payload_bytes = 6usize
+        .checked_add(expected.checked_mul(8).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "batch byte size overflow")
+        })?)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "batch byte size overflow"))?;
+    if payload_bytes > MAX_FRAME_BYTES as usize {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "sample batch exceeds MAX_FRAME_BYTES",
+        ));
+    }
     scratch.clear();
-    scratch.reserve(6 + samples_f64.len() * 8);
+    scratch.reserve(payload_bytes);
     scratch.extend_from_slice(&channels.to_le_bytes());
     scratch.extend_from_slice(&points.to_le_bytes());
     for &v in samples_f64 {
@@ -292,6 +376,18 @@ pub fn read_response(r: &mut impl Read, buf: &mut Vec<u8>) -> io::Result<Option<
         TAG_READY => Response::Ready,
         TAG_OP_RESULT => {
             let count = read_u32(buf, &mut pos)? as usize;
+            let remaining = buf.len().saturating_sub(pos);
+            let required_bytes = count.checked_mul(8).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "op result count overflow")
+            })?;
+            if required_bytes > remaining || required_bytes > MAX_FRAME_BYTES as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "op result count {count} ({required_bytes} bytes) exceeds frame payload ({remaining} bytes)"
+                    ),
+                ));
+            }
             let mut values = Vec::with_capacity(count);
             for _ in 0..count {
                 values.push(read_f64(buf, &mut pos)?);
@@ -301,7 +397,30 @@ pub fn read_response(r: &mut impl Read, buf: &mut Vec<u8>) -> io::Result<Option<
         TAG_SAMPLE_BATCH => {
             let channels = read_u16(buf, &mut pos)?;
             let points = read_u32(buf, &mut pos)?;
-            let expected = points as usize * (1 + channels as usize);
+            if channels > MAX_CHANNELS || points > MAX_BATCH_POINTS {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "sample batch header out of bounds (channels={channels}, points={points})"
+                    ),
+                ));
+            }
+            let stride = 1usize + channels as usize;
+            let expected = (points as usize).checked_mul(stride).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "sample batch count overflow")
+            })?;
+            let required_bytes = expected.checked_mul(8).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "sample batch byte overflow")
+            })?;
+            let remaining = buf.len().saturating_sub(pos);
+            if required_bytes != remaining || required_bytes > MAX_FRAME_BYTES as usize {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "sample batch payload mismatch: declared {required_bytes} bytes, frame has {remaining} bytes"
+                    ),
+                ));
+            }
             let mut data = Vec::with_capacity(expected);
             for _ in 0..expected {
                 data.push(read_f64(buf, &mut pos)?);

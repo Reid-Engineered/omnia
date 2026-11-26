@@ -1,12 +1,48 @@
-//! Dynamic FFI loader for BSD-3-Clause `libngspice` (`ngspice.dll` / `libngspice.so`)
+//! Dynamic FFI loader for `libngspice` (`ngspice.dll` / `libngspice.so`)
 //! matching `src/include/ngspice/sharedspice.h` from ngspice 47.
+//!
+//! Safety & concurrency invariants:
+//! - `libngspice` keeps process-global C state, so `ACTIVE_INSTANCE` enforces a single live
+//!   `NgspiceLib` per process (`InstanceGuard` refuses any second load until the first drops).
+//! - `NgspiceLib` is `!Sync` and requires `&mut self` for all FFI calls, preventing concurrent
+//!   FFI entry across threads.
+//! - `Drop` stops and joins any running background solver thread (`bg_halt` + wait), marks
+//!   callbacks detached, unloads `libloading::Library` first, and only then drops the pinned
+//!   `CallbackState` and releases `ACTIVE_INSTANCE`.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::marker::PhantomData;
 use std::path::Path;
-use std::sync::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use libloading::{Library, Symbol};
+use libloading::Library;
+
+static ACTIVE_INSTANCE: AtomicBool = AtomicBool::new(false);
+
+/// RAII token enforcing at most one active `libngspice` instance per process.
+#[derive(Debug)]
+pub struct InstanceGuard {
+    _private: (),
+}
+
+impl InstanceGuard {
+    pub fn acquire() -> Result<Self, String> {
+        ACTIVE_INSTANCE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| Self { _private: () })
+            .map_err(|_| {
+                "libngspice is already loaded in this process (exclusive singleton guard)".into()
+            })
+    }
+}
+
+impl Drop for InstanceGuard {
+    fn drop(&mut self) {
+        ACTIVE_INSTANCE.store(false, Ordering::Release);
+    }
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -84,7 +120,6 @@ type NgSpiceInitFn = unsafe extern "C" fn(
 type NgSpiceCommandFn = unsafe extern "C" fn(*mut c_char) -> c_int;
 type NgSpiceCircFn = unsafe extern "C" fn(*mut *mut c_char) -> c_int;
 type NgSpiceRunningFn = unsafe extern "C" fn() -> bool;
-type NgSpiceNoInitFn = unsafe extern "C" fn() -> c_int;
 type NgGetVecInfoFn = unsafe extern "C" fn(*mut c_char) -> *mut VectorInfo;
 
 /// Callback sink invoked on every accepted transient point inside `SendData`.
@@ -92,10 +127,59 @@ pub trait SampleSink: Send {
     fn on_point(&mut self, t: f64, values: &[f64]);
 }
 
+/// Shared wakeup trigger allowing external control threads (e.g., stdin `Cancel` reader) to
+/// wake the single `NgspiceLib` owner thread immediately without touching `libngspice` FFI.
+#[derive(Clone)]
+pub struct BgWakeup {
+    inner: Arc<(Mutex<WakeState>, Condvar)>,
+}
+
+struct WakeState {
+    bg_finished: bool,
+    cancel_requested: bool,
+}
+
+impl BgWakeup {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new((
+                Mutex::new(WakeState {
+                    bg_finished: true,
+                    cancel_requested: false,
+                }),
+                Condvar::new(),
+            )),
+        }
+    }
+
+    fn reset_for_run(&self) {
+        if let Ok(mut g) = self.inner.0.lock() {
+            g.bg_finished = false;
+            g.cancel_requested = false;
+        }
+    }
+
+    fn mark_bg_finished(&self) {
+        if let Ok(mut g) = self.inner.0.lock() {
+            g.bg_finished = true;
+            self.inner.1.notify_all();
+        }
+    }
+
+    /// Signal the `NgspiceLib` owner thread that a cancel was requested.
+    pub fn request_cancel(&self) {
+        if let Ok(mut g) = self.inner.0.lock() {
+            g.cancel_requested = true;
+            self.inner.1.notify_all();
+        }
+    }
+}
+
 /// Shared state bridged via `userData` pointer to `libngspice` C callbacks.
 struct CallbackState {
+    detached: AtomicBool,
+    wakeup: BgWakeup,
     inner: Mutex<CallbackInner>,
-    bg_cv: Condvar,
 }
 
 struct CallbackInner {
@@ -107,7 +191,6 @@ struct CallbackInner {
     sink: Option<Box<dyn SampleSink>>,
     total_points: u64,
     first_sample_at: Option<Instant>,
-    bg_finished: bool,
     last_error: Option<String>,
     stdout_tail: Vec<String>,
 }
@@ -123,7 +206,6 @@ impl CallbackInner {
             sink: None,
             total_points: 0,
             first_sample_at: None,
-            bg_finished: false,
             last_error: None,
             stdout_tail: Vec::new(),
         }
@@ -144,6 +226,9 @@ unsafe extern "C" fn cb_send_char(msg: *mut c_char, _ident: c_int, userdata: *mu
         return 0;
     }
     let state = unsafe { &*(userdata as *const CallbackState) };
+    if state.detached.load(Ordering::Acquire) {
+        return 0;
+    }
     let text = unsafe { CStr::from_ptr(msg) }.to_string_lossy();
     if let Ok(mut guard) = state.inner.lock() {
         if text.starts_with("stderr ") {
@@ -179,13 +264,15 @@ unsafe extern "C" fn cb_controlled_exit(
 ) -> c_int {
     if !userdata.is_null() {
         let state = unsafe { &*(userdata as *const CallbackState) };
-        if let Ok(mut guard) = state.inner.lock() {
-            if !quit_exit {
-                guard.last_error = Some(format!("ngspice controlled exit status={status}"));
-            }
-            guard.bg_finished = true;
-            state.bg_cv.notify_all();
+        if state.detached.load(Ordering::Acquire) {
+            return status;
         }
+        if let Ok(mut guard) = state.inner.lock()
+            && !quit_exit
+        {
+            guard.last_error = Some(format!("ngspice controlled exit status={status}"));
+        }
+        state.wakeup.mark_bg_finished();
     }
     status
 }
@@ -199,6 +286,9 @@ unsafe extern "C" fn cb_send_init_data(
         return 0;
     }
     let state = unsafe { &*(userdata as *const CallbackState) };
+    if state.detached.load(Ordering::Acquire) {
+        return 0;
+    }
     let info_ref = unsafe { &*info };
     let count = info_ref.veccount.max(0) as usize;
     let vecs_ptr = info_ref.vecs;
@@ -256,6 +346,9 @@ unsafe extern "C" fn cb_send_data(
         return 0;
     }
     let state = unsafe { &*(userdata as *const CallbackState) };
+    if state.detached.load(Ordering::Acquire) {
+        return 0;
+    }
     let all = unsafe { &*data };
     let veccount = all.veccount.max(0) as usize;
     if all.vecsa.is_null() || veccount == 0 {
@@ -292,7 +385,6 @@ unsafe extern "C" fn cb_send_data(
         }
         guard.total_points += 1;
 
-        // Split borrow via temporary take to avoid borrow conflict with scratch_vals.
         if let Some(mut sink) = guard.sink.take() {
             sink.on_point(t, &guard.scratch_vals);
             guard.sink = Some(sink);
@@ -308,96 +400,77 @@ unsafe extern "C" fn cb_bg_thread_running(
 ) -> c_int {
     if !userdata.is_null() {
         let state = unsafe { &*(userdata as *const CallbackState) };
-        if let Ok(mut guard) = state.inner.lock()
-            && not_running
-        {
-            guard.bg_finished = true;
-            state.bg_cv.notify_all();
+        if not_running {
+            state.wakeup.mark_bg_finished();
         }
     }
     0
 }
 
-/// Loaded `libngspice` dynamic library handle with pinned callback state.
+/// Exclusive process-global handle to dynamically loaded `libngspice`.
+///
+/// Intentionally `!Sync` (`PhantomData<*const ()>` + no `Sync` impl) so every FFI call is
+/// strictly serialized through `&mut self`.
 pub struct NgspiceLib {
-    _lib: Library,
-    fn_init: NgSpiceInitFn,
+    // Dropped first (explicitly in `Drop::drop`) so `libngspice` is unloaded while `state`
+    // is still live and `ACTIVE_INSTANCE` is still held.
+    lib: Option<Library>,
     fn_command: NgSpiceCommandFn,
     fn_circ: NgSpiceCircFn,
     fn_running: NgSpiceRunningFn,
-    fn_nospinit: Option<NgSpiceNoInitFn>,
-    fn_nospiceinit: Option<NgSpiceNoInitFn>,
     fn_get_vec_info: NgGetVecInfoFn,
-    state: Box<CallbackState>,
+    state: Option<Box<CallbackState>>,
+    bg_active: bool,
+    _guard: InstanceGuard,
+    _not_sync: PhantomData<std::cell::Cell<()>>,
 }
-
-// SAFETY: `libngspice` has process-global state; callers synchronize commands through `&self`
-// (and `bg_halt` is explicitly documented by ngspice as callable from the primary thread while
-// the background thread runs).
-unsafe impl Send for NgspiceLib {}
-unsafe impl Sync for NgspiceLib {}
 
 pub struct TranRunStats {
     pub total_points: u64,
     pub first_sample_at: Option<Instant>,
+    pub halted_by_cancel: bool,
 }
 
 impl NgspiceLib {
-    /// Dynamically load `libngspice` and initialize callbacks (`nospinit` + `nospiceinit`).
+    /// Dynamically load `libngspice` and initialize callbacks. Fails if another `NgspiceLib`
+    /// instance is already active in this process.
     pub fn load(path: &Path) -> Result<Self, String> {
+        let guard = InstanceGuard::acquire()?;
+
         // SAFETY: Loading a user/harness-specified shared library matching `sharedspice.h`.
         let lib = unsafe { Library::new(path) }
             .map_err(|e| format!("failed to load {}: {e}", path.display()))?;
 
         unsafe {
-            let fn_init: Symbol<'_, NgSpiceInitFn> = lib
-                .get(b"ngSpice_Init\0")
+            let fn_init: NgSpiceInitFn = *lib
+                .get::<NgSpiceInitFn>(b"ngSpice_Init\0")
                 .map_err(|e| format!("missing ngSpice_Init: {e}"))?;
-            let fn_command: Symbol<'_, NgSpiceCommandFn> = lib
-                .get(b"ngSpice_Command\0")
-                .map_err(|e| format!("missing ngSpice_Command: {e}"))?;
-            let fn_circ: Symbol<'_, NgSpiceCircFn> = lib
-                .get(b"ngSpice_Circ\0")
+            let fn_command: NgSpiceCommandFn =
+                *lib.get::<NgSpiceCommandFn>(b"ngSpice_Command\0")
+                    .map_err(|e| format!("missing ngSpice_Command: {e}"))?;
+            let fn_circ: NgSpiceCircFn = *lib
+                .get::<NgSpiceCircFn>(b"ngSpice_Circ\0")
                 .map_err(|e| format!("missing ngSpice_Circ: {e}"))?;
-            let fn_running: Symbol<'_, NgSpiceRunningFn> = lib
-                .get(b"ngSpice_running\0")
-                .map_err(|e| format!("missing ngSpice_running: {e}"))?;
-            let fn_get_vec_info: Symbol<'_, NgGetVecInfoFn> = lib
-                .get(b"ngGet_Vec_Info\0")
-                .map_err(|e| format!("missing ngGet_Vec_Info: {e}"))?;
-            let fn_nospinit = lib
-                .get::<NgSpiceNoInitFn>(b"ngSpice_nospinit\0")
-                .ok()
-                .map(|s| *s);
-            let fn_nospiceinit = lib
-                .get::<NgSpiceNoInitFn>(b"ngSpice_nospiceinit\0")
-                .ok()
-                .map(|s| *s);
+            let fn_running: NgSpiceRunningFn =
+                *lib.get::<NgSpiceRunningFn>(b"ngSpice_running\0")
+                    .map_err(|e| format!("missing ngSpice_running: {e}"))?;
+            let fn_get_vec_info: NgGetVecInfoFn =
+                *lib.get::<NgGetVecInfoFn>(b"ngGet_Vec_Info\0")
+                    .map_err(|e| format!("missing ngGet_Vec_Info: {e}"))?;
 
-            let me = Self {
-                fn_init: *fn_init,
-                fn_command: *fn_command,
-                fn_circ: *fn_circ,
-                fn_running: *fn_running,
-                fn_nospinit,
-                fn_nospiceinit,
-                fn_get_vec_info: *fn_get_vec_info,
-                _lib: lib,
-                state: Box::new(CallbackState {
-                    inner: Mutex::new(CallbackInner::new()),
-                    bg_cv: Condvar::new(),
-                }),
-            };
+            let state = Box::new(CallbackState {
+                detached: AtomicBool::new(false),
+                wakeup: BgWakeup::new(),
+                inner: Mutex::new(CallbackInner::new()),
+            });
 
             // Note: Do NOT call `ngSpice_nospinit()` / `ngSpice_nospiceinit()` before
             // `ngSpice_Init()` on Windows MinGW builds using Win32 threads: in upstream
             // ngspice-47 (`src/sharedspice.c:806-820, 903-907`), `cp_vset` allocates via
             // `allocMutex` before `ngSpice_Init` initializes the `CRITICAL_SECTION`,
-            // causing a 0xC0000005 access violation. Because Omnia ships no `spinit` or
-            // `.cm` codemodels alongside `libngspice`, omitting them is clean on both OSes.
-            let _ = (me.fn_nospinit, me.fn_nospiceinit);
-            let ud = (&*me.state) as *const CallbackState as *mut c_void;
-            let rc = (me.fn_init)(
+            // causing a 0xC0000005 access violation.
+            let ud = (&*state) as *const CallbackState as *mut c_void;
+            let rc = fn_init(
                 Some(cb_send_char),
                 Some(cb_send_stat),
                 Some(cb_controlled_exit),
@@ -409,11 +482,32 @@ impl NgspiceLib {
             if rc != 0 {
                 return Err(format!("ngSpice_Init returned {rc}"));
             }
-            Ok(me)
+
+            Ok(Self {
+                lib: Some(lib),
+                fn_command,
+                fn_circ,
+                fn_running,
+                fn_get_vec_info,
+                state: Some(state),
+                bg_active: false,
+                _guard: guard,
+                _not_sync: PhantomData,
+            })
         }
     }
 
-    pub fn command(&self, cmd: &str) -> Result<(), String> {
+    fn state_ref(&self) -> &CallbackState {
+        self.state.as_deref().expect("state live until Drop")
+    }
+
+    /// Returns a thread-safe wakeup handle that a control thread may signal to interrupt
+    /// `wait_tran_bg_cancellable` without touching any `libngspice` FFI symbol.
+    pub fn wakeup_handle(&self) -> BgWakeup {
+        self.state_ref().wakeup.clone()
+    }
+
+    pub fn command(&mut self, cmd: &str) -> Result<(), String> {
         let cstr = CString::new(cmd).map_err(|e| format!("invalid command string: {e}"))?;
         let rc = unsafe { (self.fn_command)(cstr.as_ptr() as *mut c_char) };
         if rc != 0 {
@@ -426,17 +520,17 @@ impl NgspiceLib {
         unsafe { (self.fn_running)() }
     }
 
-    pub fn bg_halt(&self) -> Result<(), String> {
+    pub fn bg_halt(&mut self) -> Result<(), String> {
         self.command("bg_halt")
     }
 
-    pub fn reset_circuit(&self) -> Result<(), String> {
+    pub fn reset_circuit(&mut self) -> Result<(), String> {
         let _ = self.command("destroy all");
         let _ = self.command("remcirc");
         Ok(())
     }
 
-    pub fn load_circuit(&self, lines: &[String]) -> Result<(), String> {
+    pub fn load_circuit(&mut self, lines: &[String]) -> Result<(), String> {
         let cstrings: Vec<CString> = lines
             .iter()
             .map(|l| CString::new(l.as_str()).map_err(|e| format!("nul in netlist line: {e}")))
@@ -453,10 +547,10 @@ impl NgspiceLib {
 
     /// Run a DC operating point (`op`) and read the requested probe vector values (`SINV7`:
     /// missing vectors return an explicit error, never `0.0`).
-    pub fn run_op(&self, netlist: &[String], probes: &[String]) -> Result<Vec<f64>, String> {
+    pub fn run_op(&mut self, netlist: &[String], probes: &[String]) -> Result<Vec<f64>, String> {
         self.reset_circuit()?;
         {
-            let mut guard = self.state.inner.lock().map_err(|_| "lock poisoned")?;
+            let mut guard = self.state_ref().inner.lock().map_err(|_| "lock poisoned")?;
             guard.requested_probes.clear();
             guard.sink = None;
             guard.last_error = None;
@@ -484,14 +578,15 @@ impl NgspiceLib {
 
     /// Start a background transient (`bg_run`) streaming samples to `sink`.
     pub fn start_tran_bg(
-        &self,
+        &mut self,
         netlist: &[String],
         probes: &[String],
         sink: Box<dyn SampleSink>,
     ) -> Result<(), String> {
         self.reset_circuit()?;
+        self.state_ref().wakeup.reset_for_run();
         {
-            let mut guard = self.state.inner.lock().map_err(|_| "lock poisoned")?;
+            let mut guard = self.state_ref().inner.lock().map_err(|_| "lock poisoned")?;
             guard.requested_probes = probes.to_vec();
             guard.scale_idx = None;
             guard.probe_indices.clear();
@@ -500,31 +595,67 @@ impl NgspiceLib {
             guard.sink = Some(sink);
             guard.total_points = 0;
             guard.first_sample_at = None;
-            guard.bg_finished = false;
             guard.last_error = None;
         }
         self.load_circuit(netlist)?;
-        self.command("bg_run")?;
+        self.bg_active = true;
+        if let Err(e) = self.command("bg_run") {
+            self.bg_active = false;
+            self.state_ref().wakeup.mark_bg_finished();
+            return Err(e);
+        }
         Ok(())
     }
 
-    /// Wait for the active `bg_run` to complete (either naturally or after `bg_halt`).
-    pub fn wait_tran_bg(&self, timeout: Duration) -> Result<TranRunStats, String> {
+    /// Wait for the active `bg_run` to complete, invoking `bg_halt()` on this exclusive owner
+    /// thread as soon as `wakeup_handle().request_cancel()` is signalled.
+    pub fn wait_tran_bg_cancellable(&mut self, timeout: Duration) -> Result<TranRunStats, String> {
         let deadline = Instant::now() + timeout;
-        let mut guard = self.state.inner.lock().map_err(|_| "lock poisoned")?;
-        while !guard.bg_finished {
-            let now = Instant::now();
-            if now >= deadline {
-                return Err("timed out waiting for ngspice bg_run".into());
+        let wakeup = self.state_ref().wakeup.clone();
+        let mut halted_by_cancel = false;
+
+        loop {
+            let (bg_done, want_cancel) = {
+                let mut g = wakeup.inner.0.lock().map_err(|_| "wakeup lock poisoned")?;
+                loop {
+                    if g.bg_finished {
+                        break (true, false);
+                    }
+                    if g.cancel_requested && !halted_by_cancel {
+                        break (false, true);
+                    }
+                    let now = Instant::now();
+                    if now >= deadline {
+                        return Err("timed out waiting for ngspice bg_run".into());
+                    }
+                    let wait_for = (deadline - now).min(Duration::from_millis(5));
+                    let (next, _) = wakeup
+                        .inner
+                        .1
+                        .wait_timeout(g, wait_for)
+                        .map_err(|_| "condvar poisoned")?;
+                    g = next;
+                }
+            };
+
+            if want_cancel {
+                halted_by_cancel = true;
+                // Called strictly on the single `&mut self` owner thread.
+                let _ = self.bg_halt();
+                continue;
             }
-            let wait_for = (deadline - now).min(Duration::from_millis(5));
-            let (g, _) = self
-                .state
-                .bg_cv
-                .wait_timeout(guard, wait_for)
-                .map_err(|_| "condvar poisoned")?;
-            guard = g;
+            if bg_done {
+                break;
+            }
         }
+
+        // Ensure ngspice's own running flag has also cleared.
+        while self.is_running() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        self.bg_active = false;
+
+        let mut guard = self.state_ref().inner.lock().map_err(|_| "lock poisoned")?;
         let missing = guard.missing_probe.clone();
         let total_points = guard.total_points;
         let first_sample_at = guard.first_sample_at;
@@ -543,20 +674,26 @@ impl NgspiceLib {
         Ok(TranRunStats {
             total_points,
             first_sample_at,
+            halted_by_cancel,
         })
+    }
+
+    /// Wait for the active `bg_run` to complete (or after an explicit `bg_halt()`).
+    pub fn wait_tran_bg(&mut self, timeout: Duration) -> Result<TranRunStats, String> {
+        self.wait_tran_bg_cancellable(timeout)
     }
 
     /// Synchronous transient (`run` on current thread) — avoids bg thread startup overhead
     /// for pure in-process comparison where cancellation isn't exercised.
     pub fn run_tran_sync(
-        &self,
+        &mut self,
         netlist: &[String],
         probes: &[String],
         sink: Box<dyn SampleSink>,
     ) -> Result<TranRunStats, String> {
         self.reset_circuit()?;
         {
-            let mut guard = self.state.inner.lock().map_err(|_| "lock poisoned")?;
+            let mut guard = self.state_ref().inner.lock().map_err(|_| "lock poisoned")?;
             guard.requested_probes = probes.to_vec();
             guard.scale_idx = None;
             guard.probe_indices.clear();
@@ -565,12 +702,11 @@ impl NgspiceLib {
             guard.sink = Some(sink);
             guard.total_points = 0;
             guard.first_sample_at = None;
-            guard.bg_finished = false;
             guard.last_error = None;
         }
         self.load_circuit(netlist)?;
         self.command("run")?;
-        let mut guard = self.state.inner.lock().map_err(|_| "lock poisoned")?;
+        let mut guard = self.state_ref().inner.lock().map_err(|_| "lock poisoned")?;
         let missing = guard.missing_probe.clone();
         let total_points = guard.total_points;
         let first_sample_at = guard.first_sample_at;
@@ -582,6 +718,50 @@ impl NgspiceLib {
         Ok(TranRunStats {
             total_points,
             first_sample_at,
+            halted_by_cancel: false,
         })
+    }
+}
+
+impl Drop for NgspiceLib {
+    fn drop(&mut self) {
+        // 1. Stop and wait for any active ngspice background thread BEFORE detaching or unloading.
+        if self.bg_active || self.is_running() {
+            let _ = self.bg_halt();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            if let Some(state) = self.state.as_deref() {
+                let wakeup = &state.wakeup;
+                if let Ok(mut g) = wakeup.inner.0.lock() {
+                    while !g.bg_finished && Instant::now() < deadline {
+                        let rem = deadline.saturating_duration_since(Instant::now());
+                        match wakeup
+                            .inner
+                            .1
+                            .wait_timeout(g, rem.min(Duration::from_millis(5)))
+                        {
+                            Ok((next, _)) => g = next,
+                            Err(_) => break,
+                        }
+                    }
+                }
+            }
+            while self.is_running() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            self.bg_active = false;
+        }
+
+        // 2. Detach callbacks and clear sinks while CallbackState is still alive.
+        if let Some(state) = self.state.as_deref() {
+            state.detached.store(true, Ordering::Release);
+            if let Ok(mut guard) = state.inner.lock() {
+                guard.sink = None;
+            }
+        }
+
+        // 3. Unload libloading::Library BEFORE dropping CallbackState or releasing InstanceGuard.
+        drop(self.lib.take());
+        drop(self.state.take());
+        // 4. `_guard` drops automatically after `Drop::drop` returns, releasing ACTIVE_INSTANCE.
     }
 }

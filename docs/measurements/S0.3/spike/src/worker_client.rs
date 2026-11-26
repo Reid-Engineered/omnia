@@ -1,6 +1,6 @@
 //! Host-side client driving the isolated `omnia-ngspice-worker` subprocess over binary stdio IPC.
 
-use std::io::{BufReader, BufWriter};
+use std::io::{self, BufReader, BufWriter};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -24,11 +24,20 @@ pub struct WorkerTranResult {
     pub last_ch0: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelMode {
+    /// Worker acknowledged `Response::Cancelled` AND exited cleanly and was reaped within `grace`.
+    CooperativeReaped,
+    /// Deadline expired before worker exited cleanly (or hard-kill mode was requested), so the
+    /// host killed and reaped the child process.
+    HardKilled,
+}
+
+#[derive(Debug)]
 pub struct CancelOutcome {
     pub pid: u32,
     pub cancel_elapsed: Duration,
-    pub cooperative_stopped: bool,
-    pub hard_killed: bool,
+    pub mode: CancelMode,
     pub pid_alive_after: bool,
 }
 
@@ -155,8 +164,14 @@ impl WorkerClient {
     }
 
     /// Start a streaming transient, wait until at least `min_points` have streamed in, then
-    /// trigger `SK11` cancellation (cooperative `Cancel`/`bg_halt` with `grace` ms budget,
-    /// followed by hard process kill if still running) and reap the child process (`SB4`).
+    /// trigger `SK11` cancellation:
+    /// - The `grace` deadline (50 ms) covers the ENTIRE cooperative cancel + worker clean exit
+    ///   + `try_wait`/reap path.
+    /// - If `Response::RunDone` arrives before `Response::Cancelled`, the simulation finished
+    ///   naturally before halt took effect — returned as an explicit error and never counted as
+    ///   a cooperative stop.
+    /// - If the worker has not exited and been reaped before `deadline`, the host immediately
+    ///   hard-kills and reaps it and records `CancelMode::HardKilled`.
     pub fn run_tran_then_cancel(
         mut self,
         netlist: Vec<String>,
@@ -185,49 +200,117 @@ impl WorkerClient {
                     received += points as u64;
                 }
                 Some(Response::RunDone { .. }) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
                     return Err("simulation finished before cancel could be triggered".into());
                 }
-                Some(Response::Error { message }) => return Err(message),
-                other => return Err(format!("unexpected pre-cancel response: {other:?}")),
+                Some(Response::Error { message }) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return Err(message);
+                }
+                other => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return Err(format!("unexpected pre-cancel response: {other:?}"));
+                }
             }
         }
 
+        enum StopSignal {
+            Cancelled,
+            NaturalRunDone,
+            Error(String),
+            Eof,
+        }
+
         let t_cancel = Instant::now();
-        let mut cooperative_stopped = false;
-        let mut hard_killed = false;
+        let deadline = t_cancel + grace;
+        let mode: CancelMode;
 
         if !hard_kill_only {
             let _ = write_request(&mut self.stdin, &Request::Cancel);
-            // Drain stdout on a short poll until Cancelled arrives or grace expires.
-            let deadline = t_cancel + grace;
             let (tx, rx) = std::sync::mpsc::channel();
             let mut stdout = self.stdout;
             let mut buf = self.buf;
             let reader = std::thread::spawn(move || {
-                while let Ok(Some(resp)) = read_response(&mut stdout, &mut buf) {
-                    if matches!(resp, Response::Cancelled { .. } | Response::RunDone { .. }) {
-                        let _ = tx.send(true);
-                        return;
+                loop {
+                    match read_response(&mut stdout, &mut buf) {
+                        Ok(Some(Response::SampleBatch { .. })) => continue,
+                        Ok(Some(Response::Cancelled { .. })) => {
+                            let _ = tx.send(StopSignal::Cancelled);
+                            return;
+                        }
+                        Ok(Some(Response::RunDone { .. })) => {
+                            let _ = tx.send(StopSignal::NaturalRunDone);
+                            return;
+                        }
+                        Ok(Some(Response::Error { message })) => {
+                            let _ = tx.send(StopSignal::Error(message));
+                            return;
+                        }
+                        Ok(_) | Err(_) => {
+                            let _ = tx.send(StopSignal::Eof);
+                            return;
+                        }
                     }
                 }
-                let _ = tx.send(false);
             });
 
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if let Ok(true) = rx.recv_timeout(remaining) {
-                cooperative_stopped = true;
-                let _ = write_request(&mut self.stdin, &Request::Shutdown);
-                drop(self.stdin);
-                let _ = self.child.wait();
+            let mut reaped_cleanly = false;
+            match rx.recv_timeout(remaining) {
+                Ok(StopSignal::Cancelled) => {
+                    let _ = write_request(&mut self.stdin, &Request::Shutdown);
+                    drop(self.stdin);
+                    // Enforce the SAME `deadline` over clean worker exit + reap.
+                    loop {
+                        match self.child.try_wait() {
+                            Ok(Some(_)) => {
+                                reaped_cleanly = true;
+                                break;
+                            }
+                            Ok(None) => {
+                                if Instant::now() >= deadline {
+                                    break;
+                                }
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+                Ok(StopSignal::NaturalRunDone) => {
+                    drop(self.stdin);
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    let _ = reader.join();
+                    return Err(
+                        "simulation completed naturally (RunDone) before Cancel took effect".into(),
+                    );
+                }
+                Ok(StopSignal::Error(msg)) => {
+                    drop(self.stdin);
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    let _ = reader.join();
+                    return Err(format!("worker error during cancel: {msg}"));
+                }
+                Ok(StopSignal::Eof) | Err(_) => {
+                    drop(self.stdin);
+                }
+            }
+
+            if reaped_cleanly {
+                mode = CancelMode::CooperativeReaped;
             } else {
-                hard_killed = true;
+                mode = CancelMode::HardKilled;
                 let _ = self.child.kill();
                 let _ = self.child.wait();
-                drop(self.stdin);
             }
             let _ = reader.join();
         } else {
-            hard_killed = true;
+            mode = CancelMode::HardKilled;
             let _ = self.child.kill();
             let _ = self.child.wait();
             drop(self.stdin);
@@ -235,12 +318,12 @@ impl WorkerClient {
         }
 
         let cancel_elapsed = t_cancel.elapsed();
-        let pid_alive_after = is_pid_alive(self.pid);
+        let pid_alive_after = is_pid_alive(self.pid)
+            .map_err(|e| format!("OS PID liveness query failed for pid {}: {e}", self.pid))?;
         Ok(CancelOutcome {
             pid: self.pid,
             cancel_elapsed,
-            cooperative_stopped,
-            hard_killed,
+            mode,
             pid_alive_after,
         })
     }
@@ -253,17 +336,22 @@ impl WorkerClient {
     }
 }
 
-/// Platform-specific check that a reaped worker PID is truly absent from the OS process table.
+/// Platform-specific check that a reaped worker PID is absent from the OS process table.
+/// Returns `Err` on unexpected OS query errors rather than silently assuming the process is dead.
 #[cfg(unix)]
-pub fn is_pid_alive(pid: u32) -> bool {
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
+pub fn is_pid_alive(pid: u32) -> io::Result<bool> {
+    match std::fs::metadata(format!("/proc/{pid}")) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(windows)]
-pub fn is_pid_alive(pid: u32) -> bool {
-    // Win32 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` + `GetExitCodeProcess`.
+pub fn is_pid_alive(pid: u32) -> io::Result<bool> {
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     const STILL_ACTIVE: u32 = 259;
+    const ERROR_INVALID_PARAMETER: i32 = 87;
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -279,11 +367,23 @@ pub fn is_pid_alive(pid: u32) -> bool {
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
-            return false;
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(ERROR_INVALID_PARAMETER) {
+                return Ok(false);
+            }
+            return Err(err);
         }
         let mut code: u32 = 0;
         let ok = GetExitCodeProcess(handle, &mut code);
+        let err = if ok == 0 {
+            Some(io::Error::last_os_error())
+        } else {
+            None
+        };
         CloseHandle(handle);
-        ok != 0 && code == STILL_ACTIVE
+        if let Some(e) = err {
+            return Err(e);
+        }
+        Ok(code == STILL_ACTIVE)
     }
 }

@@ -1,18 +1,21 @@
 //! Unit and integration tests for the S0.3 / SS1 spike crate.
 //!
-//! Protocol and circuit tests always run. Live `libngspice` tests run whenever `NGSPICE_LIB`
-//! points to a built `ngspice` shared library.
+//! Protocol, bounds, and singleton-guard unit tests always run. Live `libngspice` tests run
+//! whenever `NGSPICE_LIB` points to a built `ngspice` shared library.
 
-use std::io::Cursor;
+use std::io::{self, Cursor};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use omnia_s03_spike::circuits;
+use omnia_s03_spike::ngspice::{InstanceGuard, NgspiceLib, SampleSink};
 use omnia_s03_spike::protocol::{
-    Request, Response, read_request, read_response, write_request, write_response,
-    write_sample_batch_raw,
+    MAX_BATCH_POINTS, Request, Response, TAG_OP_RESULT, TAG_RUN_OP, TAG_RUN_TRAN, TAG_SAMPLE_BATCH,
+    read_request, read_response, write_request, write_response, write_sample_batch_raw,
 };
-use omnia_s03_spike::worker_client::WorkerClient;
+use omnia_s03_spike::worker_client::{CancelMode, WorkerClient, is_pid_alive};
 
 #[test]
 fn protocol_request_roundtrip() {
@@ -111,15 +114,89 @@ fn protocol_response_and_raw_batch_roundtrip() {
     );
 }
 
+fn raw_frame(tag: u8, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(5 + payload.len());
+    out.push(tag);
+    out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    out.extend_from_slice(payload);
+    out
+}
+
 #[test]
-fn live_worker_op_tran_missing_probe_and_cancel() {
+fn protocol_rejects_oversized_counts_and_batch_sizes() {
+    let mut buf = Vec::new();
+
+    // 1. Crafted OpResult declaring u32::MAX values in a 4-byte payload.
+    let bad_op = raw_frame(TAG_OP_RESULT, &u32::MAX.to_le_bytes());
+    let err = read_response(&mut Cursor::new(bad_op), &mut buf).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+    // 2. Crafted SampleBatch declaring huge points with 6-byte payload.
+    let mut bad_batch_payload = Vec::new();
+    bad_batch_payload.extend_from_slice(&2u16.to_le_bytes());
+    bad_batch_payload.extend_from_slice(&u32::MAX.to_le_bytes());
+    let bad_batch = raw_frame(TAG_SAMPLE_BATCH, &bad_batch_payload);
+    let err = read_response(&mut Cursor::new(bad_batch), &mut buf).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+    // 3. Crafted SampleBatch with valid points (100) but mismatched/truncated payload (only 16 bytes).
+    let mut trunc_batch_payload = Vec::new();
+    trunc_batch_payload.extend_from_slice(&2u16.to_le_bytes());
+    trunc_batch_payload.extend_from_slice(&100u32.to_le_bytes());
+    trunc_batch_payload.extend_from_slice(&[0u8; 16]);
+    let trunc_batch = raw_frame(TAG_SAMPLE_BATCH, &trunc_batch_payload);
+    let err = read_response(&mut Cursor::new(trunc_batch), &mut buf).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+    // 4. Crafted RunOp declaring u32::MAX strings in a 4-byte payload.
+    let bad_str_list = raw_frame(TAG_RUN_OP, &u32::MAX.to_le_bytes());
+    let err = read_request(&mut Cursor::new(bad_str_list), &mut buf).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+    // 5. Crafted RunTran with batch_size = 0 and batch_size > MAX_BATCH_POINTS.
+    for bad_bs in [0u32, MAX_BATCH_POINTS + 1, u32::MAX] {
+        let mut p = Vec::new();
+        p.extend_from_slice(&bad_bs.to_le_bytes());
+        p.extend_from_slice(&0u32.to_le_bytes());
+        p.extend_from_slice(&0u32.to_le_bytes());
+        let frame = raw_frame(TAG_RUN_TRAN, &p);
+        let err = read_request(&mut Cursor::new(frame), &mut buf).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+}
+
+#[test]
+fn instance_guard_enforces_single_active_owner() {
+    let g1 = InstanceGuard::acquire().expect("first acquire succeeds");
+    let err = InstanceGuard::acquire().expect_err("second concurrent acquire must fail");
+    assert!(err.contains("already loaded"), "unexpected err: {err}");
+    drop(g1);
+    let g2 = InstanceGuard::acquire().expect("acquire after drop succeeds");
+    drop(g2);
+}
+
+#[test]
+fn pid_liveness_reports_current_process_alive() {
+    let alive = is_pid_alive(std::process::id()).expect("query own pid");
+    assert!(alive);
+}
+
+struct NopSink(Arc<AtomicU64>);
+impl SampleSink for NopSink {
+    fn on_point(&mut self, _t: f64, _values: &[f64]) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn live_worker_op_tran_missing_probe_cancel_and_lifecycle() {
     let Ok(lib) = std::env::var("NGSPICE_LIB") else {
         return;
     };
     let lib_path = PathBuf::from(lib);
     let worker_bin = PathBuf::from(env!("CARGO_BIN_EXE_omnia-ngspice-worker"));
 
-    // 1. OP accuracy + SINV7 missing probe refusal.
+    // 1. Worker OP accuracy + SINV7 missing probe refusal.
     let (mut w, _) = WorkerClient::spawn(&worker_bin, &lib_path).expect("spawn");
     let vals = w
         .run_op(
@@ -146,7 +223,7 @@ fn live_worker_op_tran_missing_probe_and_cancel() {
     assert!(tran.total_points > 500, "points={}", tran.total_points);
     w.shutdown().expect("shutdown");
 
-    // 3. Cancel + zero orphan check (SB4 / SINV5).
+    // 3. Cancel + zero orphan check (SB4 / SINV5), enforcing 50 ms total deadline.
     let (w2, _) = WorkerClient::spawn(&worker_bin, &lib_path).expect("spawn 2");
     let outcome = w2
         .run_tran_then_cancel(
@@ -159,4 +236,38 @@ fn live_worker_op_tran_missing_probe_and_cancel() {
         )
         .expect("cancel");
     assert!(!outcome.pid_alive_after, "SINV5: orphan worker survived");
+    assert!(
+        outcome.mode == CancelMode::CooperativeReaped || outcome.mode == CancelMode::HardKilled
+    );
+    assert!(
+        outcome.cancel_elapsed < Duration::from_millis(100),
+        "SB4 exceeded: {:?}",
+        outcome.cancel_elapsed
+    );
+
+    // 4. In-process singleton guard + Drop while bg_run is active must safely halt & reload.
+    {
+        let mut ng = NgspiceLib::load(&lib_path).expect("load first in-proc instance");
+        let second = NgspiceLib::load(&lib_path);
+        assert!(
+            second.is_err(),
+            "second concurrent NgspiceLib load must fail"
+        );
+        let count = Arc::new(AtomicU64::new(0));
+        ng.start_tran_bg(
+            &circuits::heavy_cancel_tran_netlist(),
+            &["n0".into(), "n24".into()],
+            Box::new(NopSink(Arc::clone(&count))),
+        )
+        .expect("start bg tran");
+        while count.load(Ordering::Relaxed) < 10 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Drop `ng` while bg_run is actively streaming — Drop must bg_halt, join, detach, unload.
+    }
+    let mut ng2 = NgspiceLib::load(&lib_path).expect("reload after clean Drop must succeed");
+    let op2 = ng2
+        .run_op(&circuits::simple_op_netlist(), &["n1".into(), "n2".into()])
+        .expect("op after reload");
+    assert!((op2[0] - 20.0 / 3.0).abs() < 1e-6);
 }

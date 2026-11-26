@@ -1,11 +1,10 @@
-SS1 complete (reps=10, batch=256, inproc_dlopen=5.07 ms, spawn_ready p50=11.27 ms p99=14.84 ms, coop_stops=50, hard_fallbacks=0, orphans=0)
-worker-cold-op             median run p99   14.059 ms  range  12.589-16.533  ms  p50  12.622 ms
-worker-cold-wien-first     median run p99   15.171 ms  range  13.300-17.599  ms  p50  13.576 ms
-worker-warm-wien-first     median run p99    1.000 ms  range   0.864-1.305   ms  p50   0.828 ms
-inproc-wien-first          median run p99    0.592 ms  range   0.536-0.928   ms  p50   0.541 ms
-worker-stream-tran         median run p99  138.641 ms  p50 133.625 ms  rate    748450 pts/s (1496900 ch-S/s)
-inproc-stream-tran         median run p99  131.688 ms  p50 128.157 ms  rate    780385 pts/s (1560769 ch-S/s)
-worker-cancel-coop-kill    median run p99  114.488 ms  range 112.740-120.781 ms  p50 111.646 ms
-worker-cancel-hard-kill    median run p99    2.253 ms  range   1.959-9.622   ms  p50   1.892 ms
-inproc-cancel-bghalt       median run p99  109.004 ms  range 106.806-111.403 ms  p50 106.062 ms
-
+SS1 complete (reps=10, batch=256, inproc_dlopen=6.55 ms, spawn_ready p50=25.78 ms p99=191.43 ms, coop_stops=0, hard_fallbacks=50, orphans=0)
+worker-cold-op             median run p99   64.057 ms  range  15.649-392.495 ms  p50  32.631 ms
+worker-cold-wien-first     median run p99  116.480 ms  range  16.235-303.101 ms  p50  29.877 ms
+worker-warm-wien-first     median run p99   16.665 ms  range   0.723-87.759  ms  p50   3.532 ms
+inproc-wien-first          median run p99    1.692 ms  range   0.536-7.942   ms  p50   1.238 ms
+worker-stream-tran         median run p99  461.310 ms  p50 406.602 ms  rate    246004 pts/s (492008 ch-S/s)
+inproc-stream-tran         median run p99  401.225 ms  p50 372.896 ms  rate    268204 pts/s (536408 ch-S/s)
+worker-cancel-coop-kill    median run p99  129.168 ms  range  66.682-2010.408 ms  p50  75.712 ms
+worker-cancel-hard-kill    median run p99   30.507 ms  range  11.702-49.672  ms  p50  15.960 ms
+inproc-cancel-bghalt       median run p99  120.333 ms  range 115.647-139.200 ms  p50 112.761 ms

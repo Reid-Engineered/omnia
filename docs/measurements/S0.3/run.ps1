@@ -21,6 +21,12 @@ param(
 $ErrorActionPreference = "Stop"
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
+function Write-Utf8Lf([string]$Path, [string[]]$Lines) {
+    $text = (($Lines -join "`n").TrimEnd("`r", "`n")) + "`n"
+    [System.IO.File]::WriteAllText($Path, $text, $utf8NoBom)
+}
 
 function New-RunDirectory([string]$Path) {
     [System.IO.Directory]::CreateDirectory($Path) | Out-Null
@@ -73,13 +79,15 @@ $benchBin = Join-Path $bin "bench_ss1.exe"
 
 $hashes = Get-FileHash -Algorithm SHA256 $workerBin, $benchBin, $NgspiceLib |
     ForEach-Object { "{0}  {1}" -f $_.Hash.ToLower(), (Split-Path -Leaf $_.Path) }
-$hashes | Set-Content (Join-Path $results "binaries-$Label.sha256")
+Write-Utf8Lf (Join-Path $results "binaries-$Label.sha256") $hashes
 
 if (Test-Path "C:\msys64\ucrt64\bin") {
     $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
 }
 
-$auditLines = @("=== library ===", (Get-Item $NgspiceLib | ForEach-Object { "{0} bytes  {1}" -f $_.Length, $_.FullName }))
+# Log only basename and byte size (no host-specific temp directory paths).
+$libItem = Get-Item $NgspiceLib
+$auditLines = @("=== library ===", ("{0} bytes  {1}" -f $libItem.Length, $libItem.Name))
 if (Test-Path "C:\msys64\ucrt64\bin\objdump.exe") {
     $auditLines += "=== objdump -p (DLL Name) ==="
     $auditLines += (& "C:\msys64\ucrt64\bin\objdump.exe" -p $NgspiceLib | Select-String "DLL Name:" | ForEach-Object { $_.Line.Trim() })
@@ -88,11 +96,11 @@ if (Test-Path "C:\msys64\usr\bin\ldd.exe") {
     $auditLines += "=== ldd ==="
     $auditLines += (& "C:\msys64\usr\bin\ldd.exe" $NgspiceLib | ForEach-Object { $_.Trim() })
 }
-$auditLines | Set-Content (Join-Path $results "dll-audit-$Label.txt")
+Write-Utf8Lf (Join-Path $results "dll-audit-$Label.txt") $auditLines
 
-& (Join-Path $here "conditions.ps1") | Set-Content (Join-Path $results "conditions-before-$Label.txt")
+Write-Utf8Lf (Join-Path $results "conditions-before-$Label.txt") (& (Join-Path $here "conditions.ps1"))
 
-& $benchBin `
+$benchOut = & $benchBin `
     --lib $NgspiceLib `
     --worker $workerBin `
     --out (Join-Path $results "ss1-$Label") `
@@ -100,9 +108,10 @@ $auditLines | Set-Content (Join-Path $results "dll-audit-$Label.txt")
     --startup-iters $StartupIters `
     --stream-iters $StreamIters `
     --cancel-iters $CancelIters `
-    --batch-size $BatchSize |
-    Tee-Object (Join-Path $results "ss1-$Label.txt")
+    --batch-size $BatchSize
 if ($LASTEXITCODE -ne 0) { throw "bench_ss1 failed" }
+$benchOut | ForEach-Object { Write-Host $_ }
+Write-Utf8Lf (Join-Path $results "ss1-$Label.txt") $benchOut
 
-& (Join-Path $here "conditions.ps1") | Set-Content (Join-Path $results "conditions-after-$Label.txt")
+Write-Utf8Lf (Join-Path $results "conditions-after-$Label.txt") (& (Join-Path $here "conditions.ps1"))
 Write-Host "Results written to $results"

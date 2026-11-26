@@ -1,5 +1,5 @@
 === library ===
-8934197 bytes  C:\Users\marcu\.t3\userdata\antigravity-tmp\7be9b928ae8c\run-cd9pP4\omnia-s03-ngspice\install-ucrt64\bin\libngspice-0.dll
+8934197 bytes  libngspice-0.dll
 === objdump -p (DLL Name) ===
 DLL Name: ADVAPI32.dll
 DLL Name: KERNEL32.dll
@@ -31,14 +31,14 @@ RPCRT4.dll => /c/Windows/System32/RPCRT4.dll (0x7ffb27a00000)
 ucrtbase.dll => /c/Windows/System32/ucrtbase.dll (0x7ffb26c30000)
 SHELL32.dll => /c/Windows/System32/SHELL32.dll (0x7ffb28070000)
 msvcp_win.dll => /c/Windows/System32/msvcp_win.dll (0x7ffb26270000)
-libwinpthread-1.dll => /ucrt64/bin/libwinpthread-1.dll (0x7ffb155a0000)
 USER32.dll => /c/Windows/System32/USER32.dll (0x7ffb277a0000)
+libwinpthread-1.dll => /ucrt64/bin/libwinpthread-1.dll (0x7ffaf4420000)
 win32u.dll => /c/Windows/System32/win32u.dll (0x7ffb26880000)
 GDI32.dll => /c/Windows/System32/GDI32.dll (0x7ffb279d0000)
 gdi32full.dll => /c/Windows/System32/gdi32full.dll (0x7ffb26b00000)
 SHLWAPI.dll => /c/Windows/System32/SHLWAPI.dll (0x7ffb27da0000)
-libstdc++-6.dll => /ucrt64/bin/libstdc++-6.dll (0x7ffab33f0000)
-libgcc_s_seh-1.dll => /ucrt64/bin/libgcc_s_seh-1.dll (0x7ffb152b0000)
+libstdc++-6.dll => /ucrt64/bin/libstdc++-6.dll (0x7ffa58f40000)
+libgcc_s_seh-1.dll => /ucrt64/bin/libgcc_s_seh-1.dll (0x7ffaf3ad0000)
 CRYPTBASE.DLL => /c/Windows/System32/CRYPTBASE.DLL (0x7ffb25900000)
 bcryptPrimitives.dll => /c/Windows/System32/bcryptPrimitives.dll (0x7ffb268b0000)
 IMM32.DLL => /c/Windows/System32/IMM32.DLL (0x7ffb27990000)

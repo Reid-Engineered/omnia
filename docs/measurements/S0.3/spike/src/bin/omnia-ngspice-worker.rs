@@ -1,8 +1,9 @@
 //! Prototype isolated `omnia-ngspice-worker` executable (`SS1` / `SD5`).
 //!
-//! Dynamically loads `libngspice`, speaks binary framed IPC on stdin/stdout, streams transient
-//! `(t, ch0, ...)` double frames directly from `SendData`, and honours cooperative `Cancel`
-//! (`bg_halt`) on a dedicated control thread.
+//! Dynamically loads `libngspice` exclusively on the main thread (`!Sync`), speaks binary
+//! framed IPC on stdin/stdout, streams transient `(t, ch0, ...)` double frames directly from
+//! `SendData`, and honours cooperative `Cancel` via a dedicated stdin reader thread that
+//! wakes the single `NgspiceLib` owner thread through `BgWakeup`.
 
 use std::io::{self, BufReader, BufWriter, Write};
 use std::path::PathBuf;
@@ -12,7 +13,8 @@ use std::time::Duration;
 
 use omnia_s03_spike::ngspice::{NgspiceLib, SampleSink};
 use omnia_s03_spike::protocol::{
-    Request, Response, read_request, write_response, write_sample_batch_raw,
+    MAX_BATCH_POINTS, MAX_CHANNELS, Request, Response, read_request, validate_batch_size,
+    write_response, write_sample_batch_raw,
 };
 
 struct StreamingSink {
@@ -31,18 +33,32 @@ impl StreamingSink {
         channels: u16,
         batch_size: u32,
         cancelled: Arc<AtomicBool>,
-    ) -> Self {
-        let bs = batch_size.max(1) as usize;
+    ) -> Result<Self, String> {
+        if channels > MAX_CHANNELS {
+            return Err(format!(
+                "channel count {channels} exceeds MAX_CHANNELS ({MAX_CHANNELS})"
+            ));
+        }
+        let bs = validate_batch_size(batch_size).map_err(|e| {
+            format!("invalid batch_size ({batch_size}, max {MAX_BATCH_POINTS}): {e}")
+        })? as usize;
         let stride = 1 + channels as usize;
-        Self {
+        let f64_cap = bs
+            .checked_mul(stride)
+            .ok_or("sample buffer capacity overflow")?;
+        let wire_cap = f64_cap
+            .checked_mul(8)
+            .and_then(|b| b.checked_add(6))
+            .ok_or("wire scratch capacity overflow")?;
+        Ok(Self {
             stdout,
             channels,
             batch_size: bs,
             first_flushed: false,
-            f64_buf: Vec::with_capacity(bs * stride),
-            wire_scratch: Vec::with_capacity(6 + bs * stride * 8),
+            f64_buf: Vec::with_capacity(f64_cap),
+            wire_scratch: Vec::with_capacity(wire_cap),
             cancelled,
-        }
+        })
     }
 
     fn flush_batch(&mut self, flush_writer: bool) {
@@ -123,8 +139,8 @@ fn main() {
         }
     };
 
-    let ng = match NgspiceLib::load(&lib_path) {
-        Ok(lib) => Arc::new(lib),
+    let mut ng = match NgspiceLib::load(&lib_path) {
+        Ok(lib) => lib,
         Err(msg) => {
             if let Ok(mut out) = stdout.lock() {
                 let _ = write_response(&mut *out, &Response::Error { message: msg });
@@ -139,48 +155,81 @@ fn main() {
         return;
     }
 
-    // Channel dispatches work commands to a dedicated simulation thread while the main thread
-    // keeps reading stdin so `Cancel` can invoke `bg_halt` immediately during `bg_run`.
+    // Stdin reader runs on a helper thread that NEVER touches `libngspice` FFI. On `Cancel`,
+    // it flips `cancelled` and wakes the main `NgspiceLib` owner thread via `BgWakeup`.
     let (work_tx, work_rx) = std::sync::mpsc::channel::<Request>();
     let cancelled = Arc::new(AtomicBool::new(false));
-    let ng_worker = Arc::clone(&ng);
-    let out_worker = Arc::clone(&stdout);
-    let cancel_worker = Arc::clone(&cancelled);
+    let cancel_reader = Arc::clone(&cancelled);
+    let wakeup = ng.wakeup_handle();
 
-    let sim_thread = std::thread::spawn(move || {
-        while let Ok(req) = work_rx.recv() {
+    let stdin_thread = std::thread::spawn(move || {
+        let mut stdin = BufReader::new(io::stdin());
+        let mut buf = Vec::with_capacity(64 * 1024);
+        while let Ok(Some(req)) = read_request(&mut stdin, &mut buf) {
             match req {
-                Request::Ping => {
-                    if let Ok(mut out) = out_worker.lock() {
-                        let _ = write_response(&mut *out, &Response::Ready);
+                Request::Cancel => {
+                    cancel_reader.store(true, Ordering::SeqCst);
+                    wakeup.request_cancel();
+                }
+                Request::Shutdown => {
+                    let _ = work_tx.send(Request::Shutdown);
+                    break;
+                }
+                other => {
+                    if work_tx.send(other).is_err() {
+                        break;
                     }
                 }
-                Request::RunOp { probes, netlist } => {
-                    let resp = match ng_worker.run_op(&netlist, &probes) {
-                        Ok(values) => Response::OpResult { values },
-                        Err(message) => Response::Error { message },
-                    };
-                    if let Ok(mut out) = out_worker.lock() {
-                        let _ = write_response(&mut *out, &resp);
-                    }
+            }
+        }
+    });
+
+    while let Ok(req) = work_rx.recv() {
+        match req {
+            Request::Ping => {
+                if let Ok(mut out) = stdout.lock() {
+                    let _ = write_response(&mut *out, &Response::Ready);
                 }
-                Request::RunTran {
-                    probes,
-                    netlist,
+            }
+            Request::RunOp { probes, netlist } => {
+                let resp = match ng.run_op(&netlist, &probes) {
+                    Ok(values) => Response::OpResult { values },
+                    Err(message) => Response::Error { message },
+                };
+                if let Ok(mut out) = stdout.lock() {
+                    let _ = write_response(&mut *out, &resp);
+                }
+            }
+            Request::RunTran {
+                probes,
+                netlist,
+                batch_size,
+            } => {
+                cancelled.store(false, Ordering::SeqCst);
+                let channels = match u16::try_from(probes.len()) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        if let Ok(mut out) = stdout.lock() {
+                            let _ = write_response(
+                                &mut *out,
+                                &Response::Error {
+                                    message: "probe count exceeds u16".into(),
+                                },
+                            );
+                        }
+                        continue;
+                    }
+                };
+                let resp = match StreamingSink::new(
+                    Arc::clone(&stdout),
+                    channels,
                     batch_size,
-                } => {
-                    cancel_worker.store(false, Ordering::SeqCst);
-                    let channels = probes.len() as u16;
-                    let sink = StreamingSink::new(
-                        Arc::clone(&out_worker),
-                        channels,
-                        batch_size,
-                        Arc::clone(&cancel_worker),
-                    );
-                    let resp = match ng_worker.start_tran_bg(&netlist, &probes, Box::new(sink)) {
-                        Ok(()) => match ng_worker.wait_tran_bg(Duration::from_secs(120)) {
+                    Arc::clone(&cancelled),
+                ) {
+                    Ok(sink) => match ng.start_tran_bg(&netlist, &probes, Box::new(sink)) {
+                        Ok(()) => match ng.wait_tran_bg_cancellable(Duration::from_secs(120)) {
                             Ok(stats) => {
-                                if cancel_worker.load(Ordering::SeqCst) {
+                                if stats.halted_by_cancel {
                                     Response::Cancelled {
                                         total_points: stats.total_points,
                                     }
@@ -193,35 +242,17 @@ fn main() {
                             Err(message) => Response::Error { message },
                         },
                         Err(message) => Response::Error { message },
-                    };
-                    if let Ok(mut out) = out_worker.lock() {
-                        let _ = write_response(&mut *out, &resp);
-                    }
-                }
-                Request::Cancel | Request::Shutdown => break,
-            }
-        }
-    });
-
-    let mut stdin = BufReader::new(io::stdin());
-    let mut buf = Vec::with_capacity(64 * 1024);
-    while let Ok(Some(req)) = read_request(&mut stdin, &mut buf) {
-        match req {
-            Request::Cancel => {
-                cancelled.store(true, Ordering::SeqCst);
-                let _ = ng.bg_halt();
-            }
-            Request::Shutdown => {
-                let _ = work_tx.send(Request::Shutdown);
-                break;
-            }
-            other => {
-                if work_tx.send(other).is_err() {
-                    break;
+                    },
+                    Err(message) => Response::Error { message },
+                };
+                if let Ok(mut out) = stdout.lock() {
+                    let _ = write_response(&mut *out, &resp);
                 }
             }
+            Request::Cancel | Request::Shutdown => break,
         }
     }
-    drop(work_tx);
-    let _ = sim_thread.join();
+
+    drop(ng);
+    let _ = stdin_thread.join();
 }
