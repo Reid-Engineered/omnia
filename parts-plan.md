@@ -138,7 +138,7 @@ thresholds (`XD9`); these are added. `PB1`–`PB5` are chosen targets, to be ver
 | PK7 | Field size caps | At most 64 parameters per part definition; parameter string max 256 bytes; description max 2,048 bytes; at most 64 tags (32 bytes each); at most 256 pins per part; embedded SPICE text max 2 MiB (`PK3` single entry). |
 | PK8 | Container extensions | `.opart` (single-part ZIP archive), `.olib` (multi-part pack ZIP archive), `.omnia` (schematic document). |
 | PK9 | Document RON version | `version: 3` adds the `part_defs` table and per-part `def` + `params`. `version: 2` loads by strict migration (`PD8`); every other version is refused. |
-| PK10 | Disallowed SPICE content in embedded and imported models | `.control`, `.endc`, `shell`, `system`, `osdi`, `pre_osdi`, `codemodel`, `.csdf`. In archives, any `.include` / `.lib` whose path contains `..`, a drive prefix, a leading `/` or `\`, or names a file outside the archive. In embedded text (documents and commands), any `.include` or `.lib` at all: embedded decks are already flattened. |
+| PK10 | Disallowed SPICE content in embedded and imported models | `.control`, `.endc`, `shell`, `system`, `osdi`, `pre_osdi`, `codemodel`, `.csdf`. In archives, any `.include` / `.lib` whose path contains `..`, a drive prefix, a leading `/` or `\`, or names a file outside the archive. In embedded text (documents and commands), any `.include` or `.lib` at all: embedded decks are already flattened. **Screening rules** (amended 2026-11-25, `P1.2`): one screen, `omnia_doc::screen_embedded`, checks the first token of every line (comment `*` and blank lines excepted), ASCII case-insensitively with leading dots ignored; a token written with a leading dot is also refused when it only starts with a listed name (`.controlx`, `.libsave`, `.library`); tokens split on any Unicode whitespace; on a `+` continuation line only a dot-form token is a directive, so `+ SYSTEM` continues the line. Embedded text is held to the stored form (`PD3`): no byte-order mark, CR or NUL anywhere. Archive and folder imports (`omnia-parts` `spice.rs`) screen every physical line of every file read, unselected `.lib` sections included, with the same function; only the `.include`/`.inc`/`.lib <file> <section>`/`.lib <section>`/`.endl` lines the flattener follows are exempt from the directive check, and never from the stored-form check (a lone CR, NUL or stray byte-order mark is refused on every line). Every include path in a file read is checked, selected or not; includes nest at most 16 files deep, cycles are refused, and one load reads at most 8 MiB in total (`PK3` file cap; every read counts, repeated includes included). An extracted block is at most 2 MiB (`PK7`). |
 | PK11 | Model licence policy (added 2026-11-23, owner-delegated, review of #85) | Bundled files under `library/models/` carry an SPDX id from this list: `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `CC0-1.0`, or `LicenseRef-public-domain`. This is a separate policy from `deny.toml` (which covers Rust crates); `cargo xtask parts --check` enforces it from a constant table in `xtask/src/parts.rs` and checks that `THIRD_PARTY.md` lists each file (`PQ7`). |
 | PK12 | Parameter names shared with simulation (added 2026-11-23, `XD1`) | `resistance`, `capacitance`, `inductance`, `wiper` (potentiometer ratio, `0..1`), `ic` (initial condition), `waveform` (enum `dc`, `sin`, `pulse`) with its real fields (`dc`, `offset`, `ampl`, `freq`, `delay`, `v1`, `v2`, `rise`, `fall`, `width`, `period`), `ac_mag`, `ac_phase`, `dc` also as the voltage of a `rail` part (real, unit `V`), and `model` (enum over model entries embedded in the same definition). Definitions use these names when they mean these quantities. |
 
@@ -252,11 +252,15 @@ Lane separation (AGENTS.md) stays strict:
   (`XD4`).
 - **Model/subcircuit parts:** when the binding is `model` or `subckt`, the resolved SPICE
   definition (`.model` card or `.subckt`…`.ends` block, plus any transitive local
-  `.model`/`.subckt` dependencies inside the same `.lib`) is embedded once.
+  `.model`/`.subckt` dependencies inside the same `.lib`, and the top-level `.param` and `.func`
+  definitions they reference (amended 2026-11-25, `P1.2`, `P0.3` gap 1)) is embedded once.
+  References resolve from their own scope outwards, so a local definition shadows a top-level
+  one, and a subcircuit is referenced only from the subcircuit slot of an `X` line.
 - **Source-deck preservation** (amended 2026-11-23, owner-delegated, review of #85): the embedded
   block is the extracted lines of the source deck in source order, byte for byte, with one
   normalisation applied at extraction: line endings become LF and a leading UTF-8 byte-order
-  mark is dropped. Comments, case, whitespace and continuation lines inside the block are kept.
+  mark is dropped. Only CRLF is normalised: a lone CR is refused, not read as a line break
+  (amended 2026-11-25, `P1.2`, `P0.3` gap 7). Comments, case, whitespace and continuation lines inside the block are kept.
   `.include`/`.lib` directives that resolve inside an archive are replaced by the lines they
   name (flattening, `PD10`); nothing else is rewritten. The `PK5` hash is computed over this
   stored text and adds no normalisation of its own, so two decks that differ only in line
@@ -850,6 +854,34 @@ pub enum DefUpdateAvailable {
 // Packing helpers for export and tests
 pub fn pack_opart(dir: &Path, out_path: &Path) -> Result<ContentHash, LibraryError>;
 pub fn pack_olib(dir: &Path, out_path: &Path) -> Result<PackSummary, LibraryError>;
+
+// ---- omnia-parts: spice.rs (P1.2) ----
+pub const MAX_INCLUDE_DEPTH: usize = 16;                     // files in one include chain
+pub const MAX_DECK_BYTES: u64 = 8 * 1024 * 1024;             // PK3: bytes read per load
+pub const MAX_EXTRACTED_BYTES: usize = 2 * 1024 * 1024;      // PK7: one extracted block
+pub enum EntryKind { Model, Subckt }
+pub enum DefKind { Model, Subckt, Param, Func }              // separate namespaces
+pub trait DeckSource {                                       // archive, folder or memory
+    fn contains(&self, path: &str) -> bool;                  // archive-relative, `/` separators
+    fn open(&self, path: &str) -> io::Result<Box<dyn Read + '_>>;
+}
+pub struct MemSource { /* BTreeMap<String, Vec<u8>> */ }      // impl DeckSource
+pub struct Deck { /* read, screened, flattened, parsed */ }
+impl Deck {
+    pub fn load(source: &dyn DeckSource, root: &str) -> Result<Deck, SpiceError>;
+    pub fn top_level(&self, kind: DefKind) -> Vec<&str>;
+    pub fn extract(&self, entry: &str, kind: EntryKind) -> Result<Extraction, SpiceError>;
+}
+pub fn extract(source: &dyn DeckSource, root: &str, entry: &str,
+               kind: EntryKind) -> Result<Extraction, SpiceError>;
+pub struct Extraction { pub entry: String, pub kind: EntryKind,
+                        pub ports: Option<Vec<String>>, pub blocks: Vec<Block>,
+                        pub text: String }                   // LF-terminated, PD3
+pub struct Block { pub kind: DefKind, pub name: String, pub file: String,
+                   pub line_first: usize, pub line_last: usize }
+pub enum SpiceError { /* typed refusal carrying path/file/line/offset/entry as applicable; `code()` gives a stable short code */ }
+// Re-exported at the crate root: Deck, DeckSource, DefKind, EntryKind, Extraction, MemSource,
+// SpiceError, extract.
 ```
 
 Additions in `crates/omnia-doc/` (no `omnia-parts` dependency):
@@ -862,6 +894,9 @@ pub fn parse_value(text: &str, unit: Option<&str>) -> Result<FiniteF64, ValueErr
 // ---- omnia-doc: spice_screen.rs (P1.2) ----
 pub fn screen_embedded(spice: &str) -> Result<(), ScreenError>;     // PK10, embedded rules
 pub fn subckt_ports(spice: &str, entry: &str) -> Option<usize>;      // for terminal counts
+pub enum ScreenError { ByteOrderMark { line }, CarriageReturn { line }, Nul { line },
+                       Forbidden { line, directive }, Include { line, directive } }
+// Re-exported at the crate root: omnia_doc::{ScreenError, screen_embedded, subckt_ports}.
 
 // ---- omnia-doc: part_def.rs (P2.1) ----
 pub struct PartDefId(pub u32);
