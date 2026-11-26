@@ -1,0 +1,656 @@
+//! Host-side client driving the isolated `omnia-ngspice-worker` subprocess over binary stdio IPC.
+
+use std::io::{self, BufReader, BufWriter};
+use std::path::Path;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::time::{Duration, Instant};
+
+use crate::protocol::{Request, Response, read_response, write_request};
+
+pub struct WorkerClient {
+    child: Child,
+    pid: u32,
+    stdin: BufWriter<ChildStdin>,
+    stdout: BufReader<ChildStdout>,
+    buf: Vec<u8>,
+}
+
+pub struct WorkerTranResult {
+    pub total_points: u64,
+    pub total_channel_samples: u64,
+    pub batches: u64,
+    pub first_sample_at: Option<Instant>,
+    pub last_t: f64,
+    pub last_ch0: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancelMode {
+    /// Worker acknowledged `Response::Cancelled`, exited cleanly (`status.success()`), and was
+    /// reaped at or before `grace`.
+    CooperativeReaped,
+    /// Worker acknowledged `Response::Cancelled` and exited cleanly (`status.success()`) on its
+    /// own after `grace` expired — either observed directly via `try_wait()` or completed just
+    /// before an attempted host kill could terminate the child.
+    CooperativeLateReaped,
+    /// Host terminated a still-running worker and observed its dedicated host-kill exit status
+    /// (either `hard_kill_only` or because the worker was still alive after `grace` expired).
+    HardKilled,
+}
+
+fn classify_cooperative_exit(
+    success: bool,
+    within_deadline: bool,
+    status_desc: impl std::fmt::Display,
+) -> Result<CancelMode, String> {
+    if !success {
+        return Err(format!(
+            "worker exited with non-zero status during cooperative cancel: {status_desc}"
+        ));
+    }
+    if within_deadline {
+        Ok(CancelMode::CooperativeReaped)
+    } else {
+        Ok(CancelMode::CooperativeLateReaped)
+    }
+}
+
+#[cfg(windows)]
+const HOST_KILL_EXIT_CODE: u32 = 0x5030_4B49;
+
+#[cfg(unix)]
+fn terminate_child(child: &mut Child) -> bool {
+    child.kill().is_ok()
+}
+
+#[cfg(windows)]
+fn terminate_child(child: &mut Child) -> bool {
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn TerminateProcess(process: *mut std::ffi::c_void, exit_code: u32) -> i32;
+    }
+
+    // Call Win32 `TerminateProcess` with a dedicated sentinel exit code instead of `Child::kill()`
+    // (which uses `1` and maps `ERROR_ACCESS_DENIED` to `Ok(())`), so an already-exited child
+    // returning `1` can never look host-killed.
+    unsafe { TerminateProcess(child.as_raw_handle(), HOST_KILL_EXIT_CODE) != 0 }
+}
+
+#[cfg(unix)]
+fn is_host_kill_status(status: std::process::ExitStatus) -> bool {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal() == Some(9)
+}
+
+#[cfg(windows)]
+fn is_host_kill_status(status: std::process::ExitStatus) -> bool {
+    status.code() == Some(HOST_KILL_EXIT_CODE as i32)
+}
+
+fn classify_post_kill_exit(
+    after_ack: bool,
+    kill_ok: bool,
+    status_success: bool,
+    host_kill_status: bool,
+    status_desc: impl std::fmt::Display,
+) -> Result<CancelMode, String> {
+    if status_success {
+        return if after_ack {
+            Ok(CancelMode::CooperativeLateReaped)
+        } else {
+            Err("worker exited cleanly without acknowledging Cancel".into())
+        };
+    }
+    if kill_ok && host_kill_status {
+        return Ok(CancelMode::HardKilled);
+    }
+    Err(format!(
+        "worker exited before host kill took effect (kill_ok={kill_ok}, status={status_desc})"
+    ))
+}
+
+fn kill_and_reap(child: &mut Child, after_ack: bool) -> Result<CancelMode, String> {
+    let kill_ok = terminate_child(child);
+    let status = child
+        .wait()
+        .map_err(|e| format!("wait after kill failed: {e}"))?;
+    classify_post_kill_exit(
+        after_ack,
+        kill_ok,
+        status.success(),
+        is_host_kill_status(status),
+        status,
+    )
+}
+
+#[derive(Debug)]
+pub struct CancelOutcome {
+    pub pid: u32,
+    pub cancel_elapsed: Duration,
+    pub mode: CancelMode,
+    pub pid_alive_after: bool,
+}
+
+impl WorkerClient {
+    /// Spawn a fresh `omnia-ngspice-worker` loading `lib_path` and wait for `Ready`.
+    pub fn spawn(worker_bin: &Path, lib_path: &Path) -> Result<(Self, Duration), String> {
+        let t0 = Instant::now();
+        let mut child = Command::new(worker_bin)
+            .arg("--lib")
+            .arg(lib_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("failed to spawn {}: {e}", worker_bin.display()))?;
+        let pid = child.id();
+        let stdin = BufWriter::new(child.stdin.take().ok_or("missing worker stdin")?);
+        let stdout = BufReader::with_capacity(
+            64 * 1024,
+            child.stdout.take().ok_or("missing worker stdout")?,
+        );
+        let mut client = Self {
+            child,
+            pid,
+            stdin,
+            stdout,
+            buf: Vec::with_capacity(64 * 1024),
+        };
+        match read_response(&mut client.stdout, &mut client.buf)
+            .map_err(|e| format!("failed reading Ready from worker: {e}"))?
+        {
+            Some(Response::Ready) => Ok((client, t0.elapsed())),
+            Some(Response::Error { message }) => Err(format!("worker init error: {message}")),
+            other => Err(format!("unexpected worker init response: {other:?}")),
+        }
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn run_op(
+        &mut self,
+        netlist: Vec<String>,
+        probes: Vec<String>,
+    ) -> Result<Vec<f64>, String> {
+        write_request(&mut self.stdin, &Request::RunOp { probes, netlist })
+            .map_err(|e| format!("write RunOp failed: {e}"))?;
+        match read_response(&mut self.stdout, &mut self.buf)
+            .map_err(|e| format!("read OpResult failed: {e}"))?
+        {
+            Some(Response::OpResult { values }) => Ok(values),
+            Some(Response::Error { message }) => Err(message),
+            other => Err(format!("unexpected Op response: {other:?}")),
+        }
+    }
+
+    pub fn run_tran(
+        &mut self,
+        netlist: Vec<String>,
+        probes: Vec<String>,
+        batch_size: u32,
+    ) -> Result<WorkerTranResult, String> {
+        write_request(
+            &mut self.stdin,
+            &Request::RunTran {
+                probes,
+                netlist,
+                batch_size,
+            },
+        )
+        .map_err(|e| format!("write RunTran failed: {e}"))?;
+
+        let mut total_points = 0u64;
+        let mut total_channel_samples = 0u64;
+        let mut batches = 0u64;
+        let mut first_sample_at = None;
+        let mut last_t = 0.0;
+        let mut last_ch0 = 0.0;
+
+        loop {
+            match read_response(&mut self.stdout, &mut self.buf)
+                .map_err(|e| format!("read tran response failed: {e}"))?
+            {
+                Some(Response::SampleBatch {
+                    channels,
+                    points,
+                    data,
+                }) => {
+                    if first_sample_at.is_none() && points > 0 {
+                        first_sample_at = Some(Instant::now());
+                    }
+                    let stride = 1 + channels as usize;
+                    if points > 0 && data.len() >= stride {
+                        let base = (points as usize - 1) * stride;
+                        last_t = data[base];
+                        if channels >= 1 {
+                            last_ch0 = data[base + 1];
+                        }
+                    }
+                    total_points += points as u64;
+                    total_channel_samples += points as u64 * channels as u64;
+                    batches += 1;
+                }
+                Some(Response::RunDone { total_points: done }) => {
+                    if done != total_points {
+                        return Err(format!(
+                            "point count mismatch: received {total_points}, worker reported {done}"
+                        ));
+                    }
+                    return Ok(WorkerTranResult {
+                        total_points,
+                        total_channel_samples,
+                        batches,
+                        first_sample_at,
+                        last_t,
+                        last_ch0,
+                    });
+                }
+                Some(Response::Error { message }) => return Err(message),
+                other => return Err(format!("unexpected tran response: {other:?}")),
+            }
+        }
+    }
+
+    /// Start a streaming transient, wait until at least `min_points` have streamed in, then
+    /// trigger `SK11` cancellation:
+    /// - The `grace` deadline (50 ms) covers the ENTIRE cooperative cancel + worker clean exit
+    ///   + `try_wait`/reap path.
+    /// - If `Response::RunDone` arrives before `Response::Cancelled`, the simulation finished
+    ///   naturally before halt took effect — returned as an explicit error and never counted as
+    ///   a cooperative stop.
+    /// - If the worker has not exited and been reaped before `deadline`, the host immediately
+    ///   hard-kills and reaps it and records `CancelMode::HardKilled`.
+    pub fn run_tran_then_cancel(
+        mut self,
+        netlist: Vec<String>,
+        probes: Vec<String>,
+        batch_size: u32,
+        min_points: u64,
+        grace: Duration,
+        hard_kill_only: bool,
+    ) -> Result<CancelOutcome, String> {
+        write_request(
+            &mut self.stdin,
+            &Request::RunTran {
+                probes,
+                netlist,
+                batch_size,
+            },
+        )
+        .map_err(|e| format!("write RunTran failed: {e}"))?;
+
+        let mut received = 0u64;
+        while received < min_points {
+            match read_response(&mut self.stdout, &mut self.buf)
+                .map_err(|e| format!("read pre-cancel batch failed: {e}"))?
+            {
+                Some(Response::SampleBatch { points, .. }) => {
+                    received += points as u64;
+                }
+                Some(Response::RunDone { .. }) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return Err("simulation finished before cancel could be triggered".into());
+                }
+                Some(Response::Error { message }) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return Err(message);
+                }
+                other => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return Err(format!("unexpected pre-cancel response: {other:?}"));
+                }
+            }
+        }
+
+        enum StopSignal {
+            Cancelled,
+            NaturalRunDone,
+            Error(String),
+            Eof,
+        }
+
+        let t_cancel = Instant::now();
+        let deadline = t_cancel + grace;
+        let mode: CancelMode;
+
+        if !hard_kill_only {
+            let _ = write_request(&mut self.stdin, &Request::Cancel);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let mut stdout = self.stdout;
+            let mut buf = self.buf;
+            let reader = std::thread::spawn(move || {
+                loop {
+                    match read_response(&mut stdout, &mut buf) {
+                        Ok(Some(Response::SampleBatch { .. })) => continue,
+                        Ok(Some(Response::Cancelled { .. })) => {
+                            let _ = tx.send(StopSignal::Cancelled);
+                            return;
+                        }
+                        Ok(Some(Response::RunDone { .. })) => {
+                            let _ = tx.send(StopSignal::NaturalRunDone);
+                            return;
+                        }
+                        Ok(Some(Response::Error { message })) => {
+                            let _ = tx.send(StopSignal::Error(message));
+                            return;
+                        }
+                        Ok(_) | Err(_) => {
+                            let _ = tx.send(StopSignal::Eof);
+                            return;
+                        }
+                    }
+                }
+            });
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let mut reaped_status = None;
+            match rx.recv_timeout(remaining) {
+                Ok(StopSignal::Cancelled) => {
+                    let _ = write_request(&mut self.stdin, &Request::Shutdown);
+                    drop(self.stdin);
+                    // Enforce the SAME `deadline` over clean worker exit + reap.
+                    loop {
+                        if Instant::now() >= deadline {
+                            break;
+                        }
+                        match self.child.try_wait() {
+                            Ok(Some(status)) => {
+                                reaped_status = Some((status, Instant::now() <= deadline));
+                                break;
+                            }
+                            Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+                            Err(e) => {
+                                let _ = self.child.kill();
+                                let _ = self.child.wait();
+                                let _ = reader.join();
+                                return Err(format!(
+                                    "try_wait failed during cooperative cancel shutdown: {e}"
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some((status, within_deadline)) = reaped_status {
+                        let _ = reader.join();
+                        mode =
+                            classify_cooperative_exit(status.success(), within_deadline, status)?;
+                    } else {
+                        match self.child.try_wait() {
+                            Ok(Some(status)) => {
+                                let _ = reader.join();
+                                mode = classify_cooperative_exit(status.success(), false, status)?;
+                            }
+                            Ok(None) => {
+                                let res = kill_and_reap(&mut self.child, true);
+                                let _ = reader.join();
+                                mode = res?;
+                            }
+                            Err(e) => {
+                                let _ = self.child.kill();
+                                let _ = self.child.wait();
+                                let _ = reader.join();
+                                return Err(format!("final try_wait failed before hard kill: {e}"));
+                            }
+                        }
+                    }
+                }
+                Ok(StopSignal::NaturalRunDone) => {
+                    drop(self.stdin);
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    let _ = reader.join();
+                    return Err(
+                        "simulation completed naturally (RunDone) before Cancel took effect".into(),
+                    );
+                }
+                Ok(StopSignal::Error(msg)) => {
+                    drop(self.stdin);
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    let _ = reader.join();
+                    return Err(format!("worker error during cancel: {msg}"));
+                }
+                Ok(StopSignal::Eof) => {
+                    drop(self.stdin);
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    let _ = reader.join();
+                    return Err(
+                        "worker closed stdout unexpectedly before acknowledging Cancel".into(),
+                    );
+                }
+                Err(_) => {
+                    drop(self.stdin);
+                    match self.child.try_wait() {
+                        Ok(Some(status)) => {
+                            let _ = reader.join();
+                            return Err(format!(
+                                "worker exited without acknowledging Cancel (status={status})"
+                            ));
+                        }
+                        Ok(None) => {
+                            let res = kill_and_reap(&mut self.child, false);
+                            let _ = reader.join();
+                            mode = res?;
+                        }
+                        Err(e) => {
+                            let _ = self.child.kill();
+                            let _ = self.child.wait();
+                            let _ = reader.join();
+                            return Err(format!("try_wait failed after cancel timeout: {e}"));
+                        }
+                    }
+                }
+            }
+        } else {
+            drop(self.stdin);
+            drop(self.stdout);
+            mode = kill_and_reap(&mut self.child, false)?;
+        }
+
+        let cancel_elapsed = t_cancel.elapsed();
+        let pid_alive_after = is_pid_alive(self.pid)
+            .map_err(|e| format!("OS PID liveness query failed for pid {}: {e}", self.pid))?;
+        Ok(CancelOutcome {
+            pid: self.pid,
+            cancel_elapsed,
+            mode,
+            pid_alive_after,
+        })
+    }
+
+    pub fn shutdown(mut self) -> Result<(), String> {
+        let _ = write_request(&mut self.stdin, &Request::Shutdown);
+        drop(self.stdin);
+        let _ = self.child.wait();
+        Ok(())
+    }
+}
+
+/// Platform-specific check that a reaped worker PID is absent from the OS process table.
+/// Returns `Err` on unexpected OS query errors rather than silently assuming the process is dead.
+#[cfg(unix)]
+pub fn is_pid_alive(pid: u32) -> io::Result<bool> {
+    match std::fs::metadata(format!("/proc/{pid}")) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(windows)]
+pub fn is_pid_alive(pid: u32) -> io::Result<bool> {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    const ERROR_INVALID_PARAMETER: i32 = 87;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(
+            desired_access: u32,
+            inherit_handle: i32,
+            process_id: u32,
+        ) -> *mut std::ffi::c_void;
+        fn GetExitCodeProcess(process: *mut std::ffi::c_void, exit_code: *mut u32) -> i32;
+        fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+    }
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(ERROR_INVALID_PARAMETER) {
+                return Ok(false);
+            }
+            return Err(err);
+        }
+        let mut code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut code);
+        let err = if ok == 0 {
+            Some(io::Error::last_os_error())
+        } else {
+            None
+        };
+        CloseHandle(handle);
+        if let Some(e) = err {
+            return Err(e);
+        }
+        Ok(code == STILL_ACTIVE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cooperative_exit_classification_requires_success_and_distinguishes_late_reap() {
+        assert_eq!(
+            classify_cooperative_exit(true, true, "0"),
+            Ok(CancelMode::CooperativeReaped)
+        );
+        assert_eq!(
+            classify_cooperative_exit(true, false, "0"),
+            Ok(CancelMode::CooperativeLateReaped)
+        );
+        assert!(classify_cooperative_exit(false, true, "1").is_err());
+        assert!(classify_cooperative_exit(false, false, "1").is_err());
+    }
+
+    #[test]
+    fn post_kill_exit_classification_handles_late_clean_exits_and_kill_races() {
+        assert_eq!(
+            classify_post_kill_exit(true, false, true, false, "0"),
+            Ok(CancelMode::CooperativeLateReaped)
+        );
+        assert_eq!(
+            classify_post_kill_exit(true, true, true, false, "0"),
+            Ok(CancelMode::CooperativeLateReaped)
+        );
+        assert!(classify_post_kill_exit(false, false, true, false, "0").is_err());
+        assert_eq!(
+            classify_post_kill_exit(true, true, false, true, "1"),
+            Ok(CancelMode::HardKilled)
+        );
+        assert!(classify_post_kill_exit(true, false, false, true, "1").is_err());
+        assert!(classify_post_kill_exit(true, true, false, false, "2").is_err());
+        assert!(classify_post_kill_exit(false, true, false, false, "2").is_err());
+    }
+
+    fn spawn_exited_unreaped_child(exit_code: i32) -> Child {
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = Command::new("cmd");
+            c.args(["/C", &format!("exit {exit_code}")]);
+            c
+        };
+        #[cfg(unix)]
+        let mut cmd = {
+            let mut c = Command::new("sh");
+            c.args(["-c", &format!("exit {exit_code}")]);
+            c
+        };
+        let child = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn exiting child");
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            const INFINITE: u32 = 0xFFFF_FFFF;
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+            }
+            let rc = unsafe { WaitForSingleObject(child.as_raw_handle(), INFINITE) };
+            assert_eq!(rc, 0, "WaitForSingleObject failed: {rc}");
+            child
+        }
+        #[cfg(unix)]
+        {
+            use std::io::Read;
+            let mut child = child;
+            if let Some(mut stdout) = child.stdout.take() {
+                let mut sink = Vec::new();
+                let _ = stdout.read_to_end(&mut sink);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            child
+        }
+    }
+
+    #[test]
+    fn kill_and_reap_distinguishes_already_exited_subprocesses_from_host_kill() {
+        let mut exited_zero_ack = spawn_exited_unreaped_child(0);
+        assert_eq!(
+            kill_and_reap(&mut exited_zero_ack, true),
+            Ok(CancelMode::CooperativeLateReaped)
+        );
+
+        let mut exited_zero_no_ack = spawn_exited_unreaped_child(0);
+        assert!(kill_and_reap(&mut exited_zero_no_ack, false).is_err());
+
+        for code in [1, 2] {
+            for after_ack in [true, false] {
+                let mut child = spawn_exited_unreaped_child(code);
+                let res = kill_and_reap(&mut child, after_ack);
+                assert!(
+                    res.is_err(),
+                    "already-exited child (code {code}, after_ack={after_ack}) must not return {res:?}"
+                );
+            }
+        }
+
+        // A genuinely running child terminated via `kill_and_reap` returns `HardKilled`.
+        #[cfg(windows)]
+        let mut live = Command::new("findstr")
+            .arg("^")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn live blocking child");
+        #[cfg(unix)]
+        let mut live = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn live blocking child");
+
+        let _hold_stdin = live.stdin.take();
+        assert!(live.try_wait().expect("try_wait").is_none());
+        assert_eq!(kill_and_reap(&mut live, true), Ok(CancelMode::HardKilled));
+    }
+}
