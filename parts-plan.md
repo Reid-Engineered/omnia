@@ -908,6 +908,9 @@ only, with no empty or dot components. Opening a ZIP checks its headers and boun
 without decoding models. Each decoded entry must match its indexed size, so the sum
 of bounded reads of distinct entries cannot exceed the indexed `PK3` total. The parts
 crate pins the existing ZIP crate at 9.6.0 for its bounded central-directory iterator.
+Filesystem link checks start at the supplied library root or archive file. Directory
+indexing checks each entry, and reads recheck the root and relative path components
+before and after opening the file. Links above the supplied path are permitted.
 
 The P1.3 `PK5` encoding uses length-prefixed atoms (little-endian `u64` byte lengths),
 fixed record field order, explicit option presence and sequence counts. Parameters

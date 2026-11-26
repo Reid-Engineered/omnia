@@ -148,7 +148,7 @@ impl LibrarySource {
         let path = std::path::absolute(path)?;
         let metadata = checked_metadata(&path)?;
         if metadata.is_dir() {
-            return Self::from_directory(path);
+            return Self::index_directory(path);
         }
         if !metadata.is_file() {
             return Err(LibraryError::UnsafePath(path.display().to_string()));
@@ -158,7 +158,7 @@ impl LibrarySource {
             Some("olib") => "manifest.toml",
             _ => return Err(LibraryError::InvalidContainer("expected .opart or .olib")),
         };
-        let source = Self::from_zip(open_regular(&path)?)?;
+        let source = Self::from_zip(open_regular(&path, || checked_metadata(&path))?)?;
         if !source.files.contains_key(layout) {
             return Err(LibraryError::MissingEntry(layout.into()));
         }
@@ -240,7 +240,7 @@ impl LibrarySource {
         }
         archive.validate_header_consistency()?;
         for (index, path) in directories {
-            read_entry(archive.by_index(index)?, &path, 0, 0)?;
+            read_zip_entry(archive.by_index(index)?, &path, 0, 0)?;
         }
         Ok(Self {
             source: Source::Archive(archive),
@@ -249,12 +249,16 @@ impl LibrarySource {
     }
 
     fn from_directory(root: PathBuf) -> Result<Self, LibraryError> {
+        require_directory(&root)?;
+        Self::index_directory(root)
+    }
+
+    fn index_directory(root: PathBuf) -> Result<Self, LibraryError> {
         let mut files = BTreeMap::new();
         let mut pending = vec![(String::new(), root.clone())];
         let mut count = 0;
         let mut total = 0;
         while let Some((prefix, dir)) = pending.pop() {
-            checked_metadata(&dir)?;
             for entry in fs::read_dir(dir)? {
                 count += 1;
                 check_count(count)?;
@@ -299,24 +303,18 @@ impl LibrarySource {
         let bytes = match (&self.source, &entry.zip) {
             (Source::Directory(root), None) => {
                 let path_on_disk = root.join(path);
-                read_entry(open_regular(&path_on_disk)?, path, entry.size, MAX_ENTRY)?
+                let file = open_regular(&path_on_disk, || directory_entry_metadata(root, path))?;
+                read_entry(file, path, entry.size, MAX_ENTRY)?
             }
             (Source::Archive(archive), Some(zip)) => {
                 let mut archive = archive.clone();
                 let member = archive.by_index(zip.index)?;
-                read_entry(
+                read_zip_entry(
                     member,
                     path,
                     entry.size,
                     zip.compressed.saturating_mul(MAX_RATIO),
-                )
-                .map_err(|error| match error {
-                    LibraryError::Io(error) => LibraryError::CorruptEntry {
-                        path: path.into(),
-                        error,
-                    },
-                    error => error,
-                })?
+                )?
             }
             _ => unreachable!("entries are indexed with their source"),
         };
@@ -474,20 +472,35 @@ fn checked_metadata(path: &Path) -> Result<Metadata, LibraryError> {
     if is_link(&metadata) {
         return Err(LibraryError::Link(path.display().to_string()));
     }
-    for parent in path
-        .ancestors()
-        .skip(1)
-        .filter(|path| !path.as_os_str().is_empty())
-    {
-        if is_link(&fs::symlink_metadata(parent)?) {
-            return Err(LibraryError::Link(parent.display().to_string()));
-        }
-    }
     Ok(metadata)
 }
 
-fn open_regular(path: &Path) -> Result<File, LibraryError> {
-    if !checked_metadata(path)?.is_file() {
+fn require_directory(path: &Path) -> Result<(), LibraryError> {
+    if !checked_metadata(path)?.is_dir() {
+        return Err(LibraryError::UnsafePath(path.display().to_string()));
+    }
+    Ok(())
+}
+
+fn directory_entry_metadata(root: &Path, path: &str) -> Result<Metadata, LibraryError> {
+    require_directory(root)?;
+    let mut current = root.to_path_buf();
+    let mut components = path.split('/').peekable();
+    while let Some(component) = components.next() {
+        current.push(component);
+        if components.peek().is_none() {
+            return checked_metadata(&current);
+        }
+        require_directory(&current)?;
+    }
+    Err(LibraryError::UnsafePath(path.into()))
+}
+
+fn open_regular(
+    path: &Path,
+    check_metadata: impl Fn() -> Result<Metadata, LibraryError>,
+) -> Result<File, LibraryError> {
+    if !check_metadata()?.is_file() {
         return Err(LibraryError::UnsafePath(path.display().to_string()));
     }
     let mut options = fs::OpenOptions::new();
@@ -503,7 +516,7 @@ fn open_regular(path: &Path) -> Result<File, LibraryError> {
     if is_link(&metadata) {
         return Err(LibraryError::Link(path.display().to_string()));
     }
-    if !metadata.is_file() || !checked_metadata(path)?.is_file() {
+    if !metadata.is_file() || !check_metadata()?.is_file() {
         return Err(LibraryError::UnsafePath(path.display().to_string()));
     }
     Ok(file)
@@ -551,6 +564,21 @@ fn utf8<'a>(path: &str, bytes: &'a [u8]) -> Result<&'a str, LibraryError> {
     std::str::from_utf8(bytes).map_err(|error| LibraryError::NotUtf8 {
         path: path.into(),
         offset: error.valid_up_to(),
+    })
+}
+
+fn read_zip_entry(
+    reader: impl Read,
+    path: &str,
+    size: u64,
+    ratio_limit: u64,
+) -> Result<Vec<u8>, LibraryError> {
+    read_entry(reader, path, size, ratio_limit).map_err(|error| match error {
+        LibraryError::Io(error) => LibraryError::CorruptEntry {
+            path: path.into(),
+            error,
+        },
+        error => error,
     })
 }
 
@@ -679,7 +707,7 @@ fn write_pack(out_path: &Path, extension: &str, bytes: &[u8]) -> Result<(), Libr
     let mut output = File::create_new(out_path)?;
     if let Err(error) = output.write_all(bytes) {
         drop(output);
-        fs::remove_file(out_path)?;
+        let _ = fs::remove_file(out_path);
         return Err(error.into());
     }
     Ok(())
@@ -1018,38 +1046,104 @@ implicit = ["15", "-15"]
         ));
     }
 
-    #[test]
-    fn pinv8_rejects_os_links_and_junctions() {
-        let scratch = Scratch::new();
-        let root = scratch.populate("source", [("part.toml", PART.as_bytes())]);
-        let target = scratch.populate("outside", [("model.lib", MODEL.as_bytes())]);
-        let link = root.join("link");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        #[cfg(windows)]
-        {
-            let output = std::process::Command::new("cmd.exe")
-                .args(["/d", "/c", "mklink", "/J"])
-                .arg(&link)
-                .arg(&target)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+    struct DirectoryLink(PathBuf);
+
+    impl DirectoryLink {
+        fn new(link: PathBuf, target: &Path) -> Self {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &link).unwrap();
+            #[cfg(windows)]
+            {
+                let output = std::process::Command::new("cmd.exe")
+                    .args(["/d", "/c", "mklink", "/J"])
+                    .arg(&link)
+                    .arg(target)
+                    .output()
+                    .unwrap();
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            Self(link)
         }
+    }
+
+    impl Drop for DirectoryLink {
+        fn drop(&mut self) {
+            #[cfg(unix)]
+            let _ = fs::remove_file(&self.0);
+            #[cfg(windows)]
+            let _ = fs::remove_dir(&self.0);
+        }
+    }
+
+    #[test]
+    fn pinv8_accepts_links_above_library_root() {
+        let scratch = Scratch::new();
+        let original = scratch.populate(
+            "parent/source",
+            [
+                ("part.toml", PART.as_bytes()),
+                ("model.lib", MODEL.as_bytes()),
+                ("models/helpers.inc", HELPERS),
+            ],
+        );
+        let link = DirectoryLink::new(scratch.0.join("alias"), original.parent().unwrap());
+        let root = link.0.join("source");
+        let source = LibrarySource::open(&root).unwrap();
+        assert_eq!(source.read("models/helpers.inc").unwrap(), HELPERS);
+
+        let output = link.0.join("packed.opart");
+        let hash = pack_opart(&root, &output).unwrap();
+        let archive = LibrarySource::open(&output).unwrap();
+        assert_eq!(
+            archive.resolve_part("part.toml").unwrap().content_hash,
+            hash
+        );
+    }
+
+    #[test]
+    fn pinv8_rejects_os_links_and_junctions_inside_library_root() {
+        let scratch = Scratch::new();
+        let root = scratch.populate("source", [("nested/model.lib", MODEL.as_bytes())]);
+        let target = scratch.populate("outside", [("model.lib", MODEL.as_bytes())]);
+        let source = LibrarySource::open(&root).unwrap();
+        let nested = root.join("nested");
+        fs::rename(&nested, scratch.0.join("original")).unwrap();
+        let link = DirectoryLink::new(nested, &target);
+
+        assert!(matches!(
+            LibrarySource::open(&link.0),
+            Err(LibraryError::Link(_))
+        ));
         assert!(matches!(
             LibrarySource::open(&root),
             Err(LibraryError::Link(_))
         ));
         assert!(matches!(
-            LibrarySource::open(&link.join("model.lib")),
+            source.read("nested/model.lib"),
             Err(LibraryError::Link(_))
         ));
-        #[cfg(windows)]
-        fs::remove_dir(link).unwrap();
+    }
+
+    #[test]
+    fn pinv8_corrupt_directory_entry_reports_its_path() {
+        let mut zip = ZipWriter::new(Cursor::new(Vec::new()));
+        zip.add_directory("models/", SimpleFileOptions::default())
+            .unwrap();
+        let mut bytes = zip.finish().unwrap().into_inner();
+        let central = bytes
+            .windows(4)
+            .position(|part| part == b"PK\x01\x02")
+            .unwrap();
+        bytes[14] = 1;
+        bytes[central + 16] = 1;
+        assert!(matches!(
+            LibrarySource::from_zip(bytes.as_slice()),
+            Err(LibraryError::CorruptEntry { path, .. }) if path == "models"
+        ));
     }
 
     #[test]
