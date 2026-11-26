@@ -132,7 +132,7 @@ thresholds (`XD9`); these are added. `PB1`–`PB5` are chosen targets, to be ver
 | PK1 | Part manifest schema version | `schema = 1`. Unknown versions are refused with a clear error. |
 | PK2 | Canonical part id | ASCII `^[a-z0-9][a-z0-9._-]{0,63}$` (1 to 64 chars, lowercase). Pack-qualified ids use `<pack>/<id>`. |
 | PK3 | Archive safety limits (`.opart` / `.olib`) | Max compressed file: 8 MiB (`AK2`). Max uncompressed total: 32 MiB. Max single entry: 2 MiB. Max entries: 1,024. Max expansion ratio: 100:1. |
-| PK4 | Numeric grammar for user-facing values (`XD2`) | `value := number [" "] [prefix] [unit]` after trimming leading and trailing whitespace. `number` is a decimal with optional sign, fraction and exponent (`4.7`, `.5`, `-1e-3`). At most one ASCII space may separate the number from what follows (`10 kΩ`, `10k`); any other inner whitespace is refused. `prefix` is case-sensitive: `f`, `p`, `n`, `u`/`µ` (U+00B5)/`μ` (U+03BC), `m` (milli), `k`/`K`, `M` (mega), `G`, `T`, or `meg`/`MEG` (= `1e6`) (`PQ2`). `unit`, if present, must name the parameter's declared unit: `Ω`/`ohm` (ohm), `F` (farad), `H` (henry), `V` (volt), `A` (ampere), `Hz` (hertz), `s` (second); a mismatched or unknown unit is refused. A prefix letter is read as a prefix only when a unit or nothing follows it, so `1F` is one farad, `10fF` ten femtofarads and `10f` ten femto-units; `F` is never femto. `%` is accepted only for a parameter whose unit is `ratio` and multiplies by `0.01` (`50%` = `0.5`). Embedded-digit forms such as `4k7` are refused in v1. Native SPICE number syntax applies only inside model decks. Values handed to lowering are plain finite `f64`s; the emitter writes unambiguous numbers. One parser, in `omnia-doc` (`units.rs`), serves the parts loader, `Doc::apply` and the simulator. |
+| PK4 | Numeric grammar for user-facing values (`XD2`) | `value := number [" "] [prefix] [unit]` after trimming leading and trailing whitespace. `number` is a decimal with optional sign, fraction and exponent (`4.7`, `.5`, `-1e-3`). At most one ASCII space may separate the number from what follows (`10 kΩ`, `10k`, `50 %`); any other inner whitespace is refused. `prefix` is case-sensitive: `f`, `p`, `n`, `u`/`µ` (U+00B5)/`μ` (U+03BC), `m` (milli), `k`/`K`, `M` (mega), `G`, `T`, or `meg`/`MEG` (= `1e6`) (`PQ2`). `unit`, if present, must name the parameter's declared unit: `Ω`/`ohm` (ohm), `F` (farad), `H` (henry), `V` (volt), `A` (ampere), `Hz` (hertz), `s` (second); a mismatched or unknown unit is refused. A prefix letter is read as a prefix only when a unit or nothing follows it, so `1F` is one farad, `10fF` ten femtofarads and `10f` ten femto-units; `F` is never femto. `%` is accepted only for a parameter whose unit is `ratio` and shifts the decimal exponent by `-2` (`50%` = `50 %` = `0.5`); `ratio` itself is dimensionless and is refused as a literal suffix (`0.5ratio` is rejected). Prefixed values adjust the decimal exponent before a single decimal-to-`f64` parse rather than multiplying by `10^k`, so `"100n"` and `"100e-9"` agree bit for bit. Embedded-digit forms such as `4k7` are refused in v1. Native SPICE number syntax applies only inside model decks. Values handed to lowering are plain finite `f64`s; the emitter writes unambiguous numbers. One parser, in `omnia-doc` (`units.rs`), serves the parts loader, `Doc::apply` and the simulator. |
 | PK5 | Content hash | Lowercase hex SHA-256 (64 chars) over the canonical encoding of a definition: every field except `source_id` and the hash itself, in a fixed field order, each length-prefixed; text fields (including SPICE text) hashed exactly as stored (`PD3`). Independent of ZIP timestamps, file order, TOML key order or OS line endings (line endings are normalised once, at extraction). Computed by `omnia-parts` only. |
 | PK6 | Built-in primitive kinds | `resistor`, `capacitor`, `inductor`, `potentiometer`, `vsource`, `isource`, `vcvs`, `cccs`, `vccs`, `ccvs`, `ground`, `switch`, and `rail` (added 2026-11-23, sim S0.2): a one-terminal supply rail whose `dc` parameter is the rail voltage; simulation lowers it as a DC source from the pin's net to node 0. |
 | PK7 | Field size caps | At most 64 parameters per part definition; parameter string max 256 bytes; description max 2,048 bytes; at most 64 tags (32 bytes each); at most 256 pins per part; embedded SPICE text max 2 MiB (`PK3` single entry). |
@@ -224,6 +224,9 @@ Lane separation (AGENTS.md) stays strict:
 
 - A multi-part library pack is `<name>.olib`, a ZIP archive with `manifest.toml` at its root
   plus `parts/<category>/<id>.toml` and `models/...` — mirroring `library/` directly.
+- The v1 `manifest.toml` requires `schema = 1`, a `PK2` pack `id`, and the strings `name`
+  and `version`. It permits optional strings `description` (up to `PK7`'s description cap)
+  and `license`. Unknown fields are refused. This is the manifest shape used in `PS1`.
 - One internal `LibrarySource` trait reads both unpacked directories and ZIP archives, so built-in
   parts, local user folders, `.opart` files and `.olib` packs go through the exact same parser,
   validator and hasher.
@@ -373,7 +376,8 @@ Pin numbers are the ones the referenced symbol declares in `pins.toml` (`PD5`).
 
 Rules enforced by the schema parser (`#[serde(deny_unknown_fields)]`):
 - `[sim].kind` is one of `"primitive"`, `"model"`, `"subckt"`, or `"none"` (mechanical or
-  annotation-only parts that the simulator skips).
+  annotation-only parts that the simulator skips; `kind = "none"` has no simulation terminals
+  and takes no `[sim].pins` field).
 - When `kind = "model"`, `[sim]` specifies `spice_prefix` (e.g. `"D"`, `"Q"`, `"M"`), `file`,
   `entry` (the `.model` name), and `pins` in SPICE terminal order.
 - `[sim].pins` lists, in SPICE terminal order, every declared pin whose role is not
@@ -425,6 +429,10 @@ Rules enforced by the schema parser (`#[serde(deny_unknown_fields)]`):
 
 - Supported parameter kinds: `real` (with optional `unit`, `min`, `max`), `int` (`i64`), `bool`,
   `enum` (closed list of string variants), `text` (bounded by `PK7`).
+- In TOML every parameter supplies a `default`. Real defaults and bounds are strings parsed
+  with `PK4`. Integer defaults and bounds are TOML integers. Boolean defaults are TOML
+  booleans. Text and enum defaults are strings, and an enum's `variants` lists its allowed
+  strings. A numeric default must lie within its declared bounds.
 - **Finite reals with defined equality** (amended 2026-11-23, owner-delegated, review of #85):
   a real is stored as `ParamValue::Real { raw: Arc<str>, value: FiniteF64 }`. `raw` is the user's
   text as entered; `value` is the `PK4` parse. `FiniteF64` can only be built from a finite
