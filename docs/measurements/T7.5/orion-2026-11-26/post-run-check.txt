@@ -1,0 +1,7 @@
+utc: 2026-11-26T21:14:08Z
+commit: 1b9c127906e4c547f0f54f2d08210625d81abfc2
+git_status: 0 lines
+/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor:powersave
+/sys/devices/system/cpu/cpu1/cpufreq/scaling_governor:powersave
+/sys/devices/system/cpu/cpu2/cpufreq/scaling_governor:powersave
+/sys/devices/system/cpu/cpu3/cpufreq/scaling_governor:powersave

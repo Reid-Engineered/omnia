@@ -665,7 +665,7 @@ of the `canvas` lane.
 - Done when: a test that changes the scale factor from 1.25 to 1.5 mid-run renders an image
   identical to a fresh window at 1.5.
 
-### T7.5 Gate: final report · todo → H4
+### T7.5 Gate: final report · done → H4
 - Lane: bench · Depends: T7.1, T7.2, T7.3, T7.4
 - Owns: `docs/canvas-report.md`
 - Do: measure B1 to B10 on the reference machine at 100% and 125%, plus every invariant
@@ -2733,3 +2733,33 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `docs/measurements/T7.3.md`; unblocks `T7.5`. Local results-PR checks:
                        `cargo fmt --all --check`, `git diff --check`, `test_gate.py` (6/6), and archive
                        replay; Clippy, `cargo test --workspace`, and `cargo deny check` left to CI.
+2026-11-26 T7.5 done → H4 — Measured B1–B10 on the Orion reference machine (`Q4`, `B1`–`B10`, `INV1`–`INV13`,
+                       `Q5`; Core i5-7300U, HD Graphics 620 Mesa ANV, Linux 7.2.7-arch1-1, KDE Wayland,
+                       native `eDP-1` 1920×1080 @ 60.008 Hz, AC power, `performance` governor on all 4
+                       CPUs) at clean `origin/task/T7.5-final-report` `1b9c127` (Rust sources identical
+                       to `origin/main` `3f8d257`; release binary SHA-256
+                       `3a0cfdb35a784c4878833b68c77fc520186680a4fb3e69ac36bde058252cedc1`) via frozen
+                       `docs/measurements/T7.5/{gate.py,owner-run.sh}` (230/230 interleaved invocations
+                       across 100% and 125%; 160/160 attribution lines PASS; offline archive replay
+                       matched `summary.txt` byte-for-byte with exit 1). B1–B9 PASS at both scales:
+                       B1 `191.783` / `190.524 ms` (`< 400`), B2 `40.584` / `47.038 ms` (`< 300`),
+                       B3 `1k-pan` `1.567` / `1.083 ms`, `1k-zoom` `2.767` / `2.184 ms`, `1k-drag-part`
+                       `0.814` / `0.611 ms`, `1k-drag-wire` `0.832` / `0.615 ms`, `dense-drag-wire`
+                       `0.952` / `0.707 ms` (`< 16.7`, `10/10` `1.5R`), B4 `10k-pan` `2.008` / `1.457 ms`,
+                       `10k-zoom` `5.108` / `5.013 ms`, `10k-drag-part` `0.828` / `0.614 ms` (`< 33.3`,
+                       `10/10` `2.5R`), B5 worst `5.284` / `4.399 ms` (B3 `<= 33.3`) and `5.472` / `5.693 ms`
+                       (B4 `<= 50.0`), B6 `d2p` p99 `1.528`–`1.761` / `1.190`–`1.329 ms` (`<= 16.664`),
+                       B7 `hit-10k` `0.001 ms` (`< 0.2`), B8 `idle-empty` `0` frames & `0` renders in
+                       `20/20` runs, B9 max private memory `174.949 MB` (`< 300`). B10 PASSES (`0` Omnia
+                       allocs/frame) on `1k`/`10k` pan & zoom and `1k`/`dense` `drag-wire`, and MISSES
+                       with `45` max Omnia allocs/frame on `1k-drag-part` and `10k-drag-part` at both
+                       scales (reproduced on Windows `--features headless` as `48` on `Parts100`), caused
+                       by PR #155 (`W2.3`) running `omnia_doc::follow::plan_follow` inside
+                       `OverlayPaintScope::omnia` during `pointer_move` (paint paths remain `0` allocs).
+                       All 460 condition records clean; governors restored to `powersave` and verified
+                       post-run. On Windows (non-reference, `3f8d257`): `INV1`–`INV13` pass (`cargo test
+                       --workspace` 820 passed, 0 failed, 3 ignored), `omnia-golden` 84/84 goldens match
+                       with `0` differing pixels, `cargo fmt`, both Clippy commands, `cargo deny check`,
+                       and `docs/measurements/T7.5/test_gate.py` (6/6) pass. Wrote `docs/canvas-report.md`
+                       and archived evidence under `docs/measurements/T7.5/orion-2026-11-26/`; stopping at
+                       `H4` for owner review of the final report and the `W2.3` `drag-part` B10 miss.
