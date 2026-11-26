@@ -1,0 +1,20 @@
+# S0.3 spike SS1: throwaway prototype, not a workspace member.
+#
+# The empty [workspace] table keeps this package out of the Omnia workspace, so the
+# standard workspace checks never build it. Its only external dependency is `libloading`
+# (ISC, already approved in sim-plan.md §11 and pinned in the root Cargo.lock).
+# Nothing here is product code: S1.6 writes the real `omnia-sim-ngspice` and
+# `omnia-ngspice-worker` workspace crates.
+[package]
+name = "omnia-s03-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+libloading = "0.8"
+
+[profile.release]
+debug = false
