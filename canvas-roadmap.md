@@ -115,7 +115,7 @@ of the `canvas` lane.
 | H1 | After T0.6 | Reads `docs/spike-results.md`. If the outcome is not Plan A, decides how to proceed before any milestone 1 or 2 rendering task starts. |
 | H2 | During T3.3 | Approves the first golden images against the mockup. |
 | H3 | During T0.5 | Performs the touchpad and mouse gestures for S7 while the logger runs. |
-| H4 | After T7.5 | Reads the final budget report. |
+| H4 | After T7.5 | Reads the final budget report (approved 2026-11-26). |
 | — | Any time | Answers Q1 to Q7 (Q4 answered 2026-11-15). |
 
 ---
@@ -2763,3 +2763,7 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        and `docs/measurements/T7.5/test_gate.py` (6/6) pass. Wrote `docs/canvas-report.md`
                        and archived evidence under `docs/measurements/T7.5/orion-2026-11-26/`; stopping at
                        `H4` for owner review of the final report and the `W2.3` `drag-part` B10 miss.
+2026-11-26 H4 done — Owner approved the final canvas budget and invariant report
+                     (`docs/canvas-report.md`) as-is, closing the canvas roadmap (49/49 tasks).
+                     The `W2.3` `drag-part` `B10` miss (`45` allocs/frame from `plan_follow`)
+                     remains recorded as a follow-up for `W2.4`.
