@@ -39,12 +39,14 @@
 //! The GPUI side: [`sheet_key_context`] puts a view's focus element in the `Sheet` key
 //! context and routes the [`crate::keymap`] actions through [`SheetActions`].
 
+pub mod label;
 pub mod move_;
 pub mod paste;
 pub mod place;
 pub mod segment;
 pub mod wire;
 
+pub use label::{LabelEditTarget, LabelGesture, LabelTarget, TEXT_FIELD_CONTEXT};
 pub use paste::{CanvasClipboard, PasteGesture};
 pub use place::{PlaceProvider, PlaceRequest};
 pub use segment::{SegmentDragGesture, SegmentPreview};
@@ -74,7 +76,7 @@ pub enum Tool {
     Wire,
     /// Placing a part of this symbol. T5.3 commits through the placement provider.
     Place(SymbolId),
-    /// Placing net labels (W3.6). No gesture yet: the pointer falls through to selection.
+    /// Placing and editing net labels (T7.2, WD5, WD9).
     Label,
     /// Drag a rectangle and animate the camera to fit it (K13, T5.6).
     ZoomArea,
@@ -89,6 +91,7 @@ pub enum ToolPhase {
     Placing,
     Pasting,
     Wiring,
+    Labeling,
     ZoomingArea,
 }
 
@@ -196,7 +199,7 @@ impl ZoomAreaGesture {
     }
 }
 
-/// The tool's state (canvas-plan section 5): idle, hovering, dragging, placing, wiring, zooming.
+/// The tool's state (canvas-plan section 5): idle, hovering, dragging, placing, wiring, labeling, zooming.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ToolState {
     #[default]
@@ -208,6 +211,8 @@ pub enum ToolState {
     Placing(PlaceGesture),
     Pasting(PasteGesture),
     Wiring(WireGesture),
+    /// T7.2: hovering or editing net-label targets (`Tool::Label`).
+    Labeling(LabelGesture),
     ZoomingArea(ZoomAreaGesture),
 }
 
@@ -220,12 +225,13 @@ impl ToolState {
             Self::Placing(_) => ToolPhase::Placing,
             Self::Pasting(_) => ToolPhase::Pasting,
             Self::Wiring(_) => ToolPhase::Wiring,
+            Self::Labeling(_) => ToolPhase::Labeling,
             Self::ZoomingArea(_) => ToolPhase::ZoomingArea,
         }
     }
 }
 
-/// Work the machine cannot finish alone; the host carries it out (seams for T5.3, T5.6, T7.1).
+/// Work the machine cannot finish alone; the host carries it out (seams for T5.3, T5.6, T7.1, T7.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolRequest {
     /// A press on an item that did not become a drag: make it the only selection, if it
@@ -242,6 +248,12 @@ pub enum ToolRequest {
         clip: Arc<Clip>,
         at: Pt,
         orient: Orient,
+    },
+    /// A click on a wire, pin, or existing label in `Tool::Label` (or double-click on a label in
+    /// `Tool::Select`): open inline GPUI text entry anchored at `target.at()` (T7.2).
+    OpenLabelEditor {
+        target: LabelEditTarget,
+        base: DocStamp,
     },
     /// R, X or Y outside a gesture: T5.3 turns the selection with one command.
     ReorientSelection(Orient),
@@ -374,6 +386,7 @@ impl ToolMachine {
             | ToolState::Placing(_)
             | ToolState::Pasting(_)
             | ToolState::Wiring(_)
+            | ToolState::Labeling(_)
             | ToolState::ZoomingArea(_) => true,
             ToolState::DraggingSegment(seg) => seg.is_pointer_drag(),
             ToolState::Idle | ToolState::Hovering(_) => false,
@@ -413,6 +426,12 @@ impl ToolMachine {
         self.state = ToolState::Wiring(gesture);
     }
 
+    /// Installs a label-tool preview directly (golden rendering / programmatic inspection, T7.2).
+    pub(crate) fn set_label_preview(&mut self, gesture: LabelGesture) {
+        self.set_tool(Tool::Label);
+        self.state = ToolState::Labeling(gesture);
+    }
+
     /// Re-evaluates the live wire tool's WD5 snap target against `doc` at `raw_at` and
     /// `snap_radius` without moving the pointer (called on camera or document changes so the snap
     /// marker never goes stale, T6.2, WD5).
@@ -421,6 +440,30 @@ impl ToolMachine {
             ToolState::Wiring(wire) => {
                 wire.update_cursor(Some(doc), raw_at, snap_radius, &mut self.scratch)
             }
+            _ => false,
+        }
+    }
+
+    /// Re-evaluates the live label tool's target against `doc` at `raw_at` and `radii` without
+    /// moving the pointer (T7.2).
+    pub(crate) fn refresh_label_target(
+        &mut self,
+        doc: &Doc,
+        raw_at: Pt,
+        radii: PointerRadii,
+    ) -> bool {
+        match &mut self.state {
+            ToolState::Labeling(label) => {
+                label.update_cursor(Some(doc), raw_at, radii, &mut self.scratch)
+            }
+            _ => false,
+        }
+    }
+
+    /// Clears active inline editing on `ToolState::Labeling` (T7.2).
+    pub(crate) fn clear_label_editing(&mut self) -> bool {
+        match &mut self.state {
+            ToolState::Labeling(label) => label.clear_editing(),
             _ => false,
         }
     }
@@ -439,8 +482,9 @@ impl ToolMachine {
 
     fn rest_state(tool: Tool) -> ToolState {
         match tool {
-            Tool::Select | Tool::Label => ToolState::Idle,
+            Tool::Select => ToolState::Idle,
             Tool::Wire => ToolState::Wiring(WireGesture::default()),
+            Tool::Label => ToolState::Labeling(LabelGesture::default()),
             Tool::Place(symbol) => ToolState::Placing(PlaceGesture {
                 symbol,
                 at: None,
@@ -494,6 +538,10 @@ impl ToolMachine {
             ToolState::Pasting(paste) if paste.pressed => {
                 paste.pressed = false;
                 ToolOutcome::handled()
+            }
+            ToolState::Labeling(label) if label.editing.is_some() => {
+                label.clear_editing();
+                ToolOutcome::preview()
             }
             ToolState::ZoomingArea(zoom) if zoom.anchor.is_some() => {
                 zoom.anchor = None;
@@ -644,6 +692,16 @@ impl ToolMachine {
                     ..ToolOutcome::default()
                 }
             }
+            ToolState::Labeling(label) => {
+                let (edit, changed) = label.click(doc, doc_key, at, radii, &mut self.scratch);
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: changed,
+                    request: edit
+                        .map(|(target, base)| ToolRequest::OpenLabelEditor { target, base }),
+                    ..ToolOutcome::default()
+                }
+            }
             ToolState::ZoomingArea(zoom) => {
                 zoom.anchor = Some(at);
                 zoom.current = Some(at);
@@ -665,17 +723,25 @@ impl ToolMachine {
     ///
     /// Without `&Doc`, an active `DraggingSegment` previews attempted wires as
     /// [`SegmentPreview::Accepted`] without calling [`omnia_doc::route::plan_segment_drag`], and
-    /// `Tool::Wire` records raw `cursor` without WD5 snapping; use [`Self::pointer_move_with_snap`]
+    /// `Tool::Wire` records raw `cursor` without WD5 snapping; use [`Self::pointer_move_with_radii`]
     /// for live planning and snapping.
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome {
-        self.pointer_move_inner(None, at, omnia_doc::PIN_LATTICE_NM, left_held)
+        let radii = PointerRadii {
+            hit: omnia_doc::PIN_LATTICE_NM.saturating_mul(2) / 5,
+            snap: omnia_doc::PIN_LATTICE_NM,
+        };
+        self.pointer_move_inner(None, at, radii, left_held)
     }
 
     /// Like [`Self::pointer_move`], with read access to `doc` so a live segment drag runs
     /// [`omnia_doc::route::plan_segment_drag`] whenever its snapped offset changes (WD7, WD11),
-    /// and `Tool::Wire` runs WD5 snapping at the 100%-zoom K14 radius (`PIN_LATTICE_NM`).
+    /// and `Tool::Wire` / `Tool::Label` run WD5 snapping at the 100%-zoom K14 radius (`PIN_LATTICE_NM`).
     pub fn pointer_move_with_doc(&mut self, doc: &Doc, at: Pt, left_held: bool) -> ToolOutcome {
-        self.pointer_move_inner(Some(doc), at, omnia_doc::PIN_LATTICE_NM, left_held)
+        let radii = PointerRadii {
+            hit: omnia_doc::PIN_LATTICE_NM.saturating_mul(2) / 5,
+            snap: omnia_doc::PIN_LATTICE_NM,
+        };
+        self.pointer_move_inner(Some(doc), at, radii, left_held)
     }
 
     /// Like [`Self::pointer_move_with_doc`], with an explicit K14/WK4 `snap_radius` in nanometres
@@ -687,14 +753,30 @@ impl ToolMachine {
         snap_radius: i32,
         left_held: bool,
     ) -> ToolOutcome {
-        self.pointer_move_inner(Some(doc), at, snap_radius, left_held)
+        let radii = PointerRadii {
+            hit: (i64::from(snap_radius) * 2 / 5).clamp(0, i64::from(i32::MAX)) as i32,
+            snap: snap_radius,
+        };
+        self.pointer_move_inner(Some(doc), at, radii, left_held)
+    }
+
+    /// Like [`Self::pointer_move_with_doc`], with explicit K14/WK4 hit and snap radii in
+    /// nanometres (`hit_tolerance_nm` and `snap_radius_nm`, T7.2).
+    pub fn pointer_move_with_radii(
+        &mut self,
+        doc: &Doc,
+        at: Pt,
+        radii: PointerRadii,
+        left_held: bool,
+    ) -> ToolOutcome {
+        self.pointer_move_inner(Some(doc), at, radii, left_held)
     }
 
     fn pointer_move_inner(
         &mut self,
         doc: Option<&Doc>,
         at: Pt,
-        snap_radius: i32,
+        radii: PointerRadii,
         left_held: bool,
     ) -> ToolOutcome {
         match &mut self.state {
@@ -753,7 +835,15 @@ impl ToolMachine {
                 }
             }
             ToolState::Wiring(wire) => {
-                let changed = wire.update_cursor(doc, at, snap_radius, &mut self.scratch);
+                let changed = wire.update_cursor(doc, at, radii.snap, &mut self.scratch);
+                ToolOutcome {
+                    handled: true,
+                    preview_changed: changed,
+                    ..ToolOutcome::default()
+                }
+            }
+            ToolState::Labeling(label) => {
+                let changed = label.update_cursor(doc, at, radii, &mut self.scratch);
                 ToolOutcome {
                     handled: true,
                     preview_changed: changed,
@@ -883,7 +973,7 @@ impl ToolMachine {
                     ToolOutcome::handled()
                 }
             }
-            ToolState::Wiring(_) => ToolOutcome::handled(),
+            ToolState::Wiring(_) | ToolState::Labeling(_) => ToolOutcome::handled(),
             ToolState::ZoomingArea(zoom) => {
                 let Some(anchor) = zoom.anchor.take() else {
                     zoom.current = None;
@@ -918,7 +1008,14 @@ impl ToolMachine {
                 wire.drop_start();
                 ToolOutcome::preview()
             }
-            ToolState::Placing(_) | ToolState::Pasting(_) | ToolState::Wiring(_) => {
+            ToolState::Labeling(label) if label.editing.is_some() => {
+                label.clear_editing();
+                ToolOutcome::preview()
+            }
+            ToolState::Placing(_)
+            | ToolState::Pasting(_)
+            | ToolState::Wiring(_)
+            | ToolState::Labeling(_) => {
                 self.tool = Tool::Select;
                 self.state = ToolState::Idle;
                 ToolOutcome::preview()
@@ -1191,6 +1288,9 @@ pub(crate) fn sheet_key_context<V: SheetActions>(element: Div, cx: &mut Context<
 
 impl SheetActions for OverlayView {
     fn action_reorient(&mut self, by: Orient, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_editing_label() {
+            return;
+        }
         run(self, |m| m.reorient(by), cx);
     }
 
@@ -1207,7 +1307,7 @@ impl SheetActions for OverlayView {
     }
 
     fn action_delete(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_rubber_banding() {
+        if self.is_editing_label() || self.is_rubber_banding() {
             return;
         }
         run(self, ToolMachine::delete, cx);
@@ -1522,7 +1622,8 @@ mod tests {
             })
         );
         m.set_tool(Tool::Label);
-        assert_eq!(m.phase(), ToolPhase::Idle);
+        assert_eq!(m.phase(), ToolPhase::Labeling);
+        assert_eq!(m.state(), &ToolState::Labeling(LabelGesture::default()));
         m.set_tool(Tool::Select);
         assert_eq!(m.phase(), ToolPhase::Idle);
         // Choosing the active tool at rest changes nothing.
@@ -1568,13 +1669,14 @@ mod tests {
         press(&mut m, &doc, pt(-6, 0), &[C1]);
         assert_eq!(dragging(&m).items, vec![R1]);
 
-        // Shift, empty sheet and other tools are left to selection.
+        // Shift and empty sheet in Select are left to selection; Tool::Label handles clicks without starting a drag.
         let mut m = ToolMachine::new();
         assert!(!m.pointer_down(&doc, KEY, pt(-6, 0), TOL, &[], true).handled);
         assert!(!press(&mut m, &doc, pt(0, -8), &[]).handled);
         m.set_tool(Tool::Label);
-        assert!(!press(&mut m, &doc, pt(-6, 0), &[]).handled);
-        assert_eq!(m.phase(), ToolPhase::Idle);
+        let label_press = press(&mut m, &doc, pt(-6, 0), &[]);
+        assert!(label_press.handled && !label_press.capture);
+        assert_eq!(m.phase(), ToolPhase::Labeling);
     }
 
     #[test]
@@ -7491,5 +7593,599 @@ mod tests {
             };
             assert_eq!(d.wire(new_wid).copied(), Some(del_wire((4, -10), (8, -10))));
         });
+    }
+
+    // ---- T7.2: Net labels interactive & GPUI tests ----
+
+    /// Two unconnected wire chains + parts for testing `Tool::Label` placement (`Pin`, `WireEnd`,
+    /// `Junction`, `WireBody`), `WD9` wire-body split, `T7.2` done-when connectivity join/split,
+    /// and existing label editing (`Command::SetText`).
+    fn t7_2_label_doc() -> Doc {
+        let lib = SymbolLibrary::builtin();
+        let res = lib.by_name("Resistor-IEEE-Standard").unwrap();
+        let def = lib.get(res);
+        let pins: Vec<Pt> = def.pins.iter().map(|p| p.at).collect();
+        Doc::from_items(
+            [(
+                Part {
+                    symbol: res,
+                    at: pt(-8, 0),
+                    orient: Orient::IDENTITY,
+                    designator: "R1".into(),
+                    value: "1k".into(),
+                },
+                pins,
+                def.bounds,
+            )],
+            [
+                // Left wire from R1 right pin (-6, 0) to (0, 0).
+                Wire {
+                    a: pt(-6, 0),
+                    b: pt(0, 0),
+                },
+                // Disconnected right horizontal wire from (4, 0) to (10, 0).
+                Wire {
+                    a: pt(4, 0),
+                    b: pt(10, 0),
+                },
+                // Vertical branch creating a junction on (-6, -6) + free ends.
+                Wire {
+                    a: pt(-10, -6),
+                    b: pt(-6, -6),
+                },
+                Wire {
+                    a: pt(-6, -6),
+                    b: pt(-6, -10),
+                },
+                Wire {
+                    a: pt(-6, -6),
+                    b: pt(-2, -6),
+                },
+            ],
+            [],
+        )
+        .unwrap()
+    }
+
+    /// T7.2 Done-when: two unconnected wires given the same label share a `NetId`, and separate
+    /// again when one label is deleted (`INV10`, `WD9`, `INV4`, `INV5`).
+    #[gpui::test]
+    fn t7_2_done_when_two_unconnected_wires_same_label_join_and_delete_separates_inv10(
+        cx: &mut TestAppContext,
+    ) {
+        let mut rig = open_del_rig(cx, t7_2_label_doc(), false);
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+
+        // Switch to Tool::Label cleanly without a drag.
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Label, cx));
+        });
+        rig.cx.run_until_parked();
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Label);
+
+        // Clicking empty grid space opens no editor and leaves revision untouched (`INV5`).
+        let rev0 = revision(&doc, rig.cx);
+        move_to(&overlay, rig.cx, pt(2, 6));
+        click_world(&overlay, rig.cx, pt(2, 6));
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        // Click on left wire body at (-3, 0): opens inline editor and does NOT change doc yet (`INV5`).
+        let w1_mid = pt(-3, 0);
+        move_to(&overlay, rig.cx, w1_mid);
+        click_world(&overlay, rig.cx, w1_mid);
+        rig.cx.run_until_parked();
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        let before_w1 = rig.snapshot();
+        rig.cx.simulate_input("SIG");
+        rig.cx.simulate_keystrokes("enter");
+        rig.cx.run_until_parked();
+
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Label);
+        assert_eq!(revision(&doc, rig.cx), rev0 + 1);
+        assert_eq!(rig.history.borrow().len(), 1);
+
+        // Verify WD9 split on wire 1 and exact INV4 undo/redo before adding second label.
+        let after_w1 = rig.snapshot();
+        after_w1.assert_normal_form();
+        assert!(
+            after_w1.wires().any(|(_, &w)| w
+                == Wire {
+                    a: pt(-6, 0),
+                    b: w1_mid
+                })
+                && after_w1.wires().any(|(_, &w)| w
+                    == Wire {
+                        a: w1_mid,
+                        b: pt(0, 0)
+                    }),
+            "WD9: placing label on wire body splits wire at snapped point"
+        );
+        rig.cx.update(|window, cx| {
+            overlay.update(cx, |o, cx| {
+                assert!(o.undo(window, cx));
+            });
+        });
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&before_w1)));
+        rig.cx.update(|window, cx| {
+            overlay.update(cx, |o, cx| {
+                assert!(o.redo(window, cx));
+            });
+        });
+        assert!(rig.cx.update(|_, cx| doc.read(cx).content_eq(&after_w1)));
+
+        // Re-select Tool::Label (`HistoryStep` returns active modal tools to `Tool::Select`),
+        // then label the disconnected right wire (4, 0)-(10, 0) at (7, 0) with "SIG".
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Label, cx));
+        });
+        rig.cx.run_until_parked();
+        let w2_mid = pt(7, 0);
+        move_to(&overlay, rig.cx, w2_mid);
+        click_world(&overlay, rig.cx, w2_mid);
+        rig.cx.run_until_parked();
+        rig.cx.simulate_input("SIG");
+        rig.cx.simulate_keystrokes("enter");
+        rig.cx.run_until_parked();
+
+        let joined = rig.snapshot();
+        joined.assert_normal_form();
+        let net_left = joined.net_at(pt(-6, 0)).expect("left wire has net");
+        let net_right = joined.net_at(pt(10, 0)).expect("right wire has net");
+        assert_eq!(
+            net_left, net_right,
+            "T7.2 done-when: same net label joins two unconnected wires into one NetId"
+        );
+        let live_wires: Vec<WireId> = joined.wires().map(|(id, _)| id).collect();
+        assert_inv10(&joined, &[pt(-10, 0), w1_mid, w2_mid], &live_wires);
+
+        // Delete the first label: the two wires separate into distinct NetIds again (INV10).
+        let first_label = joined
+            .labels()
+            .find(|(_, l)| l.at == w1_mid)
+            .map(|(id, _)| ItemId::Label(id))
+            .expect("first SIG label");
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                o.set_tool(Tool::Select, cx);
+                o.set_selection([first_label], cx);
+            });
+        });
+        rig.delete(DelPath::Key);
+
+        let separated = rig.snapshot();
+        assert_ne!(
+            separated.net_at(pt(-6, 0)),
+            separated.net_at(pt(10, 0)),
+            "T7.2 done-when: deleting one label separates the two wires' NetIds"
+        );
+        let live_wires: Vec<WireId> = separated.wires().map(|(id, _)| id).collect();
+        assert_inv10(&separated, &[pt(-10, 0), w1_mid, w2_mid], &live_wires);
+    }
+
+    /// T7.2: placement on `Pin`, `WireEnd`, and `Junction` works, editing an existing label in
+    /// `Tool::Label` or double-clicking in `Tool::Select` commits one `Command::SetText`, and
+    /// whitespace-only / unchanged / Esc cancel with zero revision changes (`INV5`, `WD5`).
+    #[gpui::test]
+    fn t7_2_pin_end_junction_and_existing_label_set_text_with_inv5_noops(cx: &mut TestAppContext) {
+        let rig = open_del_rig(cx, t7_2_label_doc(), false);
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Label, cx));
+        });
+        rig.cx.run_until_parked();
+
+        // Place on Pin (-10, 0), WireEnd (10, 0), and Junction (-6, -6).
+        for (target, name) in [
+            (pt(-10, 0), "PIN_A"),
+            (pt(10, 0), "END_B"),
+            (pt(-6, -6), "JUNC_C"),
+        ] {
+            move_to(&overlay, rig.cx, target);
+            click_world(&overlay, rig.cx, target);
+            rig.cx.run_until_parked();
+            assert!(rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+            rig.cx.simulate_input(name);
+            rig.cx.simulate_keystrokes("enter");
+            rig.cx.run_until_parked();
+        }
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert_eq!(d.labels().count(), 3);
+            assert!(d.net_at(pt(-10, 0)).is_some());
+        });
+
+        // Empty / whitespace-only commit on Pin cancels cleanly with zero revision change (`INV5`).
+        let rev_before = revision(&doc, rig.cx);
+        click_world(&overlay, rig.cx, pt(-2, -6));
+        rig.cx.run_until_parked();
+        rig.cx.simulate_input("   ");
+        rig.cx.simulate_keystrokes("enter");
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(revision(&doc, rig.cx), rev_before);
+
+        // Clicking existing label at (10, 0) (which sits ON WireEnd!) opens pre-filled "END_B".
+        move_to(&overlay, rig.cx, pt(10, 0));
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Labeling(LabelGesture {
+                target: Some(LabelTarget::ExistingLabel { at, .. }),
+                ..
+            }) if at == pt(10, 0)
+        ));
+        click_world(&overlay, rig.cx, pt(10, 0));
+        rig.cx.run_until_parked();
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).label_editor_text(cx))
+                .as_deref(),
+            Some("END_B")
+        );
+        // Pressing Enter unchanged cancels with zero revision change (`INV5`).
+        rig.cx.simulate_keystrokes("enter");
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev_before);
+
+        // Clicking existing label at (10, 0) and replacing pre-selected text commits ONE SetText.
+        let history_before = rig.history.borrow().len();
+        click_world(&overlay, rig.cx, pt(10, 0));
+        rig.cx.run_until_parked();
+        rig.cx.simulate_input("PIN_A");
+        rig.cx.simulate_keystrokes("enter");
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev_before + 1);
+        assert_eq!(rig.history.borrow().len(), history_before + 1);
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            assert_eq!(d.labels().count(), 3);
+            assert_eq!(d.net_at(pt(-10, 0)), d.net_at(pt(10, 0)));
+        });
+
+        // Double-clicking an existing label in Tool::Select edits via one Command::SetText.
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Select, cx));
+        });
+        rig.cx.run_until_parked();
+        let rev_select = revision(&doc, rig.cx);
+        let at_screen = screen(&overlay, rig.cx, pt(-10, 0));
+        rig.cx
+            .simulate_mouse_move(at_screen, None, Modifiers::none());
+        rig.cx.simulate_event(gpui::MouseDownEvent {
+            button: MouseButton::Left,
+            position: at_screen,
+            modifiers: Modifiers::none(),
+            click_count: 1,
+            first_mouse: false,
+        });
+        rig.cx
+            .simulate_mouse_up(at_screen, MouseButton::Left, Modifiers::none());
+        rig.cx.simulate_event(gpui::MouseDownEvent {
+            button: MouseButton::Left,
+            position: at_screen,
+            modifiers: Modifiers::none(),
+            click_count: 2,
+            first_mouse: false,
+        });
+        rig.cx
+            .simulate_mouse_up(at_screen, MouseButton::Left, Modifiers::none());
+        rig.cx.run_until_parked();
+
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).label_editor_text(cx))
+                .as_deref(),
+            Some("PIN_A")
+        );
+        rig.cx.simulate_input("VCC_MAIN");
+        rig.cx.simulate_keystrokes("enter");
+        rig.cx.run_until_parked();
+        assert_eq!(revision(&doc, rig.cx), rev_select + 1);
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Select);
+        rig.cx.update(|_, cx| {
+            let d = doc.read(cx);
+            let updated = d
+                .labels()
+                .find(|(_, l)| l.at == pt(-10, 0))
+                .map(|(_, l)| l.text.as_ref());
+            assert_eq!(updated, Some("VCC_MAIN"));
+        });
+    }
+
+    /// T7.2 / UD3: while inline label editing is active (`TextField` key context), `r`, `x`, `y`,
+    /// `w`, `space`, `delete`, `ctrl-z`, `ctrl-y` edit/navigate text cleanly and NEVER trigger
+    /// `Sheet` actions; two-step Esc cancels editing then returns to `Tool::Select`.
+    #[gpui::test]
+    fn t7_2_ud3_text_field_routes_rwxy_editing_and_blocks_sheet_actions(cx: &mut TestAppContext) {
+        let rig = open_del_rig(cx, t7_2_label_doc(), false);
+        let (overlay, doc, canvas) = (rig.overlay.clone(), rig.doc.clone(), rig.canvas.clone());
+        let rev0 = revision(&doc, rig.cx);
+
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                o.set_selection([ItemId::Part(PartId(0))], cx);
+                o.set_tool(Tool::Label, cx);
+            });
+        });
+        rig.cx.run_until_parked();
+
+        click_world(&overlay, rig.cx, pt(-3, 0));
+        rig.cx.run_until_parked();
+        assert!(rig.cx.update(|_, cx| canvas.read(cx).is_editing_label(cx)));
+
+        // Type r, w, x, y, space, z + Ctrl+Z / Ctrl+Y + Delete: zero Sheet actions or undo fire!
+        rig.cx
+            .simulate_keystrokes("r w x y space A ctrl-z ctrl-y left delete end 1");
+        rig.cx.run_until_parked();
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Label);
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).label_editor_text(cx))
+                .as_deref(),
+            Some("rwxy 1")
+        );
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        // Clipboard Select-All, Copy, Cut, Paste, and two-step Esc cancel (`INV5`).
+        rig.cx.simulate_keystrokes("ctrl-a ctrl-c ctrl-x ctrl-v");
+        rig.cx.run_until_parked();
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).label_editor_text(cx))
+                .as_deref(),
+            Some("rwxy 1")
+        );
+
+        rig.cx.simulate_keystrokes("escape");
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Label);
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        rig.cx.simulate_keystrokes("escape");
+        rig.cx.run_until_parked();
+        assert_eq!(rig.cx.update(|_, cx| overlay.read(cx).tool()), Tool::Select);
+        assert_eq!(revision(&doc, rig.cx), rev0);
+    }
+
+    /// T7.2 / C4 / INV11 / B10: hovering, opening, typing, and cancelling never repaint `SheetView`
+    /// (`INV11`, accounting for at most 1 GPUI Mouse->Keyboard modality refresh on the first key);
+    /// warm hover/paint in `Tool::Label` executes 0 Omnia heap allocations (`B10`); and C4 paths
+    /// (`FreshPress` outside pill, `ToolChange`, `HistoryStep`, `DocumentSwitch`, external
+    /// `on_doc_change`, `WindowDeactivated`) cancel active inline editing cleanly.
+    #[gpui::test]
+    fn t7_2_c4_inv11_b10_hover_edit_cancel_and_overlay_allocs(cx: &mut TestAppContext) {
+        struct LabelAllocScope {
+            counting: std::cell::Cell<bool>,
+            omnia_allocs: std::cell::Cell<usize>,
+            omnia_calls: std::cell::Cell<u64>,
+        }
+        impl crate::overlay::OverlayPaintScope for LabelAllocScope {
+            fn omnia(&self, work: &mut dyn FnMut()) {
+                self.omnia_calls.set(self.omnia_calls.get() + 1);
+                if !self.counting.get() {
+                    work();
+                    return;
+                }
+                let prev = crate::sheet::replace_alloc_counter(Some(0));
+                work();
+                let used = crate::sheet::replace_alloc_counter(prev).unwrap_or(0);
+                self.omnia_allocs.set(self.omnia_allocs.get() + used);
+            }
+            fn gpui(&self, work: &mut dyn FnMut()) {
+                if !self.counting.get() {
+                    work();
+                    return;
+                }
+                let paused = crate::sheet::replace_alloc_counter(None);
+                work();
+                crate::sheet::replace_alloc_counter(paused);
+            }
+        }
+
+        let scope = Rc::new(LabelAllocScope {
+            counting: std::cell::Cell::new(false),
+            omnia_allocs: std::cell::Cell::new(0),
+            omnia_calls: std::cell::Cell::new(0),
+        });
+        let rig = open_del_rig(cx, t7_2_label_doc(), false);
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+        let rev0 = revision(&doc, rig.cx);
+
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| {
+                o.set_paint_scope(Some(scope.clone()));
+                o.set_tool(Tool::Label, cx);
+            });
+        });
+        rig.cx.run_until_parked();
+
+        // Warm scratch/caches before measuring B10.
+        for x in -10..=10 {
+            move_to(&overlay, rig.cx, pt(x, 0));
+        }
+
+        let sheet_paints0 = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let sheet_renders0 = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_render_count(cx));
+
+        scope.omnia_calls.set(0);
+        scope.omnia_allocs.set(0);
+        scope.counting.set(true);
+        for step in 0..50 {
+            let p = Pt {
+                x: ((step % 21) - 10) * G,
+                y: if step % 3 == 0 { 0 } else { -6 * G },
+            };
+            move_to(&overlay, rig.cx, p);
+        }
+        scope.counting.set(false);
+        assert!(scope.omnia_calls.get() >= 20);
+        assert_eq!(
+            scope.omnia_allocs.get(),
+            0,
+            "B10: warm Tool::Label hover and preview paint must execute 0 Omnia heap allocs"
+        );
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints0,
+            "INV11: hovering targets in Tool::Label must never repaint SheetView"
+        );
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_render_count(cx)),
+            sheet_renders0
+        );
+
+        // Opening inline editor on wire body repaints 0 SheetView frames (`INV11`).
+        move_to(&overlay, rig.cx, pt(-3, 0));
+        click_world(&overlay, rig.cx, pt(-3, 0));
+        rig.cx.run_until_parked();
+        assert!(rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints0,
+            "INV11: opening inline label editor must repaint SheetView 0 times"
+        );
+
+        // First keystroke may perform GPUI Mouse->Keyboard modality refresh; subsequent keys & Esc do 0.
+        let was_keyboard = rig.cx.update(|window, _| window.last_input_was_keyboard());
+        rig.cx.simulate_keystrokes("a");
+        rig.cx.run_until_parked();
+        let is_keyboard = rig.cx.update(|window, _| window.last_input_was_keyboard());
+        let modality_switches = u64::from(!was_keyboard && is_keyboard);
+        let sheet_paints_kbd = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let sheet_renders_kbd = rig
+            .cx
+            .update(|_, cx| overlay.read(cx).sheet_render_count(cx));
+        assert!(
+            sheet_paints_kbd - sheet_paints0 <= modality_switches,
+            "INV11: at most 1 GPUI Mouse->Keyboard modality refresh on first keystroke"
+        );
+        assert!(
+            sheet_renders_kbd - sheet_renders0 <= modality_switches,
+            "INV11: at most 1 GPUI Mouse->Keyboard modality refresh on first keystroke"
+        );
+        rig.cx.simulate_keystrokes("b c d escape");
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sheet_paints_kbd,
+            "INV11: typing and Esc inside inline editor must execute 0 SheetView paints"
+        );
+        assert_eq!(
+            rig.cx
+                .update(|_, cx| overlay.read(cx).sheet_render_count(cx)),
+            sheet_renders_kbd
+        );
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        // C4: Clicking outside editor on empty sheet cancels active editor with 0 edits.
+        click_world(&overlay, rig.cx, pt(-3, 0));
+        rig.cx.simulate_input("STALE");
+        rig.cx.run_until_parked();
+        click_world(&overlay, rig.cx, pt(2, 6));
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        // C4: Tool switch cancels active editor with 0 edits.
+        click_world(&overlay, rig.cx, pt(-3, 0));
+        rig.cx.simulate_input("STALE");
+        rig.cx.run_until_parked();
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Select, cx));
+        });
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(revision(&doc, rig.cx), rev0);
+
+        // C4: External on_doc_change (e.g., programmatic doc edit) cancels stale editor.
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Label, cx));
+        });
+        click_world(&overlay, rig.cx, pt(-3, 0));
+        rig.cx.simulate_input("STALE");
+        rig.cx.run_until_parked();
+        let ext = rig.cx.update(|_, cx| {
+            doc.update(cx, |d, _| {
+                d.apply(Command::AddLabel(Label {
+                    at: pt(0, 6),
+                    text: "EXT".into(),
+                }))
+                .unwrap()
+            })
+        });
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.on_doc_change(&ext, cx));
+        });
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(
+            rig.cx.update(|_, cx| doc.read(cx).labels().count()),
+            1,
+            "stale editor must never commit over external change"
+        );
+
+        // C4: Undo/HistoryStep cancels active editor without committing buffered text.
+        click_world(&overlay, rig.cx, pt(-3, 0));
+        rig.cx.simulate_input("STALE");
+        rig.cx.run_until_parked();
+        rig.cx.update(|window, cx| {
+            overlay.update(cx, |o, cx| {
+                let _ = o.undo(window, cx);
+            });
+        });
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+
+        // C4: WindowDeactivated cancels active editor.
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Label, cx));
+        });
+        rig.cx.run_until_parked();
+        click_world(&overlay, rig.cx, pt(-3, 0));
+        rig.cx.simulate_input("STALE");
+        rig.cx.run_until_parked();
+        rig.cx.update(|window, cx| {
+            overlay.update(cx, |o, cx| {
+                assert!(o.end_gesture(GestureEndReason::WindowDeactivated, Some(window), Some(cx)));
+            });
+        });
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+
+        // C4: DocumentSwitch cancels active editor.
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Label, cx));
+        });
+        rig.cx.run_until_parked();
+        click_world(&overlay, rig.cx, pt(-3, 0));
+        rig.cx.simulate_input("STALE");
+        rig.cx.run_until_parked();
+        let rev_before_swap = revision(&doc, rig.cx);
+        let new_doc = rig.cx.update(|_, cx| cx.new(|_| Doc::new()));
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_document(new_doc, cx));
+        });
+        rig.cx.run_until_parked();
+        assert!(!rig.cx.update(|_, cx| overlay.read(cx).is_editing_label()));
+        assert_eq!(revision(&doc, rig.cx), rev_before_swap);
     }
 }

@@ -241,11 +241,45 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
             Ok(apply_wire_plan(doc, plan, acc))
         }
         Command::AddLabel(label) => {
+            if !label.at.is_in_bounds() {
+                return Err(CommandError::OutOfBounds);
+            }
+            let label_at = label.at;
             let (id, bounds) = doc.insert_label_raw(label)?;
             acc.record_dirty(bounds);
             acc.record_added(ItemId::Label(id));
             acc.nets_changed = true;
-            Ok(UndoOp::RemoveLabel(id))
+            // WD9 / INV2: placing a label in the strict interior of an existing wire splits that
+            // wire at `label_at`; normalisation via `plan_add_wires` preserves labelled vertices.
+            let mut split_ids = Vec::new();
+            doc.index.visit_wires_unstamped(
+                Rect {
+                    min: label_at,
+                    max: label_at,
+                },
+                |wid, _| {
+                    if doc
+                        .wire(wid)
+                        .is_some_and(|w| crate::clip::point_in_wire_strict_interior(label_at, *w))
+                    {
+                        split_ids.push(wid);
+                    }
+                },
+            );
+            if split_ids.is_empty() {
+                return Ok(UndoOp::RemoveLabel(id));
+            }
+            split_ids.sort_unstable_by_key(|wid| wid.0);
+            split_ids.dedup();
+            let split_wires: Vec<Wire> = split_ids
+                .into_iter()
+                .map(|wid| *doc.wire(wid).expect("indexed wire exists"))
+                .collect();
+            let plan = crate::route::plan_add_wires(doc, &split_wires);
+            let wire_undo = apply_wire_plan(doc, plan, acc);
+            // Undo batches execute in reverse order: restore unsplit wires before removing the
+            // label, and redo restores the label first so split geometry replays verbatim (INV4).
+            Ok(UndoOp::Batch(vec![UndoOp::RemoveLabel(id), wire_undo]))
         }
         Command::Move {
             items,
@@ -4221,6 +4255,264 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn t7_2_add_label_on_wire_interior_splits_and_undoes_inv4_inv10_wd9() {
+        let mut doc = Doc::new();
+        let a = del_point(0, 0);
+        let mid = del_point(2, 0);
+        let b = del_point(4, 0);
+        let add_wire = doc.apply(Command::AddWires(vec![del_wire(a, b)])).unwrap();
+        let ItemId::Wire(orig_wire) = add_wire.added[0] else {
+            panic!("expected WireId");
+        };
+        let pre_label = doc.fork();
+
+        let change = doc
+            .apply(Command::AddLabel(Label {
+                at: mid,
+                text: "CLK".into(),
+            }))
+            .unwrap();
+        assert_doc_consistent(&doc);
+        doc.assert_normal_form();
+        assert!(change.nets_changed);
+        let ItemId::Label(lbl_id) = change.added[0] else {
+            panic!("first added item must remain the LabelId");
+        };
+        assert_eq!(doc.wires().count(), 2);
+        let mut segs: Vec<Wire> = doc.wires().map(|(_, &w)| w).collect();
+        segs.sort_by_key(|w| (w.a.x.min(w.b.x), w.a.x.max(w.b.x)));
+        assert_eq!(segs, vec![del_wire(a, mid), del_wire(mid, b)]);
+        assert!(doc.net_at(a).is_some());
+        assert_eq!(doc.net_at(a), doc.net_at(mid));
+        assert_eq!(doc.net_at(a), doc.net_at(b));
+
+        // Undo restores the single pre-split wire with its exact ID (INV4).
+        let after_label = doc.fork();
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&pre_label));
+        assert_doc_consistent(&doc);
+        doc.assert_normal_form();
+        assert_eq!(doc.wire(orig_wire), Some(&del_wire(a, b)));
+        assert_eq!(doc.label(lbl_id), None);
+
+        // Redo restores the label and exact split wire IDs (INV4).
+        doc.redo().unwrap();
+        assert!(doc.content_eq(&after_label));
+        assert_doc_consistent(&doc);
+        doc.assert_normal_form();
+    }
+
+    #[test]
+    fn t7_2_add_label_crossing_splits_both_and_endpoints_do_not_split() {
+        let mut doc = Doc::new();
+        let h = del_wire(del_point(-2, 0), del_point(2, 0));
+        let v = del_wire(del_point(0, -2), del_point(0, 2));
+        doc.apply(Command::AddWires(vec![h, v])).unwrap();
+        let before = doc.fork();
+
+        doc.apply(Command::AddLabel(Label {
+            at: del_point(0, 0),
+            text: "X".into(),
+        }))
+        .unwrap();
+        assert_doc_consistent(&doc);
+        doc.assert_normal_form();
+        assert_eq!(doc.wires().count(), 4);
+        let net = doc.net_at(del_point(0, 0)).unwrap();
+        for p in [
+            del_point(-2, 0),
+            del_point(2, 0),
+            del_point(0, -2),
+            del_point(0, 2),
+        ] {
+            assert_eq!(doc.net_at(p), Some(net));
+        }
+
+        let after_cross = doc.fork();
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&before));
+        doc.redo().unwrap();
+        assert!(doc.content_eq(&after_cross));
+
+        // Placing a label on an existing endpoint or empty space splits nothing.
+        let before_end = doc.fork();
+        let end_change = follow_roundtrip(
+            &mut doc,
+            Command::AddLabel(Label {
+                at: del_point(2, 0),
+                text: "Y".into(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(end_change.removed, Vec::<ItemId>::new());
+        assert_eq!(doc.wires().count(), 4);
+        assert_ne!(before_end.revision(), doc.revision());
+
+        // Out-of-bounds AddLabel fails atomically with zero mutation (INV4).
+        let snap = doc.snapshot();
+        let err = doc
+            .apply(Command::AddLabel(Label {
+                at: Pt {
+                    x: SHEET_LIMIT_NM + 1,
+                    y: 0,
+                },
+                text: "OOB".into(),
+            }))
+            .unwrap_err();
+        assert_eq!(err, CommandError::OutOfBounds);
+        assert_eq!(doc.snapshot(), snap);
+    }
+
+    #[test]
+    fn t7_2_same_label_joins_unconnected_wires_and_delete_separates_inv10() {
+        let mut doc = Doc::new();
+        let w1_a = del_point(-4, 0);
+        let w1_b = del_point(0, 0);
+        let w2_a = del_point(4, 2);
+        let w2_b = del_point(8, 2);
+        doc.apply(Command::AddWires(vec![
+            del_wire(w1_a, w1_b),
+            del_wire(w2_a, w2_b),
+        ]))
+        .unwrap();
+        assert_ne!(doc.net_at(w1_a), doc.net_at(w2_a));
+
+        let l1 = doc
+            .apply(Command::AddLabel(Label {
+                at: del_point(-2, 0),
+                text: "BUS".into(),
+            }))
+            .unwrap()
+            .added[0];
+        let l2 = doc
+            .apply(Command::AddLabel(Label {
+                at: del_point(6, 2),
+                text: "BUS".into(),
+            }))
+            .unwrap()
+            .added[0];
+        assert_doc_consistent(&doc);
+        doc.assert_normal_form();
+        assert_eq!(doc.net_at(w1_a), doc.net_at(w2_a));
+        assert_eq!(doc.wires().count(), 4);
+
+        // SetText to another name separates them, and unchanged SetText is a no-op (INV4/INV5/INV10).
+        let pre_noop_rev = doc.revision();
+        let noop = doc
+            .apply(Command::SetText {
+                item: l2,
+                field: TextField::Label,
+                text: "BUS".into(),
+            })
+            .unwrap();
+        assert!(noop.dirty.is_none());
+        assert_eq!(doc.revision(), pre_noop_rev);
+
+        follow_roundtrip(
+            &mut doc,
+            Command::SetText {
+                item: l2,
+                field: TextField::Label,
+                text: "AUX".into(),
+            },
+        )
+        .unwrap();
+        assert_ne!(doc.net_at(w1_a), doc.net_at(w2_a));
+
+        // Rename back to BUS joins them again, then deleting l1 separates them again (T7.2 Done-when).
+        follow_roundtrip(
+            &mut doc,
+            Command::SetText {
+                item: l2,
+                field: TextField::Label,
+                text: "BUS".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(doc.net_at(w1_a), doc.net_at(w2_a));
+
+        follow_roundtrip(
+            &mut doc,
+            Command::Delete {
+                items: vec![l1],
+                with_wires: false,
+            },
+        )
+        .unwrap();
+        assert_ne!(doc.net_at(w1_a), doc.net_at(w2_a));
+        assert_doc_consistent(&doc);
+    }
+
+    proptest! {
+        #![proptest_config(crate::proptest_config(64))]
+        #[test]
+        fn t7_2_add_label_wire_split_and_set_text_inv2_inv4_inv10(
+            split_x in 1i32..=7,
+            split2_x in 1i32..=7,
+            use_same in any::<bool>(),
+        ) {
+            let mut doc = Doc::new();
+            let a1 = del_point(0, 0);
+            let b1 = del_point(8, 0);
+            let a2 = del_point(0, 4);
+            let b2 = del_point(8, 4);
+            doc.apply(Command::AddWires(vec![del_wire(a1, b1), del_wire(a2, b2)]))
+                .unwrap();
+
+            let p1 = del_point(split_x, 0);
+            let c1 = follow_roundtrip(
+                &mut doc,
+                Command::AddLabel(Label {
+                    at: p1,
+                    text: "N1".into(),
+                }),
+            )
+            .unwrap();
+            doc.assert_normal_form();
+            let l1 = c1.added[0];
+
+            let p2 = del_point(split2_x, 4);
+            let c2 = follow_roundtrip(
+                &mut doc,
+                Command::AddLabel(Label {
+                    at: p2,
+                    text: if use_same { "N1" } else { "N2" }.into(),
+                }),
+            )
+            .unwrap();
+            doc.assert_normal_form();
+            let l2 = c2.added[0];
+
+            if use_same {
+                prop_assert_eq!(doc.net_at(a1), doc.net_at(a2));
+            } else {
+                prop_assert_ne!(doc.net_at(a1), doc.net_at(a2));
+            }
+
+            follow_roundtrip(
+                &mut doc,
+                Command::SetText {
+                    item: l2,
+                    field: TextField::Label,
+                    text: "N1".into(),
+                },
+            )
+            .unwrap();
+            prop_assert_eq!(doc.net_at(a1), doc.net_at(a2));
+
+            follow_roundtrip(
+                &mut doc,
+                Command::Delete {
+                    items: vec![l1],
+                    with_wires: false,
+                },
+            )
+            .unwrap();
+            prop_assert_ne!(doc.net_at(a1), doc.net_at(a2));
         }
     }
 }

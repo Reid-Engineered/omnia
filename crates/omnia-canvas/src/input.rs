@@ -479,6 +479,12 @@ impl SheetCanvas {
         self.overlay.clone()
     }
 
+    /// Whether an inline net-label text editor is currently active in the gesture owner (`T7.2`).
+    pub fn is_editing_label(&self, cx: &App) -> bool {
+        self.gesture_owner(cx)
+            .is_some_and(|overlay| overlay.read(cx).is_editing_label())
+    }
+
     /// D7: an edit repaints the sheet only when its dirty rectangle meets the viewport.
     pub(crate) fn repaint_if_visible(&mut self, dirty: Option<Rect>, cx: &mut Context<Self>) {
         if dirty.is_some_and(|dirty| dirty.intersects(self.camera.visible())) {
@@ -748,6 +754,9 @@ impl Render for SheetCanvas {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "space" {
+                    if this.is_editing_label(cx) {
+                        return;
+                    }
                     if this.space_consumed_by_wire {
                         cx.stop_propagation();
                         return;
@@ -768,6 +777,10 @@ impl Render for SheetCanvas {
             }))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, _, cx| {
                 if event.keystroke.key == "space" {
+                    if this.is_editing_label(cx) {
+                        this.space_consumed_by_wire = false;
+                        return;
+                    }
                     this.space_consumed_by_wire = false;
                     this.nav.set_space(false);
                     cx.stop_propagation();

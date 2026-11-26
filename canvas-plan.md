@@ -502,7 +502,7 @@ pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
 pub enum Command {
     PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect }, // P2.2 adds def: PlaceDef and params: Params (parts-plan.md PD8)
     AddWires(Vec<Wire>),
-    AddLabel(Label),
+    AddLabel(Label), // T7.2 (WD9): splits wires whose strict interior holds label.at; undo restores wires first (INV4)
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
     Reorient { items: Vec<ItemId>, pivot: Pt, by: Orient, follow: FollowPolicy }, // follow added in W2.2 (WD3)
     Transform { items: Vec<ItemId>, delta: Pt, pivot: Pt, by: Orient, follow: FollowPolicy }, // T5.5: pivot + by(p - pivot) + delta, planned and normalised once
@@ -685,7 +685,7 @@ impl Camera {
     pub fn set_viewport(&mut self, viewport: Bounds<Pixels>);
 }
 pub enum Tool { Select, Wire, Place(SymbolId), Label, ZoomArea } // T5.2 (tool.rs); ZoomArea delivered in T5.6
-pub enum ToolPhase { Idle, Hovering, Dragging, Placing, Pasting, Wiring, ZoomingArea }
+pub enum ToolPhase { Idle, Hovering, Dragging, Placing, Pasting, Wiring, Labeling, ZoomingArea }
 // T5.2 (tool.rs): pure tool state machine. One gesture owner, OverlayView, holds it; the owner
 // applies a gesture's one Command only to the document and revision it was planned on (INV5).
 pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture),
@@ -693,6 +693,7 @@ pub enum ToolState { Idle, Hovering(ItemId), Dragging(DragGesture),
                      Placing(PlaceGesture),
                      Pasting(PasteGesture),               // T7.1
                      Wiring(WireGesture),
+                     Labeling(LabelGesture),              // T7.2
                      ZoomingArea(ZoomAreaGesture) } // T5.6
 pub struct DocStamp { pub key: u64, pub revision: u64 }   // key: doc_key(&Entity<Doc>)
 pub fn doc_key(doc: &Entity<Doc>) -> u64;
@@ -756,9 +757,30 @@ impl WireGesture {
     pub fn click(&mut self, doc: &Doc, doc_key: u64, raw_at: Pt, snap_radius: i32, scratch: &mut Vec<ItemId>) -> (Option<Commit>, bool);
 }
 pub struct PointerRadii { pub hit: i32, pub snap: i32 }   // K14/WK4 hit tolerance and snap radius in nm
+// T7.2 (tool/label.rs; LabelTarget/LabelEditTarget/LabelGesture re-exported from tool.rs and lib.rs):
+// net-label targeting (`Pin`, `WireEnd`, `Junction`, `WireBody`, existing label; never empty `Grid`) and
+// inline GPUI text entry in `TextField` key context (`UD3`).
+pub const TEXT_FIELD_CONTEXT: &str;                       // "TextField"
+pub enum LabelTarget { ExistingLabel { id: LabelId, at: Pt }, Attach(Snap) }
+impl LabelTarget { pub fn at(self) -> Pt; }
+pub enum LabelEditTarget { New { at: Pt }, Existing { id: LabelId, at: Pt, original: Arc<str> } }
+impl LabelEditTarget { pub fn at(&self) -> Pt; pub fn initial_text(&self) -> &str; }
+pub struct LabelGesture { pub target: Option<LabelTarget>, pub editing: Option<LabelEditTarget> }
+impl LabelGesture {
+    pub fn for_preview(target: Option<LabelTarget>) -> Self;
+    pub fn anchor_point(&self) -> Option<Pt>;
+    pub fn update_cursor(&mut self, doc: Option<&Doc>, raw_at: Pt, radii: PointerRadii, scratch: &mut Vec<ItemId>) -> bool;
+    pub fn click(&mut self, doc: &Doc, doc_key: u64, raw_at: Pt, radii: PointerRadii, scratch: &mut Vec<ItemId>) -> (Option<(LabelEditTarget, DocStamp)>, bool);
+    pub fn clear_editing(&mut self) -> bool;
+}
+pub fn is_valid_label_snap(target: Snap) -> bool;
+pub fn find_existing_label(doc: &Doc, raw_at: Pt, hit_tol: i32, scratch: &mut Vec<ItemId>) -> Option<(LabelId, Pt)>;
+pub fn find_label_target(doc: &Doc, raw_at: Pt, radii: PointerRadii, scratch: &mut Vec<ItemId>) -> Option<LabelTarget>;
+pub fn label_commit_command(target: &LabelEditTarget, raw_text: &str) -> Option<Command>;
 pub struct ZoomAreaGesture { pub anchor: Option<Pt>, pub current: Option<Pt> } // T5.6
 pub enum ToolRequest { Click { item: ItemId, base: DocStamp }, Place { symbol: SymbolId, at: Pt, orient: Orient },
                        Paste { clip: Arc<Clip>, at: Pt, orient: Orient }, // T7.1
+                       OpenLabelEditor { target: LabelEditTarget, base: DocStamp }, // T7.2
                        ReorientSelection(Orient), DeleteSelection, ZoomArea(Rect) } // T5.3, T5.6: handled by OverlayView
 pub struct Commit { pub command: Command, pub base: DocStamp }
 pub struct ToolOutcome { pub handled: bool, pub preview_changed: bool, pub capture: bool,
@@ -770,7 +792,7 @@ impl ToolMachine {
     pub fn tool(&self) -> Tool;
     pub fn state(&self) -> &ToolState;
     pub fn phase(&self) -> ToolPhase;
-    pub fn routes_pointer(&self) -> bool;                // T7.1: Placing, Pasting, Wiring, or ZoomingArea
+    pub fn routes_pointer(&self) -> bool;                // T7.2: Placing, Pasting, Wiring, Labeling, or ZoomingArea
     pub fn holds_capture(&self) -> bool;                 // T5.6: Dragging, pointer-driven DraggingSegment, or active ZoomArea
     pub(crate) fn has_pending_press(&self) -> bool;             // T7.1: Placing or Pasting with pressed=true
     pub fn start_paste(&mut self, clip: Arc<Clip>, raw_cursor: Option<Pt>) -> ToolOutcome; // T7.1
@@ -785,6 +807,7 @@ impl ToolMachine {
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome;
     pub fn pointer_move_with_doc(&mut self, doc: &Doc, at: Pt, left_held: bool) -> ToolOutcome; // W3.3; wiring defaults to 100% K14 radius (PIN_LATTICE_NM)
     pub fn pointer_move_with_snap(&mut self, doc: &Doc, at: Pt, snap_radius: i32, left_held: bool) -> ToolOutcome; // T6.2: live camera K14/WK4 snap radius
+    pub fn pointer_move_with_radii(&mut self, doc: &Doc, at: Pt, radii: PointerRadii, left_held: bool) -> ToolOutcome; // T7.2: live camera K14/WK4 hit + snap radii
     pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome; // alt: WK3 at commit
     pub fn pointer_up_with_doc(&mut self, doc: &Doc, at: Pt, alt: bool) -> ToolOutcome;       // W3.3
     pub fn flip_wire_corner(&mut self) -> ToolOutcome;    // T6.2: Space while wiring (WD6)
@@ -880,6 +903,7 @@ impl OverlayView {
     pub fn set_rubber_band_preview(&mut self, anchor: Pt, current: Pt, mode: SelectMode, cx: &mut Context<Self>);
     pub fn set_segment_drag_preview(&mut self, wire: WireId, offset: i32, cx: &mut Context<Self>) -> bool; // W3.3
     pub fn set_wire_preview(&mut self, start: Option<Pt>, snap: Snap, first_leg: Option<Axis>, cx: &mut Context<Self>); // T6.2
+    pub fn set_label_preview(&mut self, target: Option<LabelTarget>, cx: &mut Context<Self>); // T7.2 (INV11)
     pub fn flip_wire_corner(&mut self, cx: &mut Context<Self>) -> bool; // T6.2: Space while wiring (WD6)
     pub fn set_camera(&mut self, camera: Camera, cx: &mut Context<Self>);
     pub fn set_theme(&mut self, theme: &'static Theme, cx: &mut Context<Self>);
@@ -900,6 +924,8 @@ impl OverlayView {
     pub fn tool(&self) -> Tool;
     pub fn tool_state(&self) -> &ToolState;
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>); // cancels gesture and band
+    pub fn is_editing_label(&self) -> bool;                        // T7.2
+    pub fn label_editor_text(&self, cx: &App) -> Option<SharedString>; // T7.2
     pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool; // tool, then band
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool;
@@ -955,6 +981,7 @@ impl SheetCanvas {
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>);   // T5.2
     pub fn tool(&self, cx: &App) -> Tool;                             // T5.2
     pub fn tool_state(&self, cx: &App) -> ToolState;                  // T5.2
+    pub fn is_editing_label(&self, cx: &App) -> bool;                 // T7.2
     pub fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool; // T5.2: Esc (UQ14)
     pub fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.2: emits CanvasHistory
     pub fn redo(&mut self, window: &mut Window, cx: &mut Context<Self>); // T5.2: emits CanvasHistory
@@ -1040,12 +1067,16 @@ Preconditions of the public canvas API. INV5 and INV11 remain the primary invari
   canvas's current document key from a shared `Rc<Cell<Option<u64>>>` rather than re-borrowing
   the emitting entity, so self-subscription never triggers a GPUI double-borrow panic.)
 - **C4.** Every pointer-captured or pending gesture (drag, rubber band, pending place or paste
-  press) ends
+  press, or active inline net-label editor) ends
   by exactly one of: commit to its own document at its stamped revision while it still holds
-  capture, or end with no edit. Either way it releases the capture it took, in the window it took
+  capture (or is still open at that document/revision), or end with no edit. Either way it
+  releases the capture it took, in the window it took
   it in, and never a newer capture. Enforced structurally by a `{ window, hitbox, generation }`
   capture record and a single `OverlayView::end_gesture` path. (`Tool::Wire` takes no pointer
-  capture and commits each segment on left press; Esc drops the active chain origin.)
+  capture and commits each segment on left press; Esc drops the active chain origin. An active
+  inline label editor cancels with zero document edits on Esc, an outside `FreshPress`,
+  `ToolChange`, `HistoryStep`, `DocumentSwitch`, `Attach`/`Detach`, `Drop`, `WindowDeactivated`,
+  or external `on_doc_change` revision mismatch.)
 
 Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 
