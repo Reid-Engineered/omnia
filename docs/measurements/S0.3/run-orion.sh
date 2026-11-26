@@ -13,6 +13,7 @@
 #   label    = orion
 #   work_dir = /tmp/omnia-s03-ngspice
 set -euo pipefail
+unset CDPATH
 
 NGSPICE_VER="47"
 NGSPICE_URL="https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/${NGSPICE_VER}/ngspice-${NGSPICE_VER}.tar.gz"
@@ -64,8 +65,8 @@ BATCH_SIZE=256
 label="${1:-orion}"
 work_dir="${2:-/tmp/omnia-s03-ngspice}"
 mkdir -p "$work_dir"
-work_dir="$(cd "$work_dir" && pwd)"
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+work_dir="$(CDPATH='' cd -- "$work_dir" && pwd)"
+here="$(CDPATH='' cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Claim an atomic run directory; plain mkdir (no -p) fails if it already exists so no
 # concurrent or repeated run can overwrite committed campaign data.

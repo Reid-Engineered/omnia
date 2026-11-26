@@ -2,7 +2,8 @@
 $ErrorActionPreference = "Continue"
 "timestamp: " + (Get-Date -Format o)
 $os = Get-CimInstance Win32_OperatingSystem
-"os: {0} {1} (build {2}), {3}" -f $os.Caption, $os.Version, $os.BuildNumber, $os.OSArchitecture
+$osCaption = ($os.Caption -replace '^.*?(Windows\b)', '$1').Trim()
+"os: {0} {1} (build {2}), {3}" -f $osCaption, $os.Version, $os.BuildNumber, $os.OSArchitecture
 "memory_total_gb: {0:N1}" -f ($os.TotalVisibleMemorySize / 1MB)
 "memory_free_gb: {0:N1}" -f ($os.FreePhysicalMemory / 1MB)
 foreach ($c in Get-CimInstance Win32_Processor) {

@@ -182,6 +182,7 @@ impl BgWakeup {
 /// Shared state bridged via `userData` pointer to `libngspice` C callbacks.
 struct CallbackState {
     detached: AtomicBool,
+    bg_ever_started: AtomicBool,
     wakeup: BgWakeup,
     inner: Mutex<CallbackInner>,
 }
@@ -404,11 +405,25 @@ unsafe extern "C" fn cb_bg_thread_running(
 ) -> c_int {
     if !userdata.is_null() {
         let state = unsafe { &*(userdata as *const CallbackState) };
+        // Latch on every callback notification (start and finish) regardless of which
+        // ngspice command initiated the background thread.
+        state.bg_ever_started.store(true, Ordering::Release);
         if not_running {
             state.wakeup.mark_bg_finished();
         }
     }
     0
+}
+
+fn is_bg_command(cmd: &str) -> bool {
+    cmd.split([';', '\n', '\r']).any(|stmt| {
+        stmt.split_whitespace().next().is_some_and(|tok| {
+            matches!(
+                tok.to_ascii_lowercase().as_str(),
+                "bg_run" | "bg_resume" | "bg_step" | "bg_trun"
+            )
+        })
+    })
 }
 
 /// Exclusive process-global handle to dynamically loaded `libngspice`.
@@ -465,6 +480,7 @@ impl NgspiceLib {
 
             let state = Box::new(CallbackState {
                 detached: AtomicBool::new(false),
+                bg_ever_started: AtomicBool::new(false),
                 wakeup: BgWakeup::new(),
                 inner: Mutex::new(CallbackInner::new()),
             });
@@ -513,9 +529,22 @@ impl NgspiceLib {
         self.state_ref().wakeup.clone()
     }
 
+    fn mark_bg_ever_started(&mut self) {
+        self.bg_ever_started = true;
+        if let Some(state) = self.state.as_deref() {
+            state.bg_ever_started.store(true, Ordering::Release);
+        }
+    }
+
     pub fn command(&mut self, cmd: &str) -> Result<(), String> {
+        if is_bg_command(cmd) {
+            self.mark_bg_ever_started();
+        }
         let cstr = CString::new(cmd).map_err(|e| format!("invalid command string: {e}"))?;
         let rc = unsafe { (self.fn_command)(cstr.as_ptr() as *mut c_char) };
+        if self.is_running() {
+            self.mark_bg_ever_started();
+        }
         if rc != 0 {
             return Err(format!("ngSpice_Command({cmd:?}) returned {rc}"));
         }
@@ -605,7 +634,7 @@ impl NgspiceLib {
         }
         self.load_circuit(netlist)?;
         self.bg_active = true;
-        self.bg_ever_started = true;
+        self.mark_bg_ever_started();
         if let Err(e) = self.command("bg_run") {
             self.bg_active = false;
             self.state_ref().wakeup.mark_bg_finished();
@@ -736,6 +765,14 @@ impl NgspiceLib {
 
 impl Drop for NgspiceLib {
     fn drop(&mut self) {
+        let mut ever_bg = self.bg_active
+            || self.bg_ever_started
+            || self
+                .state
+                .as_deref()
+                .is_some_and(|s| s.bg_ever_started.load(Ordering::Acquire))
+            || self.is_running();
+
         // 1. Stop and wait for any active ngspice background thread BEFORE detaching.
         if self.bg_active || self.is_running() {
             let _halt_ok = self.bg_halt().is_ok();
@@ -770,19 +807,67 @@ impl Drop for NgspiceLib {
             }
         }
 
+        ever_bg |= self
+            .state
+            .as_deref()
+            .is_some_and(|s| s.bg_ever_started.load(Ordering::Acquire))
+            || self.is_running();
+
         // 3. Only unload `libngspice`, free `CallbackState`, and release `ACTIVE_INSTANCE`
-        //    when no background solver thread was ever started (`!self.bg_ever_started`).
+        //    when no background solver thread was ever started (`!ever_bg`).
         //    Upstream ngspice-47 fires `cb_bg_thread_running` before the solver thread returns
         //    and spawns detached pthreads on Unix without a join API, so pinning avoids any
         //    possibility of unloading code or freeing state beneath an exiting thread.
-        if !self.bg_ever_started && !self.is_running() {
+        if !ever_bg {
             drop(self.lib.take());
             drop(self.state.take());
             drop(self.guard.take());
         } else {
+            self.bg_ever_started = true;
             std::mem::forget(self.lib.take());
             std::mem::forget(self.state.take());
             std::mem::forget(self.guard.take());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_bg_command_detects_bg_entry_points() {
+        assert!(is_bg_command("bg_run"));
+        assert!(is_bg_command("  BG_RUN "));
+        assert!(is_bg_command("bg_resume"));
+        assert!(is_bg_command("bg_step"));
+        assert!(is_bg_command("bg_trun"));
+        assert!(is_bg_command("echo start; bg_run"));
+        assert!(!is_bg_command("op"));
+        assert!(!is_bg_command("run"));
+        assert!(!is_bg_command("bg_halt"));
+        assert!(!is_bg_command("destroy all"));
+    }
+
+    #[test]
+    fn cb_bg_thread_running_latches_bg_ever_started() {
+        let mut state = CallbackState {
+            detached: AtomicBool::new(false),
+            bg_ever_started: AtomicBool::new(false),
+            wakeup: BgWakeup::new(),
+            inner: Mutex::new(CallbackInner::new()),
+        };
+        let ud = (&mut state as *mut CallbackState).cast::<c_void>();
+        unsafe {
+            cb_bg_thread_running(false, 0, ud);
+        }
+        assert!(state.bg_ever_started.load(Ordering::Acquire));
+
+        state.bg_ever_started.store(false, Ordering::Release);
+        state.wakeup.reset_for_run();
+        unsafe {
+            cb_bg_thread_running(true, 0, ud);
+        }
+        assert!(state.bg_ever_started.load(Ordering::Acquire));
     }
 }

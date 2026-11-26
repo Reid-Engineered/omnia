@@ -1,5 +1,5 @@
 timestamp: 2026-11-25T19:47:22.3922942-05:00
-os: Microsoft Windows 11 Home 10.0.26200 (build 26200), 64-bit
+os: Windows 11 Home 10.0.26200 (build 26200), 64-bit
 memory_total_gb: 31.6
 memory_free_gb: 15.1
 cpu: Intel(R) Core(TM) i7-14650HX (16 cores / 24 logical, max 2200 MHz, current 2200 MHz)

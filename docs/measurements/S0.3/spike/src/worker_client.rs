@@ -26,11 +26,32 @@ pub struct WorkerTranResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancelMode {
-    /// Worker acknowledged `Response::Cancelled` AND exited cleanly and was reaped within `grace`.
+    /// Worker acknowledged `Response::Cancelled`, exited cleanly (`status.success()`), and was
+    /// reaped at or before `grace`.
     CooperativeReaped,
-    /// Deadline expired before worker exited cleanly (or hard-kill mode was requested), so the
-    /// host killed and reaped the child process.
+    /// Worker acknowledged `Response::Cancelled` and exited cleanly (`status.success()`) on its
+    /// own after `grace` expired, without the host invoking `kill()`.
+    CooperativeLateReaped,
+    /// Host invoked `kill()` + `wait()` on a still-running worker (either `hard_kill_only` or
+    /// because the worker was still alive when the `grace` deadline expired).
     HardKilled,
+}
+
+fn classify_cooperative_exit(
+    success: bool,
+    within_deadline: bool,
+    status_desc: impl std::fmt::Display,
+) -> Result<CancelMode, String> {
+    if !success {
+        return Err(format!(
+            "worker exited with non-zero status during cooperative cancel: {status_desc}"
+        ));
+    }
+    if within_deadline {
+        Ok(CancelMode::CooperativeReaped)
+    } else {
+        Ok(CancelMode::CooperativeLateReaped)
+    }
 }
 
 #[derive(Debug)]
@@ -258,8 +279,7 @@ impl WorkerClient {
             });
 
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let mut reaped_within_grace = false;
-            let mut child_reaped = false;
+            let mut reaped_status = None;
             match rx.recv_timeout(remaining) {
                 Ok(StopSignal::Cancelled) => {
                     let _ = write_request(&mut self.stdin, &Request::Shutdown);
@@ -270,13 +290,44 @@ impl WorkerClient {
                             break;
                         }
                         match self.child.try_wait() {
-                            Ok(Some(_)) => {
-                                child_reaped = true;
-                                reaped_within_grace = Instant::now() <= deadline;
+                            Ok(Some(status)) => {
+                                reaped_status = Some((status, Instant::now() <= deadline));
                                 break;
                             }
                             Ok(None) => std::thread::sleep(Duration::from_millis(1)),
-                            Err(_) => break,
+                            Err(e) => {
+                                let _ = self.child.kill();
+                                let _ = self.child.wait();
+                                let _ = reader.join();
+                                return Err(format!(
+                                    "try_wait failed during cooperative cancel shutdown: {e}"
+                                ));
+                            }
+                        }
+                    }
+
+                    if let Some((status, within_deadline)) = reaped_status {
+                        let _ = reader.join();
+                        mode =
+                            classify_cooperative_exit(status.success(), within_deadline, status)?;
+                    } else {
+                        match self.child.try_wait() {
+                            Ok(Some(status)) => {
+                                let _ = reader.join();
+                                mode = classify_cooperative_exit(status.success(), false, status)?;
+                            }
+                            Ok(None) => {
+                                let _ = self.child.kill();
+                                let _ = self.child.wait();
+                                let _ = reader.join();
+                                mode = CancelMode::HardKilled;
+                            }
+                            Err(e) => {
+                                let _ = self.child.kill();
+                                let _ = self.child.wait();
+                                let _ = reader.join();
+                                return Err(format!("final try_wait failed before hard kill: {e}"));
+                            }
                         }
                     }
                 }
@@ -296,21 +347,39 @@ impl WorkerClient {
                     let _ = reader.join();
                     return Err(format!("worker error during cancel: {msg}"));
                 }
-                Ok(StopSignal::Eof) | Err(_) => {
+                Ok(StopSignal::Eof) => {
                     drop(self.stdin);
-                }
-            }
-
-            if reaped_within_grace {
-                mode = CancelMode::CooperativeReaped;
-            } else {
-                mode = CancelMode::HardKilled;
-                if !child_reaped {
                     let _ = self.child.kill();
                     let _ = self.child.wait();
+                    let _ = reader.join();
+                    return Err(
+                        "worker closed stdout unexpectedly before acknowledging Cancel".into(),
+                    );
+                }
+                Err(_) => {
+                    drop(self.stdin);
+                    match self.child.try_wait() {
+                        Ok(Some(status)) => {
+                            let _ = reader.join();
+                            return Err(format!(
+                                "worker exited without acknowledging Cancel (status={status})"
+                            ));
+                        }
+                        Ok(None) => {
+                            let _ = self.child.kill();
+                            let _ = self.child.wait();
+                            let _ = reader.join();
+                            mode = CancelMode::HardKilled;
+                        }
+                        Err(e) => {
+                            let _ = self.child.kill();
+                            let _ = self.child.wait();
+                            let _ = reader.join();
+                            return Err(format!("try_wait failed after cancel timeout: {e}"));
+                        }
+                    }
                 }
             }
-            let _ = reader.join();
         } else {
             mode = CancelMode::HardKilled;
             let _ = self.child.kill();
@@ -387,5 +456,24 @@ pub fn is_pid_alive(pid: u32) -> io::Result<bool> {
             return Err(e);
         }
         Ok(code == STILL_ACTIVE)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cooperative_exit_classification_requires_success_and_distinguishes_late_reap() {
+        assert_eq!(
+            classify_cooperative_exit(true, true, "0"),
+            Ok(CancelMode::CooperativeReaped)
+        );
+        assert_eq!(
+            classify_cooperative_exit(true, false, "0"),
+            Ok(CancelMode::CooperativeLateReaped)
+        );
+        assert!(classify_cooperative_exit(false, true, "1").is_err());
+        assert!(classify_cooperative_exit(false, false, "1").is_err());
     }
 }

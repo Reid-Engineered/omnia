@@ -271,7 +271,9 @@ fn live_worker_op_tran_missing_probe_cancel_and_lifecycle() {
         .expect("cancel");
     assert!(!outcome.pid_alive_after, "SINV5: orphan worker survived");
     assert!(
-        outcome.mode == CancelMode::CooperativeReaped || outcome.mode == CancelMode::HardKilled
+        outcome.mode == CancelMode::CooperativeReaped
+            || outcome.mode == CancelMode::CooperativeLateReaped
+            || outcome.mode == CancelMode::HardKilled
     );
     assert!(
         outcome.cancel_elapsed < Duration::from_millis(100),

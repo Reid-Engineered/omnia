@@ -494,6 +494,7 @@ fn main() {
     let mut s3_all_ns: Vec<Vec<u64>> = vec![Vec::new(); CancelCase::ALL.len()];
     let mut total_orphans = 0u64;
     let mut coop_stops = 0u64;
+    let mut late_coop_stops = 0u64;
     let mut hard_kills = 0u64;
 
     for rep in 0..a.reps {
@@ -533,10 +534,10 @@ fn main() {
                         let is_coop = outcome.mode == CancelMode::CooperativeReaped;
                         let is_hard = outcome.mode == CancelMode::HardKilled;
                         if !hard_only {
-                            if is_coop {
-                                coop_stops += 1;
-                            } else {
-                                hard_kills += 1;
+                            match outcome.mode {
+                                CancelMode::CooperativeReaped => coop_stops += 1,
+                                CancelMode::CooperativeLateReaped => late_coop_stops += 1,
+                                CancelMode::HardKilled => hard_kills += 1,
                             }
                         }
                         if outcome.pid_alive_after {
@@ -699,7 +700,7 @@ fn main() {
 
     let per_run_trimmed = per_run_json.trim_end().trim_end_matches(',');
     let json = format!(
-        "{{\n  \"spike\": \"SS1\",\n  \"budgets\": [\"SB3\", \"SB4\"],\n  \"reps\": {},\n  \"startup_iters\": {},\n  \"stream_iters\": {},\n  \"cancel_iters\": {},\n  \"batch_size\": {},\n  \"inproc_dlopen_init_ms\": {:.4},\n  \"first_worker_spawn_ready_ms\": {:.4},\n  \"worker_spawn_ready_p50_ms\": {:.4},\n  \"worker_spawn_ready_p99_ms\": {:.4},\n  \"stream_points_per_run\": {},\n  \"cancel_coop_stops\": {},\n  \"cancel_hard_kill_fallbacks\": {},\n  \"orphan_processes\": {},\n  \"cases\": [\n{}\n  ],\n  \"runs\": [\n{}\n  ]\n}}\n",
+        "{{\n  \"spike\": \"SS1\",\n  \"budgets\": [\"SB3\", \"SB4\"],\n  \"reps\": {},\n  \"startup_iters\": {},\n  \"stream_iters\": {},\n  \"cancel_iters\": {},\n  \"batch_size\": {},\n  \"inproc_dlopen_init_ms\": {:.4},\n  \"first_worker_spawn_ready_ms\": {:.4},\n  \"worker_spawn_ready_p50_ms\": {:.4},\n  \"worker_spawn_ready_p99_ms\": {:.4},\n  \"stream_points_per_run\": {},\n  \"cancel_coop_stops\": {},\n  \"cancel_late_coop_stops\": {},\n  \"cancel_hard_kill_fallbacks\": {},\n  \"orphan_processes\": {},\n  \"cases\": [\n{}\n  ],\n  \"runs\": [\n{}\n  ]\n}}\n",
         a.reps,
         a.startup_iters,
         a.stream_iters,
@@ -711,6 +712,7 @@ fn main() {
         spawn_ready_p99_ms,
         stream_points_seen,
         coop_stops,
+        late_coop_stops,
         hard_kills,
         total_orphans,
         summary_entries.join(",\n"),
@@ -726,13 +728,14 @@ fn main() {
     std::fs::write(format!("{stem}-order.txt"), order_log).expect("write order");
 
     print!(
-        "SS1 complete (reps={}, batch={}, inproc_dlopen={:.2} ms, spawn_ready p50={:.2} ms p99={:.2} ms, coop_stops={}, hard_fallbacks={}, orphans={})\n{table}",
+        "SS1 complete (reps={}, batch={}, inproc_dlopen={:.2} ms, spawn_ready p50={:.2} ms p99={:.2} ms, coop_stops={}, late_coop_stops={}, hard_fallbacks={}, orphans={})\n{table}",
         a.reps,
         a.batch_size,
         ms(inproc_dlopen_ns),
         spawn_ready_p50_ms,
         spawn_ready_p99_ms,
         coop_stops,
+        late_coop_stops,
         hard_kills,
         total_orphans
     );

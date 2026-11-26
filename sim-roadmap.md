@@ -452,4 +452,15 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        absolute path in `run-orion.sh`; removed redundant OS vendor word
                        in `S0.3.md` and qualified PR #141 `SB4` claim cleanly. Status
                        stays needs-human.
+2026-11-25 S0.3 third review fixes — Addressed PR #141 third Codex review
+                       findings (all 4): latched background-run pinning across
+                       `NgspiceLib::command`, `start_tran_bg`, `is_running`, and
+                       `cb_bg_thread_running` (and aligned `S0.3.md` table);
+                       required `status.success()` for cooperative cancel exits,
+                       rejected premature `Eof` before `Cancelled`, and separated
+                       `CancelMode::CooperativeLateReaped` from `HardKilled` in
+                       `worker_client.rs`/`bench_ss1.rs`; cleared `CDPATH` for
+                       directory resolution in `run-orion.sh`; stripped the redundant
+                       OS vendor prefix in `conditions.ps1` and both Windows
+                       condition snapshots. Status stays needs-human.
 ```
