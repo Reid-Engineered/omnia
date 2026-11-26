@@ -30,10 +30,11 @@ pub enum CancelMode {
     /// reaped at or before `grace`.
     CooperativeReaped,
     /// Worker acknowledged `Response::Cancelled` and exited cleanly (`status.success()`) on its
-    /// own after `grace` expired, without the host invoking `kill()`.
+    /// own after `grace` expired — either observed directly via `try_wait()` or completed just
+    /// before an attempted host kill could terminate the child.
     CooperativeLateReaped,
-    /// Host invoked `kill()` + `wait()` on a still-running worker (either `hard_kill_only` or
-    /// because the worker was still alive when the `grace` deadline expired).
+    /// Host terminated a still-running worker and observed its dedicated host-kill exit status
+    /// (either `hard_kill_only` or because the worker was still alive after `grace` expired).
     HardKilled,
 }
 
@@ -54,6 +55,29 @@ fn classify_cooperative_exit(
     }
 }
 
+#[cfg(windows)]
+const HOST_KILL_EXIT_CODE: u32 = 0x5030_4B49;
+
+#[cfg(unix)]
+fn terminate_child(child: &mut Child) -> bool {
+    child.kill().is_ok()
+}
+
+#[cfg(windows)]
+fn terminate_child(child: &mut Child) -> bool {
+    use std::os::windows::io::AsRawHandle;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn TerminateProcess(process: *mut std::ffi::c_void, exit_code: u32) -> i32;
+    }
+
+    // Call Win32 `TerminateProcess` with a dedicated sentinel exit code instead of `Child::kill()`
+    // (which uses `1` and maps `ERROR_ACCESS_DENIED` to `Ok(())`), so an already-exited child
+    // returning `1` can never look host-killed.
+    unsafe { TerminateProcess(child.as_raw_handle(), HOST_KILL_EXIT_CODE) != 0 }
+}
+
 #[cfg(unix)]
 fn is_host_kill_status(status: std::process::ExitStatus) -> bool {
     use std::os::unix::process::ExitStatusExt;
@@ -62,7 +86,7 @@ fn is_host_kill_status(status: std::process::ExitStatus) -> bool {
 
 #[cfg(windows)]
 fn is_host_kill_status(status: std::process::ExitStatus) -> bool {
-    status.code() == Some(1)
+    status.code() == Some(HOST_KILL_EXIT_CODE as i32)
 }
 
 fn classify_post_kill_exit(
@@ -88,7 +112,7 @@ fn classify_post_kill_exit(
 }
 
 fn kill_and_reap(child: &mut Child, after_ack: bool) -> Result<CancelMode, String> {
-    let kill_ok = child.kill().is_ok();
+    let kill_ok = terminate_child(child);
     let status = child
         .wait()
         .map_err(|e| format!("wait after kill failed: {e}"))?;
@@ -538,5 +562,96 @@ mod tests {
         assert!(classify_post_kill_exit(true, false, false, true, "1").is_err());
         assert!(classify_post_kill_exit(true, true, false, false, "2").is_err());
         assert!(classify_post_kill_exit(false, true, false, false, "2").is_err());
+    }
+
+    fn spawn_exited_unreaped_child(exit_code: i32) -> Child {
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = Command::new("cmd");
+            c.args(["/C", &format!("exit {exit_code}")]);
+            c
+        };
+        #[cfg(unix)]
+        let mut cmd = {
+            let mut c = Command::new("sh");
+            c.args(["-c", &format!("exit {exit_code}")]);
+            c
+        };
+        let child = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn exiting child");
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            const INFINITE: u32 = 0xFFFF_FFFF;
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn WaitForSingleObject(handle: *mut std::ffi::c_void, milliseconds: u32) -> u32;
+            }
+            let rc = unsafe { WaitForSingleObject(child.as_raw_handle(), INFINITE) };
+            assert_eq!(rc, 0, "WaitForSingleObject failed: {rc}");
+        }
+        #[cfg(unix)]
+        {
+            use std::io::Read;
+            let mut child = child;
+            if let Some(mut stdout) = child.stdout.take() {
+                let mut sink = Vec::new();
+                let _ = stdout.read_to_end(&mut sink);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            return child;
+        }
+        #[cfg(not(unix))]
+        child
+    }
+
+    #[test]
+    fn kill_and_reap_distinguishes_already_exited_subprocesses_from_host_kill() {
+        let mut exited_zero_ack = spawn_exited_unreaped_child(0);
+        assert_eq!(
+            kill_and_reap(&mut exited_zero_ack, true),
+            Ok(CancelMode::CooperativeLateReaped)
+        );
+
+        let mut exited_zero_no_ack = spawn_exited_unreaped_child(0);
+        assert!(kill_and_reap(&mut exited_zero_no_ack, false).is_err());
+
+        for code in [1, 2] {
+            for after_ack in [true, false] {
+                let mut child = spawn_exited_unreaped_child(code);
+                let res = kill_and_reap(&mut child, after_ack);
+                assert!(
+                    res.is_err(),
+                    "already-exited child (code {code}, after_ack={after_ack}) must not return {res:?}"
+                );
+            }
+        }
+
+        // A genuinely running child terminated via `kill_and_reap` returns `HardKilled`.
+        #[cfg(windows)]
+        let mut live = Command::new("findstr")
+            .arg("^")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn live blocking child");
+        #[cfg(unix)]
+        let mut live = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn live blocking child");
+
+        let _hold_stdin = live.stdin.take();
+        assert!(live.try_wait().expect("try_wait").is_none());
+        assert_eq!(kill_and_reap(&mut live, true), Ok(CancelMode::HardKilled));
     }
 }

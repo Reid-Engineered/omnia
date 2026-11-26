@@ -472,4 +472,12 @@ S3.6 + S4.1 + S4.3 -> S4.4 (Final Orion Gate) [HS4]
                        `worker_client.rs` so pre-kill exits cannot inflate `HardKilled`
                        or hide nonzero exits; removed third-party review-tool names
                        from the roadmap log. Status stays needs-human.
+2026-11-25 S0.3 fifth review fixes — Addressed PR #141 fifth independent review
+                       findings: replaced `Child::kill()` on Windows with direct
+                       Win32 `TerminateProcess(..., HOST_KILL_EXIT_CODE)` (`0x50304B49`)
+                       and `is_host_kill_status` in `worker_client.rs`, updated
+                       `CancelMode::CooperativeLateReaped` docs, and added a real
+                       subprocess regression test covering already-exited `0`/`1`/`2`
+                       and live host termination; updated `S0.3.md` to list all nine
+                       public `NgspiceLib` methods accurately. Status stays needs-human.
 ```
