@@ -1448,4 +1448,152 @@ mod tests {
             &[LabelEditorEvent::Submit("CLK_BUS".into())]
         );
     }
+
+    fn assert_inv10(doc: &Doc) {
+        let oracle = omnia_doc::Connectivity::rebuild_with_parts(
+            doc.wires().map(|(id, &w)| (id, w)),
+            doc.labels(),
+            doc.parts().map(|(id, _)| (id, doc.pins(id).unwrap())),
+        );
+        assert_eq!(doc.net_count(), oracle.net_count());
+        let mut pts: Vec<Pt> = doc
+            .wires()
+            .flat_map(|(_, w)| [w.a, w.b])
+            .chain(
+                doc.parts()
+                    .flat_map(|(id, _)| doc.pins(id).unwrap().iter().copied()),
+            )
+            .chain(doc.labels().map(|(_, l)| l.at))
+            .collect();
+        pts.sort_unstable_by_key(|p| (p.x, p.y));
+        pts.dedup();
+        for &a in &pts {
+            assert_eq!(doc.net_at(a).is_some(), oracle.net_at(a).is_some());
+            for &b in &pts {
+                assert_eq!(
+                    doc.net_at(a) == doc.net_at(b),
+                    oracle.net_at(a) == oracle.net_at(b)
+                );
+            }
+        }
+        doc.assert_normal_form();
+    }
+
+    #[test]
+    fn w3_6_wd9_wire_body_split_on_lattice_and_half_grid_and_tc_label_04() {
+        // Lattice wire body + half-grid wire body (from pin offset by half grid).
+        let half = G / 2;
+        let mut doc = Doc::from_items(
+            [],
+            [
+                Wire {
+                    a: pt(0, 0),
+                    b: pt(6, 0),
+                },
+                Wire {
+                    a: Pt { x: half, y: 2 * G },
+                    b: Pt { x: half, y: 6 * G },
+                },
+            ],
+            [],
+        )
+        .unwrap();
+        let radii = PointerRadii {
+            hit: G / 4,
+            snap: G / 2,
+        };
+        let mut scratch = Vec::with_capacity(16);
+        let mut gesture = LabelGesture::default();
+
+        // 1. Click lattice wire body near (3G, 0): snaps to (3G, 0) and splits the wire into 2 segments.
+        let (edit1, _) = gesture
+            .click(
+                &doc,
+                1,
+                Pt {
+                    x: 3 * G + G / 6,
+                    y: G / 8,
+                },
+                radii,
+                &mut scratch,
+            )
+            .0
+            .unwrap();
+        assert_eq!(edit1, LabelEditTarget::New { at: pt(3, 0) });
+        let cmd1 = label_commit_command(&edit1, " NET_L ").unwrap();
+        let pre1 = doc.fork();
+        doc.apply(cmd1).unwrap();
+        assert_inv10(&doc);
+        let segs_y0: Vec<Wire> = doc
+            .wires()
+            .filter(|(_, w)| w.a.y == 0)
+            .map(|(_, &w)| w)
+            .collect();
+        assert_eq!(segs_y0.len(), 2);
+        assert!(segs_y0.contains(&Wire {
+            a: pt(0, 0),
+            b: pt(3, 0)
+        }));
+        assert!(segs_y0.contains(&Wire {
+            a: pt(3, 0),
+            b: pt(6, 0)
+        }));
+
+        // 2. Click half-grid wire body near (half, 4G): WD5 keeps half-grid X and snaps Y to grid 4G,
+        //    then Command::AddLabel splits the half-grid wire cleanly.
+        let (edit2, _) = gesture
+            .click(
+                &doc,
+                1,
+                Pt {
+                    x: half + G / 8,
+                    y: 4 * G + G / 6,
+                },
+                radii,
+                &mut scratch,
+            )
+            .0
+            .unwrap();
+        assert_eq!(
+            edit2,
+            LabelEditTarget::New {
+                at: Pt { x: half, y: 4 * G },
+            }
+        );
+        doc.apply(label_commit_command(&edit2, "HALF").unwrap())
+            .unwrap();
+        assert_inv10(&doc);
+        assert_eq!(doc.wires().count(), 4);
+
+        // Undo back to pre1 restores exact unsplit wire (INV4).
+        doc.undo().unwrap();
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&pre1));
+        assert_inv10(&doc);
+        doc.redo().unwrap();
+        assert_inv10(&doc);
+
+        // 3. TC-label-04: deleting the right half (3, 0)->(6, 0) keeps NET_L on the left half
+        //    and removes its name/net from (6, 0).
+        let right_wire = doc
+            .wires()
+            .find(|(_, w)| {
+                **w == Wire {
+                    a: pt(3, 0),
+                    b: pt(6, 0),
+                }
+            })
+            .map(|(id, _)| ItemId::Wire(id))
+            .unwrap();
+        let left_net_before = doc.net_at(pt(0, 0));
+        assert_eq!(left_net_before, doc.net_at(pt(6, 0)));
+        doc.apply(Command::Delete {
+            items: vec![right_wire],
+            with_wires: false,
+        })
+        .unwrap();
+        assert_inv10(&doc);
+        assert_eq!(doc.net_at(pt(0, 0)), doc.net_at(pt(3, 0)));
+        assert_ne!(doc.net_at(pt(0, 0)), doc.net_at(pt(6, 0)));
+    }
 }

@@ -331,10 +331,11 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   `delete_wires_with_part` the way `ToolRequest::DeleteSelection` does (WD10: Cut behaves
   like Delete; one command, one undo step).
 
-### W3.6 Labels ride their runs · todo
+### W3.6 Labels ride their runs · done
 - Lane: doc, canvas · Depends: T7.2, W2.2 · Read: WD9, WINV9
 - Owns: `crates/schematic-doc/src/follow.rs` (label placement), `crates/schematic-canvas/src/tool/label.rs`
-  (split on placement)
+  (split on placement), widened to `crates/omnia-canvas/src/overlay/follow.rs` (draw moved labels
+  in follow preview)
 - Do: placing a label on a wire body splits the wire there; `plan_follow` fills
   `FollowPlan::labels` per WD9 and splits the new run at each label; the preview draws
   moved labels.
@@ -978,3 +979,26 @@ emit `"Move refused: ..."`; (5) nits — documented doc-less `ToolMachine::{poin
 reorient, pointer_up}` follow behavior in `tool.rs` and added `TC-move-17` (selected
 wire + part) plus a non-rigid labelled-run regression test. Status stays `needs-human`
 for the Orion Linux/Wayland `Alt`-during-drag session check (`docs/measurements/W2.3.md`).
+
+2026-11-26 W3.6 done — implemented WD9 label placement on rerouted runs, splitting of
+planned rerouted segments at placed label coordinates, moved-part pin-riding labels, and
+follow-preview painting of all moved labels. `crates/omnia-doc/src/follow.rs` adds
+`has_pin_labels`, `collect_pin_labels_only`, `nearest_lattice_point_on_run` (Manhattan
+nearest lattice point on the new run, breaking ties toward the unmoved end `b` when
+present and then `(x, y)`), and `split_wires_at_points` (splitting `wires` at each
+placed corner label before inserting into `View` and `FollowPlan::add`), plus moves
+non-selected labels sitting on moved parts' pins with those pins (keeping zero allocations
+on the empty-boundary/pin-label-free fast path). Widened ownership to
+`crates/omnia-canvas/src/overlay/follow.rs` so `paint_follow_preview` renders every
+moved label in `plan_labels_sorted` (rigid corners, rerouted corners, and pin-riding
+labels) while retaining stationary `ink_secondary` dots for hidden `affected_labels` on
+refusal/detach (`B10` zero warm Omnia allocations). `crates/omnia-doc/src/command.rs` was
+left untouched (it already consumes `FollowPlan::labels` and splits on `AddLabel`).
+Added `w3_6_winv9_winv6_random_labelled_runs_and_pin_labels` (128-case `WINV9`/`WINV6`/
+`WINV4`/`INV10`/`WINV3` property test) and `w3_6_tc_label_01`–`04` in `follow.rs`,
+`w3_6_wd9_wire_body_split_on_lattice_and_half_grid_and_tc_label_04` in `tool/label.rs`,
+and `w3_6_b10_warm_rerouted_and_pin_label_follow_paint_makes_zero_omnia_allocations` in
+`overlay/follow.rs`. All five standard checks (`cargo fmt --all --check`, workspace
+all-target `clippy -D warnings`, `omnia-bench` `--features scene-counts,readback`
+`clippy -D warnings`, `cargo test --workspace`, `cargo deny check`) and Rule-1 scan pass
+locally on Windows; no budgets certified or thresholds weakened.

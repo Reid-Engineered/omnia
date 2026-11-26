@@ -167,22 +167,16 @@ pub(super) fn paint_follow_preview(
                         );
                     }
                 }
-                for &id in data.affected_labels {
-                    if let Ok(idx) = data
-                        .plan_labels_sorted
-                        .binary_search_by_key(&id.0, |(lid, _)| lid.0)
-                    {
-                        let moved_at = data.plan_labels_sorted[idx].1;
-                        paint_ghost_label_halo(
-                            GhostLabel {
-                                at: moved_at,
-                                in_bounds: moved_at.is_in_bounds(),
-                            },
-                            params,
-                            palette,
-                            window,
-                        );
-                    }
+                for &(_, moved_at) in data.plan_labels_sorted {
+                    paint_ghost_label_halo(
+                        GhostLabel {
+                            at: moved_at,
+                            in_bounds: moved_at.is_in_bounds(),
+                        },
+                        params,
+                        palette,
+                        window,
+                    );
                 }
             }
             paint_drag_items_halo(
@@ -255,13 +249,8 @@ pub(super) fn paint_follow_preview(
                 }
             }
             paint_junction_dots(data.preview_junctions, full_ink, params, window, cx);
-            for &id in data.affected_labels {
-                if !is_refused
-                    && let Ok(idx) = data
-                        .plan_labels_sorted
-                        .binary_search_by_key(&id.0, |(lid, _)| lid.0)
-                {
-                    let moved_at = data.plan_labels_sorted[idx].1;
+            if !is_refused {
+                for &(_, moved_at) in data.plan_labels_sorted {
                     paint_ghost_label_fg(
                         GhostLabel {
                             at: moved_at,
@@ -273,7 +262,15 @@ pub(super) fn paint_follow_preview(
                         palette,
                         window,
                     );
-                } else if let Some(label) = params.doc.label(id)
+                }
+            }
+            for &id in data.affected_labels {
+                if (is_refused
+                    || data
+                        .plan_labels_sorted
+                        .binary_search_by_key(&id.0, |(lid, _)| lid.0)
+                        .is_err())
+                    && let Some(label) = params.doc.label(id)
                     && params.visible_padded.contains(label.at)
                 {
                     let screen = params.camera.world_to_screen(label.at);
@@ -691,6 +688,115 @@ mod tests {
             scope.omnia_allocs.get(),
             0,
             "B10: warm rigid-label follow overlay paint must make 0 Omnia allocations"
+        );
+    }
+
+    /// W3.6 / B10 / WINV5: rerouted-run corner labels and pin-riding labels in `plan_labels_sorted`
+    /// draw during a non-rigid follow drag with zero warm Omnia heap allocations.
+    #[gpui::test]
+    fn w3_6_b10_warm_rerouted_and_pin_label_follow_paint_makes_zero_omnia_allocations(
+        cx: &mut TestAppContext,
+    ) {
+        let mut doc_val = Doc::new();
+        let r1 = place_resistor(&mut doc_val, pt(-6, 0), "R1");
+        let _r2 = place_resistor(&mut doc_val, pt(6, 4), "R2");
+        doc_val
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: pt(-4, 0),
+                    b: pt(4, 0),
+                },
+                Wire {
+                    a: pt(4, 0),
+                    b: pt(4, 4),
+                },
+            ]))
+            .unwrap();
+        let ItemId::Label(corner_lid) = doc_val
+            .apply(Command::AddLabel(Label {
+                at: pt(4, 0),
+                text: "CORNER".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        let ItemId::Label(pin_lid) = doc_val
+            .apply(Command::AddLabel(Label {
+                at: pt(-4, 0),
+                text: "PIN".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+
+        let doc = cx.new(|_| doc_val);
+        let scope = Rc::new(FollowAllocScope::new());
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let doc_clone = doc.clone();
+        let scope_clone = scope.clone();
+
+        struct Host(gpui::Entity<OverlayView>);
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.0.clone()
+            }
+        }
+
+        let (host, cx) = cx.add_window_view(move |_, cx| {
+            let overlay = cx.new(|cx| {
+                OverlayView::new(
+                    doc_clone,
+                    Camera::new(Pt::ZERO, 1.0, viewport),
+                    &GRAPHITE,
+                    cx,
+                )
+                .with_paint_scope(scope_clone)
+            });
+            Host(overlay)
+        });
+        let overlay = host.read_with(cx, |h, _| h.0.clone());
+
+        // Warm non-rigid drag of only `R1`: reroutes the L-run, moves `corner_lid` to (4, 2)
+        // and moves `pin_lid` with R1's right pin to (-3, 2).
+        overlay.update(cx, |o, cx| {
+            assert!(o.set_move_preview([ItemId::Part(r1)], pt(1, 2), Orient::IDENTITY, false, cx));
+            let crate::tool::ToolState::Dragging(drag) = o.tool_state() else {
+                panic!("expected Dragging");
+            };
+            assert!(drag.affected_labels().is_empty());
+            assert_eq!(
+                drag.plan_labels_sorted(),
+                &[(corner_lid, pt(4, 2)), (pin_lid, pt(-3, 2))]
+            );
+        });
+        cx.run_until_parked();
+
+        scope.omnia_allocs.set(0);
+        scope.omnia_calls.set(0);
+        scope.counting.set(true);
+        for (step, theme) in [(2, &GRAY), (3, &GRAPHITE), (1, &GRAY)] {
+            overlay.update(cx, |o, cx| {
+                o.set_theme(theme, cx);
+                assert!(o.set_move_preview(
+                    [ItemId::Part(r1)],
+                    pt(step, 2),
+                    Orient::IDENTITY,
+                    false,
+                    cx,
+                ));
+            });
+            cx.run_until_parked();
+        }
+        scope.counting.set(false);
+        assert!(scope.omnia_calls.get() >= 3);
+        assert_eq!(
+            scope.omnia_allocs.get(),
+            0,
+            "B10: warm rerouted/pin-label follow overlay paint must make 0 Omnia allocations"
         );
     }
 }

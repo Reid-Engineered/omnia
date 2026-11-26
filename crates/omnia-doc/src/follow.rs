@@ -124,6 +124,175 @@ fn has_boundary(doc: &Doc, items: &[ItemId]) -> bool {
     })
 }
 
+fn has_pin_labels(doc: &Doc, items: &[ItemId]) -> bool {
+    items.iter().any(|&item| {
+        let ItemId::Part(id) = item else {
+            return false;
+        };
+        doc.pins(id).is_some_and(|pins| {
+            pins.iter().any(|&pin| {
+                doc.connectivity
+                    .labels_at(pin)
+                    .iter()
+                    .any(|&lid| !items.contains(&ItemId::Label(lid)))
+            })
+        })
+    })
+}
+
+fn collect_pin_labels_only(
+    doc: &Doc,
+    items: &[ItemId],
+    t: Isometry,
+    plan: &mut FollowPlan,
+) -> Result<(), FollowError> {
+    for &item in items {
+        let ItemId::Part(id) = item else {
+            continue;
+        };
+        let Some(pins) = doc.pins(id) else {
+            continue;
+        };
+        for &old_pin in pins {
+            for &lid in doc.connectivity.labels_at(old_pin) {
+                if !items.contains(&ItemId::Label(lid)) {
+                    let moved = t.apply(old_pin).map_err(|_| FollowError::NoRoute {
+                        from: old_pin,
+                        to: old_pin,
+                        blocker: Blocker::Sheet,
+                    })?;
+                    plan.labels.push((lid, moved));
+                }
+            }
+        }
+    }
+    plan.labels.sort_unstable_by_key(|(id, _)| id.0);
+    plan.labels.dedup_by_key(|(id, _)| *id);
+    Ok(())
+}
+
+/// WD9: finds the lattice point on `wires` nearest (Manhattan) to `old_at`;
+/// a tie goes to the point nearer the run's unmoved end `b` (if `has_unmoved_end`),
+/// then by `(x, y)`.
+fn nearest_lattice_point_on_run(
+    old_at: Pt,
+    wires: &[Wire],
+    a: Pt,
+    b: Pt,
+    has_unmoved_end: bool,
+) -> Pt {
+    if wires.is_empty() {
+        return a;
+    }
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+    struct RankKey {
+        dist_old: i64,
+        tie_manhattan: i64,
+        tie_along: i64,
+        x: i32,
+        y: i32,
+    }
+
+    let step = i64::from(crate::PIN_LATTICE_NM);
+    let total_len: i64 = wires.iter().map(|w| w.a.manhattan_distance(w.b)).sum();
+    let mut prefix_len = 0i64;
+    let mut best: Option<(RankKey, Pt)> = None;
+
+    let mut consider = |cand: Pt, dist_from_a: i64| {
+        let dist_old = cand.manhattan_distance(old_at);
+        let (tie_manhattan, tie_along) = if has_unmoved_end {
+            (cand.manhattan_distance(b), total_len - dist_from_a)
+        } else {
+            (0, 0)
+        };
+        let key = RankKey {
+            dist_old,
+            tie_manhattan,
+            tie_along,
+            x: cand.x,
+            y: cand.y,
+        };
+        if best.is_none_or(|(bk, _)| key < bk) {
+            best = Some((key, cand));
+        }
+    };
+
+    for &w in wires {
+        if w.a.y == w.b.y {
+            let y = w.a.y;
+            if i64::from(y).rem_euclid(step) == 0 {
+                let lo = i64::from(w.a.x.min(w.b.x));
+                let hi = i64::from(w.a.x.max(w.b.x));
+                let rem = lo.rem_euclid(step);
+                let first = lo + if rem == 0 { 0 } else { step - rem };
+                let last = hi - hi.rem_euclid(step);
+                if first <= last {
+                    let ox = i64::from(old_at.x);
+                    let fx = ox - ox.rem_euclid(step);
+                    for cx in [fx.clamp(first, last), (fx + step).clamp(first, last)] {
+                        let cand = Pt { x: cx as i32, y };
+                        consider(cand, prefix_len + w.a.manhattan_distance(cand));
+                    }
+                }
+            }
+        } else {
+            let x = w.a.x;
+            if i64::from(x).rem_euclid(step) == 0 {
+                let lo = i64::from(w.a.y.min(w.b.y));
+                let hi = i64::from(w.a.y.max(w.b.y));
+                let rem = lo.rem_euclid(step);
+                let first = lo + if rem == 0 { 0 } else { step - rem };
+                let last = hi - hi.rem_euclid(step);
+                if first <= last {
+                    let oy = i64::from(old_at.y);
+                    let fy = oy - oy.rem_euclid(step);
+                    for cy in [fy.clamp(first, last), (fy + step).clamp(first, last)] {
+                        let cand = Pt { x, y: cy as i32 };
+                        consider(cand, prefix_len + w.a.manhattan_distance(cand));
+                    }
+                }
+            }
+        }
+        prefix_len += w.a.manhattan_distance(w.b);
+    }
+
+    best.map_or(b, |(_, pt)| pt)
+}
+
+/// Splits any segment in `wires` whose strict interior contains a point in `split_pts` (WD9).
+fn split_wires_at_points(
+    wires: &mut Vec<Wire>,
+    split_pts: &[Pt],
+    out: &mut Vec<Wire>,
+    interior: &mut Vec<Pt>,
+) {
+    if wires.is_empty() || split_pts.is_empty() {
+        return;
+    }
+    out.clear();
+    for &w in wires.iter() {
+        interior.clear();
+        for &p in split_pts {
+            if crate::clip::point_in_wire_strict_interior(p, w) {
+                interior.push(p);
+            }
+        }
+        if interior.is_empty() {
+            out.push(w);
+            continue;
+        }
+        interior.sort_unstable_by_key(|p| w.a.manhattan_distance(*p));
+        interior.dedup();
+        let mut prev = w.a;
+        for &p in interior.iter() {
+            out.push(Wire { a: prev, b: p });
+            prev = p;
+        }
+        out.push(Wire { a: prev, b: w.b });
+    }
+    std::mem::swap(wires, out);
+}
+
 fn allows_on(v: &View<'_>, run: &Run, policy: FollowPolicy) -> bool {
     [run.a, run.b]
         .into_iter()
@@ -745,9 +914,10 @@ impl RouteSheet for View<'_> {
     }
 }
 
-/// WD3: rigid first, unanimous boundary policy, reroute or detach. On refusal `plan` is empty.
-/// Labels on rigid corners move once; rerouted label placement belongs to W3.6.
-/// Nonempty plans read the document through a final-geometry view layered over it
+/// WD3 / WD9: rigid first, unanimous boundary policy, reroute or detach. On refusal `plan` is empty.
+/// Labels on rigid corners move with the run, labels on rerouted corners land on the nearest
+/// lattice point of the new run (splitting it there), and labels on moved parts' pins move with
+/// the pin. Nonempty plans read the document through a final-geometry view layered over it
 /// (selection, reservations and planned wires only), never a copy of the sheet.
 pub fn plan_follow(
     doc: &Doc,
@@ -757,10 +927,14 @@ pub fn plan_follow(
     plan: &mut FollowPlan,
 ) -> Result<(), FollowError> {
     plan.clear();
-    if !has_boundary(doc, items) {
-        return Ok(());
-    }
-    let result = build(doc, items, t, policy, plan);
+    let result = if !has_boundary(doc, items) {
+        if !has_pin_labels(doc, items) {
+            return Ok(());
+        }
+        collect_pin_labels_only(doc, items, t, plan)
+    } else {
+        build(doc, items, t, policy, plan)
+    };
     if result.is_err() {
         plan.clear();
     }
@@ -788,6 +962,9 @@ fn build(
     let mut end_markers = Vec::new();
     let mut reservations = Vec::new();
     let mut wires = Vec::new();
+    let mut run_split_pts = Vec::new();
+    let mut split_wires_scratch = Vec::new();
+    let mut split_pts_scratch = Vec::new();
     // A failed rigid attempt under detach policy introduces old geometry. Restart so every
     // earlier run sees it too. Each restart fixes at least one fate, so termination is bounded.
     'restart: loop {
@@ -893,6 +1070,27 @@ fn build(
                         plan.labels.push((id, p));
                     }
                 }
+            } else {
+                // WD9: rerouted corner labels land on the new run's nearest lattice point
+                // (ties nearer the unmoved end `b`), and the new run is split there.
+                run_split_pts.clear();
+                let has_unmoved_end = r.b.1 != Anchor::Boundary;
+                for &id in &r.labels {
+                    if !items.contains(&ItemId::Label(id)) {
+                        let old_at = doc.label(id).unwrap().at;
+                        let p = nearest_lattice_point_on_run(old_at, &wires, a, b, has_unmoved_end);
+                        plan.labels.push((id, p));
+                        run_split_pts.push(p);
+                    }
+                }
+                if !run_split_pts.is_empty() {
+                    split_wires_at_points(
+                        &mut wires,
+                        &run_split_pts,
+                        &mut split_wires_scratch,
+                        &mut split_pts_scratch,
+                    );
+                }
             }
             // Insertion makes subsequent runs validate against every already planned segment.
             for &w in &wires {
@@ -901,6 +1099,17 @@ fn build(
             plan.remove.extend_from_slice(&r.wires);
             plan.add.extend_from_slice(&wires);
             plan.fates.push((r.a.0, fate));
+        }
+        // WD9: a label on a moved part's pin moves with the pin.
+        for part in &v.parts {
+            let orig_pins = doc.pins(part.id).expect("live selected part");
+            for (&orig_pin, &moved_pin) in orig_pins.iter().zip(&v.pins[part.pins.clone()]) {
+                for &id in doc.connectivity.labels_at(orig_pin) {
+                    if !items.contains(&ItemId::Label(id)) {
+                        plan.labels.push((id, moved_pin));
+                    }
+                }
+            }
         }
         plan.labels.sort_unstable_by_key(|(id, _)| id.0);
         plan.labels.dedup_by_key(|(id, _)| *id);
@@ -1439,6 +1648,681 @@ mod tests {
             prop_assert_eq!(expected.fates.len(),n as usize);
             let mut removed=expected.remove.clone();removed.sort_unstable_by_key(|w|w.0);removed.dedup();prop_assert_eq!(removed.len(),expected.remove.len());
         }
+        #[test]
+        fn w3_6_winv9_winv6_random_labelled_runs_and_pin_labels(
+            counts in prop::collection::vec(1usize..4, 2..5),
+            pick in any::<usize>(),
+            dx in -2i32..3,
+            dy in -2i32..3,
+            orientation in 0usize..8,
+            mode in 0u8..3,
+            follow in any::<bool>(),
+            pin_label_mask in any::<u8>(),
+            second_corner_label in any::<bool>(),
+        ) {
+            use crate::{Command, Connectivity};
+
+            let mut base = Doc::new();
+            let mut movable = Vec::new();
+            let mut fixed_pins = Vec::new();
+            for (i, &count) in counts.iter().enumerate() {
+                let x = i as i32 * 30;
+                let p_id = base
+                    .apply(Command::PlacePart {
+                        part: Part {
+                            symbol: SymbolId(0),
+                            at: p(x, 0),
+                            orient: Orient::IDENTITY,
+                            designator: format!("P{i}").into(),
+                            value: "".into(),
+                        },
+                        local_pins: (0..count).map(|j| p(0, j as i32 * 4)).collect(),
+                        local_bounds: Rect::from_points(Pt::ZERO, Pt::ZERO).unwrap(),
+                    })
+                    .unwrap()
+                    .added[0];
+                let ItemId::Part(part_id) = p_id else {
+                    unreachable!();
+                };
+                movable.push(part_id);
+                for j in 0..count {
+                    let y = j as i32 * 4;
+                    let far = p(x - 10, y + 2);
+                    base.apply(Command::PlacePart {
+                        part: Part {
+                            symbol: SymbolId(0),
+                            at: far,
+                            orient: Orient::IDENTITY,
+                            designator: format!("F{i}_{j}").into(),
+                            value: "".into(),
+                        },
+                        local_pins: vec![Pt::ZERO],
+                        local_bounds: Rect::from_points(Pt::ZERO, Pt::ZERO).unwrap(),
+                    })
+                    .unwrap();
+                    fixed_pins.push((part_id, p(x, y), far));
+                    // 3-segment run with corners at (x - 6, y) and (x - 6, y + 2).
+                    base.apply(Command::AddWires(vec![
+                        Wire { a: p(x, y), b: p(x - 6, y) },
+                        Wire { a: p(x - 6, y), b: p(x - 6, y + 2) },
+                        Wire { a: p(x - 6, y + 2), b: far },
+                    ]))
+                    .unwrap();
+                    base.apply(Command::AddLabel(Label {
+                        at: p(x - 6, y),
+                        text: format!("N{i}_{j}").into(),
+                    }))
+                    .unwrap();
+                    if second_corner_label {
+                        base.apply(Command::AddLabel(Label {
+                            at: p(x - 6, y + 2),
+                            text: format!("M{i}_{j}").into(),
+                        }))
+                        .unwrap();
+                    }
+                    if (pin_label_mask >> ((i + j) % 8)) & 1 == 1 {
+                        base.apply(Command::AddLabel(Label {
+                            at: p(x, y),
+                            text: format!("PIN{i}_{j}").into(),
+                        }))
+                        .unwrap();
+                    }
+                }
+            }
+            base.assert_normal_form();
+            let chosen = movable[pick % movable.len()];
+            let items = vec![ItemId::Part(chosen)];
+            let pivot = base.part(chosen).unwrap().at;
+            let t = match mode {
+                0 => Isometry::Translate(p(dx, dy)),
+                1 => Isometry::Reorient {
+                    pivot,
+                    by: Orient::ALL[orientation],
+                },
+                _ => Isometry::Transform {
+                    delta: p(dx, dy),
+                    pivot,
+                    by: Orient::ALL[orientation],
+                },
+            };
+            let pol = FollowPolicy::new(follow, 10, false).unwrap();
+
+            // Record every label's original state, net peers, and whether it sits on an affected run.
+            let mut boundary = Boundary::default();
+            base.boundary_points(&items, &mut boundary);
+            let mut runs = Vec::new();
+            base.affected_runs(&boundary, &mut runs);
+            let label_records: Vec<_> = base
+                .labels()
+                .map(|(lid, l)| {
+                    let on_affected_run = runs.iter().position(|r| r.labels.contains(&lid));
+                    let on_moved_pin = base.pins(chosen).unwrap().contains(&l.at);
+                    let run_far = on_affected_run.map(|idx| runs[idx].b.0);
+                    (
+                        lid,
+                        l.at,
+                        l.text.clone(),
+                        on_affected_run,
+                        on_moved_pin,
+                        run_far,
+                        base.net_at(l.at),
+                    )
+                })
+                .collect();
+
+            let mut out = FollowPlan::default();
+            let plan_res = plan_follow(&base, &items, t, pol, &mut out);
+            let mut doc = base.fork();
+            let cmd = match mode {
+                0 => Command::Move {
+                    items: items.clone(),
+                    delta: p(dx, dy),
+                    follow: pol,
+                },
+                1 => Command::Reorient {
+                    items: items.clone(),
+                    pivot,
+                    by: Orient::ALL[orientation],
+                    follow: pol,
+                },
+                _ => Command::Transform {
+                    items: items.clone(),
+                    delta: p(dx, dy),
+                    pivot,
+                    by: Orient::ALL[orientation],
+                    follow: pol,
+                },
+            };
+            let apply_res = doc.apply(cmd);
+
+            if !t.is_identity() {
+                prop_assert_eq!(plan_res.is_ok(), apply_res.is_ok());
+            }
+            if plan_res.is_ok() && apply_res.is_ok() {
+                // Every placed label in `out.labels` must not lie in the strict interior of `out.add`.
+                for &(_, lat) in &out.labels {
+                    for &w in &out.add {
+                        prop_assert!(!crate::clip::point_in_wire_strict_interior(lat, w));
+                    }
+                }
+                doc.assert_normal_form();
+                let oracle = Connectivity::rebuild_with_parts(
+                    doc.wires().map(|(id, &w)| (id, w)),
+                    doc.labels(),
+                    doc.parts().map(|(id, _)| (id, doc.pins(id).unwrap())),
+                );
+                crate::connectivity::tests::assert_partitions(&doc.connectivity, &oracle);
+
+                // WINV9: every label on an affected run or moved pin still sits on a wire end or
+                // pin of the net it was on, with text unchanged.
+                for (lid, old_at, old_text, run_idx, on_moved_pin, run_far, _old_net) in label_records {
+                    let after = doc.label(lid).unwrap();
+                    prop_assert_eq!(&after.text, &old_text);
+                    if on_moved_pin {
+                        let expected_pin = t.apply(old_at).unwrap();
+                        prop_assert_eq!(after.at, expected_pin);
+                        prop_assert!(doc.points.at(after.at).len() > 0);
+                    } else if let Some(idx) = run_idx {
+                        let fate = out.fates[idx].1;
+                        let far = run_far.unwrap();
+                        if fate == RunFate::Detached {
+                            prop_assert_eq!(after.at, old_at);
+                            prop_assert!(doc.points.at(after.at).len() > 0);
+                            prop_assert_eq!(doc.net_at(after.at), doc.net_at(far));
+                        } else {
+                            prop_assert!(doc.points.at(after.at).len() > 0);
+                            prop_assert!(doc.net_at(after.at).is_some());
+                            prop_assert_eq!(doc.net_at(after.at), doc.net_at(far));
+                        }
+                    } else {
+                        prop_assert_eq!(after.at, old_at);
+                    }
+                }
+
+                // WINV4 / INV4 and WINV6: non-identity moves roundtrip and match rebuilt sheets.
+                if !t.is_identity() {
+                    let after_fork = doc.fork();
+                    doc.undo().unwrap();
+                    prop_assert!(doc.content_eq(&base));
+                    doc.redo().unwrap();
+                    prop_assert!(doc.content_eq(&after_fork));
+
+                    let mut rebuilt = Doc::new();
+                    let mut chosen_rebuilt = None;
+                    for (i, s) in base.parts.slots.iter().enumerate().rev() {
+                        if let Some(s) = s {
+                            let local: Vec<_> = s
+                                .pins
+                                .iter()
+                                .map(|&pt| s.part.orient.inverse().apply(pt - s.part.at))
+                                .collect();
+                            let (nid, _) = rebuilt
+                                .insert_part_raw(s.part.clone(), &local, s.local_bounds)
+                                .unwrap();
+                            if PartId(i as u32) == chosen {
+                                chosen_rebuilt = Some(ItemId::Part(nid));
+                            }
+                        }
+                    }
+                    for (_, &w) in base.wires().collect::<Vec<_>>().into_iter().rev() {
+                        rebuilt.insert_wire_raw(w).unwrap();
+                    }
+                    let mut label_map = Vec::new();
+                    for (oid, l) in base.labels().collect::<Vec<_>>().into_iter().rev() {
+                        let (nid, _) = rebuilt.insert_label_raw(l.clone()).unwrap();
+                        label_map.push((oid, nid));
+                    }
+                    let mut rebuilt_plan = FollowPlan::default();
+                    plan_follow(&rebuilt, &[chosen_rebuilt.unwrap()], t, pol, &mut rebuilt_plan).unwrap();
+                    prop_assert_eq!(&out.add, &rebuilt_plan.add);
+                    prop_assert_eq!(&out.fates, &rebuilt_plan.fates);
+                    let mut mapped: Vec<_> = out
+                        .labels
+                        .iter()
+                        .map(|&(oid, pt)| {
+                            let nid = label_map.iter().find(|&&(o, _)| o == oid).unwrap().1;
+                            (nid, pt)
+                        })
+                        .collect();
+                    mapped.sort_unstable_by_key(|(id, _)| id.0);
+                    prop_assert_eq!(mapped, rebuilt_plan.labels);
+                }
+            } else if apply_res.is_err() {
+                prop_assert!(doc.content_eq(&base));
+            }
+        }
+    }
+
+    fn assert_inv10_and_normal(doc: &Doc) {
+        let oracle = crate::Connectivity::rebuild_with_parts(
+            doc.wires().map(|(id, &w)| (id, w)),
+            doc.labels(),
+            doc.parts().map(|(id, _)| (id, doc.pins(id).unwrap())),
+        );
+        crate::connectivity::tests::assert_partitions(&doc.connectivity, &oracle);
+        doc.assert_normal_form();
+    }
+
+    fn roundtrip_cmd(doc: &mut Doc, cmd: crate::Command) {
+        let before = doc.fork();
+        doc.apply(cmd).unwrap();
+        assert_inv10_and_normal(doc);
+        let after = doc.fork();
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&before));
+        assert_inv10_and_normal(doc);
+        doc.redo().unwrap();
+        assert!(doc.content_eq(&after));
+        assert_inv10_and_normal(doc);
+    }
+
+    #[test]
+    fn w3_6_tc_label_01_translated_run_carries_corner_label() {
+        use crate::Command;
+
+        let mut doc = Doc::new();
+        let a = part(&mut doc, &[p(0, 0)]);
+        let b = part(&mut doc, &[p(4, 0)]);
+        doc.apply(Command::AddWires(vec![
+            Wire {
+                a: p(0, 0),
+                b: p(0, 2),
+            },
+            Wire {
+                a: p(0, 2),
+                b: p(4, 2),
+            },
+            Wire {
+                a: p(4, 2),
+                b: p(4, 0),
+            },
+        ]))
+        .unwrap();
+        let ItemId::Label(lid) = doc
+            .apply(Command::AddLabel(Label {
+                at: p(0, 2),
+                text: "SIG".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+
+        let items = vec![ItemId::Part(a), ItemId::Part(b)];
+        let mut out = FollowPlan::default();
+        plan_follow(
+            &doc,
+            &items,
+            Isometry::Translate(p(2, -1)),
+            policy(false),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out.fates, vec![(p(0, 0), RunFate::Translated)]);
+        assert_eq!(out.labels, vec![(lid, p(2, 1))]);
+
+        roundtrip_cmd(
+            &mut doc,
+            Command::Move {
+                items: items.clone(),
+                delta: p(2, -1),
+                follow: policy(false),
+            },
+        );
+        assert_eq!(doc.label(lid).unwrap().at, p(2, 1));
+        assert_eq!(doc.label(lid).unwrap().text.as_ref(), "SIG");
+        assert_eq!(doc.net_at(p(2, 1)), doc.net_at(p(2, -1)));
+
+        roundtrip_cmd(
+            &mut doc,
+            Command::Reorient {
+                items,
+                pivot: p(4, -1),
+                by: Orient::ROT_90,
+                follow: policy(false),
+            },
+        );
+        assert_eq!(doc.label(lid).unwrap().at, p(2, -3));
+        assert_eq!(doc.net_at(p(2, -3)), doc.net_at(p(4, -3)));
+        assert_eq!(doc.net_at(p(2, -3)), doc.net_at(p(4, 1)));
+    }
+
+    #[test]
+    fn w3_6_tc_label_02_rerouted_run_places_splits_ties_and_pin_labels() {
+        use crate::Command;
+
+        // 1. Rerouted L-run -> straight run: corner label lands on nearest lattice point and splits the new wire.
+        let mut doc = Doc::new();
+        let r1 = part(&mut doc, &[p(0, 0)]);
+        let _r2 = part(&mut doc, &[p(6, 2)]);
+        doc.apply(Command::AddWires(vec![
+            Wire {
+                a: p(0, 0),
+                b: p(2, 0),
+            },
+            Wire {
+                a: p(2, 0),
+                b: p(2, 2),
+            },
+            Wire {
+                a: p(2, 2),
+                b: p(6, 2),
+            },
+        ]))
+        .unwrap();
+        let ItemId::Label(l_mid) = doc
+            .apply(Command::AddLabel(Label {
+                at: p(2, 0),
+                text: "CLK".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        let ItemId::Label(l_other) = doc
+            .apply(Command::AddLabel(Label {
+                at: p(2, 2),
+                text: "CLK2".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        // Also place a label directly on r1's pin (0, 0) to verify WD9 pin-label motion.
+        let ItemId::Label(l_pin) = doc
+            .apply(Command::AddLabel(Label {
+                at: p(0, 0),
+                text: "PIN_L".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+
+        let mut out = FollowPlan::default();
+        plan_follow(
+            &doc,
+            &[ItemId::Part(r1)],
+            Isometry::Translate(p(0, 2)),
+            policy(false),
+            &mut out,
+        )
+        .unwrap();
+        assert_eq!(out.fates, vec![(p(0, 0), RunFate::Rerouted)]);
+        // New run is straight (0, 2) -> (6, 2); both corner labels project to (2, 2) and split it once.
+        assert_eq!(
+            out.add,
+            vec![
+                Wire {
+                    a: p(0, 2),
+                    b: p(2, 2)
+                },
+                Wire {
+                    a: p(2, 2),
+                    b: p(6, 2)
+                },
+            ]
+        );
+        assert_eq!(
+            out.labels,
+            vec![(l_mid, p(2, 2)), (l_other, p(2, 2)), (l_pin, p(0, 2))]
+        );
+
+        roundtrip_cmd(
+            &mut doc,
+            Command::Move {
+                items: vec![ItemId::Part(r1)],
+                delta: p(0, 2),
+                follow: policy(false),
+            },
+        );
+        assert_eq!(doc.label(l_mid).unwrap().at, p(2, 2));
+        assert_eq!(doc.label(l_other).unwrap().at, p(2, 2));
+        assert_eq!(doc.label(l_pin).unwrap().at, p(0, 2));
+        assert_eq!(doc.wires().count(), 2);
+        assert_eq!(doc.net_at(p(2, 2)), doc.net_at(p(6, 2)));
+        assert_eq!(doc.net_at(p(0, 2)), doc.net_at(p(6, 2)));
+
+        // 2. WD9 tie-breaker: equal Manhattan distance on an L-route chooses the point nearer the unmoved end.
+        // Move `m` from (-2, 0) to (0, 0) with horizontal first_leg so new L-route is (0, 0) -> (4, 0) -> (4, 4):
+        // nearest points to (2, 2) are (2, 0) [dist 2 to old, dist 6 to (4, 4)] and (4, 2) [dist 2 to old, dist 2 to (4, 4)]!
+        let mut tie_doc = Doc::new();
+        let m = part(&mut tie_doc, &[p(-2, 0)]);
+        let _fixed = part(&mut tie_doc, &[p(4, 4)]);
+        tie_doc
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: p(-2, 0),
+                    b: p(2, 0),
+                },
+                Wire {
+                    a: p(2, 0),
+                    b: p(2, 2),
+                },
+                Wire {
+                    a: p(2, 2),
+                    b: p(2, 4),
+                },
+                Wire {
+                    a: p(2, 4),
+                    b: p(4, 4),
+                },
+            ]))
+            .unwrap();
+        let ItemId::Label(l_tie) = tie_doc
+            .apply(Command::AddLabel(Label {
+                at: p(2, 2),
+                text: "TIE".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        let mut tie_plan = FollowPlan::default();
+        plan_follow(
+            &tie_doc,
+            &[ItemId::Part(m)],
+            Isometry::Translate(p(2, 0)),
+            policy(false),
+            &mut tie_plan,
+        )
+        .unwrap();
+        // Horizontal-first L-route is (0, 0) -> (4, 0) -> (4, 4); (4, 2) ties (2, 0) at Manhattan dist 2
+        // from (2, 2) and wins because it is nearer unmoved end (4, 4)!
+        assert_eq!(tie_plan.labels, vec![(l_tie, p(4, 2))]);
+        assert_eq!(
+            tie_plan.add,
+            vec![
+                Wire {
+                    a: p(0, 0),
+                    b: p(4, 0)
+                },
+                Wire {
+                    a: p(4, 0),
+                    b: p(4, 2)
+                },
+                Wire {
+                    a: p(4, 2),
+                    b: p(4, 4)
+                },
+            ]
+        );
+
+        // 3. Unwired part with a pin label moves the pin label (even when !has_boundary).
+        let mut unwired = Doc::new();
+        let u = part(&mut unwired, &[p(0, 0)]);
+        let ItemId::Label(lu) = unwired
+            .apply(Command::AddLabel(Label {
+                at: p(0, 0),
+                text: "UPIN".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        let mut unwired_plan = FollowPlan::default();
+        plan_follow(
+            &unwired,
+            &[ItemId::Part(u)],
+            Isometry::Translate(p(3, -2)),
+            policy(false),
+            &mut unwired_plan,
+        )
+        .unwrap();
+        assert_eq!(unwired_plan.labels, vec![(lu, p(3, -2))]);
+        roundtrip_cmd(
+            &mut unwired,
+            Command::Move {
+                items: vec![ItemId::Part(u)],
+                delta: p(3, -2),
+                follow: policy(false),
+            },
+        );
+        assert_eq!(unwired.label(lu).unwrap().at, p(3, -2));
+    }
+
+    #[test]
+    fn w3_6_tc_label_03_detached_run_leaves_corner_label_and_wires_unchanged() {
+        use crate::Command;
+
+        let mut doc = Doc::new();
+        let big = part(&mut doc, &(0..10).map(|y| p(0, y * 4)).collect::<Vec<_>>());
+        for y in 0..10 {
+            let py = y * 4;
+            part(&mut doc, &[p(6, py + 2)]);
+            doc.apply(Command::AddWires(vec![
+                Wire {
+                    a: p(0, py),
+                    b: p(2, py),
+                },
+                Wire {
+                    a: p(2, py),
+                    b: p(2, py + 2),
+                },
+                Wire {
+                    a: p(2, py + 2),
+                    b: p(6, py + 2),
+                },
+            ]))
+            .unwrap();
+        }
+        let ItemId::Label(l_corner) = doc
+            .apply(Command::AddLabel(Label {
+                at: p(2, 0),
+                text: "DET".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        // Also place a label on one of `big`'s pins: WD9 says pin labels move with the pin even on detach.
+        let ItemId::Label(l_pin) = doc
+            .apply(Command::AddLabel(Label {
+                at: p(0, 0),
+                text: "BIG_PIN".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        let wires_before: Vec<_> = doc.wires().map(|(id, &w)| (id, w)).collect();
+
+        let mut out = FollowPlan::default();
+        plan_follow(
+            &doc,
+            &[ItemId::Part(big)],
+            Isometry::Translate(p(-1, 0)),
+            policy(false),
+            &mut out,
+        )
+        .unwrap();
+        assert!(out.fates.iter().all(|(_, f)| *f == RunFate::Detached));
+        assert!(out.remove.is_empty() && out.add.is_empty());
+        assert_eq!(out.labels, vec![(l_pin, p(-1, 0))]);
+
+        roundtrip_cmd(
+            &mut doc,
+            Command::Move {
+                items: vec![ItemId::Part(big)],
+                delta: p(-1, 0),
+                follow: policy(false),
+            },
+        );
+        assert_eq!(doc.label(l_corner).unwrap().at, p(2, 0));
+        assert_eq!(doc.label(l_pin).unwrap().at, p(-1, 0));
+        let wires_after: Vec<_> = doc.wires().map(|(id, &w)| (id, w)).collect();
+        assert_eq!(wires_before, wires_after);
+        assert_eq!(doc.net_at(p(2, 0)), doc.net_at(p(6, 2)));
+        assert_ne!(doc.net_at(p(-1, 0)), doc.net_at(p(2, 0)));
+    }
+
+    #[test]
+    fn w3_6_tc_label_04_delete_bridge_wire_keeps_label_on_its_half_only() {
+        use crate::Command;
+
+        let mut doc = Doc::new();
+        let left = part(&mut doc, &[p(0, 0)]);
+        let right = part(&mut doc, &[p(8, 0)]);
+        let w_left = doc
+            .apply(Command::AddWires(vec![Wire {
+                a: p(0, 0),
+                b: p(3, 0),
+            }]))
+            .unwrap()
+            .added[0];
+        let ItemId::Label(lid) = doc
+            .apply(Command::AddLabel(Label {
+                at: p(2, 0),
+                text: "BUS".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        doc.apply(Command::AddWires(vec![
+            Wire {
+                a: p(3, 0),
+                b: p(3, 2),
+            },
+            Wire {
+                a: p(3, 2),
+                b: p(8, 2),
+            },
+        ]))
+        .unwrap();
+        let bridge = doc
+            .wires()
+            .find(|(_, w)| {
+                **w == Wire {
+                    a: p(3, 0),
+                    b: p(3, 2),
+                }
+            })
+            .map(|(id, _)| ItemId::Wire(id))
+            .unwrap();
+        let _ = (left, right, w_left);
+        assert_eq!(doc.net_at(p(0, 0)), doc.net_at(p(8, 2)));
+
+        roundtrip_cmd(
+            &mut doc,
+            Command::Delete {
+                items: vec![bridge],
+                with_wires: false,
+            },
+        );
+        assert_eq!(doc.label(lid).unwrap().at, p(2, 0));
+        assert_eq!(doc.label(lid).unwrap().text.as_ref(), "BUS");
+        assert_eq!(doc.net_at(p(0, 0)), doc.net_at(p(2, 0)));
+        assert_ne!(doc.net_at(p(0, 0)), doc.net_at(p(8, 2)));
     }
 }
 
