@@ -665,7 +665,7 @@ of the `canvas` lane.
 - Done when: a test that changes the scale factor from 1.25 to 1.5 mid-run renders an image
   identical to a fresh window at 1.5.
 
-### T7.5 Gate: final report · todo → H4
+### T7.5 Gate: final report · doing → H4
 - Lane: bench · Depends: T7.1, T7.2, T7.3, T7.4
 - Owns: `docs/canvas-report.md`
 - Do: measure B1 to B10 on the reference machine at 100% and 125%, plus every invariant
