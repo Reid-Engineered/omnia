@@ -29,5 +29,7 @@ pub mod run;
 pub use run::{Anchor, Boundary, Run};
 pub mod follow;
 pub use follow::{FollowError, FollowPlan, Isometry, RunFate, plan_follow};
+pub mod spice_screen;
+pub use spice_screen::{ScreenError, screen_embedded, subckt_ports};
 pub mod units;
 pub use units::{FiniteF64, ValueError, parse_value};
