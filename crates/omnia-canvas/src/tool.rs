@@ -375,8 +375,20 @@ impl ToolMachine {
 
     /// Installs a wire-tool preview directly (golden rendering / programmatic inspection, T6.2).
     pub(crate) fn set_wire_preview(&mut self, gesture: WireGesture) {
-        self.tool = Tool::Wire;
+        self.set_tool(Tool::Wire);
         self.state = ToolState::Wiring(gesture);
+    }
+
+    /// Re-evaluates the live wire tool's WD5 snap target against `doc` at `raw_at` and
+    /// `snap_radius` without moving the pointer (called on camera or document changes so the snap
+    /// marker never goes stale, T6.2, WD5).
+    pub(crate) fn refresh_wire_snap(&mut self, doc: &Doc, raw_at: Pt, snap_radius: i32) -> bool {
+        match &mut self.state {
+            ToolState::Wiring(wire) => {
+                wire.update_cursor(Some(doc), raw_at, snap_radius, &mut self.scratch)
+            }
+            _ => false,
+        }
     }
 
     /// Space while wiring (T6.2, WD6): flips the active L-preview's first corner.
@@ -482,7 +494,7 @@ impl ToolMachine {
     /// left to selection (not `handled`). A press during a drag means its release was lost:
     /// the stale drag ends with no edit and the press is taken as a new one. `tolerance` is
     /// the K14 hit radius in nm; wiring derives the K14 snap radius as `tolerance * 5 / 2`
-    /// (`10 px / 4 px`). Call [`Self::pointer_down_with_snap`] when the exact camera-derived
+    /// (`10 px / 4 px`). Call [`Self::pointer_down_with_radii`] when the exact camera-derived
     /// [`snap_radius_nm`] is available.
     pub fn pointer_down(
         &mut self,
@@ -6653,15 +6665,144 @@ mod tests {
                 ..
             })
         ));
-        // Key-repeat (is_held = true) must not rapidly flip-flop the corner.
+        // Key-repeat (is_held = true) must neither flip-flop the corner nor arm Space-pan (P2 #1).
         cx.simulate_event(gpui::KeyDownEvent {
-            keystroke: space,
+            keystroke: space.clone(),
             is_held: true,
             prefer_character_input: false,
         });
         cx.run_until_parked();
+        assert!(!cx.update(|_, cx| canvas.read(cx).navigator().space_held()));
         assert!(matches!(
             cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                first_leg: Some(omnia_doc::route::Axis::Vertical),
+                ..
+            })
+        ));
+
+        // Releasing Space and leaving the active wire restores Space-pan.
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: space.clone(),
+        });
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_tool(Tool::Select, cx)));
+        cx.run_until_parked();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: space.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.run_until_parked();
+        assert!(cx.update(|_, cx| canvas.read(cx).navigator().space_held()));
+        cx.simulate_event(gpui::KeyUpEvent { keystroke: space });
+        cx.run_until_parked();
+        assert!(!cx.update(|_, cx| canvas.read(cx).navigator().space_held()));
+    }
+
+    /// T6.2 review P2 #2 & nit: camera changes (`set_camera`) and document edits (`on_doc_change`,
+    /// e.g. deleting a wire under the cursor) refresh the live WD5 snap marker without waiting for
+    /// a pointer move, and `OverlayView`'s own Space key-repeat ignores `is_held = true`.
+    #[gpui::test]
+    fn t6_2_snap_marker_refreshes_on_camera_and_doc_change(cx: &mut TestAppContext) {
+        let rig = open_del_rig(cx, t6_2_wire_doc(), false);
+        let (overlay, doc) = (rig.overlay.clone(), rig.doc.clone());
+
+        rig.cx.simulate_keystrokes("w");
+        // Hover over wire 3's interior at (6, -6) -> Snap::WireBody { wire: WireId(3), .. }.
+        move_to(&overlay, rig.cx, pt(6, -6));
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                snap: Some(omnia_doc::Snap::WireBody {
+                    wire: WireId(3),
+                    at,
+                }),
+                ..
+            }) if at == pt(6, -6)
+        ));
+
+        // Delete wire 3 in the document and deliver `on_doc_change`: stale WireBody refreshes to Grid.
+        let change = rig.cx.update(|_, cx| {
+            doc.update(cx, |d, _| {
+                d.apply(Command::Delete {
+                    items: vec![ItemId::Wire(WireId(3))],
+                    with_wires: false,
+                })
+                .unwrap()
+            })
+        });
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.on_doc_change(&change, cx));
+        });
+        rig.cx.run_until_parked();
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                snap: Some(omnia_doc::Snap::Grid(at)),
+                ..
+            }) if at == pt(6, -6)
+        ));
+
+        // Move 14 px right of R1's right pin (-4, 0) at 100% zoom -> outside 10 px radius -> Grid.
+        let pin1 = pt(-4, 0);
+        let screen_pin1 = screen(&overlay, rig.cx, pin1);
+        let offset_pos = gpui::point(screen_pin1.x + gpui::px(14.0), screen_pin1.y);
+        rig.cx
+            .simulate_mouse_move(offset_pos, None, Modifiers::none());
+        rig.cx.run_until_parked();
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                snap: Some(omnia_doc::Snap::Grid(_)),
+                ..
+            })
+        ));
+
+        // Pan the camera so `offset_pos` now sits right over pin1 without moving the mouse:
+        // `set_camera` refreshes the live snap marker to `Snap::Pin`.
+        let mut cam = rig.cx.update(|_, cx| overlay.read(cx).camera().clone());
+        cam.pan_by(gpui::point(14.0, 0.0));
+        rig.cx.update(|_, cx| {
+            overlay.update(cx, |o, cx| o.set_camera(cam, cx));
+        });
+        rig.cx.run_until_parked();
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                snap: Some(omnia_doc::Snap::Pin {
+                    part: PartId(0),
+                    pin: 1,
+                    at,
+                }),
+                ..
+            }) if at == pin1
+        ));
+
+        // OverlayView's own Space handler flips once on initial press and ignores key-repeat.
+        click_world(&overlay, rig.cx, pin1);
+        move_to(&overlay, rig.cx, pt(2, 2));
+        let space = gpui::Keystroke::parse("space").unwrap();
+        rig.cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: space.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        rig.cx.run_until_parked();
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                first_leg: Some(omnia_doc::route::Axis::Vertical),
+                ..
+            })
+        ));
+        rig.cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: space,
+            is_held: true,
+            prefer_character_input: false,
+        });
+        rig.cx.run_until_parked();
+        assert!(matches!(
+            rig.cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
             ToolState::Wiring(WireGesture {
                 first_leg: Some(omnia_doc::route::Axis::Vertical),
                 ..

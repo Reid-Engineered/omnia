@@ -749,12 +749,12 @@ impl ToolMachine {
     pub fn pointer_lost(&mut self) -> ToolOutcome;          // window deactivated
     pub fn hover(&mut self, item: Option<ItemId>) -> ToolOutcome;
     pub fn pointer_down(&mut self, doc: &Doc, doc_key: u64, at: Pt, tolerance: i32,
-                        selection: &[ItemId], shift: bool) -> ToolOutcome; // ends a stale drag
+                        selection: &[ItemId], shift: bool) -> ToolOutcome; // ends a stale drag; wiring uses tolerance*5/2 (100% K14 ratio)
     pub fn pointer_down_with_radii(&mut self, doc: &Doc, doc_key: u64, at: Pt, radii: PointerRadii,
-                                   selection: &[ItemId], shift: bool) -> ToolOutcome; // T6.2
+                                   selection: &[ItemId], shift: bool) -> ToolOutcome; // T6.2: live camera K14/WK4 radii
     pub fn pointer_move(&mut self, at: Pt, left_held: bool) -> ToolOutcome;
-    pub fn pointer_move_with_doc(&mut self, doc: &Doc, at: Pt, left_held: bool) -> ToolOutcome; // W3.3
-    pub fn pointer_move_with_snap(&mut self, doc: &Doc, at: Pt, snap_radius: i32, left_held: bool) -> ToolOutcome; // T6.2
+    pub fn pointer_move_with_doc(&mut self, doc: &Doc, at: Pt, left_held: bool) -> ToolOutcome; // W3.3; wiring defaults to 100% K14 radius (PIN_LATTICE_NM)
+    pub fn pointer_move_with_snap(&mut self, doc: &Doc, at: Pt, snap_radius: i32, left_held: bool) -> ToolOutcome; // T6.2: live camera K14/WK4 snap radius
     pub fn pointer_up(&mut self, at: Pt, alt: bool) -> ToolOutcome; // alt: WK3 at commit
     pub fn pointer_up_with_doc(&mut self, doc: &Doc, at: Pt, alt: bool) -> ToolOutcome;       // W3.3
     pub fn flip_wire_corner(&mut self) -> ToolOutcome;    // T6.2: Space while wiring (WD6)
@@ -976,11 +976,12 @@ Preconditions of the public canvas API. INV5 and INV11 remain the primary invari
 - **C3.** A `SheetCanvas` does not subscribe to its own history. (`subscribe_history` reads the
   canvas's current document key from a shared `Rc<Cell<Option<u64>>>` rather than re-borrowing
   the emitting entity, so self-subscription never triggers a GPUI double-borrow panic.)
-- **C4.** Every gesture (drag, rubber band, pending place/wire press) ends by exactly one of:
-  commit to its own document at its stamped revision while it still holds capture, or end with
-  no edit. Either way it releases the capture it took, in the window it took it in, and never
-  a newer capture. Enforced structurally by a `{ window, hitbox, generation }` capture record
-  and a single `OverlayView::end_gesture` path.
+- **C4.** Every pointer-captured or pending gesture (drag, rubber band, pending place press) ends
+  by exactly one of: commit to its own document at its stamped revision while it still holds
+  capture, or end with no edit. Either way it releases the capture it took, in the window it took
+  it in, and never a newer capture. Enforced structurally by a `{ window, hitbox, generation }`
+  capture record and a single `OverlayView::end_gesture` path. (`Tool::Wire` takes no pointer
+  capture and commits each segment on left press; Esc drops the active chain origin.)
 
 Bench command line. Every subcommand exits by itself and takes `--json <file>`.
 

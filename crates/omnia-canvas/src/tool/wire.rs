@@ -26,12 +26,14 @@ use omnia_doc::{
 pub const SNAP_RADIUS_PX: f64 = 10.0;
 
 /// Converts [`SNAP_RADIUS_PX`] (K14, WK4) into an inclusive nanometre snap radius at `camera`'s
-/// current scale.
+/// current scale (matching `hit_tolerance_nm`'s ceiling rounding while staying exact at rational
+/// zoom steps such as 25%, 100%, and 800%).
 pub fn snap_radius_nm(camera: &Camera) -> i32 {
-    let scale = camera.scale();
-    debug_assert!(scale.is_finite() && scale > 0.0);
-    (SNAP_RADIUS_PX / scale)
-        .round()
+    let zoom = camera.zoom();
+    debug_assert!(zoom.is_finite() && zoom > 0.0);
+    // K3: 20 logical px per GRID_NM at 100% zoom, so 10 px / scale == (10 * GRID_NM) / (20 * zoom).
+    ((SNAP_RADIUS_PX * f64::from(GRID_NM)) / (20.0 * zoom))
+        .ceil()
         .clamp(0.0, f64::from(i32::MAX)) as i32
 }
 

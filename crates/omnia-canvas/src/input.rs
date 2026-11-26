@@ -239,6 +239,9 @@ pub struct SheetCanvas {
     current_doc_key: Rc<Cell<Option<u64>>>,
     sheet_doc: Option<SheetDocument>,
     nav: Navigator,
+    /// T6.2: Space press was consumed to flip the wire corner; suppress key-repeat from arming
+    /// Space-pan until Space is released (WK3).
+    space_consumed_by_wire: bool,
     /// T5.2: the gesture owner. Tool, cancel, undo and redo go to it (`set_overlay`).
     overlay: Option<Entity<OverlayView>>,
     overlay_subscriptions: Vec<Subscription>,
@@ -279,6 +282,7 @@ impl SheetCanvas {
             current_doc_key,
             sheet_doc: None,
             nav: Navigator::default(),
+            space_consumed_by_wire: false,
             overlay: None,
             overlay_subscriptions: Vec::new(),
             place_provider: None,
@@ -709,12 +713,17 @@ impl Render for SheetCanvas {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "space" {
+                    if this.space_consumed_by_wire {
+                        cx.stop_propagation();
+                        return;
+                    }
                     if !event.is_held
                         && !event.keystroke.modifiers.modified()
                         && this.gesture_owner(cx).is_some_and(|overlay| {
                             overlay.update(cx, |o, cx| o.flip_wire_corner(cx))
                         })
                     {
+                        this.space_consumed_by_wire = true;
                         cx.stop_propagation();
                         return;
                     }
@@ -724,6 +733,7 @@ impl Render for SheetCanvas {
             }))
             .on_key_up(cx.listener(|this, event: &KeyUpEvent, _, cx| {
                 if event.keystroke.key == "space" {
+                    this.space_consumed_by_wire = false;
                     this.nav.set_space(false);
                     cx.stop_propagation();
                 }

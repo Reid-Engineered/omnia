@@ -315,6 +315,9 @@ pub struct OverlayView {
     net_highlight: NetHighlight,
     focus: FocusHandle,
     viewport: Bounds<Pixels>,
+    /// Last pointer screen position over the sheet (logical px) so camera or document edits can
+    /// refresh the live wire-tool WD5 snap target without waiting for a mouse move (T6.2).
+    pointer_screen: Option<gpui::Point<f64>>,
     anim: Option<ViewAnimation>,
     renders: u64,
     paints: Rc<Cell<u64>>,
@@ -363,6 +366,7 @@ impl OverlayView {
             net_highlight: NetHighlight::new(),
             focus: cx.focus_handle(),
             viewport: Bounds::default(),
+            pointer_screen: None,
             anim: None,
             renders: 0,
             paints: Rc::new(Cell::new(0)),
@@ -710,6 +714,24 @@ impl OverlayView {
         self.animate_to(target, cx);
     }
 
+    /// Re-evaluates the live wire tool's WD5 snap marker against the current camera and document
+    /// (called on camera changes and document edits so the marker never goes stale, T6.2, WD5).
+    fn refresh_wire_snap(&mut self, cx: &App) -> bool {
+        let tool::ToolState::Wiring(wire) = *self.tools.state() else {
+            return false;
+        };
+        let raw_world = self
+            .pointer_screen
+            .map(|p| self.camera.screen_to_world(p))
+            .or_else(|| wire.target_point());
+        let Some(raw_world) = raw_world else {
+            return false;
+        };
+        let snap_radius = tool::snap_radius_nm(&self.camera);
+        self.tools
+            .refresh_wire_snap(self.doc.read(cx), raw_world, snap_radius)
+    }
+
     /// Updates the camera and invalidates both the cached sheet and the overlay when changed (D7).
     pub fn set_camera(&mut self, camera: Camera, cx: &mut Context<Self>) {
         self.anim = None;
@@ -720,6 +742,7 @@ impl OverlayView {
             return;
         }
         self.camera = camera.clone();
+        self.refresh_wire_snap(cx);
         self.sheet.update(cx, |sheet, cx| {
             sheet.camera = camera;
             cx.notify();
@@ -777,6 +800,9 @@ impl OverlayView {
             && !item_exists(self.doc.read(cx), item)
         {
             self.tools.hover(None);
+        }
+        if self.refresh_wire_snap(cx) {
+            update.visual_changed = true;
         }
         if self.sync_net_highlight(cx) {
             update.visual_changed = true;
@@ -1036,7 +1062,9 @@ impl OverlayView {
             self.end_gesture(GestureEndReason::FreshPress, Some(window), Some(cx));
         }
         // T5.2: the tool sees the press first; a press it leaves goes to selection.
-        let world = self.camera.screen_to_world(to_f64(event.position));
+        let screen_pos = to_f64(event.position);
+        self.pointer_screen = Some(screen_pos);
+        let world = self.camera.screen_to_world(screen_pos);
         let radii = tool::PointerRadii {
             hit: hit_tolerance_nm(&self.camera),
             snap: tool::snap_radius_nm(&self.camera),
@@ -1106,7 +1134,9 @@ impl OverlayView {
             // T5.2: a gesture holds the pointer; hover and selection wait for it to end.
             self.viewport = bounds;
             self.camera.set_viewport(bounds);
-            let world = self.camera.screen_to_world(to_f64(event.position));
+            let screen_pos = to_f64(event.position);
+            self.pointer_screen = hovered.then_some(screen_pos);
+            let world = self.camera.screen_to_world(screen_pos);
             let left_held = event.pressed_button == Some(MouseButton::Left);
             if self.tools.holds_capture() && (!owns_capture || !left_held) {
                 let reason = if hovered {
@@ -1161,6 +1191,7 @@ impl OverlayView {
         let update = run_omnia(scope.as_deref(), || {
             self.viewport = bounds;
             self.camera.set_viewport(bounds);
+            self.pointer_screen = hovered.then(|| to_f64(event.position));
             let doc = self.doc.read(cx);
             let update = self.state.mouse_move(doc, &self.camera, event);
             if update.visual_changed || update.selection_changed {
@@ -1175,6 +1206,7 @@ impl OverlayView {
     }
 
     fn on_mouse_leave(&mut self, cx: &mut Context<Self>) {
+        self.pointer_screen = None;
         if self.tools.routes_pointer() {
             return;
         }

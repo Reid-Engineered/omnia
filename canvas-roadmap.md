@@ -604,7 +604,9 @@ of the `canvas` lane.
 
 ### T6.2 Wire tool · done
 - Lane: canvas · Depends: T5.4, T6.1 · Read: K14, D7, wiring-plan.md WD5, WD6
-- Owns: `crates/omnia-canvas/src/tool/wire.rs`, `overlay/snap_marker.rs`
+- Owns: `crates/omnia-canvas/src/tool/wire.rs`, `overlay/snap_marker.rs`, plus integration hooks
+  in `crates/omnia-canvas/src/{tool.rs,overlay.rs,input.rs}`, `tests/golden/tests/overlay.rs`
+  (and its wire/snap golden PNGs), and `canvas-plan.md` §9
 - Do: W starts wiring; an L-shaped preview follows the cursor with its first corner chosen
   per WD6 (Space flips the corner); the snap target (pin, wire end, junction, wire body per
   WD5) is marked in `stage/snap` before the click; click commits the segment and continues
@@ -2511,3 +2513,16 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        `cargo clippy -p omnia-bench --all-targets --features scene-counts,readback -- -D warnings`,
                        `cargo test --workspace`, `cargo deny check`, `git diff --check`, and
                        Rule-1 scan.
+2026-11-25  T6.2 review fixes  done  Addressed independent review findings on PR #147
+                       (`claude-opus-5-5`, verdict approve, 0 P0/P1, 3 P2 + nits): guarded
+                       `SheetCanvas` Space key-repeat (`space_consumed_by_wire`) so holding Space
+                       after a wire-corner flip never arms Space-pan until key-up; tracked
+                       `OverlayView::pointer_screen` and added `refresh_wire_snap` on
+                       `set_camera` and `on_doc_change` so WD5 snap markers never go stale across
+                       pan/zoom or undo/delete; recorded integration hooks on T6.2's Owns line;
+                       fixed the `pointer_down_with_radii` doc link, used exact ceiling rounding
+                       in `snap_radius_nm` (matching `hit_tolerance_nm` and `WK4`), aligned
+                       concentric snap-marker device-pixel parity (`match_parity`) and refreshed
+                       the affected fractional-scale overlay goldens, routed `set_wire_preview`
+                       through `set_tool(Tool::Wire)`, updated `canvas-plan.md` §9/C4 wording,
+                       and added regression tests for Space repeat and camera/doc snap refresh.

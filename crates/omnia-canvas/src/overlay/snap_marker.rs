@@ -85,6 +85,17 @@ fn wire_bounds(wire: Wire) -> Rect {
     }
 }
 
+/// Adjusts `size_dev` by at most `+1` device pixel so its parity matches `reference_dev`,
+/// keeping concentric markers centred on the exact same device pixel at fractional scale factors.
+#[inline]
+fn match_parity(size_dev: u32, reference_dev: u32) -> u32 {
+    if size_dev % 2 == reference_dev % 2 {
+        size_dev
+    } else {
+        size_dev.saturating_add(1)
+    }
+}
+
 /// Circle stroke/fill parameters for [`paint_circle`].
 #[derive(Clone, Copy)]
 struct CircleStyle {
@@ -208,18 +219,27 @@ pub(super) fn paint_wire_preview(
 
     let pin_ring_dev = stroke_device_px(PIN_RING_DIAMETER_PX, params.sf);
     let pin_stroke_dev = stroke_device_px(PIN_RING_STROKE_PX, params.sf);
-    let pin_dot_dev = stroke_device_px(PIN_CENTER_DOT_PX, params.sf);
+    let pin_dot_dev = match_parity(stroke_device_px(PIN_CENTER_DOT_PX, params.sf), pin_ring_dev);
 
     let end_square_dev = stroke_device_px(WIRE_END_SQUARE_PX, params.sf);
     let end_stroke_dev = stroke_device_px(WIRE_END_STROKE_PX, params.sf);
 
     let junc_ring_dev = stroke_device_px(JUNCTION_OUTER_RING_PX, params.sf);
     let junc_stroke_dev = stroke_device_px(JUNCTION_RING_STROKE_PX, params.sf);
-    let junc_dot_dev = stroke_device_px(JUNCTION_INNER_DOT_PX, params.sf);
+    let junc_dot_dev = match_parity(
+        stroke_device_px(JUNCTION_INNER_DOT_PX, params.sf),
+        junc_ring_dev,
+    );
 
     let body_span_dev = stroke_device_px(WIRE_BODY_CROSS_SPAN_PX, params.sf);
-    let body_stroke_dev = stroke_device_px(WIRE_BODY_CROSS_STROKE_PX, params.sf);
-    let body_halo_dev = stroke_device_px(WIRE_BODY_HALO_PX, params.sf);
+    let body_stroke_dev = match_parity(
+        stroke_device_px(WIRE_BODY_CROSS_STROKE_PX, params.sf),
+        body_span_dev,
+    );
+    let body_halo_dev = match_parity(
+        stroke_device_px(WIRE_BODY_HALO_PX, params.sf),
+        body_span_dev,
+    );
 
     let grid_dot_dev = stroke_device_px(GRID_DOT_PX, params.sf);
     let start_dot_dev = stroke_device_px(START_ANCHOR_PX, params.sf);
