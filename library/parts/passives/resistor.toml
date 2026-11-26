@@ -1,0 +1,41 @@
+schema = 1
+id = "resistor"
+name = "Resistor"
+category = "Passives"
+description = "Ideal linear two-terminal resistor"
+tags = ["passive", "resistor", "linear"]
+designator_prefix = "R"
+primary_param = "resistance"
+
+[symbol]
+builtin = "Resistor-IEEE-Standard"
+default = true
+
+[[pins]]
+number = "1"
+name = "a"
+role = "passive"
+
+[[pins]]
+number = "2"
+name = "b"
+role = "passive"
+
+[params.resistance]
+kind = "real"
+unit = "ohm"
+default = "10k"
+min = "1e-6"
+label = "Resistance"
+
+[params.tc1]
+kind = "real"
+unit = "1/K"
+default = "0"
+label = "Linear tempco"
+optional = true
+
+[sim]
+kind = "primitive"
+primitive = "resistor"
+pins = ["1", "2"]

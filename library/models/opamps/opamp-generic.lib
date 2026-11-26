@@ -1,0 +1,28 @@
+* Generic behavioural voltage-feedback operational amplifier macromodel
+* Authored for Omnia under CC0-1.0 (SPDX-License-Identifier: CC0-1.0)
+* Specs (SQ8): A_OL = 100k, GBW = 3 MHz, R_in = 1 MOhm, R_out = 75 Ohm,
+* diode rail clamp referenced to vcc/vee using R, C, E, G, D only.
+.model OPAMP_CLAMP D(IS=1e-12 N=1 RS=1)
+
+.subckt OPAMP_GENERIC inp inn vcc vee out
+* Mid-supply reference
+Rmid1 vcc mid 100k
+Rmid2 mid vee 100k
+* Differential and common-mode input impedance
+Rin inp inn 1e6
+Ricm1 inp mid 1e9
+Ricm2 inn mid 1e9
+* Dominant-pole gain stage: gm = 1 mS, Rgain = 100 MOhm -> A_OL = 1e5,
+* f_p = 30 Hz -> Cgain = 53.0516 pF -> GBW = 3 MHz
+G1 mid gain inp inn 1e-3
+Rgain gain mid 1e8
+Cgain gain mid 53.0516e-12
+* Supply-referenced rail clamps
+Ehi vhi mid vcc mid 0.9
+Elo vlo mid vee mid 0.9
+Dcp gain vhi OPAMP_CLAMP
+Dcn vlo gain OPAMP_CLAMP
+* Buffered output stage with 75 Ohm output resistance
+Eout out_int mid gain mid 1.0
+Rout out_int out 75
+.ends OPAMP_GENERIC

@@ -1,0 +1,47 @@
+schema = 1
+id = "potentiometer"
+name = "Potentiometer"
+category = "Passives"
+description = "Three-terminal linear potentiometer"
+tags = ["passive", "resistor", "potentiometer", "variable"]
+designator_prefix = "R"
+primary_param = "resistance"
+
+[symbol]
+builtin = "Resistor-IEEE-Potentiometer"
+default = true
+
+[[pins]]
+number = "1"
+name = "a"
+role = "passive"
+
+[[pins]]
+number = "2"
+name = "b"
+role = "passive"
+
+[[pins]]
+number = "3"
+name = "wiper"
+role = "passive"
+
+[params.resistance]
+kind = "real"
+unit = "ohm"
+default = "20k"
+min = "1e-6"
+label = "Total resistance"
+
+[params.wiper]
+kind = "real"
+unit = "ratio"
+default = "0.5"
+min = "0"
+max = "1"
+label = "Wiper position"
+
+[sim]
+kind = "primitive"
+primitive = "potentiometer"
+pins = ["1", "2", "3"]

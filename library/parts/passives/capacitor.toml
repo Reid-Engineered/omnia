@@ -1,0 +1,41 @@
+schema = 1
+id = "capacitor"
+name = "Capacitor"
+category = "Passives"
+description = "Ideal linear two-terminal non-polarized capacitor"
+tags = ["passive", "capacitor", "linear"]
+designator_prefix = "C"
+primary_param = "capacitance"
+
+[symbol]
+builtin = "Capacitor-IEEE-NonPolarized"
+default = true
+
+[[pins]]
+number = "1"
+name = "a"
+role = "passive"
+
+[[pins]]
+number = "2"
+name = "b"
+role = "passive"
+
+[params.capacitance]
+kind = "real"
+unit = "F"
+default = "100n"
+min = "1e-18"
+label = "Capacitance"
+
+[params.ic]
+kind = "real"
+unit = "V"
+default = "0"
+label = "Initial voltage"
+optional = true
+
+[sim]
+kind = "primitive"
+primitive = "capacitor"
+pins = ["1", "2"]

@@ -1,0 +1,20 @@
+schema = 1
+id = "ground"
+name = "Ground"
+category = "Sources"
+description = "Reference ground node (SPICE node 0)"
+tags = ["ground", "reference", "power"]
+
+[symbol]
+builtin = "Ground-COM-General"
+default = true
+
+[[pins]]
+number = "1"
+name = "gnd"
+role = "ground"
+
+[sim]
+kind = "primitive"
+primitive = "ground"
+pins = ["1"]

@@ -6586,6 +6586,8 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "omnia-doc",
+ "omnia-parts",
+ "omnia-symbols",
  "serde_json",
  "toml 1.2.1+spec-1.1.0",
  "usvg",

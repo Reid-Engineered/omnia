@@ -67,6 +67,8 @@ pub const SYMBOL_CATALOG: &[(&str, &str, &str)] = &[
     ("IC-COM-OpAmp", "analog", "Op-amp"),
     ("Resistor-IEEE-Potentiometer", "basic", "Potentiometer"),
     ("Resistor-IEEE-Standard", "basic", "Resistor"),
+    ("Source-COM-AC", "sources", "Voltage source (AC)"),
+    ("Source-COM-DC", "sources", "Voltage source (DC)"),
 ];
 
 /// The category id and display name of `def` ([`SYMBOL_CATALOG`], else the fallback).
@@ -894,13 +896,15 @@ mod tests {
 
     /// Debug selector of a symbol row in a category popover.
     fn row_selector(symbol: SymbolId) -> &'static str {
-        const ROWS: [&str; 6] = [
+        const ROWS: [&str; 8] = [
             "picker-place-0",
             "picker-place-1",
             "picker-place-2",
             "picker-place-3",
             "picker-place-4",
             "picker-place-5",
+            "picker-place-6",
+            "picker-place-7",
         ];
         ROWS[symbol.index()]
     }
