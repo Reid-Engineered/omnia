@@ -658,7 +658,7 @@ of the `canvas` lane.
   `bench run --sheet 10k --script pan --instrument` gives p99 < 16 ms on the reference
   machine (otherwise record; then measure again at 30 Hz).
 
-### T7.4 Scale-factor changes · todo
+### T7.4 Scale-factor changes · done
 - Lane: canvas · Depends: T6.4 · Read: plan section 11, T0.4's S8 result
 - Owns: `crates/omnia-canvas/src/sheet.rs` (cache keys only)
 - Do: when the window's scale factor changes, drop the size-keyed caches and repaint.
@@ -2590,3 +2590,20 @@ D4's Plan B fallback awaits the owner. Evidence: [T2.7](docs/measurements/T2.7.m
                        and archived a later post-test governor/source check. Existing
                        Linux-only unused window warning in spike/shell_cache.rs:1657
                        is a separate fix follow-up; no code changed for this gate.
+2026-11-26 T7.4 done — Audited all scale-factor caches across `sheet.rs` and
+                       `sheet/{lod,symbols,text,wires}.rs` (`S8`, `D4`, `D6`, `G12`, `G15`):
+                       confirmed no Omnia-side cache retains stale scale-dependent state
+                       (`Scratch` refills per frame, `MergedSegments` stores world nm,
+                       `symbols::Masks` keys by live device-pixel bucket, `TextCache` keys
+                       `ShapedLine`s in logical units with GPUI keying rasterized glyphs by
+                       `scale_factor`, and `Window::set_scale_factor` calls `refresh()` so
+                       `.cached()` `CachedSheet` repaints automatically). Dropped the no-op
+                       cache reset and `wires.rs` helper; kept regression tests in `sheet.rs`
+                       (`t7_4_scale_factor_change_matches_fresh_cache_and_preserves_b10`,
+                       `t7_4_cached_sheet_repaints_on_scale_factor_change`) and
+                       `crates/omnia-canvas/tests/scale_factor.rs` (`Cargo.toml`) proving exact
+                       `render_to_image` parity (`1.25 -> 1.5` vs a true fresh `1.5` window
+                       across near/far zoom and `OverlayView`), `CachedSheet` repaint without
+                       manual notify, `INV11`, and `B10` (`0` warm Omnia heap allocs at `1.25`
+                       and `1.5`, with `TestScope::gpui` separated) on Windows dev hardware
+                       (non-reference, `Q4`).
