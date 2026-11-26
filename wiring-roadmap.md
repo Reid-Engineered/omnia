@@ -291,9 +291,16 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   and undo restores it exactly (WINV4); a refused drag returns the `Blocker` and changes
   nothing.
 
-### W3.3 Segment drag tool · todo
+### W3.3 Segment drag tool · done
 - Lane: canvas · Depends: W3.2, T5.3 · Read: WD7, WD11
-- Owns: `crates/schematic-canvas/src/tool/segment.rs`
+- Owns: `crates/schematic-canvas/src/tool/segment.rs` (widened 2026-11-25 for integration hooks:
+  `mod segment;` and `DraggingSegment` dispatch/tests in `crates/omnia-canvas/src/tool.rs`,
+  segment-drag hidden-item sync/preview/C4 dispatch in `crates/omnia-canvas/src/overlay.rs`,
+  segment-drag accepted/refused/`Blocker` ghost rendering in
+  `crates/omnia-canvas/src/overlay/ghosts.rs`, the `drag-segment` bench script in
+  `crates/omnia-bench/src/{drag_segment.rs,driver.rs,harness.rs,lib.rs,main.rs,scripts.rs}`,
+  and the refused-state golden case/PNGs in `tests/golden/tests/overlay.rs` and
+  `tests/golden/overlay-segment-drag-refused-*.png`)
 - Do: dragging one selected wire segment in the select tool starts a segment drag, not a
   move; the overlay shows the planned wires; a refusal shows `mark/conflict` and the
   outlined blocker; Esc cancels. Add the `drag-segment` bench script.
@@ -878,3 +885,28 @@ pre- and post-Delete fixture points (N1); tightened `tc_del_02_*` to assert surv
 and labels match `original` by id and value (N2); added `w3_5_direct_delete_request_is_ignored_during_active_gestures`
 and `w3_5_delete_is_ignored_during_rubber_band_drag`; removed the attribution footer from PR
 #139 (B4). Local checks passed (recorded in PR #139).
+
+2026-11-25 W3.3 done — implemented the segment drag tool (`WD7`, `WD11`, `WINV3`, `WINV4`,
+`INV5`, `INV6`, `INV11`). Added `crates/omnia-canvas/src/tool/segment.rs` with
+`SegmentDragGesture`, `SegmentPreview`, and perpendicular `GRID_NM`-snapped `segment_offset`.
+Widened ownership beyond `tool/segment.rs` (recorded in **Owns** above): `tool.rs` (`mod segment;`,
+`ToolState::DraggingSegment`, `pointer_move_with_doc`, `pointer_up_with_doc`, single-wire segment
+drag dispatch, and simulated-input GPUI tests), `overlay.rs` (lift-off hiding of the dragged
+segment plus directly attached corner neighbours so `SheetView` paints exactly twice per drag
+even across accepted/zero/shrink-to-zero/refused transitions, `set_segment_drag_preview`, and C4
+gesture-end routing), `overlay/ghosts.rs` (`GhostPreview::Segment` rendering planned wires or
+`mark/conflict` attempted wires plus outlined `Blocker::{Pin,WireEnd,WireBody,Overlap}` using
+`omnia-theme` tokens only, with zero warm Omnia allocations verified in B10 test), `omnia-bench`
+(`drag_segment.rs`, `driver.rs`, `harness.rs`, `lib.rs`, `main.rs`, `scripts.rs` adding
+`--script drag-segment` for native and headless runs), and `tests/golden/tests/overlay.rs` plus
+six `overlay-segment-drag-refused-{graphite,gray}-{100,125,150}.png` goldens (all 30 overlay
+goldens match with 0 pixel differences on Windows; tolerances unchanged). Two pre-W3.3 wire-drag
+tests in `tool.rs` were updated to reflect W3.3's single-wire dispatch without weakening
+assertions (`t5_2_a_drag_does_not_survive_a_document_swap` now verifies `DraggingSegment` on
+`WireId(0)`, and `t5_3_r_x_y_during_a_drag_commit_one_transform` uses a two-item selection
+`[WireId(1), LabelId(0)]` sharing the same `(3, 2)` pivot). Headless Windows diagnostic smoke
+(`bench run --sheet dense --script drag-segment --frames 20 --warmup 5 --headless`, non-reference):
+`sheet_paints: 0`, `press_sheet_paints: 0`, `lift_sheet_paints: 1`, `mismatches: 0`,
+`revision_changes: 0`, `allocs_per_frame.ours.max: 0.0`. No `omnia-doc` signatures changed; WB6
+remains to be certified on Orion at W3.7. All five standard checks, wiki unit tests,
+`git diff --check`, and Rule-1 scan pass locally on Windows.

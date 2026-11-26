@@ -27,7 +27,7 @@ use crate::{
 use gpui::{App, Bounds, Hsla, Pixels, Window, fill, point, px};
 use omnia_doc::{
     Doc, Isometry, ItemId, LabelId, Orient, PartId, Pt, Rect, SHEET_LIMIT_NM, SymbolId, Wire,
-    WireId,
+    WireId, route::Blocker,
 };
 use omnia_symbols::SymbolDef;
 use omnia_theme::Theme;
@@ -40,6 +40,14 @@ const ANCHOR_PIN_MARKER_PX: f64 = 5.0;
 const PIN_MARKER_PX: f64 = 3.5;
 /// Logical side of the anchor dot on a dragged net-label ghost.
 const LABEL_ANCHOR_DOT_PX: f64 = 3.0;
+/// Half-extent in logical px of the conflict outline around a blocking pin (`WD7`, `TC-seg-03`).
+const BLOCKER_PIN_HALF_PX: f64 = 6.0;
+/// Logical side of the center marker square on a blocking pin (`WD7`).
+const BLOCKER_PIN_DOT_PX: f64 = 4.0;
+/// Logical padding around a blocking wire segment (`WD7`).
+const BLOCKER_WIRE_PAD_PX: f64 = 4.0;
+/// Logical outline thickness for conflict blocker frames (`WD7`, `WD11`).
+const BLOCKER_OUTLINE_PX: f64 = 2.0;
 
 /// Ghost opacity factors applied to `omnia-theme` tokens (INV6).
 const GHOST_INK_ALPHA: f32 = 0.55;
@@ -64,6 +72,11 @@ pub(super) enum GhostPreview<'a> {
         items: &'a [ItemId],
         transform: Isometry,
     },
+    /// W3.3: planned or refused wire-segment drag preview (`WD7`, `WD11`).
+    Segment {
+        wires: &'a [Wire],
+        blocker: Option<Blocker>,
+    },
 }
 
 impl GhostPreview<'_> {
@@ -73,6 +86,7 @@ impl GhostPreview<'_> {
             Self::None => false,
             Self::Place { .. } => true,
             Self::Drag { items, .. } => !items.is_empty(),
+            Self::Segment { wires, blocker } => !wires.is_empty() || blocker.is_some(),
         }
     }
 }
@@ -407,7 +421,62 @@ fn paint_symbol_shape(
     }
 }
 
-/// Paints the active placement or drag-move ghost preview inside its own GPUI paint layers.
+/// Computes the device-pixel frame around a WD4 refusal blocker (plus the exact pin point when
+/// blocked by `Blocker::Pin`), allocating nothing (WD7, WD11, B10).
+fn blocker_dev_rect(
+    blocker: Blocker,
+    params: &GhostPaintParams<'_>,
+) -> Option<(super::DevRect, Option<Pt>)> {
+    match blocker {
+        Blocker::Pin { part, pin } => {
+            let at = *params.doc.pins(part)?.get(pin)?;
+            if !params.visible_padded.contains(at) {
+                return None;
+            }
+            label_rect_dev(
+                at,
+                BLOCKER_PIN_HALF_PX,
+                params.camera,
+                params.sf,
+                params.clip,
+            )
+            .map(|rect| (rect, Some(at)))
+        }
+        Blocker::WireEnd(id) | Blocker::WireBody(id) | Blocker::Overlap(id) => {
+            let wire = *params.doc.wire(id)?;
+            let bounds = wire_bounds(wire);
+            if !bounds.intersects(params.visible_padded) {
+                return None;
+            }
+            padded_rect_dev(
+                bounds,
+                BLOCKER_WIRE_PAD_PX,
+                params.camera,
+                params.sf,
+                params.clip,
+            )
+            .map(|rect| (rect, None))
+        }
+        Blocker::Sheet => None,
+    }
+}
+
+#[inline]
+fn wire_bounds(wire: Wire) -> Rect {
+    Rect {
+        min: Pt {
+            x: wire.a.x.min(wire.b.x),
+            y: wire.a.y.min(wire.b.y),
+        },
+        max: Pt {
+            x: wire.a.x.max(wire.b.x),
+            y: wire.a.y.max(wire.b.y),
+        },
+    }
+}
+
+/// Paints the active placement, drag-move, or segment-drag ghost preview inside its own GPUI paint
+/// layers.
 ///
 /// Must be called from `paint_overlay` inside its content-masked `run_gpui` block.
 pub(super) fn paint_ghosts(
@@ -428,6 +497,8 @@ pub(super) fn paint_ghosts(
     let wire_width_dev = stroke_device_px(wire_base_px, params.sf);
     let wire_halo_dev = stroke_device_px(wire_base_px + GHOST_WIRE_HALO_EXTRA_PX, params.sf);
     let outline_dev = stroke_device_px(SELECT_OUTLINE_PX, params.sf);
+    let blocker_outline_dev = stroke_device_px(BLOCKER_OUTLINE_PX, params.sf);
+    let blocker_pin_dot_dev = stroke_device_px(BLOCKER_PIN_DOT_PX, params.sf);
     let anchor_pin_dev = stroke_device_px(ANCHOR_PIN_MARKER_PX, params.sf);
     let pin_dev = stroke_device_px(PIN_MARKER_PX, params.sf);
     let label_dot_dev = stroke_device_px(LABEL_ANCHOR_DOT_PX, params.sf);
@@ -728,6 +799,93 @@ pub(super) fn paint_ghosts(
                                     params.scope,
                                 );
                             }
+                        }
+                    }
+                });
+            });
+        }
+        GhostPreview::Segment { wires, blocker } => {
+            let valid = blocker.is_none();
+            let halo_color = palette.wire_halo_for(valid);
+            let wire_color = palette.ink_for(valid);
+
+            // Layer 1: translucent wire halos and blocker highlight fill (`stage/select-halo` or
+            // `mark/conflict`, INV6).
+            window.paint_layer(|window| {
+                run_omnia(params.scope, || {
+                    for &wire in wires {
+                        if !wire_bounds(wire).intersects(params.visible_padded) {
+                            continue;
+                        }
+                        if let Some(rect) = wire_rect_dev(
+                            wire,
+                            params.camera,
+                            params.sf,
+                            wire_halo_dev,
+                            params.clip,
+                        ) {
+                            paint_quad_scoped(
+                                window,
+                                fill(rect.bounds(params.sf), halo_color),
+                                params.scope,
+                            );
+                        }
+                    }
+                    if let Some(blocker) = blocker
+                        && let Some((rect, _)) = blocker_dev_rect(blocker, params)
+                    {
+                        paint_quad_scoped(
+                            window,
+                            fill(rect.bounds(params.sf), palette.conflict_halo),
+                            params.scope,
+                        );
+                    }
+                });
+            });
+
+            // Layer 2: planned/attempted wire strokes and crisp blocker outline in `mark/conflict`
+            // (WD7, WD11, INV6).
+            window.paint_layer(|window| {
+                run_omnia(params.scope, || {
+                    for &wire in wires {
+                        if !wire_bounds(wire).intersects(params.visible_padded) {
+                            continue;
+                        }
+                        if let Some(rect) = wire_rect_dev(
+                            wire,
+                            params.camera,
+                            params.sf,
+                            wire_width_dev,
+                            params.clip,
+                        ) {
+                            paint_quad_scoped(
+                                window,
+                                fill(rect.bounds(params.sf), wire_color),
+                                params.scope,
+                            );
+                        }
+                    }
+                    if let Some(blocker) = blocker
+                        && let Some((rect, pin_at)) = blocker_dev_rect(blocker, params)
+                    {
+                        paint_solid_outline(
+                            rect,
+                            blocker_outline_dev,
+                            palette.conflict_outline,
+                            params.sf,
+                            params.scope,
+                            window,
+                        );
+                        if let Some(at) = pin_at {
+                            let screen = params.camera.world_to_screen(at);
+                            paint_quad_scoped(
+                                window,
+                                fill(
+                                    centered_square(screen, blocker_pin_dot_dev, params.sf),
+                                    palette.conflict_outline,
+                                ),
+                                params.scope,
+                            );
                         }
                     }
                 });
@@ -1046,6 +1204,7 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     enum OwnedPreview {
         None,
         Place {
@@ -1056,6 +1215,10 @@ mod tests {
         Drag {
             items: Vec<ItemId>,
             transform: Isometry,
+        },
+        Segment {
+            wires: Vec<Wire>,
+            blocker: Option<Blocker>,
         },
     }
 
@@ -1075,18 +1238,7 @@ mod tests {
                 camera: self.camera.clone(),
                 theme: self.theme,
                 masks: self.masks.clone(),
-                preview: match &self.preview {
-                    OwnedPreview::None => OwnedPreview::None,
-                    OwnedPreview::Place { symbol, at, orient } => OwnedPreview::Place {
-                        symbol: *symbol,
-                        at: *at,
-                        orient: *orient,
-                    },
-                    OwnedPreview::Drag { items, transform } => OwnedPreview::Drag {
-                        items: items.clone(),
-                        transform: *transform,
-                    },
-                },
+                preview: self.preview.clone(),
                 scope: self.scope.clone(),
             })
         }
@@ -1172,6 +1324,10 @@ mod tests {
                 OwnedPreview::Drag { items, transform } => GhostPreview::Drag {
                     items,
                     transform: *transform,
+                },
+                OwnedPreview::Segment { wires, blocker } => GhostPreview::Segment {
+                    wires,
+                    blocker: *blocker,
                 },
             };
             window.with_content_mask(Some(ContentMask { bounds }), |window| {
@@ -1420,6 +1576,10 @@ mod tests {
                                 items,
                                 transform: *transform,
                             },
+                            OwnedPreview::Segment { wires, blocker } => GhostPreview::Segment {
+                                wires,
+                                blocker: *blocker,
+                            },
                         };
                         window.with_content_mask(Some(ContentMask { bounds }), |window| {
                             paint_ghosts(preview, &params, window, cx);
@@ -1430,18 +1590,7 @@ mod tests {
                     doc: self.doc.clone(),
                     camera: self.camera.clone(),
                     masks: self.masks.clone(),
-                    preview: match &self.preview {
-                        OwnedPreview::None => OwnedPreview::None,
-                        OwnedPreview::Place { symbol, at, orient } => OwnedPreview::Place {
-                            symbol: *symbol,
-                            at: *at,
-                            orient: *orient,
-                        },
-                        OwnedPreview::Drag { items, transform } => OwnedPreview::Drag {
-                            items: items.clone(),
-                            transform: *transform,
-                        },
-                    },
+                    preview: self.preview.clone(),
                     scope: self.scope.clone(),
                 })
             }
@@ -1532,6 +1681,69 @@ mod tests {
             alloc_scope.omnia_allocs.get(),
             0,
             "B10: warm Drag ghost paint must not allocate in omnia code"
+        );
+
+        // Warm Segment drag preview path (accepted + every Blocker kind), then assert 0 allocs.
+        let seg_wires = vec![
+            Wire {
+                a: Pt {
+                    x: 0,
+                    y: 2 * GRID_NM,
+                },
+                b: Pt {
+                    x: 6 * GRID_NM,
+                    y: 2 * GRID_NM,
+                },
+            },
+            Wire {
+                a: Pt {
+                    x: 0,
+                    y: 2 * GRID_NM,
+                },
+                b: Pt {
+                    x: 0,
+                    y: 4 * GRID_NM,
+                },
+            },
+        ];
+        view.update(cx, |v, cx| {
+            v.preview = OwnedPreview::Segment {
+                wires: seg_wires.clone(),
+                blocker: None,
+            };
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        alloc_scope.omnia_allocs.set(0);
+        alloc_scope.omnia_calls.set(0);
+        alloc_scope.counting.set(true);
+        for blocker in [
+            None,
+            Some(Blocker::Pin {
+                part: PartId(0),
+                pin: 0,
+            }),
+            Some(Blocker::WireEnd(WireId(0))),
+            Some(Blocker::WireBody(WireId(0))),
+            Some(Blocker::Overlap(WireId(0))),
+            Some(Blocker::Sheet),
+        ] {
+            view.update(cx, |v, cx| {
+                v.preview = OwnedPreview::Segment {
+                    wires: seg_wires.clone(),
+                    blocker,
+                };
+                cx.notify();
+            });
+            cx.run_until_parked();
+        }
+        alloc_scope.counting.set(false);
+        assert!(alloc_scope.omnia_calls.get() >= 12);
+        assert_eq!(
+            alloc_scope.omnia_allocs.get(),
+            0,
+            "B10: warm Segment drag preview paint (accepted and refused) must not allocate"
         );
 
         // Far-zoom LOD box path for both Drag and Place.
