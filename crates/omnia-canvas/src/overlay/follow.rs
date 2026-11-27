@@ -250,11 +250,12 @@ pub(super) fn paint_follow_preview(
             }
             paint_junction_dots(data.preview_junctions, full_ink, params, window, cx);
             if !is_refused {
-                for &(_, moved_at) in data.plan_labels_sorted {
+                for &(id, moved_at) in data.plan_labels_sorted {
+                    let in_bounds = moved_at.is_in_bounds();
                     paint_ghost_label_fg(
                         GhostLabel {
                             at: moved_at,
-                            in_bounds: moved_at.is_in_bounds(),
+                            in_bounds,
                         },
                         sizes.outline_dev,
                         sizes.label_dot_dev,
@@ -262,6 +263,21 @@ pub(super) fn paint_follow_preview(
                         palette,
                         window,
                     );
+                    if let Some(text_cache) = params.text_cache {
+                        text_cache.borrow_mut().paint_net_label_at(
+                            id,
+                            moved_at,
+                            crate::sheet::text::NetLabelPaint {
+                                doc: params.doc,
+                                camera: params.camera,
+                                viewport: params.bounds,
+                                scale_factor: params.sf,
+                                color: palette.ink_for(in_bounds),
+                            },
+                            window,
+                            |work| run_gpui(params.scope, work),
+                        );
+                    }
                 }
             }
             for &id in data.affected_labels {
@@ -282,6 +298,21 @@ pub(super) fn paint_follow_preview(
                         ),
                         params.scope,
                     );
+                    if let Some(text_cache) = params.text_cache {
+                        text_cache.borrow_mut().paint_net_label_at(
+                            id,
+                            label.at,
+                            crate::sheet::text::NetLabelPaint {
+                                doc: params.doc,
+                                camera: params.camera,
+                                viewport: params.bounds,
+                                scale_factor: params.sf,
+                                color: ink_secondary,
+                            },
+                            window,
+                            |work| run_gpui(params.scope, work),
+                        );
+                    }
                 }
             }
             paint_drag_items_fg(
@@ -760,14 +791,15 @@ mod tests {
         });
         let overlay = host.read_with(cx, |h, _| h.0.clone());
 
-        // Warm non-rigid drag of only `R1`: reroutes the L-run, moves `corner_lid` to (4, 2)
-        // and moves `pin_lid` with R1's right pin to (-3, 2).
+        // Warm non-rigid drag of only `R1`: reroutes the L-run, hides both `corner_lid` and
+        // `pin_lid` in `SheetView`, moves `corner_lid` to (4, 2) and `pin_lid` with R1's right
+        // pin to (-3, 2), and paints their cached text in the overlay.
         overlay.update(cx, |o, cx| {
             assert!(o.set_move_preview([ItemId::Part(r1)], pt(1, 2), Orient::IDENTITY, false, cx));
             let crate::tool::ToolState::Dragging(drag) = o.tool_state() else {
                 panic!("expected Dragging");
             };
-            assert!(drag.affected_labels().is_empty());
+            assert_eq!(drag.affected_labels(), &[corner_lid, pin_lid]);
             assert_eq!(
                 drag.plan_labels_sorted(),
                 &[(corner_lid, pt(4, 2)), (pin_lid, pt(-3, 2))]

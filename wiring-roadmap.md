@@ -334,8 +334,11 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 ### W3.6 Labels ride their runs · done
 - Lane: doc, canvas · Depends: T7.2, W2.2 · Read: WD9, WINV9
 - Owns: `crates/schematic-doc/src/follow.rs` (label placement), `crates/schematic-canvas/src/tool/label.rs`
-  (split on placement), widened to `crates/omnia-canvas/src/overlay/follow.rs` (draw moved labels
-  in follow preview)
+  (split on placement), widened to `crates/omnia-doc/src/route.rs` (validate label-induced splits
+  during route candidate selection), `crates/omnia-canvas/src/{tool/move_.rs,sheet.rs,sheet/text.rs,
+  overlay.rs,overlay/ghosts.rs,overlay/follow.rs}` (hide affected run/pin labels at lift-off,
+  plan unwired pin-label drags, and paint moved/stationary label text with zero warm allocations),
+  and `wiring-plan.md` (W3.6 preview note)
 - Do: placing a label on a wire body splits the wire there; `plan_follow` fills
   `FollowPlan::labels` per WD9 and splits the new run at each label; the preview draws
   moved labels.
@@ -1002,3 +1005,20 @@ and `w3_6_b10_warm_rerouted_and_pin_label_follow_paint_makes_zero_omnia_allocati
 all-target `clippy -D warnings`, `omnia-bench` `--features scene-counts,readback`
 `clippy -D warnings`, `cargo test --workspace`, `cargo deny check`) and Rule-1 scan pass
 locally on Windows; no budgets certified or thresholds weakened.
+
+2026-11-26 W3.6 done (review of #160 addressed) — fixed all Sol 6.2 review findings: (B1)
+removed `tie_along` from `nearest_lattice_point_on_run` so reroute ties break strictly by
+Manhattan distance to unmoved end `b` then `(x, y)`, with dogleg regression
+`w3_6_b1_dogleg_tie_break_uses_coordinates_without_along_distance`; (B2) added
+`route_on_checked` in `crates/omnia-doc/src/route.rs` so rerouted runs with riding corner
+labels validate label-induced segment splits during WD4 candidate selection (rejecting
+candidates whose label split lands on a crossing foreign wire body), with regression
+`w3_6_b2_label_split_on_foreign_crossing_is_rejected_and_nets_stay_separate`; (B3)
+widened `affected_labels` in `tool/move_.rs` to collect all affected run corner labels
+(rigid and rerouted) plus moved-part pin labels at lift-off (`WINV11`), enabled
+`plan_follow` for unwired pin-label drags, and exposed `TextCache::paint_net_label_at` so
+`overlay/follow.rs` paints cached K8/K9/K11 label text for both moved and stationary
+hidden labels with zero warm Omnia allocations (`B10`), updating `wiring-plan.md` and
+tests in `tool/move_.rs` and `overlay/follow.rs`; (N1) strengthened the `WINV4` refusal
+check in `follow.rs` from `content_eq` to full `Doc` `PartialEq`. Merged `origin/main`
+(keeping `W3.1` and `W3.6` entries in order). All five standard checks pass locally.

@@ -126,6 +126,11 @@ impl SheetDocument {
     pub(crate) fn masks(&self) -> &symbols::Masks {
         &self.cache.masks
     }
+
+    /// Shared shaped-text cache for overlay label previews (W3.6, zero duplicate shaping/allocs).
+    pub(crate) fn text_cache(&self) -> &RefCell<text::TextCache> {
+        &self.cache.text
+    }
 }
 
 /// Zero-allocation membership test against a canonically sorted slice of hidden items (T5.3, B10).

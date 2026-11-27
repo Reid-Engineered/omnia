@@ -645,15 +645,15 @@ defines `FOLLOW_PREVIEW_CAP = 256` (`WK7`), `FollowPreview { None, Accepted, Ref
 `items ∪ affected_wires ∪ affected_labels` so `SheetView` paints strictly twice per drag
 per `WINV11`, caching `plan_follow` on `(delta, by, alt)` per `WD11`, skipping
 `plan_follow` at identity and above `FOLLOW_PREVIEW_CAP`, and exposing
-`preview_wires` / `preview_labels` / `preview_junctions`; `affected_labels` only collects
-corner labels on rigid-eligible runs (`Anchor::Boundary` at both ends), leaving labels on
-non-rigid runs unhidden in `SheetView` so their text remains visible). `overlay/follow.rs`
+`preview_wires` / `preview_labels` / `preview_junctions`; since W3.6 (2026-11-26),
+`affected_labels` collects every non-selected corner label on affected runs (rigid or rerouted)
+plus every non-selected pin-riding label on moved parts, hiding them at lift-off (`WINV11`) and
+calling `plan_follow` even when a drag has pin labels with no wires). `overlay/follow.rs`
 renders surviving wires and restored `K6` junction dots in `stage/ink`, `plan.add` wires in
-ghost ink + halo, moved rigid-run corner labels (`plan.labels` as outline + dot matching
-selected-label ghosts, with text rendering deferred to W3.6; or a stationary anchor dot
-when a rigid drag is refused/identity while hidden under `WINV11`), and refused ghosts +
-moved/stationary `Blocker` in `mark/conflict` with zero warm Omnia heap allocations
-(`B10`, `INV6`). Refusal on mouse-up cancels like `Esc` (`WINV4`) and `apply_change`
+ghost ink + halo, moved labels (`plan.labels` as outline + dot + cached K8/K9/K11 label text
+via `TextCache::paint_net_label_at`, or stationary anchor dot + text in `stage/ink-secondary`
+when detached/refused/identity while hidden under `WINV11`), and refused ghosts + moved/stationary
+`Blocker` in `mark/conflict` with zero warm Omnia heap allocations (`B10`, `INV6`). Refusal on mouse-up cancels like `Esc` (`WINV4`) and `apply_change`
 forwards move/transform/reorient commit refusals as `CanvasNotice` (`RefusalVerb`, via a
 separate `EventEmitter<CanvasNotice>` keeping `CanvasEvent` exhaustive matches intact),
 filtered under C2 on `SheetCanvas` (`last_notice`). Known `WINV5` boundary (P2-2): live

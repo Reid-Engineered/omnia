@@ -136,6 +136,7 @@ pub(super) struct GhostPaintParams<'a> {
     pub clip: (f64, f64, f64, f64),
     pub theme: &'static Theme,
     pub masks: &'a Masks,
+    pub text_cache: Option<&'a std::cell::RefCell<crate::sheet::text::TextCache>>,
     pub scope: Option<&'a dyn OverlayPaintScope>,
 }
 
@@ -1581,6 +1582,7 @@ mod tests {
                 clip,
                 theme: self.theme,
                 masks: &self.masks,
+                text_cache: None,
                 scope: Some(self.scope.as_ref()),
             };
             let preview = match &self.preview {
@@ -1837,6 +1839,7 @@ mod tests {
                             clip,
                             theme: &GRAPHITE,
                             masks: &self.masks,
+                            text_cache: None,
                             scope: Some(self.scope.as_ref()),
                         };
                         let preview = match &self.preview {
@@ -2354,6 +2357,7 @@ mod tests {
                             clip: clip_dev,
                             theme: &GRAPHITE,
                             masks: &self.masks,
+                            text_cache: None,
                             scope: Some(self.scope.as_ref()),
                         };
                         let preview = match &self.preview {

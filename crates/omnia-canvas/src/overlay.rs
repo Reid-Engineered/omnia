@@ -122,6 +122,11 @@ impl CachedSheet {
         self.document.as_ref().map(SheetDocument::masks)
     }
 
+    /// Shared shaped-text cache from the cached document for overlay label text (W3.6).
+    pub(crate) fn text_cache(&self) -> Option<&std::cell::RefCell<crate::sheet::text::TextCache>> {
+        self.document.as_ref().map(SheetDocument::text_cache)
+    }
+
     /// Currently hidden dragged items, if any (T5.3 tests).
     #[cfg(test)]
     pub(crate) fn hidden_items(&self) -> &[ItemId] {
@@ -2083,6 +2088,7 @@ impl Element for OverlayLayer {
                     sf,
                     theme: self.theme,
                     masks: sheet.masks(),
+                    text_cache: sheet.text_cache(),
                     scope,
                 };
                 paint_overlay(
@@ -2495,6 +2501,7 @@ struct OverlayPaintContext<'a> {
     sf: f32,
     theme: &'static Theme,
     masks: Option<&'a crate::sheet::symbols::Masks>,
+    text_cache: Option<&'a std::cell::RefCell<crate::sheet::text::TextCache>>,
     scope: Option<&'a dyn OverlayPaintScope>,
 }
 
@@ -2528,6 +2535,7 @@ fn paint_overlay(
         sf,
         theme,
         masks,
+        text_cache,
         scope,
     } = *ctx;
     let is_dragging_ghosts = matches!(
@@ -2913,6 +2921,7 @@ fn paint_overlay(
                     clip,
                     theme,
                     masks,
+                    text_cache,
                     scope,
                 };
                 ghosts::paint_ghosts(ghost_preview, &ghost_params, window, cx);

@@ -38,6 +38,15 @@ use crate::{
     snap_px::snap_logical,
 };
 
+/// Target parameters for [`TextCache::paint_net_label_at`] (`W3.6`).
+pub(crate) struct NetLabelPaint<'a> {
+    pub(crate) doc: &'a Doc,
+    pub(crate) camera: &'a Camera,
+    pub(crate) viewport: Bounds<Pixels>,
+    pub(crate) scale_factor: f32,
+    pub(crate) color: Hsla,
+}
+
 /// K8/Q3: part designator and value size at 100% zoom, in logical pixels.
 pub const PART_LABEL_PX: f64 = 17.0;
 /// K8: net label size at 100% zoom, in logical pixels.
@@ -590,6 +599,80 @@ impl TextCache {
                 });
             });
         });
+    }
+
+    /// Paints a single net label's cached text at `at` (used by `overlay/follow.rs` to draw
+    /// moved and stationary hidden labels with matching K8/K9/K11 typography and zero warm
+    /// Omnia allocations, `W3.6`, `B10`).
+    pub(crate) fn paint_net_label_at(
+        &mut self,
+        label_id: LabelId,
+        at: Pt,
+        target: NetLabelPaint<'_>,
+        window: &mut Window,
+        mut gpui_call: impl FnMut(&mut dyn FnMut()),
+    ) {
+        struct ScopeAdapter<'a, F: FnMut(&mut dyn FnMut())>(&'a std::cell::RefCell<F>);
+        impl<F: FnMut(&mut dyn FnMut())> SheetPaintScope for ScopeAdapter<'_, F> {
+            fn gpui(&self, mut work: impl FnMut()) {
+                (self.0.borrow_mut())(&mut work);
+            }
+        }
+
+        self.sync(target.doc);
+        let Some(bucket) = FontBucket::from_logical(NET_LABEL_PX * target.camera.zoom()) else {
+            return;
+        };
+        let gpui_cell = std::cell::RefCell::new(&mut gpui_call);
+        let scope = ScopeAdapter(&gpui_cell);
+        self.ensure_label_slot_shaped(label_id, target.color, window, &scope);
+
+        let Some(line) = self
+            .label_lines
+            .get(label_id.0 as usize)
+            .and_then(|s| s.line.as_ref())
+        else {
+            return;
+        };
+
+        let zoom = target.camera.zoom();
+        let anchor = target.camera.world_to_screen(at);
+        let left_x = anchor.x + 2.0 * zoom;
+        let baseline_y = anchor.y;
+        let bucket_px = bucket.pixels();
+        let scale = font_scale_f32(line, bucket);
+
+        let origin_x = snap_logical(left_x, target.scale_factor) as f32;
+        let baseline_y = snap_logical(baseline_y, target.scale_factor) as f32;
+        let top_y = baseline_y - f32::from(line.ascent) * scale;
+        let bottom_y = baseline_y + f32::from(line.descent).max(0.0) * scale;
+        let right_x = origin_x + f32::from(line.width) * scale;
+        let v_left = f32::from(target.viewport.left());
+        let v_right = f32::from(target.viewport.right());
+        let v_top = f32::from(target.viewport.top());
+        let v_bottom = f32::from(target.viewport.bottom());
+        if right_x < v_left || origin_x > v_right || bottom_y < v_top || top_y > v_bottom {
+            return;
+        }
+
+        for run in &line.runs {
+            for glyph in &run.glyphs {
+                let pos = point(
+                    px(origin_x + f32::from(glyph.position.x) * scale),
+                    px(baseline_y + f32::from(glyph.position.y) * scale),
+                );
+                scope.gpui(|| {
+                    let result = if glyph.is_emoji {
+                        window.paint_emoji(pos, run.font_id, glyph.id, bucket_px)
+                    } else {
+                        window.paint_glyph(pos, run.font_id, glyph.id, bucket_px, target.color)
+                    };
+                    if let Err(error) = result {
+                        eprintln!("follow label glyph: {error}");
+                    }
+                });
+            }
+        }
     }
 
     fn collect_from_query_buf(

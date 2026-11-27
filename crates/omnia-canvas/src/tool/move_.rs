@@ -382,21 +382,40 @@ impl DragGesture {
                 .collect();
             wires.sort_unstable_by_key(|id| id.0);
             wires.dedup();
-            // Only runs with both ends on the moving boundary can translate rigidly and carry
-            // corner labels (WD3); leaving non-rigid run labels unhidden preserves their sheet text.
+            // W3.6 (WD9): collect every non-selected riding corner label on affected runs
+            // (rigid or rerouted) plus every non-selected label sitting on a moved part's pin
+            // so `SheetView` hides them at lift-off (`WINV11`) and `overlay/follow.rs` paints
+            // their moved (or stationary detached/refused) text and markers.
             let mut labels: Vec<LabelId> = runs
                 .iter()
-                .filter(|run| run.a.1 == Anchor::Boundary && run.b.1 == Anchor::Boundary)
                 .flat_map(|run| run.labels.iter().copied())
                 .filter(|id| !items.contains(&ItemId::Label(*id)))
                 .collect();
+            let mut pin_hits = Vec::new();
+            for &item in &items {
+                if let ItemId::Part(pid) = item
+                    && let Some(pins) = doc.pins(pid)
+                {
+                    for &pin in pins {
+                        doc.query(Rect { min: pin, max: pin }, &mut pin_hits);
+                        for &hit in &pin_hits {
+                            if let ItemId::Label(lid) = hit
+                                && doc.label(lid).is_some_and(|l| l.at == pin)
+                                && !items.contains(&ItemId::Label(lid))
+                            {
+                                labels.push(lid);
+                            }
+                        }
+                    }
+                }
+            }
             labels.sort_unstable_by_key(|id| id.0);
             labels.dedup();
             hidden.extend(wires.iter().map(|&id| ItemId::Wire(id)));
             hidden.extend(labels.iter().map(|&id| ItemId::Label(id)));
             hidden.sort_unstable_by_key(|&item| item_sort_key(item));
             hidden.dedup();
-            let verdict = if wires.is_empty() {
+            let verdict = if wires.is_empty() && labels.is_empty() {
                 FollowPreview::None
             } else {
                 FollowPreview::Accepted
@@ -627,7 +646,9 @@ impl DragGesture {
             if self.last_plan_key.is_some() {
                 self.last_plan_key = None;
                 self.clear_plan_buffers();
-                self.preview = if self.cache.affected_wires.is_empty() {
+                self.preview = if self.cache.affected_wires.is_empty()
+                    && self.cache.affected_labels.is_empty()
+                {
                     FollowPreview::None
                 } else {
                     FollowPreview::Accepted
@@ -644,7 +665,7 @@ impl DragGesture {
             return false;
         }
         let key = (delta, self.by, self.alt);
-        if self.cache.affected_wires.is_empty() {
+        if self.cache.affected_wires.is_empty() && self.cache.affected_labels.is_empty() {
             self.last_plan_key = Some(key);
             self.preview = FollowPreview::None;
             return false;
@@ -1411,7 +1432,8 @@ mod tests {
             key: 3,
             revision: doc.revision(),
         };
-        // Dragging only R1 makes the L-run non-rigid, so `lid` stays unhidden in `SheetView`.
+        // W3.6: dragging R1 alone hides the non-rigid run's corner label at lift-off (`WINV11`)
+        // so the overlay paints its rerouted destination (follow) or stationary text (detach).
         for alt in [false, true] {
             let mut single_drag = DragGesture::start(
                 &doc,
@@ -1422,18 +1444,73 @@ mod tests {
                 WiringPrefs::default(),
                 alt,
             );
-            assert!(
-                single_drag.affected_labels().is_empty(),
-                "non-rigid run must not hide its corner label (alt={alt})"
+            assert_eq!(
+                single_drag.affected_labels(),
+                &[lid],
+                "W3.6: non-rigid run corner label must be tracked in affected_labels (alt={alt})"
             );
             single_drag.current = pt(-5, 2);
             single_drag.set_lifted();
             assert!(single_drag.update_preview(Some(&doc)));
             assert!(
-                !single_drag.hidden_items().contains(&ItemId::Label(lid)),
-                "non-rigid corner label keeps SheetView text during drag (alt={alt})"
+                single_drag.hidden_items().contains(&ItemId::Label(lid)),
+                "W3.6: non-rigid corner label must be hidden in SheetView during drag (alt={alt})"
             );
+            if alt {
+                // Detached: label stays at original position.
+                assert!(single_drag.plan_labels_sorted().is_empty());
+                assert_eq!(single_drag.preview_labels(&doc), vec![(lid, pt(4, 0))]);
+            } else {
+                // Rerouted: label rides onto the new run.
+                assert_eq!(single_drag.plan_labels_sorted(), &[(lid, pt(4, 2))]);
+                assert_eq!(single_drag.preview_labels(&doc), vec![(lid, pt(4, 2))]);
+            }
         }
+
+        // W3.6 B3: an unwired part with a pin label must hide the pin label and run `plan_follow`.
+        let mut unwired_doc = Doc::new();
+        let up = resistor_part(&mut unwired_doc, pt(0, 0), "R9");
+        let pin0 = unwired_doc.pins(up).unwrap()[0];
+        let ItemId::Label(pin_lbl) = unwired_doc
+            .apply(Command::AddLabel(Label {
+                at: pin0,
+                text: "PIN_ONLY".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        let mut unwired_drag = DragGesture::start(
+            &unwired_doc,
+            vec![ItemId::Part(up)],
+            ItemId::Part(up),
+            pt(0, 0),
+            DocStamp {
+                key: 99,
+                revision: unwired_doc.revision(),
+            },
+            WiringPrefs::default(),
+            false,
+        );
+        assert!(unwired_drag.affected_wires().is_empty());
+        assert_eq!(unwired_drag.affected_labels(), &[pin_lbl]);
+        assert!(unwired_drag.hidden_items().contains(&ItemId::Label(pin_lbl)));
+        unwired_drag.current = pt(2, 3);
+        unwired_drag.set_lifted();
+        assert!(unwired_drag.update_preview(Some(&unwired_doc)));
+        let expected_pin = Pt {
+            x: pin0.x + 2 * GRID_NM,
+            y: pin0.y + 3 * GRID_NM,
+        };
+        assert_eq!(
+            unwired_drag.plan_labels_sorted(),
+            &[(pin_lbl, expected_pin)]
+        );
+        assert_eq!(
+            unwired_drag.preview_labels(&unwired_doc),
+            vec![(pin_lbl, expected_pin)]
+        );
 
         let mut drag = DragGesture::start(
             &doc,
