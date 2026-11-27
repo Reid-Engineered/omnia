@@ -1717,6 +1717,8 @@ mod tests {
                         },
                         local_pins: (0..count).map(|j| p(0, j as i32 * 4)).collect(),
                         local_bounds: Rect::from_points(Pt::ZERO, Pt::ZERO).unwrap(),
+                        def: crate::PlaceDef::Unmodelled,
+                        params: crate::Params::new(),
                     })
                     .unwrap()
                     .added[0];
@@ -1737,6 +1739,8 @@ mod tests {
                         },
                         local_pins: vec![Pt::ZERO],
                         local_bounds: Rect::from_points(Pt::ZERO, Pt::ZERO).unwrap(),
+                        def: crate::PlaceDef::Unmodelled,
+                        params: crate::Params::new(),
                     })
                     .unwrap();
                     fixed_pins.push((part_id, p(x, y), far));
@@ -2363,6 +2367,106 @@ mod tests {
         assert_eq!(doc.net_at(p(0, 0)), doc.net_at(p(2, 0)));
         assert_ne!(doc.net_at(p(0, 0)), doc.net_at(p(8, 2)));
     }
+
+    #[test]
+    fn w3_6_b1_dogleg_tie_break_uses_coordinates_without_along_distance() {
+        // Dogleg (0,0) -> (6,0) -> (6,4) -> (4,4): from old_at (5,1), both (5,0) and (6,1)
+        // are distance 1 from old_at and Manhattan distance 5 from unmoved end b=(4,4).
+        // WD9 coordinate tie-break must pick (5,0) rather than (6,1) (closer along run).
+        let dogleg = [
+            Wire {
+                a: p(0, 0),
+                b: p(6, 0),
+            },
+            Wire {
+                a: p(6, 0),
+                b: p(6, 4),
+            },
+            Wire {
+                a: p(6, 4),
+                b: p(4, 4),
+            },
+        ];
+        assert_eq!(
+            nearest_lattice_point_on_run(p(5, 1), &dogleg, p(0, 0), p(4, 4), true),
+            p(5, 0)
+        );
+    }
+
+    #[test]
+    fn w3_6_b2_label_split_on_foreign_crossing_is_rejected_and_nets_stay_separate() {
+        // Part A has pin at (0,0), Part B has pin at (4,2); initial run A(0,0)->(2,0)->(4,0)->(4,2)
+        // carries a corner label at (2,0). An unrelated vertical foreign wire runs from (2,1) to
+        // (2,4). Moving A by delta (0,2) puts A'=(0,2), B=(4,2). The straight candidate (0,2)->(4,2)
+        // crosses the foreign wire at (2,2), which is also the nearest lattice point for the corner
+        // label at (2,0). Candidate validation must reject the straight candidate so commit never
+        // splits the foreign wire or merges the two unrelated nets.
+        let mut doc = Doc::new();
+        let p_a = part(&mut doc, &[p(0, 0)]);
+        let _p_b = part(&mut doc, &[p(4, 2)]);
+        let _ = wire(&mut doc, p(0, 0), p(2, 0));
+        let _ = wire(&mut doc, p(2, 0), p(4, 0));
+        let _ = wire(&mut doc, p(4, 0), p(4, 2));
+        let (lbl_id, _) = doc
+            .insert_label_raw(Label {
+                at: p(2, 0),
+                text: "SIG".into(),
+            })
+            .unwrap();
+        let foreign_w = wire(&mut doc, p(2, 1), p(2, 4));
+        let net_a_before = doc.connectivity.net_at(p(0, 0)).unwrap();
+        let net_foreign_before = doc.connectivity.net_of(foreign_w).unwrap();
+        assert_ne!(net_a_before, net_foreign_before);
+
+        let delta = Pt {
+            x: 0,
+            y: 2 * GRID_NM,
+        };
+        let pol = policy(false);
+        let mut plan = FollowPlan::default();
+        let plan_res = plan_follow(
+            &doc,
+            &[ItemId::Part(p_a)],
+            Isometry::Translate(delta),
+            pol,
+            &mut plan,
+        );
+        match plan_res {
+            Ok(()) => {
+                let &(_, moved_lbl) = plan
+                    .labels
+                    .iter()
+                    .find(|&&(id, _)| id == lbl_id)
+                    .expect("riding label planned");
+                assert!(
+                    !(moved_lbl.x == p(2, 0).x
+                        && moved_lbl.y > p(2, 1).y
+                        && moved_lbl.y < p(2, 4).y),
+                    "riding label must not land on foreign wire interior: {moved_lbl:?}"
+                );
+                let mut committed = doc.fork();
+                committed
+                    .apply(crate::Command::Move {
+                        items: vec![ItemId::Part(p_a)],
+                        delta,
+                        follow: pol,
+                    })
+                    .unwrap();
+                assert_inv10_and_normal(&committed);
+                let net_a_after = committed.connectivity.net_at(p(0, 2)).unwrap();
+                let net_b_after = committed.connectivity.net_at(p(4, 2)).unwrap();
+                let net_foreign_after = committed.connectivity.net_of(foreign_w).unwrap();
+                assert_eq!(net_a_after, net_b_after);
+                assert_ne!(
+                    net_a_after, net_foreign_after,
+                    "label split must never merge the routed net with the crossing foreign wire"
+                );
+            }
+            Err(FollowError::NoRoute { blocker, .. }) => {
+                assert_eq!(blocker, Blocker::WireBody(foreign_w));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2647,116 +2751,6 @@ mod view_tests {
             let policy = FollowPolicy::new(true, 10, false).unwrap();
             let _ = plan_follow(&d, &items, t, policy, &mut plan);
             prop_assert_eq!(before, format!("{d:?}"));
-        }
-    }
-
-    #[test]
-    fn w3_6_b1_dogleg_tie_break_uses_coordinates_without_along_distance() {
-        // Dogleg (0,0) -> (6,0) -> (6,4) -> (4,4): from old_at (5,1), both (5,0) and (6,1)
-        // are distance 1 from old_at and Manhattan distance 5 from unmoved end b=(4,4).
-        // WD9 coordinate tie-break must pick (5,0) rather than (6,1) (closer along run).
-        let dogleg = [
-            Wire {
-                a: p(0, 0),
-                b: p(6, 0),
-            },
-            Wire {
-                a: p(6, 0),
-                b: p(6, 4),
-            },
-            Wire {
-                a: p(6, 4),
-                b: p(4, 4),
-            },
-        ];
-        assert_eq!(
-            nearest_lattice_point_on_run(p(5, 1), &dogleg, p(0, 0), p(4, 4), true),
-            p(5, 0)
-        );
-    }
-
-    #[test]
-    fn w3_6_b2_label_split_on_foreign_crossing_is_rejected_and_nets_stay_separate() {
-        // Part A has pin at (0,0), Part B has pin at (4,0), connected by an L-run via (2,0)-(2,2)
-        // or straight wire with a corner label at (2,0) via (0,0)->(2,0)->(2,2)->(4,2) when A moves
-        // to (0,2): the straight reroute (0,2)->(4,2) crosses a vertical foreign wire at (2,2),
-        // which is ALSO the nearest lattice point for the corner label at (2,1).
-        // Candidate validation must reject the straight route whose label split lands on (2,2)
-        // so commit never merges the two unrelated nets!
-        let mut doc = Doc::new();
-        let p_a = part(&mut doc, &[p(0, 0)]);
-        let p_b = part(&mut doc, &[p(4, 2)]);
-        // L-run from A(0,0) -> (2,0) -> (2,1) -> ... wait: make run A(0,0) -> (2,0) -> (4,0)?
-        // Better: A at (0,0), B at (4,2); initial run A(0,0) -> (2,0) -> (2,2)? No, keep foreign wire
-        // at x=2 from y=1 to y=4, so initially A(0,0)->(2,0)->(4,0)->(4,2) does NOT touch foreign wire!
-        // Put label on corner (2,0). Foreign wire runs vertically from (2,1) to (2,4) (unrelated net).
-        // Now move A by delta (0, 2) -> A'=(0,2), B=(4,2).
-        // Straight candidate (0,2)->(4,2) crosses foreign wire (2,1)-(2,4) at interior (2,2).
-        // Old label at (2,0) projects to (2,2) on the straight candidate — right on the foreign wire!
-        let _ = wire(&mut doc, p(0, 0), p(2, 0));
-        let _ = wire(&mut doc, p(2, 0), p(4, 0));
-        let _ = wire(&mut doc, p(4, 0), p(4, 2));
-        let (lbl_id, _) = doc
-            .insert_label_raw(Label {
-                at: p(2, 0),
-                text: "SIG".into(),
-            })
-            .unwrap();
-        let foreign_w = wire(&mut doc, p(2, 1), p(2, 4));
-        let net_a_before = doc.connectivity.net_of_pin(p_a, 0).unwrap();
-        let net_foreign_before = doc.connectivity.net_of_wire(foreign_w).unwrap();
-        assert_ne!(net_a_before, net_foreign_before);
-
-        let delta = Pt {
-            x: 0,
-            y: 2 * GRID_NM,
-        };
-        let pol = policy(false);
-        let mut plan = FollowPlan::default();
-        let plan_res = plan_follow(
-            &doc,
-            &[ItemId::Part(p_a)],
-            Isometry::translate(delta),
-            pol,
-            &mut plan,
-        );
-        // Either the planner picks a valid dogleg whose label does NOT land on foreign_w,
-        // or refuses cleanly; in every case, no placed label or planned wire endpoint may land
-        // on foreign_w's interior, and committing must keep the two nets strictly separate.
-        match plan_res {
-            Ok(()) => {
-                let &(_, moved_lbl) = plan
-                    .labels
-                    .iter()
-                    .find(|&&(id, _)| id == lbl_id)
-                    .expect("riding label planned");
-                assert!(
-                    !(moved_lbl.x == p(2, 0).x
-                        && moved_lbl.y > p(2, 1).y
-                        && moved_lbl.y < p(2, 4).y),
-                    "riding label must not land on foreign wire interior: {moved_lbl:?}"
-                );
-                let mut committed = doc.fork();
-                committed
-                    .apply(crate::Command::Move {
-                        items: vec![ItemId::Part(p_a)],
-                        delta,
-                        follow: pol,
-                    })
-                    .unwrap();
-                assert_inv10_and_normal(&committed);
-                let net_a_after = committed.connectivity.net_of_pin(p_a, 0).unwrap();
-                let net_b_after = committed.connectivity.net_of_pin(p_b, 0).unwrap();
-                let net_foreign_after = committed.connectivity.net_of_wire(foreign_w).unwrap();
-                assert_eq!(net_a_after, net_b_after);
-                assert_ne!(
-                    net_a_after, net_foreign_after,
-                    "label split must never merge the routed net with the crossing foreign wire"
-                );
-            }
-            Err(FollowError::NoRoute { blocker, .. }) => {
-                assert_eq!(blocker, Blocker::WireBody(foreign_w));
-            }
         }
     }
 }

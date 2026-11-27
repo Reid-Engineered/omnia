@@ -335,8 +335,8 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 - Lane: doc, canvas · Depends: T7.2, W2.2 · Read: WD9, WINV9
 - Owns: `crates/schematic-doc/src/follow.rs` (label placement), `crates/schematic-canvas/src/tool/label.rs`
   (split on placement), widened to `crates/omnia-doc/src/route.rs` (validate label-induced splits
-  during route candidate selection), `crates/omnia-canvas/src/{tool/move_.rs,sheet.rs,sheet/text.rs,
-  overlay.rs,overlay/ghosts.rs,overlay/follow.rs}` (hide affected run/pin labels at lift-off,
+  during route candidate selection), `crates/omnia-canvas/src/{tool.rs,tool/move_.rs,sheet.rs,
+  sheet/text.rs,overlay.rs,overlay/ghosts.rs,overlay/follow.rs}` (hide affected run/pin labels at lift-off,
   plan unwired pin-label drags, and paint moved/stationary label text with zero warm allocations),
   and `wiring-plan.md` (W3.6 preview note)
 - Do: placing a label on a wire body splits the wire there; `plan_follow` fills
@@ -1008,7 +1008,7 @@ all-target `clippy -D warnings`, `omnia-bench` `--features scene-counts,readback
 `clippy -D warnings`, `cargo test --workspace`, `cargo deny check`) and Rule-1 scan pass
 locally on Windows; no budgets certified or thresholds weakened.
 
-2026-11-26 W3.6 done (review of #160 addressed) — fixed all Sol 6.2 review findings: (B1)
+2026-11-26 W3.6 done (review of #160 addressed) — fixed all independent review findings: (B1)
 removed `tie_along` from `nearest_lattice_point_on_run` so reroute ties break strictly by
 Manhattan distance to unmoved end `b` then `(x, y)`, with dogleg regression
 `w3_6_b1_dogleg_tie_break_uses_coordinates_without_along_distance`; (B2) added

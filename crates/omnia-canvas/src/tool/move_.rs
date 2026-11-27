@@ -19,8 +19,8 @@ use crate::{
 };
 use gpui::SharedString;
 use omnia_doc::{
-    Anchor, Boundary, Command, CommandError, Doc, FollowError, FollowPlan, GRID_NM, Isometry,
-    ItemId, LabelId, Orient, Pt, Rect, SHEET_LIMIT_NM, Wire, WireId, plan_follow,
+    Boundary, Command, CommandError, Doc, FollowError, FollowPlan, GRID_NM, Isometry, ItemId,
+    LabelId, Orient, Pt, Rect, SHEET_LIMIT_NM, Wire, WireId, plan_follow,
     prefs::{FollowPolicy, WiringPrefs},
     route::Blocker,
     snap_to,
@@ -1497,9 +1497,13 @@ mod tests {
         );
         assert!(unwired_drag.affected_wires().is_empty());
         assert_eq!(unwired_drag.affected_labels(), &[pin_lbl]);
-        assert!(unwired_drag.hidden_items().contains(&ItemId::Label(pin_lbl)));
         unwired_drag.current = pt(2, 3);
         unwired_drag.set_lifted();
+        assert!(
+            unwired_drag
+                .hidden_items()
+                .contains(&ItemId::Label(pin_lbl))
+        );
         assert!(unwired_drag.update_preview(Some(&unwired_doc)));
         let expected_pin = Pt {
             x: pin0.x + 2 * GRID_NM,

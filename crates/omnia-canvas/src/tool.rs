@@ -9297,8 +9297,8 @@ mod tests {
         let doc = rig.doc.clone();
         let rev0 = revision(&doc, rig.cx);
 
-        // Single-part drag makes the labelled run non-rigid: its label stays unhidden in
-        // `SheetView` (text preserved) during both follow and Alt-detach moves.
+        // W3.6: single-part drag hides the non-rigid run's corner label at lift-off (`WINV11`)
+        // so the overlay draws its rerouted destination (follow) or stationary text (Alt-detach).
         rig.cx.update(|_, cx| {
             overlay.update(cx, |o, cx| {
                 o.set_selection([ItemId::Part(r1)], cx);
@@ -9317,14 +9317,20 @@ mod tests {
                 let ToolState::Dragging(drag) = overlay.read(cx).tool_state() else {
                     panic!("expected Dragging");
                 };
-                assert!(
-                    drag.affected_labels().is_empty(),
-                    "non-rigid run must not collect corner label into affected_labels (alt={alt})"
+                assert_eq!(
+                    drag.affected_labels(),
+                    &[lid],
+                    "W3.6: non-rigid run corner label must be in affected_labels (alt={alt})"
                 );
                 assert!(
-                    !drag.hidden_items().contains(&ItemId::Label(lid)),
-                    "non-rigid run label must remain visible with its SheetView text (alt={alt})"
+                    drag.hidden_items().contains(&ItemId::Label(lid)),
+                    "W3.6: non-rigid run label must be hidden in SheetView during drag (alt={alt})"
                 );
+                if alt {
+                    assert!(drag.plan_labels_sorted().is_empty());
+                } else {
+                    assert_eq!(drag.plan_labels_sorted(), &[(lid, pt(4, 2))]);
+                }
             });
         }
         rig.cx.simulate_keystrokes("escape");

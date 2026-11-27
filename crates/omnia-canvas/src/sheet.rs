@@ -19,7 +19,7 @@
 
 pub(crate) mod lod;
 pub(crate) mod symbols;
-mod text;
+pub(crate) mod text;
 pub(crate) mod wires;
 
 use std::{cell::RefCell, rc::Rc};

@@ -246,7 +246,7 @@ pub(super) struct TextFrame<'a> {
 
 /// Persistent per-sheet shaped-line cache and reusable candidate buffer (D6, B10).
 #[derive(Debug)]
-pub(super) struct TextCache {
+pub(crate) struct TextCache {
     library: Arc<SymbolLibrary>,
     pin_offsets: Vec<usize>,
     pin_lines: Vec<CachedLine>,
@@ -614,8 +614,13 @@ impl TextCache {
     ) {
         struct ScopeAdapter<'a, F: FnMut(&mut dyn FnMut())>(&'a std::cell::RefCell<F>);
         impl<F: FnMut(&mut dyn FnMut())> SheetPaintScope for ScopeAdapter<'_, F> {
-            fn gpui(&self, mut work: impl FnMut()) {
-                (self.0.borrow_mut())(&mut work);
+            fn gpui(&self, paint: impl FnOnce()) {
+                let mut paint = Some(paint);
+                (self.0.borrow_mut())(&mut || {
+                    if let Some(work) = paint.take() {
+                        work();
+                    }
+                });
             }
         }
 

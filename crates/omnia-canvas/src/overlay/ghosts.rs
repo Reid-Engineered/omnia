@@ -466,7 +466,7 @@ impl GhostPalette {
     }
 
     #[inline]
-    fn ink_for(self, in_bounds: bool) -> Hsla {
+    pub(super) fn ink_for(self, in_bounds: bool) -> Hsla {
         if in_bounds {
             self.ink
         } else {
