@@ -1588,6 +1588,8 @@ mod tests {
             part: part(Pt { x, y: 0 }, Orient::IDENTITY),
             local_pins: vec![Pt::ZERO],
             local_bounds: bounds,
+            def: crate::PlaceDef::Unmodelled,
+            params: crate::Params::new(),
         };
         doc.apply(place(0)).unwrap();
         doc.apply(place(10)).unwrap();
@@ -1848,6 +1850,8 @@ mod tests {
                 ),
                 local_pins,
                 local_bounds,
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             },
             GenStep::AddWires {
                 x,
@@ -1959,6 +1963,8 @@ mod tests {
                     part: named(Pt::ZERO, Orient::IDENTITY, "B", "10"),
                     local_pins,
                     local_bounds,
+                    def: crate::PlaceDef::Unmodelled,
+                    params: crate::Params::new(),
                 }];
                 if !live.is_empty() {
                     cmds.push(Command::Move {

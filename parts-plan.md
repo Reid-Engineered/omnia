@@ -523,14 +523,17 @@ amended decision:
     default-valued override is refused rather than normalised);
   - if `def.primary_param` is set, `Part::value` equals the `raw` text of the resolved primary
     parameter (override, else default), which is what `PD6` sync maintains.
-- **`UpdatePartDef` refreshes display values** (amended 2026-11-23, fourth review of #85). For
-  each moved part, overrides are kept and validated against `to`. If `to` has a `primary_param`,
+- **`UpdatePartDef` refreshes display values** (amended 2026-11-23, fourth review of #85;
+  amended 2026-11-26, P2.2 review of #162). For each moved part, any existing override whose
+  value equals `to`'s default for that parameter is canonically pruned (`PINV12`), and the
+  remaining overrides are kept and validated against `to`. If `to` has a `primary_param`,
   `Part::value` becomes, in the same transaction and in every case, the `raw` text of `to`'s
   resolved primary parameter for that part: its override if it has one, else `to`'s default.
-  So a default changing from `10k` to `22k` shows `22k` on a part without an override, and a
-  primary that moves from parameter `a` to parameter `b` shows the part's existing `b` override.
-  If `to` has no `primary_param`, `Part::value` is unchanged. Undo restores the old text with the
-  old definition (`PTC-update-value`).
+  So a default changing from `10k` to `22k` shows `22k` on a part without an override, a part
+  whose `22k` override now matches `to`'s `22k` default drops the redundant override while
+  still showing `22k`, and a primary that moves from parameter `a` to parameter `b` shows the
+  part's existing `b` override. If `to` has no `primary_param`, `Part::value` is unchanged.
+  Undo restores the old overrides and text with the old definition (`PTC-update-value`).
 - **Symbol ids are checked where symbols are known.** `omnia-doc` cannot see the symbol library,
   so a v3 (or v2) file can name a `SymbolId` that does not exist. `omnia-symbols` provides
   `SymbolLibrary::try_get(id) -> Option<&SymbolDef>` and
@@ -783,7 +786,7 @@ Each scenario is an automated test with this expected result.
 | PTC-offline-omnia | Place a custom `.opart` part, save, drop `Catalog`, load | Loads cleanly; `load(save(doc)) == doc`; all metadata, pin roles, param overrides and SPICE `.subckt` intact; ids unchanged (`PINV4`). |
 | PTC-def-lifecycle | Place a modelled part (definition id 1) and delete it: call this state `D`. Branch A: save `D`, load it as `L`, then place the same definition in both `D` and `L`. Branch B: rebuild `D` on a fresh document by replaying the same place and delete (a fork of `D` has no history to undo), then undo the delete and place the same definition again | A: the saved file has `None` at id 1 and the same arena length; `L == D` under `PartialEq`; both placements allocate the same new id 2, since neither document has a referenced record at 1 (`PD8`, `PINV4`). B: undo restores the part with `def == 1` and an equal record (`PINV7`); the new placement reuses id 1 because it is referenced again. |
 | PTC-instance-refuse | Load v3 files whose part records hold (a) an override below its `min`, (b) an undeclared override name, (c) an override of the wrong kind, (d) an override equal to its default; (e) a real override with `raw = "10M"` and `value = 0.01`, (f) a resistor whose `Part::value` differs from its resolved `resistance` text; apply `PlacePart { def: Existing(id) }` whose `local_pins` are the definition's pins with two swapped (same count) | Each file refused at load with an error naming the part and parameter; the command refused with `InvalidInstance`; `Doc` unchanged (`PD8`, `PINV12`). |
-| PTC-update-value | Place two resistors (default `10k`), give the second an override `4.7k`, then `UpdatePartDef` to a definition whose default is `22k`; undo. Then, with a definition pair whose primary moves from parameter `a` to parameter `b`, update a part that already overrides `b` | After the first update the parts show `22k` and `4.7k`; both are in `Change::modified`; undo restores `10k` and `4.7k`. After the second update the part shows its `b` override's `raw` text, and undo restores its old `a` text (`PD8`). |
+| PTC-update-value | Place two resistors (default `10k`), give the second an override `4.7k` (and a third an override `22k`), then `UpdatePartDef` to a definition whose default is `22k`; undo. Then, with a definition pair whose primary moves from parameter `a` to parameter `b`, update a part that already overrides `b` | After the first update the parts show `22k`, `4.7k` and `22k`, the third part's redundant `22k` override is canonically pruned (`PINV12`), and all moved parts are in `Change::modified`; undo restores `10k`, `4.7k` and the third part's `22k` override. After the second update the part shows its `b` override's `raw` text, and undo restores its old `a` text (`PD8`). |
 | PTC-unknown-symbol | Open a v3 file whose part names `SymbolId(999)` through the agent file host and app File > Open; call `SymbolLibrary::check_doc` and `Catalog::diff_embedded` on the `Doc` returned by `Doc::load` | Both hosts refuse the file with a clear error and the app leaves no tab open; `check_doc` returns `UnknownSymbol`; `diff_embedded` reports `UnknownSymbol` and does not panic (`PD8`, `PD9`). |
 | PTC-no-lossy-save | Between `P2.2` and `P2.3`: place a part with `PlaceDef::Embed`, or apply `SetParam`, then call `save`; and save a document of unmodelled parts | The first two saves are refused with `InvalidData` and write nothing usable as a v2 file; the unmodelled document saves byte-identical to before. From `P2.3` the same documents save as v3 and `PINV4` holds (`PD8`). |
 | PTC-batch-intern-refused | Apply a `Batch` of `PlacePart { def: Embed(new) }` followed by an invalid `SetParam` | Refused; the definition arena length, every record, every part, revision and history are unchanged (`PINV7`). |

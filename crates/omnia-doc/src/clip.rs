@@ -5,9 +5,10 @@ use std::sync::Arc;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
-    Doc, GRID_NM, ItemId, Label, LabelId, Orient, Part, PartId, Pt, Rect, SHEET_LIMIT_NM, Wire,
-    WireId,
-    command::{ChangeAcc, CommandError, apply_wire_plan},
+    Doc, EmbeddedPartDef, GRID_NM, ItemId, Label, LabelId, Orient, Params, Part, PartId, Pt, Rect,
+    SHEET_LIMIT_NM, Wire, WireId,
+    command::{ChangeAcc, CommandError, apply_wire_plan, insert_part_with_def_raw},
+    part_def::{validate, validate_instance},
     snap_to,
     undo::UndoOp,
 };
@@ -21,6 +22,10 @@ pub struct ClipPart {
     pub part: Part,
     pub local_pins: Vec<Pt>,
     pub local_bounds: Rect,
+    /// Self-contained definition snapshot from the source document (`P2.2`, `PD3`, `PD8`).
+    pub def: Arc<EmbeddedPartDef>,
+    /// Copied parameter overrides (`PD6`).
+    pub params: Params,
 }
 
 /// Self-contained snapshot of copied schematic items (T7.1, D2).
@@ -114,6 +119,8 @@ impl Clip {
                     part,
                     local_pins: cp.local_pins.clone(),
                     local_bounds: cp.local_bounds,
+                    def: Arc::clone(&cp.def),
+                    params: cp.params.clone(),
                 }
             })
             .collect();
@@ -217,23 +224,19 @@ impl Doc {
             .into_iter()
             .map(|id| {
                 let stored = self.parts.get(id.0).expect("live copied part");
-                let local_pins = self
+                let def = self
                     .part_defs
-                    .get(stored.def)
-                    .map(|def| def.local_pins.clone())
-                    .unwrap_or_else(|| {
-                        stored
-                            .pins
-                            .iter()
-                            .map(|&p| stored.part.orient.inverse().apply(p - stored.part.at))
-                            .collect()
-                    });
+                    .get_arc(stored.def)
+                    .expect("live copied part must reference a definition");
+                let local_pins = def.local_pins.clone();
                 let mut part = stored.part.clone();
                 part.at = part.at - origin;
                 ClipPart {
                     part,
                     local_pins,
                     local_bounds: stored.local_bounds,
+                    def,
+                    params: stored.params.clone(),
                 }
             })
             .collect();
@@ -335,19 +338,30 @@ pub(crate) fn apply_paste(
     // Phase 1: full transactional validation before any document or arena mutation.
     let mut resolved_parts = Vec::with_capacity(clip.parts.len());
     for cp in clip.parts {
+        validate(&cp.def).map_err(CommandError::InvalidDef)?;
+        validate_instance(
+            &cp.def,
+            cp.part.symbol,
+            &cp.local_pins,
+            cp.local_bounds,
+            &cp.part.value,
+            &cp.params,
+        )
+        .map_err(CommandError::InvalidInstance)?;
         Rect::new(cp.local_bounds.min, cp.local_bounds.max)
             .map_err(|_| CommandError::OutOfBounds)?;
         let new_at = offset_pt(at, cp.part.at)?;
+        let mut world_pins = Vec::with_capacity(cp.local_pins.len());
         for &pin in &cp.local_pins {
             if !pin.is_in_bounds() {
                 return Err(CommandError::OutOfBounds);
             }
-            new_at.checked_add(cp.part.orient.apply(pin))?;
+            world_pins.push(new_at.checked_add(cp.part.orient.apply(pin))?);
         }
-        Doc::part_bounds_at(new_at, cp.part.orient, cp.local_bounds)?;
+        let area = Doc::part_envelope_raw(new_at, cp.part.orient, cp.local_bounds, &world_pins)?;
         let mut part = cp.part;
         part.at = new_at;
-        resolved_parts.push((part, cp.local_pins, cp.local_bounds));
+        resolved_parts.push((part, world_pins, cp.local_bounds, area, cp.def, cp.params));
     }
 
     let mut resolved_wires = Vec::with_capacity(clip.wires.len());
@@ -378,7 +392,7 @@ pub(crate) fn apply_paste(
             .map(|(_, part)| Arc::clone(&part.designator))
             .collect();
         let mut needs_rename = vec![false; resolved_parts.len()];
-        for (i, (part, _, _)) in resolved_parts.iter().enumerate() {
+        for (i, (part, ..)) in resolved_parts.iter().enumerate() {
             if used.contains(&part.designator) {
                 needs_rename[i] = true;
             } else {
@@ -386,7 +400,7 @@ pub(crate) fn apply_paste(
             }
         }
         let mut next_by_prefix: FxHashMap<String, u32> = FxHashMap::default();
-        for (i, (part, _, _)) in resolved_parts.iter_mut().enumerate() {
+        for (i, (part, ..)) in resolved_parts.iter_mut().enumerate() {
             if needs_rename[i] {
                 part.designator =
                     next_unique_designator(&part.designator, &mut used, &mut next_by_prefix);
@@ -398,11 +412,11 @@ pub(crate) fn apply_paste(
     let mut added_non_wires = Vec::with_capacity(resolved_parts.len() + resolved_labels.len());
     let mut landed = Vec::new();
 
-    for (part, local_pins, local_bounds) in resolved_parts {
-        let has_pins = !local_pins.is_empty();
-        let (id, bounds) = doc
-            .insert_part_raw(part, &local_pins, local_bounds)
-            .expect("pre-validated paste part must insert");
+    for (part, world_pins, local_bounds, bounds, def, params) in resolved_parts {
+        let has_pins = !world_pins.is_empty();
+        let def_id = doc.part_defs.intern(def);
+        let id =
+            insert_part_with_def_raw(doc, part, world_pins, local_bounds, bounds, def_id, params);
         acc.record_dirty(bounds);
         let item = ItemId::Part(id);
         acc.record_added(item);
@@ -527,6 +541,8 @@ mod tests {
                 part: part(0, pt(-4, 0), Orient::IDENTITY, "R1", "10k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -604,6 +620,8 @@ mod tests {
                 part: part(4, Pt { x: half, y: half }, Orient::IDENTITY, "U1", "OPAMP"),
                 local_pins: op_pins,
                 local_bounds: op_bounds,
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -636,6 +654,8 @@ mod tests {
                 part: part(0, pt(x, 0), Orient::IDENTITY, des, "1k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0]
@@ -718,6 +738,8 @@ mod tests {
                 part: part(0, pt(-6, 0), Orient::IDENTITY, "R1", "10k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -726,6 +748,8 @@ mod tests {
                 part: part(0, pt(6, 0), Orient::IDENTITY, "R2", "22k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -734,6 +758,8 @@ mod tests {
                 part: part(5, pt(0, 6), Orient::IDENTITY, "GND1", ""),
                 local_pins: vec![Pt::ZERO],
                 local_bounds: rect(-1, 0, 1, 2),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -742,6 +768,8 @@ mod tests {
                 part: part(5, pt(-8, 0), Orient::IDENTITY, "GND2", ""),
                 local_pins: vec![Pt::ZERO],
                 local_bounds: rect(-1, 0, 1, 2),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -766,6 +794,8 @@ mod tests {
                 part: part(0, pt(20, 0), Orient::IDENTITY, "R9", "1k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap();
 
@@ -861,6 +891,8 @@ mod tests {
                 part: part(0, pt(0, 0), Orient::IDENTITY, "R1", "1k"),
                 local_pins: vec![Pt { x: -2 * G, y: 0 }, Pt { x: 2 * G, y: 0 }],
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -902,6 +934,8 @@ mod tests {
                 part: part(0, pt(0, 0), Orient::IDENTITY, "R1", "1k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -947,6 +981,8 @@ mod tests {
                 part: part(0, pt(0, 0), Orient::IDENTITY, "R1", "1k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -955,6 +991,8 @@ mod tests {
                 part: part(0, pt(0, 4), Orient::IDENTITY, "R2", "2k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -965,6 +1003,8 @@ mod tests {
             part: part(0, pt(-10, 0), Orient::IDENTITY, "R1", "10k"),
             local_pins: two_pin_pins(),
             local_bounds: two_pin_bounds(),
+            def: crate::PlaceDef::Unmodelled,
+            params: crate::Params::new(),
         })
         .unwrap();
 
@@ -1017,6 +1057,8 @@ mod tests {
                 part: part(0, pt(0, 0), Orient::IDENTITY, "R1", "1k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -1054,6 +1096,8 @@ mod tests {
                 part: part(0, pt(-6, 0), Orient::IDENTITY, "R1", "10k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -1062,6 +1106,8 @@ mod tests {
                 part: part(0, pt(6, 0), Orient::IDENTITY, "R2", "22k"),
                 local_pins: two_pin_pins(),
                 local_bounds: two_pin_bounds(),
+                def: crate::PlaceDef::Unmodelled,
+                params: crate::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -1167,100 +1213,266 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(crate::proptest_config(128))]
-        #[test]
-        fn t7_1_paste_undo_redo_satisfies_inv2_inv4_inv10(
-            setup in gen_setup(),
-            mask in prop::collection::vec(any::<bool>(), 1..30),
-            tx in -12i32..=12,
-            ty in -12i32..=12,
-            orient_idx in 0usize..8,
-        ) {
-            let mut setup = setup;
-            // Place parts and labels first so subsequent AddWires splits across all pin and
-            // label interiors (`WINV3`, `WD9`).
-            setup.sort_by_key(|step| match step {
-                GenStep::Place(..) => 0u8,
-                GenStep::Label(..) => 1u8,
-                GenStep::Wire(..) => 2u8,
-            });
-            let mut doc = Doc::new();
-            let names = ["A", "B", "GND"];
-            let mut des_n = 1u32;
-            for step in setup {
-                match step {
-                    GenStep::Place(x, y) => {
-                        let _ = doc.apply(Command::PlacePart {
-                            part: part(0, Pt { x: x * PIN_LATTICE_NM, y: y * PIN_LATTICE_NM }, Orient::IDENTITY, &format!("R{des_n}"), "1k"),
-                            local_pins: vec![Pt::ZERO, Pt { x: PIN_LATTICE_NM, y: 0 }],
-                            local_bounds: Rect::from_points(Pt { x: -PIN_LATTICE_NM, y: -PIN_LATTICE_NM }, Pt { x: 2 * PIN_LATTICE_NM, y: PIN_LATTICE_NM }).unwrap(),
-                        });
-                        des_n += 1;
-                    }
-                    GenStep::Wire(x, y, h) => {
-                        let a = Pt { x: x * PIN_LATTICE_NM, y: y * PIN_LATTICE_NM };
-                        let b = if h {
-                            Pt { x: (x + 2) * PIN_LATTICE_NM, y: y * PIN_LATTICE_NM }
-                        } else {
-                            Pt { x: x * PIN_LATTICE_NM, y: (y + 2) * PIN_LATTICE_NM }
-                        };
-                        let _ = doc.apply(Command::AddWires(vec![Wire { a, b }]));
-                    }
-                    GenStep::Label(x, y, n) => {
-                        let _ = doc.apply(Command::AddLabel(Label {
-                            at: Pt { x: x * PIN_LATTICE_NM, y: y * PIN_LATTICE_NM },
-                            text: names[n as usize].into(),
-                        }));
+            #![proptest_config(crate::proptest_config(128))]
+            #[test]
+            fn t7_1_paste_undo_redo_satisfies_inv2_inv4_inv10(
+                setup in gen_setup(),
+                mask in prop::collection::vec(any::<bool>(), 1..30),
+                tx in -12i32..=12,
+                ty in -12i32..=12,
+                orient_idx in 0usize..8,
+            ) {
+                let mut setup = setup;
+                // Place parts and labels first so subsequent AddWires splits across all pin and
+                // label interiors (`WINV3`, `WD9`).
+                setup.sort_by_key(|step| match step {
+                    GenStep::Place(..) => 0u8,
+                    GenStep::Label(..) => 1u8,
+                    GenStep::Wire(..) => 2u8,
+                });
+                let mut doc = Doc::new();
+                let names = ["A", "B", "GND"];
+                let mut des_n = 1u32;
+                for step in setup {
+                    match step {
+                        GenStep::Place(x, y) => {
+                            let _ = doc.apply(Command::PlacePart {
+                                part: part(0, Pt { x: x * PIN_LATTICE_NM, y: y * PIN_LATTICE_NM }, Orient::IDENTITY, &format!("R{des_n}"), "1k"),
+                                local_pins: vec![Pt::ZERO, Pt { x: PIN_LATTICE_NM, y: 0 }],
+                                local_bounds: Rect::from_points(Pt { x: -PIN_LATTICE_NM, y: -PIN_LATTICE_NM }, Pt { x: 2 * PIN_LATTICE_NM, y: PIN_LATTICE_NM }).unwrap(),
+        def: crate::PlaceDef::Unmodelled,
+        params: crate::Params::new(),
+    });
+                            des_n += 1;
+                        }
+                        GenStep::Wire(x, y, h) => {
+                            let a = Pt { x: x * PIN_LATTICE_NM, y: y * PIN_LATTICE_NM };
+                            let b = if h {
+                                Pt { x: (x + 2) * PIN_LATTICE_NM, y: y * PIN_LATTICE_NM }
+                            } else {
+                                Pt { x: x * PIN_LATTICE_NM, y: (y + 2) * PIN_LATTICE_NM }
+                            };
+                            let _ = doc.apply(Command::AddWires(vec![Wire { a, b }]));
+                        }
+                        GenStep::Label(x, y, n) => {
+                            let _ = doc.apply(Command::AddLabel(Label {
+                                at: Pt { x: x * PIN_LATTICE_NM, y: y * PIN_LATTICE_NM },
+                                text: names[n as usize].into(),
+                            }));
+                        }
                     }
                 }
-            }
-            let live: Vec<ItemId> = doc
-                .parts()
-                .map(|(id, _)| ItemId::Part(id))
-                .chain(doc.wires().map(|(id, _)| ItemId::Wire(id)))
-                .chain(doc.labels().map(|(id, _)| ItemId::Label(id)))
-                .collect();
-            let selected: Vec<ItemId> = live
-                .iter()
-                .enumerate()
-                .filter_map(|(i, &id)| mask.get(i).copied().unwrap_or(i % 2 == 0).then_some(id))
-                .collect();
-            let clip = doc.copy(&selected).reoriented(Orient::ALL[orient_idx]);
-            let before = doc.fork();
-            let before_snap = doc.snapshot();
-            let pre_rev = doc.revision();
-            match doc.apply(Command::Paste {
-                clip,
-                at: pt(tx, ty),
-            }) {
-                Ok(change) if change.dirty.is_none() => {
-                    prop_assert_eq!(doc.revision(), pre_rev);
-                    prop_assert_eq!(doc.snapshot(), before_snap);
-                    assert_inv10_and_normal_form(&doc);
-                }
-                Ok(_) => {
-                    prop_assert_eq!(doc.revision(), pre_rev + 1);
-                    let all_des: Vec<&str> = doc.parts().map(|(_, p)| &*p.designator).collect();
-                    let uniq: BTreeSet<&str> = all_des.iter().copied().collect();
-                    prop_assert_eq!(all_des.len(), uniq.len(), "designators must be unique");
-                    assert_inv10_and_normal_form(&doc);
+                let live: Vec<ItemId> = doc
+                    .parts()
+                    .map(|(id, _)| ItemId::Part(id))
+                    .chain(doc.wires().map(|(id, _)| ItemId::Wire(id)))
+                    .chain(doc.labels().map(|(id, _)| ItemId::Label(id)))
+                    .collect();
+                let selected: Vec<ItemId> = live
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &id)| mask.get(i).copied().unwrap_or(i % 2 == 0).then_some(id))
+                    .collect();
+                let clip = doc.copy(&selected).reoriented(Orient::ALL[orient_idx]);
+                let before = doc.fork();
+                let before_snap = doc.snapshot();
+                let pre_rev = doc.revision();
+                match doc.apply(Command::Paste {
+                    clip,
+                    at: pt(tx, ty),
+                }) {
+                    Ok(change) if change.dirty.is_none() => {
+                        prop_assert_eq!(doc.revision(), pre_rev);
+                        prop_assert_eq!(doc.snapshot(), before_snap);
+                        assert_inv10_and_normal_form(&doc);
+                    }
+                    Ok(_) => {
+                        prop_assert_eq!(doc.revision(), pre_rev + 1);
+                        let all_des: Vec<&str> = doc.parts().map(|(_, p)| &*p.designator).collect();
+                        let uniq: BTreeSet<&str> = all_des.iter().copied().collect();
+                        prop_assert_eq!(all_des.len(), uniq.len(), "designators must be unique");
+                        assert_inv10_and_normal_form(&doc);
 
-                    let after = doc.fork();
-                    prop_assert!(doc.undo().is_some());
-                    prop_assert!(doc.content_eq(&before));
-                    assert_inv10_and_normal_form(&doc);
+                        let after = doc.fork();
+                        prop_assert!(doc.undo().is_some());
+                        prop_assert!(doc.content_eq(&before));
+                        assert_inv10_and_normal_form(&doc);
 
-                    prop_assert!(doc.redo().is_some());
-                    prop_assert!(doc.content_eq(&after));
-                    assert_inv10_and_normal_form(&doc);
-                }
-                Err(err) => {
-                    prop_assert!(
-                        false,
-                        "in-bounds paste of valid copied items must succeed, got {err:?}"
-                    );
+                        prop_assert!(doc.redo().is_some());
+                        prop_assert!(doc.content_eq(&after));
+                        assert_inv10_and_normal_form(&doc);
+                    }
+                    Err(err) => {
+                        prop_assert!(
+                            false,
+                            "in-bounds paste of valid copied items must succeed, got {err:?}"
+                        );
+                    }
                 }
             }
         }
+
+    /// P2.2 (T7.1 handoff): `ClipPart` carries the embedded `EmbeddedPartDef` and `Params`
+    /// across same-doc paste (deduplicating referenced definitions), cross-doc paste and
+    /// cut-and-paste, with exact `INV4` undo/redo.
+    #[test]
+    fn p2_2_copy_paste_preserves_embedded_def_and_params() {
+        let pins = two_pin_pins();
+        let bounds = two_pin_bounds();
+        let r_def = Arc::new(EmbeddedPartDef {
+            source_id: "omnia:resistor".into(),
+            content_hash: Some([0x33; 32]),
+            name: "Resistor".into(),
+            category: "Passives".into(),
+            description: "Ideal resistor".into(),
+            designator_prefix: "R".into(),
+            symbol: SymbolId(0),
+            local_pins: pins.clone(),
+            local_bounds: bounds,
+            pins: vec![
+                crate::EmbeddedPin {
+                    number: "1".into(),
+                    name: "a".into(),
+                    role: crate::PinRole::Passive,
+                },
+                crate::EmbeddedPin {
+                    number: "2".into(),
+                    name: "b".into(),
+                    role: crate::PinRole::Passive,
+                },
+            ],
+            params: vec![
+                crate::EmbeddedParamSpec {
+                    name: "resistance".into(),
+                    label: "Resistance".into(),
+                    kind: crate::ParamKind::Real {
+                        unit: Some("ohm".into()),
+                        min: Some(crate::FiniteF64::new(1e-6).unwrap()),
+                        max: None,
+                    },
+                    default: crate::ParamValue::Real {
+                        raw: "10k".into(),
+                        value: crate::parse_value("10k", Some("ohm")).unwrap(),
+                    },
+                    optional: false,
+                },
+                crate::EmbeddedParamSpec {
+                    name: "tc1".into(),
+                    label: "Tempco".into(),
+                    kind: crate::ParamKind::Real {
+                        unit: Some("1/K".into()),
+                        min: None,
+                        max: None,
+                    },
+                    default: crate::ParamValue::Real {
+                        raw: "0".into(),
+                        value: crate::parse_value("0", Some("1/K")).unwrap(),
+                    },
+                    optional: true,
+                },
+            ],
+            primary_param: Some("resistance".into()),
+            sim: crate::EmbeddedSimBinding::Primitive {
+                kind: crate::PrimitiveKind::Resistor,
+                terminals: vec![0, 1],
+            },
+        });
+
+        let mut params = Params::new();
+        params.insert(
+            "resistance".into(),
+            crate::ParamValue::Real {
+                raw: "4.7k".into(),
+                value: crate::parse_value("4.7k", Some("ohm")).unwrap(),
+            },
+        );
+        params.insert(
+            "tc1".into(),
+            crate::ParamValue::Real {
+                raw: "1e-3".into(),
+                value: crate::parse_value("1e-3", Some("1/K")).unwrap(),
+            },
+        );
+
+        let mut doc = Doc::new();
+        let r1_item = doc
+            .apply(Command::PlacePart {
+                part: part(0, pt(0, 0), Orient::IDENTITY, "R1", "4.7k"),
+                local_pins: pins,
+                local_bounds: bounds,
+                def: crate::PlaceDef::Embed(Arc::clone(&r_def)),
+                params: params.clone(),
+            })
+            .unwrap()
+            .added[0];
+        let ItemId::Part(r1) = r1_item else {
+            unreachable!();
+        };
+        let orig_def_id = doc.part_def_id(r1).unwrap();
+
+        let clip = doc.copy(&[r1_item]);
+        assert_eq!(clip.parts().len(), 1);
+        assert_eq!(clip.parts()[0].def, r_def);
+        assert_eq!(clip.parts()[0].params, params);
+
+        // Same-doc paste deduplicates onto `orig_def_id` and preserves overrides + value.
+        let before = doc.fork();
+        let c = doc
+            .apply(Command::Paste {
+                clip: clip.clone(),
+                at: pt(0, 10),
+            })
+            .unwrap();
+        let [ItemId::Part(r2)] = c.added[..] else {
+            panic!("expected pasted part");
+        };
+        assert_eq!(doc.part_defs().count(), 1);
+        assert_eq!(doc.part_def_id(r2), Some(orig_def_id));
+        assert_eq!(doc.part_params(r2), Some(&params));
+        assert_eq!(&*doc.part(r2).unwrap().value, "4.7k");
+
+        let after = doc.fork();
+        doc.undo().unwrap();
+        assert!(doc.content_eq(&before));
+        doc.redo().unwrap();
+        assert!(doc.content_eq(&after));
+
+        // Cross-doc paste into a brand-new Doc carries the full definition and overrides.
+        let mut fresh = Doc::new();
+        let cf = fresh
+            .apply(Command::Paste {
+                clip: clip.reoriented(Orient::ROT_90),
+                at: pt(4, 4),
+            })
+            .unwrap();
+        let [ItemId::Part(rf)] = cf.added[..] else {
+            panic!("expected pasted part in fresh doc");
+        };
+        assert_eq!(fresh.part_defs().count(), 1);
+        let fresh_def_id = fresh.part_def_id(rf).unwrap();
+        assert_eq!(fresh.part_def(fresh_def_id), Some(&*r_def));
+        assert_eq!(fresh.part_params(rf), Some(&params));
+        assert_eq!(&*fresh.part(rf).unwrap().value, "4.7k");
+
+        // Cut-and-paste: deleting all parts on `orig_def_id` makes it retained, so pasting
+        // allocates a fresh definition id (`PD8`) while preserving the definition and params.
+        doc.apply(Command::Delete {
+            items: vec![ItemId::Part(r1), ItemId::Part(r2)],
+            with_wires: false,
+        })
+        .unwrap();
+        let cc = doc
+            .apply(Command::Paste {
+                clip,
+                at: pt(0, 20),
+            })
+            .unwrap();
+        let [ItemId::Part(r3)] = cc.added[..] else {
+            panic!("expected pasted part after cut");
+        };
+        let cut_def_id = doc.part_def_id(r3).unwrap();
+        assert_ne!(cut_def_id, orig_def_id);
+        assert_eq!(doc.part_def(cut_def_id), Some(&*r_def));
+        assert_eq!(doc.part_params(r3), Some(&params));
     }
 }

@@ -213,6 +213,8 @@ impl SymbolLibrary {
             },
             local_pins: def.pins.iter().map(|pin| pin.at).collect(),
             local_bounds: def.bounds,
+            def: omnia_doc::PlaceDef::Unmodelled,
+            params: omnia_doc::Params::new(),
         }
     }
 
@@ -259,6 +261,7 @@ mod tests {
                     part,
                     local_pins,
                     local_bounds,
+                    ..
                 } = &cmd
                 else {
                     panic!("place_command must build PlacePart");

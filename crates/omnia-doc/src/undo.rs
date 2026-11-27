@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use crate::{
-    Change, Doc, ItemId, Label, LabelId, Orient, PartId, Pt, Wire, WireId,
+    Change, Doc, ItemId, Label, LabelId, Orient, ParamValue, Params, PartDefId, PartId, Pt, Wire,
+    WireId,
     command::{self, ChangeAcc, TextField},
     doc::StoredPart,
 };
@@ -51,6 +52,17 @@ pub(crate) enum UndoOp {
         item: ItemId,
         field: TextField,
         text: Arc<str>,
+    },
+    SetParam {
+        part: PartId,
+        name: Arc<str>,
+        value: Option<ParamValue>,
+        part_value: Arc<str>,
+    },
+    UpdatePartDef {
+        from: PartDefId,
+        to: PartDefId,
+        parts: Vec<(PartId, Arc<str>, Params)>,
     },
     Batch(Vec<UndoOp>),
 }
@@ -371,6 +383,61 @@ pub(crate) fn apply_undo_op(doc: &mut Doc, op: UndoOp, acc: &mut ChangeAcc) -> U
                 text: old_text,
             }
         }
+        UndoOp::SetParam {
+            part,
+            name,
+            value,
+            part_value,
+        } => {
+            let stored = doc
+                .parts
+                .get_mut(part.0)
+                .expect("undo/redo set_param part must exist");
+            let prev_value = match value {
+                Some(v) => stored.params.insert(Arc::clone(&name), v),
+                None => stored.params.remove(&name),
+            };
+            let prev_part_value = std::mem::replace(&mut stored.part.value, part_value);
+            let bounds = doc
+                .index
+                .bounds(ItemId::Part(part))
+                .expect("live part must exist in index");
+            acc.record_dirty(bounds);
+            acc.record_modified(part);
+            UndoOp::SetParam {
+                part,
+                name,
+                value: prev_value,
+                part_value: prev_part_value,
+            }
+        }
+        UndoOp::UpdatePartDef { from, to, parts } => {
+            let mut inverse_parts = Vec::with_capacity(parts.len());
+            for (part, target_value, target_params) in parts {
+                doc.part_defs.release(from);
+                doc.part_defs.acquire(to);
+                let stored = doc
+                    .parts
+                    .get_mut(part.0)
+                    .expect("undo/redo update_part_def part must exist");
+                debug_assert_eq!(stored.def, from);
+                stored.def = to;
+                let prev_value = std::mem::replace(&mut stored.part.value, target_value);
+                let prev_params = std::mem::replace(&mut stored.params, target_params);
+                let bounds = doc
+                    .index
+                    .bounds(ItemId::Part(part))
+                    .expect("live part must exist in index");
+                acc.record_dirty(bounds);
+                acc.record_modified(part);
+                inverse_parts.push((part, prev_value, prev_params));
+            }
+            UndoOp::UpdatePartDef {
+                from: to,
+                to: from,
+                parts: inverse_parts,
+            }
+        }
         UndoOp::Batch(ops) => {
             let mut next_ops = Vec::with_capacity(ops.len());
             for sub in ops.into_iter().rev() {
@@ -384,7 +451,7 @@ pub(crate) fn apply_undo_op(doc: &mut Doc, op: UndoOp, acc: &mut ChangeAcc) -> U
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Command, Rect, SymbolId, TextField};
+    use crate::{Command, PlaceDef, Rect, SymbolId, TextField};
     use proptest::prelude::*;
     use std::collections::HashMap;
 
@@ -405,6 +472,8 @@ mod tests {
             },
             local_pins: vec![Pt::ZERO],
             local_bounds: Rect::from_points(Pt { x: -2, y: -1 }, Pt { x: 2, y: 1 }).unwrap(),
+            def: PlaceDef::Unmodelled,
+            params: Params::new(),
         }
     }
 

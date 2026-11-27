@@ -1576,6 +1576,7 @@ fn section_9_3_example_shapes() {
             ItemId::Wire(WireId(41)),
         ],
         removed: vec![ItemId::Wire(WireId(7))],
+        modified: vec![],
         nets_changed: true,
     };
     let dto = ChangeDto::from(&change);
