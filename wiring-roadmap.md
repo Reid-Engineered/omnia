@@ -270,7 +270,7 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
 
 ## Milestone W3: wire editing and selection
 
-### W3.1 Wire tool: first corner and snap markers · todo
+### W3.1 Wire tool: first corner and snap markers · done
 - Lane: canvas · Depends: T6.2, W1.3 · Read: WD5, WD6
 - Owns: `crates/schematic-canvas/src/tool/wire.rs`, `overlay/snap_marker.rs` (after T6.2)
 - Do: choose the first leg per WD6; keep Space as the flip; one marker shape per snap class
@@ -982,6 +982,8 @@ emit `"Move refused: ..."`; (5) nits — documented doc-less `ToolMachine::{poin
 reorient, pointer_up}` follow behavior in `tool.rs` and added `TC-move-17` (selected
 wire + part) plus a non-rigid labelled-run regression test. Status stays `needs-human`
 for the Orion Linux/Wayland `Alt`-during-drag session check (`docs/measurements/W2.3.md`).
+
+2026-11-26 W3.1 done — verified and completed W3.1 (wire tool first corner and snap markers: `WD5`, `WD6`, `WK1`, `WK4`, `M10`, `INV5`, `INV6`, `INV11`, `K14`, `B10`, `TC-corner-01..04`, `TC-snap-09`). Confirmed `T6.2` already implemented the `WD6` first-leg choice/lock/Space-flip state in `crates/omnia-canvas/src/tool/wire.rs` and the five distinct `stage/snap` marker shapes (`Pin`, `WireEnd`, `Junction`, `WireBody`, `Grid`, using `omnia-theme` tokens only) in `crates/omnia-canvas/src/overlay/snap_marker.rs`, plus the 30 wire-preview/snap-marker goldens across both themes (`graphite`, `gray`) at 100%/125%/150% in `tests/golden/tests/overlay.rs`. Added GPUI simulated-input tests in `crates/omnia-canvas/src/tool/wire.rs` (`tc_corner_01_to_04_simulated_input_and_zero_sheet_paints`, `tc_snap_09_simulated_input_25_and_800_zoom_zero_sheet_paints`) verifying `TC-corner-01..04` (right -> horizontal, up -> vertical, diagonal tie -> horizontal, lock until Space flip, fresh leg per segment, zero `CachedSheet` notifies / zero pointer `SheetView` paints) and `TC-snap-09` (identical snap-class selection at 8 px inside / `Grid` fallback at 12 px outside across 25% and 800% zoom for `Pin`, `WireEnd`, `Junction`, and `WireBody` with zero `SheetView` paints). No files outside W3.1's `Owns` were modified. All five standard checks (`fmt`, workspace clippy, bench clippy with `scene-counts,readback`, `cargo test --workspace` incl. `omnia-golden`, `cargo deny check`) plus `git diff --check` pass locally on Windows; no checks weakened; no reference measurements run.
 
 2026-11-26 W3.6 done — implemented WD9 label placement on rerouted runs, splitting of
 planned rerouted segments at placed label coordinates, moved-part pin-riding labels, and

@@ -760,6 +760,8 @@ mod tests {
                     },
                     local_pins: def.pins.iter().map(|pin| pin.at).collect(),
                     local_bounds: def.bounds,
+                    def: omnia_doc::PlaceDef::Unmodelled,
+                    params: omnia_doc::Params::new(),
                 })
                 .unwrap();
                 wires.push(Wire {
@@ -1029,7 +1031,9 @@ mod tests {
                 },
                 local_pins: ground.pins.iter().map(|pin| pin.at).collect(),
                 local_bounds: ground.bounds,
-            }).unwrap();
+    def: omnia_doc::PlaceDef::Unmodelled,
+    params: omnia_doc::Params::new(),
+}).unwrap();
             let document = SheetDocument::new(cx.new(|_| doc));
             let handle = cx.open_window(
                 WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), show: false, focus: false, ..Default::default() },
@@ -1252,6 +1256,8 @@ mod tests {
                 },
                 local_pins: def.pins.iter().map(|pin| pin.at).collect(),
                 local_bounds: def.bounds,
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap()
             .added[0];
@@ -1269,6 +1275,8 @@ mod tests {
                 },
                 local_pins: def.pins.iter().map(|pin| pin.at).collect(),
                 local_bounds: def.bounds,
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap()
             .added[0];

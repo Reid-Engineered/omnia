@@ -552,6 +552,8 @@ mod windows {
                 },
                 local_pins: pins.clone(),
                 local_bounds: def.bounds,
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
             doc.apply(Command::AddWires(vec![

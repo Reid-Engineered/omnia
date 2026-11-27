@@ -1882,6 +1882,8 @@ mod tests {
                 },
                 local_pins: resistor.pins.iter().map(|p| p.at).collect(),
                 local_bounds: resistor.bounds,
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
         }
@@ -1901,6 +1903,8 @@ mod tests {
                 },
                 local_pins: resistor.pins.iter().map(|p| p.at).collect(),
                 local_bounds: resistor.bounds,
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
         let ItemId::Part(offscreen_id) = offscreen_change.added[0] else {
@@ -2101,6 +2105,8 @@ mod tests {
                 },
                 local_pins: resistor.pins.iter().map(|p| p.at).collect(),
                 local_bounds: resistor.bounds,
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
         let ItemId::Part(edge_part_id) = part_add.added[0] else {
@@ -2266,6 +2272,8 @@ mod tests {
                 },
                 local_pins: resistor.pins.iter().map(|p| p.at).collect(),
                 local_bounds: resistor.bounds,
+                def: omnia_doc::PlaceDef::Unmodelled,
+                params: omnia_doc::Params::new(),
             })
             .unwrap();
         let ItemId::Part(part_id) = change.added[0] else {

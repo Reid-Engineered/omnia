@@ -12,7 +12,7 @@ pub mod prefs;
 mod undo;
 
 pub use clip::{Clip, ClipPart};
-pub use command::{Change, Command, CommandError, TextField};
+pub use command::{Change, Command, CommandError, PlaceDef, TextField};
 pub use connectivity::{Connectivity, NetId};
 pub use doc::{Doc, ItemId, Label, LabelId, Part, PartId, StoreError, SymbolId, Wire, WireId};
 

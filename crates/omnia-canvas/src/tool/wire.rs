@@ -457,4 +457,373 @@ mod tests {
         let used = crate::sheet::replace_alloc_counter(prev).unwrap_or(0);
         assert_eq!(used, 0, "B10: warm wire preview update must not allocate");
     }
+
+    fn open_wire_overlay(
+        cx: &mut gpui::TestAppContext,
+        doc: Doc,
+    ) -> (
+        gpui::Entity<crate::OverlayView>,
+        gpui::Entity<Doc>,
+        &mut gpui::VisualTestContext,
+    ) {
+        use gpui::AppContext;
+        cx.update(|cx| cx.bind_keys(crate::keymap::standalone_bindings()));
+        let doc = cx.new(|_| doc);
+        let doc_clone = doc.clone();
+        let (overlay, cx) = cx.add_window_view(move |window, cx| {
+            let camera = Camera::new(Pt::ZERO, 1.0, Bounds::default());
+            let view = crate::OverlayView::new(doc_clone, camera, &omnia_theme::GRAPHITE, cx);
+            window.activate_window();
+            window.focus(view.focus_handle(), cx);
+            view
+        });
+        cx.run_until_parked();
+        (overlay, doc, cx)
+    }
+
+    fn overlay_screen(
+        overlay: &gpui::Entity<crate::OverlayView>,
+        cx: &mut gpui::VisualTestContext,
+        world: Pt,
+    ) -> gpui::Point<gpui::Pixels> {
+        cx.update(|_, cx| overlay.read(cx).camera().world_to_pixels(world))
+    }
+
+    fn move_overlay_world(
+        overlay: &gpui::Entity<crate::OverlayView>,
+        cx: &mut gpui::VisualTestContext,
+        world: Pt,
+    ) {
+        let p = overlay_screen(overlay, cx, world);
+        cx.simulate_mouse_move(p, None, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    fn click_overlay_world(
+        overlay: &gpui::Entity<crate::OverlayView>,
+        cx: &mut gpui::VisualTestContext,
+        world: Pt,
+    ) {
+        let p = overlay_screen(overlay, cx, world);
+        cx.simulate_mouse_down(p, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.simulate_mouse_up(p, gpui::MouseButton::Left, gpui::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    /// W3.1 done-when (`TC-corner-01`..`TC-corner-04`, `WD6`, `M10`, `INV5`, `INV11`):
+    /// simulated GPUI pointer/keyboard input chooses first leg once when leaving `start`
+    /// (right -> Horizontal, up -> Vertical, diagonal tie -> Horizontal), keeps it even when the
+    /// other axis dominates, flips only on Space, resets on each new segment, and causes zero
+    /// `SheetView` paints during preview/flip/cancel.
+    #[gpui::test]
+    fn tc_corner_01_to_04_simulated_input_and_zero_sheet_paints(cx: &mut gpui::TestAppContext) {
+        use crate::tool::{Tool, ToolState};
+        use std::{cell::Cell, rc::Rc};
+
+        let (overlay, doc, cx) = open_wire_overlay(cx, Doc::new());
+        let sheet_notifies = Rc::new(Cell::new(0u32));
+        let sn = sheet_notifies.clone();
+        cx.update(|_, cx| {
+            let sheet = overlay.read(cx).sheet_entity().clone();
+            cx.observe(&sheet, move |_, _| sn.set(sn.get() + 1))
+                .detach();
+            overlay.update(cx, |o, cx| o.set_tool(Tool::Wire, cx));
+        });
+        cx.run_until_parked();
+
+        let sp0 = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        let sn0 = sheet_notifies.get();
+        let rev0 = cx.update(|_, cx| doc.read(cx).revision());
+
+        // TC-corner-01: anchor start at (0, 0) and leave right to (3, 0) -> Horizontal first.
+        click_overlay_world(&overlay, cx, pt(0, 0));
+        move_overlay_world(&overlay, cx, pt(3, 0));
+        match cx.update(|_, cx| overlay.read(cx).tool_state().clone()) {
+            ToolState::Wiring(w) => {
+                assert_eq!(w.first_leg, Some(Axis::Horizontal));
+                assert_eq!(
+                    w.preview_wires(),
+                    [
+                        Some(Wire {
+                            a: pt(0, 0),
+                            b: pt(3, 0)
+                        }),
+                        None
+                    ]
+                );
+            }
+            other => panic!("expected Wiring state, got {other:?}"),
+        }
+
+        // TC-corner-04 (H->V): move so vertical dominates (3, 8) -> Horizontal stays locked.
+        move_overlay_world(&overlay, cx, pt(3, 8));
+        match cx.update(|_, cx| overlay.read(cx).tool_state().clone()) {
+            ToolState::Wiring(w) => {
+                assert_eq!(w.first_leg, Some(Axis::Horizontal));
+                assert_eq!(
+                    w.preview_wires(),
+                    [
+                        Some(Wire {
+                            a: pt(0, 0),
+                            b: pt(3, 0)
+                        }),
+                        Some(Wire {
+                            a: pt(3, 0),
+                            b: pt(3, 8)
+                        }),
+                    ]
+                );
+            }
+            other => panic!("expected Wiring state, got {other:?}"),
+        }
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sp0,
+            "INV11: pointer preview moves must cost 0 SheetView paints"
+        );
+        // Space flips the corner to Vertical (0 CachedSheet notifies; at most 1 G17 pointer->key
+        // modality-switch paint).
+        let sp_before_space = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        cx.simulate_keystrokes("space");
+        cx.run_until_parked();
+        match cx.update(|_, cx| overlay.read(cx).tool_state().clone()) {
+            ToolState::Wiring(w) => {
+                assert_eq!(w.first_leg, Some(Axis::Vertical));
+                assert_eq!(
+                    w.preview_wires(),
+                    [
+                        Some(Wire {
+                            a: pt(0, 0),
+                            b: pt(0, 8)
+                        }),
+                        Some(Wire {
+                            a: pt(0, 8),
+                            b: pt(3, 8)
+                        }),
+                    ]
+                );
+            }
+            other => panic!("expected flipped Wiring state, got {other:?}"),
+        }
+        assert_eq!(
+            cx.update(|_, cx| doc.read(cx).revision()),
+            rev0,
+            "INV5: preview and Space flip must not modify Doc"
+        );
+        assert_eq!(
+            sheet_notifies.get(),
+            sn0,
+            "INV11: preview and Space flip must never notify CachedSheet"
+        );
+        assert!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)) <= sp_before_space + 1,
+            "INV11/G17: Space flip causes at most 1 GPUI modality-switch paint"
+        );
+
+        // Commit on empty Grid (3, 8): continues from (3, 8) with a fresh WD6 choice.
+        click_overlay_world(&overlay, cx, pt(3, 8));
+        assert_eq!(cx.update(|_, cx| doc.read(cx).revision()), rev0 + 1);
+        let sn_after_commit = sheet_notifies.get();
+
+        // TC-corner-02: leave upward from (3, 8) to (3, 5) -> Vertical first.
+        move_overlay_world(&overlay, cx, pt(3, 5));
+        let sp_seg2 = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        assert!(matches!(
+            cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                first_leg: Some(Axis::Vertical),
+                ..
+            })
+        ));
+        // TC-corner-04 (V->H): move right to (10, 5) -> Vertical stays locked until Space flips.
+        move_overlay_world(&overlay, cx, pt(10, 5));
+        assert!(matches!(
+            cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                first_leg: Some(Axis::Vertical),
+                ..
+            })
+        ));
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sp_seg2,
+            "INV11: second-segment pointer preview must cost 0 SheetView paints"
+        );
+        cx.simulate_keystrokes("space");
+        cx.run_until_parked();
+        assert!(matches!(
+            cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                first_leg: Some(Axis::Horizontal),
+                ..
+            })
+        ));
+        assert_eq!(
+            sheet_notifies.get(),
+            sn_after_commit,
+            "INV11: second-segment preview and flip must never notify CachedSheet"
+        );
+
+        // Esc drops active start without editing Doc, staying in Tool::Wire.
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(cx.update(|_, cx| doc.read(cx).revision()), rev0 + 1);
+
+        // TC-corner-03: start at (-4, -4) and leave diagonally to (-1, -7) (|dx| == |dy|).
+        click_overlay_world(&overlay, cx, pt(-4, -4));
+        let sp_diag = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+        move_overlay_world(&overlay, cx, pt(-1, -7));
+        assert!(matches!(
+            cx.update(|_, cx| overlay.read(cx).tool_state().clone()),
+            ToolState::Wiring(WireGesture {
+                first_leg: Some(Axis::Horizontal),
+                ..
+            })
+        ));
+        assert_eq!(
+            cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+            sp_diag,
+            "INV11: diagonal preview must cost 0 SheetView paints"
+        );
+        assert_eq!(sheet_notifies.get(), sn_after_commit);
+    }
+
+    /// W3.1 done-when (`TC-snap-09`, `WD5`, `WK4`, `INV11`): simulated pointer motion at 25% and
+    /// 800% zoom selects the exact same snap class (`Pin`, `WireEnd`, `Junction`, `WireBody`) at
+    /// 8 px screen distance and falls back to `Grid` at 12 px screen distance, with 0 `SheetView`
+    /// paints.
+    #[gpui::test]
+    fn tc_snap_09_simulated_input_25_and_800_zoom_zero_sheet_paints(cx: &mut gpui::TestAppContext) {
+        use crate::tool::{Tool, ToolState};
+
+        let doc = Doc::from_items(
+            [(
+                Part {
+                    symbol: SymbolId(0),
+                    at: pt(-10, 0),
+                    orient: Orient::IDENTITY,
+                    designator: "R1".into(),
+                    value: "".into(),
+                },
+                vec![Pt::ZERO],
+                Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
+            )],
+            [
+                // WireEnd at (0, -6) with vertical body extending upward.
+                Wire {
+                    a: pt(0, -6),
+                    b: pt(0, -10),
+                },
+                // 3-wire Junction at (10, 0).
+                Wire {
+                    a: pt(6, 0),
+                    b: pt(10, 0),
+                },
+                Wire {
+                    a: pt(10, 0),
+                    b: pt(14, 0),
+                },
+                Wire {
+                    a: pt(10, 0),
+                    b: pt(10, 4),
+                },
+                // Horizontal WireBody passing through (0, 6).
+                Wire {
+                    a: pt(-4, 6),
+                    b: pt(4, 6),
+                },
+            ],
+            [],
+        )
+        .unwrap();
+
+        let (overlay, _, cx) = open_wire_overlay(cx, doc);
+        cx.update(|_, cx| overlay.update(cx, |o, cx| o.set_tool(Tool::Wire, cx)));
+        cx.run_until_parked();
+
+        let cases = [
+            ("Pin", pt(-10, 0), (8.0_f32, 0.0_f32), (12.0_f32, 0.0_f32)),
+            ("WireEnd", pt(0, -6), (0.0, 8.0), (0.0, 12.0)),
+            ("Junction", pt(10, 0), (0.0, -8.0), (0.0, -12.0)),
+            ("WireBody", pt(0, 6), (0.0, 8.0), (0.0, 12.0)),
+        ];
+
+        for zoom in [0.25, 8.0] {
+            for &(label, target, inside_px, outside_px) in &cases {
+                cx.update(|_, cx| {
+                    overlay.update(cx, |o, cx| {
+                        let vp = o.viewport();
+                        o.set_camera(Camera::new(target, zoom, vp), cx);
+                    });
+                });
+                cx.run_until_parked();
+                let sp0 = cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx));
+                let target_px = overlay_screen(&overlay, cx, target);
+
+                let inside = gpui::point(
+                    target_px.x + gpui::px(inside_px.0),
+                    target_px.y + gpui::px(inside_px.1),
+                );
+                cx.simulate_mouse_move(inside, None, gpui::Modifiers::none());
+                cx.run_until_parked();
+                let inside_snap = match cx.update(|_, cx| overlay.read(cx).tool_state().clone()) {
+                    ToolState::Wiring(w) => w.snap,
+                    other => panic!("expected Wiring state, got {other:?}"),
+                };
+                match label {
+                    "Pin" => assert_eq!(
+                        inside_snap,
+                        Some(Snap::Pin {
+                            part: PartId(0),
+                            pin: 0,
+                            at: target,
+                        }),
+                        "8 px inside must snap to Pin at zoom {zoom}"
+                    ),
+                    "WireEnd" => assert_eq!(
+                        inside_snap,
+                        Some(Snap::WireEnd {
+                            wire: WireId(0),
+                            at: target,
+                        }),
+                        "8 px inside must snap to WireEnd at zoom {zoom}"
+                    ),
+                    "Junction" => assert_eq!(
+                        inside_snap,
+                        Some(Snap::Junction { at: target }),
+                        "8 px inside must snap to Junction at zoom {zoom}"
+                    ),
+                    "WireBody" => assert_eq!(
+                        inside_snap,
+                        Some(Snap::WireBody {
+                            wire: WireId(4),
+                            at: target,
+                        }),
+                        "8 px inside must snap to WireBody at zoom {zoom}"
+                    ),
+                    _ => unreachable!(),
+                }
+
+                let outside = gpui::point(
+                    target_px.x + gpui::px(outside_px.0),
+                    target_px.y + gpui::px(outside_px.1),
+                );
+                cx.simulate_mouse_move(outside, None, gpui::Modifiers::none());
+                cx.run_until_parked();
+                let outside_snap = match cx.update(|_, cx| overlay.read(cx).tool_state().clone()) {
+                    ToolState::Wiring(w) => w.snap,
+                    other => panic!("expected Wiring state, got {other:?}"),
+                };
+                assert!(
+                    matches!(outside_snap, Some(Snap::Grid(_))),
+                    "12 px outside {label} must fall back to Grid at zoom {zoom}, got {outside_snap:?}"
+                );
+                assert_eq!(
+                    cx.update(|_, cx| overlay.read(cx).sheet_paint_count(cx)),
+                    sp0,
+                    "INV11: TC-snap-09 pointer moves must cost 0 SheetView paints"
+                );
+            }
+        }
+    }
 }

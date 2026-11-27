@@ -2760,6 +2760,8 @@ mod tests {
             },
             local_pins: vec![Pt::ZERO],
             local_bounds: Rect::new(Pt::ZERO, Pt::ZERO).unwrap(),
+            def: crate::PlaceDef::Unmodelled,
+            params: crate::Params::new(),
         })
         .unwrap();
         doc.apply(Command::AddWires(vec![w(0, 0, 10, 0)])).unwrap();
