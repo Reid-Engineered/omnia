@@ -8,7 +8,7 @@ use crate::catalog::{
     BuiltinSimBinding, BuiltinSupplyDecl,
 };
 
-static CAPACITOR_LOCAL_PINS: &[Pt] = &[
+static PART_CAPACITOR_LOCAL_PINS: &[Pt] = &[
     Pt {
         x: -5_080_000,
         y: 0,
@@ -16,7 +16,7 @@ static CAPACITOR_LOCAL_PINS: &[Pt] = &[
     Pt { x: 5_080_000, y: 0 },
 ];
 
-static CAPACITOR_PINS: &[BuiltinPin] = &[
+static PART_CAPACITOR_PINS: &[BuiltinPin] = &[
     BuiltinPin {
         number: "1",
         name: "a",
@@ -29,7 +29,7 @@ static CAPACITOR_PINS: &[BuiltinPin] = &[
     },
 ];
 
-static CAPACITOR_PARAMS: &[BuiltinParamSpec] = &[
+static PART_CAPACITOR_PARAMS: &[BuiltinParamSpec] = &[
     BuiltinParamSpec {
         name: "capacitance",
         label: "Capacitance",
@@ -60,7 +60,7 @@ static CAPACITOR_PARAMS: &[BuiltinParamSpec] = &[
     },
 ];
 
-static DIODE_SIGNAL_LOCAL_PINS: &[Pt] = &[
+static PART_DIODE_HSIGNAL_LOCAL_PINS: &[Pt] = &[
     Pt {
         x: -5_080_000,
         y: 0,
@@ -68,7 +68,7 @@ static DIODE_SIGNAL_LOCAL_PINS: &[Pt] = &[
     Pt { x: 5_080_000, y: 0 },
 ];
 
-static DIODE_SIGNAL_PINS: &[BuiltinPin] = &[
+static PART_DIODE_HSIGNAL_PINS: &[BuiltinPin] = &[
     BuiltinPin {
         number: "1",
         name: "a",
@@ -81,19 +81,19 @@ static DIODE_SIGNAL_PINS: &[BuiltinPin] = &[
     },
 ];
 
-static DIODE_SIGNAL_PARAMS: &[BuiltinParamSpec] = &[];
+static PART_DIODE_HSIGNAL_PARAMS: &[BuiltinParamSpec] = &[];
 
-static GROUND_LOCAL_PINS: &[Pt] = &[Pt { x: 0, y: 0 }];
+static PART_GROUND_LOCAL_PINS: &[Pt] = &[Pt { x: 0, y: 0 }];
 
-static GROUND_PINS: &[BuiltinPin] = &[BuiltinPin {
+static PART_GROUND_PINS: &[BuiltinPin] = &[BuiltinPin {
     number: "1",
     name: "gnd",
     role: PinRole::Ground,
 }];
 
-static GROUND_PARAMS: &[BuiltinParamSpec] = &[];
+static PART_GROUND_PARAMS: &[BuiltinParamSpec] = &[];
 
-static OPAMP_GENERIC_LOCAL_PINS: &[Pt] = &[
+static PART_OPAMP_HGENERIC_LOCAL_PINS: &[Pt] = &[
     Pt {
         x: -11_430_000,
         y: -3_810_000,
@@ -116,7 +116,7 @@ static OPAMP_GENERIC_LOCAL_PINS: &[Pt] = &[
     },
 ];
 
-static OPAMP_GENERIC_PINS: &[BuiltinPin] = &[
+static PART_OPAMP_HGENERIC_PINS: &[BuiltinPin] = &[
     BuiltinPin {
         number: "3",
         name: "in+",
@@ -144,9 +144,9 @@ static OPAMP_GENERIC_PINS: &[BuiltinPin] = &[
     },
 ];
 
-static OPAMP_GENERIC_PARAMS: &[BuiltinParamSpec] = &[];
+static PART_OPAMP_HGENERIC_PARAMS: &[BuiltinParamSpec] = &[];
 
-static POTENTIOMETER_LOCAL_PINS: &[Pt] = &[
+static PART_POTENTIOMETER_LOCAL_PINS: &[Pt] = &[
     Pt {
         x: -5_080_000,
         y: 0,
@@ -155,7 +155,7 @@ static POTENTIOMETER_LOCAL_PINS: &[Pt] = &[
     Pt { x: 0, y: 5_080_000 },
 ];
 
-static POTENTIOMETER_PINS: &[BuiltinPin] = &[
+static PART_POTENTIOMETER_PINS: &[BuiltinPin] = &[
     BuiltinPin {
         number: "1",
         name: "a",
@@ -173,7 +173,7 @@ static POTENTIOMETER_PINS: &[BuiltinPin] = &[
     },
 ];
 
-static POTENTIOMETER_PARAMS: &[BuiltinParamSpec] = &[
+static PART_POTENTIOMETER_PARAMS: &[BuiltinParamSpec] = &[
     BuiltinParamSpec {
         name: "resistance",
         label: "Total resistance",
@@ -204,7 +204,7 @@ static POTENTIOMETER_PARAMS: &[BuiltinParamSpec] = &[
     },
 ];
 
-static RESISTOR_LOCAL_PINS: &[Pt] = &[
+static PART_RESISTOR_LOCAL_PINS: &[Pt] = &[
     Pt {
         x: -5_080_000,
         y: 0,
@@ -212,7 +212,7 @@ static RESISTOR_LOCAL_PINS: &[Pt] = &[
     Pt { x: 5_080_000, y: 0 },
 ];
 
-static RESISTOR_PINS: &[BuiltinPin] = &[
+static PART_RESISTOR_PINS: &[BuiltinPin] = &[
     BuiltinPin {
         number: "1",
         name: "a",
@@ -225,7 +225,7 @@ static RESISTOR_PINS: &[BuiltinPin] = &[
     },
 ];
 
-static RESISTOR_PARAMS: &[BuiltinParamSpec] = &[
+static PART_RESISTOR_PARAMS: &[BuiltinParamSpec] = &[
     BuiltinParamSpec {
         name: "resistance",
         label: "Resistance",
@@ -256,7 +256,7 @@ static RESISTOR_PARAMS: &[BuiltinParamSpec] = &[
     },
 ];
 
-static VSOURCE_AC_LOCAL_PINS: &[Pt] = &[
+static PART_VSOURCE_HAC_LOCAL_PINS: &[Pt] = &[
     Pt { x: 5_080_000, y: 0 },
     Pt {
         x: -5_080_000,
@@ -264,7 +264,7 @@ static VSOURCE_AC_LOCAL_PINS: &[Pt] = &[
     },
 ];
 
-static VSOURCE_AC_PINS: &[BuiltinPin] = &[
+static PART_VSOURCE_HAC_PINS: &[BuiltinPin] = &[
     BuiltinPin {
         number: "1",
         name: "+",
@@ -277,7 +277,7 @@ static VSOURCE_AC_PINS: &[BuiltinPin] = &[
     },
 ];
 
-static VSOURCE_AC_PARAMS: &[BuiltinParamSpec] = &[
+static PART_VSOURCE_HAC_PARAMS: &[BuiltinParamSpec] = &[
     BuiltinParamSpec {
         name: "ac_mag",
         label: "AC magnitude",
@@ -469,7 +469,7 @@ static VSOURCE_AC_PARAMS: &[BuiltinParamSpec] = &[
     },
 ];
 
-static VSOURCE_DC_LOCAL_PINS: &[Pt] = &[
+static PART_VSOURCE_HDC_LOCAL_PINS: &[Pt] = &[
     Pt { x: 5_080_000, y: 0 },
     Pt {
         x: -5_080_000,
@@ -477,7 +477,7 @@ static VSOURCE_DC_LOCAL_PINS: &[Pt] = &[
     },
 ];
 
-static VSOURCE_DC_PINS: &[BuiltinPin] = &[
+static PART_VSOURCE_HDC_PINS: &[BuiltinPin] = &[
     BuiltinPin {
         number: "1",
         name: "+",
@@ -490,7 +490,7 @@ static VSOURCE_DC_PINS: &[BuiltinPin] = &[
     },
 ];
 
-static VSOURCE_DC_PARAMS: &[BuiltinParamSpec] = &[
+static PART_VSOURCE_HDC_PARAMS: &[BuiltinParamSpec] = &[
     BuiltinParamSpec {
         name: "ac_mag",
         label: "AC magnitude",
@@ -699,7 +699,7 @@ pub static BUILTINS: &[BuiltinPart] = &[
         designator_prefix: "C",
         symbol: SymbolId(0),
         symbol_default: true,
-        local_pins: CAPACITOR_LOCAL_PINS,
+        local_pins: PART_CAPACITOR_LOCAL_PINS,
         local_bounds: Rect {
             min: Pt {
                 x: -5_080_000,
@@ -710,8 +710,8 @@ pub static BUILTINS: &[BuiltinPart] = &[
                 y: 5_080_000,
             },
         },
-        pins: CAPACITOR_PINS,
-        params: CAPACITOR_PARAMS,
+        pins: PART_CAPACITOR_PINS,
+        params: PART_CAPACITOR_PARAMS,
         primary_param: Some("capacitance"),
         sim: BuiltinSimBinding::Primitive {
             kind: PrimitiveKind::Capacitor,
@@ -735,7 +735,7 @@ pub static BUILTINS: &[BuiltinPart] = &[
         designator_prefix: "D",
         symbol: SymbolId(1),
         symbol_default: true,
-        local_pins: DIODE_SIGNAL_LOCAL_PINS,
+        local_pins: PART_DIODE_HSIGNAL_LOCAL_PINS,
         local_bounds: Rect {
             min: Pt {
                 x: -5_080_000,
@@ -746,8 +746,8 @@ pub static BUILTINS: &[BuiltinPart] = &[
                 y: 5_080_000,
             },
         },
-        pins: DIODE_SIGNAL_PINS,
-        params: DIODE_SIGNAL_PARAMS,
+        pins: PART_DIODE_HSIGNAL_PINS,
+        params: PART_DIODE_HSIGNAL_PARAMS,
         primary_param: None,
         sim: BuiltinSimBinding::Model {
             spice_prefix: 'D',
@@ -777,7 +777,7 @@ pub static BUILTINS: &[BuiltinPart] = &[
         designator_prefix: "",
         symbol: SymbolId(2),
         symbol_default: true,
-        local_pins: GROUND_LOCAL_PINS,
+        local_pins: PART_GROUND_LOCAL_PINS,
         local_bounds: Rect {
             min: Pt {
                 x: -3_048_000,
@@ -788,8 +788,8 @@ pub static BUILTINS: &[BuiltinPart] = &[
                 y: 6_096_000,
             },
         },
-        pins: GROUND_PINS,
-        params: GROUND_PARAMS,
+        pins: PART_GROUND_PINS,
+        params: PART_GROUND_PARAMS,
         primary_param: None,
         sim: BuiltinSimBinding::Primitive {
             kind: PrimitiveKind::Ground,
@@ -813,7 +813,7 @@ pub static BUILTINS: &[BuiltinPart] = &[
         designator_prefix: "U",
         symbol: SymbolId(3),
         symbol_default: true,
-        local_pins: OPAMP_GENERIC_LOCAL_PINS,
+        local_pins: PART_OPAMP_HGENERIC_LOCAL_PINS,
         local_bounds: Rect {
             min: Pt {
                 x: -11_430_000,
@@ -824,8 +824,8 @@ pub static BUILTINS: &[BuiltinPart] = &[
                 y: 11_430_000,
             },
         },
-        pins: OPAMP_GENERIC_PINS,
-        params: OPAMP_GENERIC_PARAMS,
+        pins: PART_OPAMP_HGENERIC_PINS,
+        params: PART_OPAMP_HGENERIC_PARAMS,
         primary_param: None,
         sim: BuiltinSimBinding::Subckt {
             entry: "OPAMP_GENERIC",
@@ -858,7 +858,7 @@ pub static BUILTINS: &[BuiltinPart] = &[
         designator_prefix: "R",
         symbol: SymbolId(4),
         symbol_default: true,
-        local_pins: POTENTIOMETER_LOCAL_PINS,
+        local_pins: PART_POTENTIOMETER_LOCAL_PINS,
         local_bounds: Rect {
             min: Pt {
                 x: -5_080_000,
@@ -869,8 +869,8 @@ pub static BUILTINS: &[BuiltinPart] = &[
                 y: 5_080_000,
             },
         },
-        pins: POTENTIOMETER_PINS,
-        params: POTENTIOMETER_PARAMS,
+        pins: PART_POTENTIOMETER_PINS,
+        params: PART_POTENTIOMETER_PARAMS,
         primary_param: Some("resistance"),
         sim: BuiltinSimBinding::Primitive {
             kind: PrimitiveKind::Potentiometer,
@@ -894,7 +894,7 @@ pub static BUILTINS: &[BuiltinPart] = &[
         designator_prefix: "R",
         symbol: SymbolId(5),
         symbol_default: true,
-        local_pins: RESISTOR_LOCAL_PINS,
+        local_pins: PART_RESISTOR_LOCAL_PINS,
         local_bounds: Rect {
             min: Pt {
                 x: -5_080_000,
@@ -905,8 +905,8 @@ pub static BUILTINS: &[BuiltinPart] = &[
                 y: 5_080_000,
             },
         },
-        pins: RESISTOR_PINS,
-        params: RESISTOR_PARAMS,
+        pins: PART_RESISTOR_PINS,
+        params: PART_RESISTOR_PARAMS,
         primary_param: Some("resistance"),
         sim: BuiltinSimBinding::Primitive {
             kind: PrimitiveKind::Resistor,
@@ -930,7 +930,7 @@ pub static BUILTINS: &[BuiltinPart] = &[
         designator_prefix: "V",
         symbol: SymbolId(6),
         symbol_default: false,
-        local_pins: VSOURCE_AC_LOCAL_PINS,
+        local_pins: PART_VSOURCE_HAC_LOCAL_PINS,
         local_bounds: Rect {
             min: Pt {
                 x: -5_080_000,
@@ -941,8 +941,8 @@ pub static BUILTINS: &[BuiltinPart] = &[
                 y: 5_080_000,
             },
         },
-        pins: VSOURCE_AC_PINS,
-        params: VSOURCE_AC_PARAMS,
+        pins: PART_VSOURCE_HAC_PINS,
+        params: PART_VSOURCE_HAC_PARAMS,
         primary_param: Some("ampl"),
         sim: BuiltinSimBinding::Primitive {
             kind: PrimitiveKind::VSource,
@@ -966,7 +966,7 @@ pub static BUILTINS: &[BuiltinPart] = &[
         designator_prefix: "V",
         symbol: SymbolId(7),
         symbol_default: false,
-        local_pins: VSOURCE_DC_LOCAL_PINS,
+        local_pins: PART_VSOURCE_HDC_LOCAL_PINS,
         local_bounds: Rect {
             min: Pt {
                 x: -5_080_000,
@@ -977,8 +977,8 @@ pub static BUILTINS: &[BuiltinPart] = &[
                 y: 5_080_000,
             },
         },
-        pins: VSOURCE_DC_PINS,
-        params: VSOURCE_DC_PARAMS,
+        pins: PART_VSOURCE_HDC_PINS,
+        params: PART_VSOURCE_HDC_PARAMS,
         primary_param: Some("dc"),
         sim: BuiltinSimBinding::Primitive {
             kind: PrimitiveKind::VSource,

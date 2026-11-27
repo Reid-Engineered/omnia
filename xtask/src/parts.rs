@@ -7,11 +7,14 @@
 //! deterministic, rustfmt-clean static Rust tables in `crates/omnia-parts/src/generated.rs`.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt::Write as _,
     fs,
-    path::Path,
-    sync::Arc,
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use omnia_doc::{
@@ -81,20 +84,56 @@ pub fn run(root: &Path, check: bool) -> Result<(), Error> {
     }
 }
 
-/// Runs `cargo xtask part pack <dir> <out.opart>`: validates with `PD10` and writes a deterministic
-/// `.opart` archive.
+/// Runs `cargo xtask part pack <dir> <out.opart>`: packs to a staging archive, validates the
+/// packed archive's `part.toml` snapshot with `PD10`, and publishes `out.opart` only on success.
 pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
-    let source = LibrarySource::open(dir)
-        .map_err(|e| format!("open part directory {}: {e}", dir.display()))?;
-    let part_path = "part.toml";
-    let resolved = resolve_with_context(&source, part_path, "")?;
-    let symbols = SymbolLibrary::builtin();
-    let embedded = build_embedded(&resolved, &symbols, format!("custom:{}", resolved.part.id))?;
-    validate(&embedded).map_err(|e| format!("{}/{part_path}: {e}", dir.display()))?;
-    let hash = pack_opart(dir, out_path)
-        .map_err(|e| format!("pack {} -> {}: {e}", dir.display(), out_path.display()))?;
-    println!("part pack: wrote {} (sha256:{hash})", out_path.display());
-    Ok(())
+    let stage_path = staging_opart_path(out_path);
+    let pack_result = (|| -> Result<omnia_parts::ContentHash, Error> {
+        let hash = pack_opart(dir, &stage_path)
+            .map_err(|e| format!("pack {} -> {}: {e}", dir.display(), out_path.display()))?;
+        let archive = LibrarySource::open(&stage_path)
+            .map_err(|e| format!("reopen staged archive {}: {e}", stage_path.display()))?;
+        let part_path = "part.toml";
+        let resolved = resolve_with_context(&archive, part_path, "")?;
+        let symbols = SymbolLibrary::builtin();
+        let embedded = build_embedded(&resolved, &symbols, format!("custom:{}", resolved.part.id))?;
+        validate(&embedded).map_err(|e| format!("{}/{part_path}: {e}", dir.display()))?;
+        Ok(hash)
+    })();
+
+    match pack_result {
+        Ok(hash) => {
+            if out_path.exists() {
+                fs::remove_file(out_path)
+                    .map_err(|e| format!("replace {}: {e}", out_path.display()))?;
+            }
+            fs::rename(&stage_path, out_path).map_err(|e| {
+                let _ = fs::remove_file(&stage_path);
+                format!(
+                    "publish {} -> {}: {e}",
+                    stage_path.display(),
+                    out_path.display()
+                )
+            })?;
+            println!("part pack: wrote {} (sha256:{hash})", out_path.display());
+            Ok(())
+        }
+        Err(err) => {
+            let _ = fs::remove_file(&stage_path);
+            Err(err)
+        }
+    }
+}
+
+fn staging_opart_path(out_path: &Path) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+    let parent = out_path.parent().unwrap_or_else(|| Path::new("."));
+    let stem = out_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("part");
+    parent.join(format!(".{stem}.tmp-{}-{seq}.opart", std::process::id()))
 }
 
 /// Reads `library/` and `THIRD_PARTY.md` under `root`, validates every part and model licence,
@@ -113,30 +152,27 @@ fn compile_library(root: &Path) -> Result<Vec<CompiledPart>, Error> {
     let third_party = fs::read_to_string(&third_party_path)
         .map_err(|e| format!("read {}: {e}", third_party_path.display()))?;
 
-    // Check every bundled model file under `library/models/` is listed in `THIRD_PARTY.md` (PK11, PQ7).
+    // Check every bundled model file under `library/models/` declares an allowed PK11 SPDX
+    // header and has a matching attribution entry in `THIRD_PARTY.md` (PK11, PQ7).
     let model_paths: Vec<String> = source
         .paths()
         .filter(|path| path.starts_with("models/"))
         .map(str::to_owned)
         .collect();
+    let mut model_licenses: BTreeMap<String, String> = BTreeMap::new();
     for model_rel in &model_paths {
         let repo_rel = format!("{LIBRARY_DIR}/{model_rel}");
-        if !third_party.contains(&repo_rel) {
-            return Err(format!(
-                "{repo_rel}: bundled model file is not listed in {THIRD_PARTY_MD} (PK11, PQ7)"
-            ));
-        }
-        // If a model file carries an SPDX-License-Identifier tag, verify it is in PK11 too.
         let bytes = source
             .read(model_rel)
             .map_err(|e| format!("{repo_rel}: {e}"))?;
         let text = std::str::from_utf8(&bytes).map_err(|e| format!("{repo_rel}: {e}"))?;
-        for line in text.lines() {
-            if let Some(rest) = line.split_once("SPDX-License-Identifier:").map(|(_, r)| r) {
-                let spdx = rest.trim().trim_end_matches([')', ']', ',', ';']);
-                check_pk11_license(&repo_rel, spdx)?;
-            }
+        let spdx = parse_model_spdx(&repo_rel, text)?;
+        if !has_third_party_attribution(&third_party, &repo_rel, &spdx) {
+            return Err(format!(
+                "{repo_rel}: bundled model file with licence {spdx:?} is missing an exact attribution entry (`- `{repo_rel}` ... `{spdx}``) in {THIRD_PARTY_MD} (PK11, PQ7)"
+            ));
         }
+        model_licenses.insert(model_rel.clone(), spdx);
     }
 
     let part_paths: Vec<String> = source
@@ -154,7 +190,6 @@ fn compile_library(root: &Path) -> Result<Vec<CompiledPart>, Error> {
     let mut compiled = Vec::with_capacity(part_paths.len());
     let mut seen_ids: BTreeMap<String, String> = BTreeMap::new();
     let mut defaults_by_symbol: BTreeMap<SymbolId, (String, String)> = BTreeMap::new();
-    let mut referenced_models: BTreeSet<String> = BTreeSet::new();
 
     for part_rel in &part_paths {
         let display_path = format!("{LIBRARY_DIR}/{part_rel}");
@@ -177,7 +212,6 @@ fn compile_library(root: &Path) -> Result<Vec<CompiledPart>, Error> {
                         "{display_path}: built-in model path {model_file:?} must live under models/"
                     ));
                 }
-                referenced_models.insert(model_file.to_owned());
                 let license = part.license.as_ref().ok_or_else(|| {
                     format!(
                         "{display_path} ({LIBRARY_DIR}/{model_file}): missing [license] metadata required for bundled models (PK11)"
@@ -187,6 +221,14 @@ fn compile_library(root: &Path) -> Result<Vec<CompiledPart>, Error> {
                     &format!("{display_path} ({LIBRARY_DIR}/{model_file})"),
                     &license.spdx,
                 )?;
+                if let Some(model_spdx) = model_licenses.get(model_file)
+                    && model_spdx != &license.spdx
+                {
+                    return Err(format!(
+                        "{display_path} ({LIBRARY_DIR}/{model_file}): part [license].spdx {:?} does not match model file SPDX header {model_spdx:?} (PK11)",
+                        license.spdx
+                    ));
+                }
             }
             SimToml::Primitive { .. } | SimToml::None => {
                 if let Some(license) = &part.license {
@@ -232,19 +274,40 @@ fn compile_library(root: &Path) -> Result<Vec<CompiledPart>, Error> {
         });
     }
 
-    // Ensure every bundled model file is referenced by at least one validated part (or carries a
-    // verified SPDX header, already checked above).
-    for model_rel in &model_paths {
-        if !referenced_models.contains(model_rel) {
-            return Err(format!(
-                "{LIBRARY_DIR}/{model_rel}: bundled model file is not referenced by any part in {LIBRARY_DIR}/parts/"
-            ));
-        }
-    }
-
     // Canonical deterministic order by `source_id` (PINV2).
     compiled.sort_by(|a, b| a.source_id.cmp(&b.source_id));
     Ok(compiled)
+}
+
+fn parse_model_spdx(repo_rel: &str, text: &str) -> Result<String, Error> {
+    let mut found: Option<String> = None;
+    for line in text.lines() {
+        if let Some((_, rest)) = line.split_once("SPDX-License-Identifier:") {
+            let spdx = rest.trim().trim_end_matches([')', ']', ',', ';']);
+            check_pk11_license(repo_rel, spdx)?;
+            match &found {
+                None => found = Some(spdx.to_owned()),
+                Some(prev) if prev == spdx => {}
+                Some(prev) => {
+                    return Err(format!(
+                        "{repo_rel}: conflicting SPDX-License-Identifier headers {prev:?} and {spdx:?} (PK11)"
+                    ));
+                }
+            }
+        }
+    }
+    found.ok_or_else(|| {
+        format!("{repo_rel}: missing SPDX-License-Identifier header required by PK11")
+    })
+}
+
+fn has_third_party_attribution(third_party: &str, repo_rel: &str, spdx: &str) -> bool {
+    let path_bullet = format!("- `{repo_rel}`");
+    let spdx_token = format!("`{spdx}`");
+    third_party.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with(&path_bullet) && trimmed.contains(&spdx_token)
+    })
 }
 
 fn is_part_toml_path(path: &str) -> bool {
@@ -695,16 +758,24 @@ fn render_rust(parts: &[CompiledPart]) -> String {
     out
 }
 
+/// Deterministically encodes any `PK2` part slug (`[a-z0-9._-]`) into a valid,
+/// collision-free Rust `UPPER_SNAKE_CASE` identifier prefix.
 fn const_ident(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_uppercase()
-            } else {
-                '_'
+    let mut out = String::with_capacity("PART_".len() + name.len() * 2);
+    out.push_str("PART_");
+    for ch in name.chars() {
+        match ch {
+            'a'..='z' => out.push(ch.to_ascii_uppercase()),
+            'A'..='Z' | '0'..='9' => out.push(ch),
+            '-' => out.push_str("_H"),
+            '_' => out.push_str("_U"),
+            '.' => out.push_str("_D"),
+            _ => {
+                let _ = write!(out, "_X{:X}_", ch as u32);
             }
-        })
-        .collect()
+        }
+    }
+    out
 }
 
 fn fmt_i32(v: i32) -> String {
@@ -1009,12 +1080,12 @@ source = "models/opamps/bad.lib"
         fs::create_dir_all(root.join("library/models/diodes")).unwrap();
         fs::write(
             root.join("THIRD_PARTY.md"),
-            "- `library/models/diodes/bad.lib` — `GPL-3.0-only`\n",
+            "- `library/models/diodes/bad.lib` — `CC0-1.0`\n",
         )
         .unwrap();
         fs::write(
             root.join("library/models/diodes/bad.lib"),
-            "* Disallowed licence test\n.model D_BAD D(IS=1e-12)\n",
+            "* SPDX-License-Identifier: CC0-1.0\n.model D_BAD D(IS=1e-12)\n",
         )
         .unwrap();
         fs::write(
@@ -1062,6 +1133,136 @@ source = "models/diodes/bad.lib"
             "diagnostic must name rejected licence id: {err}"
         );
 
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// B1 (`PK11`): model files without an SPDX-License-Identifier header, or with a mismatched
+    /// `THIRD_PARTY.md` licence entry, are refused.
+    #[test]
+    fn refuses_model_without_spdx_header_or_exact_third_party_entry() {
+        let root = temp_workspace("missing-spdx");
+        fs::create_dir_all(root.join("library/parts/diodes")).unwrap();
+        fs::create_dir_all(root.join("library/models/diodes")).unwrap();
+        fs::write(
+            root.join("THIRD_PARTY.md"),
+            "- `library/models/diodes/nohdr.lib` — `CC0-1.0`\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("library/models/diodes/nohdr.lib"),
+            "* No SPDX header here\n.model D_NOHDR D(IS=1e-12)\n",
+        )
+        .unwrap();
+        let err = run(&root, true).expect_err("model without SPDX header must fail");
+        assert!(
+            err.contains("library/models/diodes/nohdr.lib")
+                && err.contains("SPDX-License-Identifier"),
+            "unexpected diagnostic: {err}"
+        );
+
+        // Now give it a valid SPDX header, but a wrong licence in THIRD_PARTY.md.
+        fs::write(
+            root.join("library/models/diodes/nohdr.lib"),
+            "* SPDX-License-Identifier: MIT\n.model D_NOHDR D(IS=1e-12)\n",
+        )
+        .unwrap();
+        let err = run(&root, true).expect_err("mismatched THIRD_PARTY.md licence must fail");
+        assert!(
+            err.contains("library/models/diodes/nohdr.lib")
+                && err.contains("MIT")
+                && err.contains("THIRD_PARTY.md"),
+            "unexpected diagnostic: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// B2: `const_ident` yields valid, collision-free Rust identifiers across the `PK2` alphabet.
+    #[test]
+    fn const_ident_is_valid_and_injective_across_pk2_alphabet() {
+        let samples = [
+            "2-stage", "a-b", "a_b", "a.b", "a_hb", "a_ub", "a_db", "0.1_2-3",
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for s in samples {
+            let ident = const_ident(s);
+            let first = ident.chars().next().expect("non-empty ident");
+            assert!(
+                first.is_ascii_alphabetic(),
+                "{s:?} -> {ident:?} must start with ASCII letter"
+            );
+            assert!(
+                ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'),
+                "{s:?} -> {ident:?} must contain only Rust ident chars"
+            );
+            assert!(
+                seen.insert(ident.clone()),
+                "collision for {s:?} -> {ident:?}"
+            );
+        }
+    }
+
+    /// B3: a licensed shared model file included via `.include` is accepted by `xtask parts`.
+    #[test]
+    fn allows_shared_included_model_file() {
+        let root = temp_workspace("shared-include");
+        fs::create_dir_all(root.join("library/parts/diodes")).unwrap();
+        fs::create_dir_all(root.join("library/models/diodes")).unwrap();
+        fs::write(
+            root.join("THIRD_PARTY.md"),
+            concat!(
+                "- `library/models/diodes/shared.inc` — `CC0-1.0`\n",
+                "- `library/models/diodes/main.lib` — `CC0-1.0`\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("library/models/diodes/shared.inc"),
+            "* SPDX-License-Identifier: CC0-1.0\n.param D_IS=1e-12\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("library/models/diodes/main.lib"),
+            "* SPDX-License-Identifier: CC0-1.0\n.include shared.inc\n.model D_SHARED D(IS={D_IS})\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("library/parts/diodes/d.toml"),
+            r#"
+schema = 1
+id = "d-shared"
+name = "Shared diode"
+category = "Diodes"
+
+[symbol]
+builtin = "Diode-COM-Standard"
+
+[[pins]]
+number = "1"
+name = "a"
+role = "passive"
+
+[[pins]]
+number = "2"
+name = "k"
+role = "passive"
+
+[sim]
+kind = "model"
+spice_prefix = "D"
+file = "models/diodes/main.lib"
+entry = "D_SHARED"
+pins = ["1", "2"]
+
+[license]
+spdx = "CC0-1.0"
+source = "models/diodes/main.lib"
+"#,
+        )
+        .unwrap();
+
+        let rendered = render_from_files(&root).expect("shared .include model must compile");
+        assert!(rendered.contains("d-shared"));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1129,7 +1330,7 @@ pins = ["1", "2"]
         fs::write(root.join("THIRD_PARTY.md"), "# Empty\n").unwrap();
         fs::write(
             root.join("library/models/diodes/unlisted.lib"),
-            ".model D_TEST D(IS=1e-12)\n",
+            "* SPDX-License-Identifier: CC0-1.0\n.model D_TEST D(IS=1e-12)\n",
         )
         .unwrap();
         fs::write(
@@ -1269,6 +1470,34 @@ pins = ["1", "2"]
         let archive = LibrarySource::open(&out).expect("reopen packed .opart");
         let resolved = archive.resolve_part("part.toml").expect("resolve packed");
         assert_eq!(resolved.part.id.as_str(), "custom-res");
+
+        // B4: a part failing PD10 (unknown built-in symbol) must not publish an .opart file.
+        let bad_src = root.join("bad-src");
+        fs::create_dir_all(&bad_src).unwrap();
+        fs::write(
+            bad_src.join("part.toml"),
+            r#"
+schema = 1
+id = "bad-custom"
+name = "Bad custom"
+category = "Passives"
+
+[symbol]
+builtin = "No-Such-Symbol"
+
+[[pins]]
+number = "1"
+name = "a"
+role = "passive"
+
+[sim]
+kind = "none"
+"#,
+        )
+        .unwrap();
+        let bad_out = root.join("bad-custom.opart");
+        run_part_pack(&bad_src, &bad_out).expect_err("unknown symbol must fail pack");
+        assert!(!bad_out.exists(), "failed pack must not publish output");
 
         let _ = fs::remove_dir_all(&root);
     }
