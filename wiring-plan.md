@@ -651,8 +651,8 @@ plus every non-selected pin-riding label on moved parts, hiding them at lift-off
 calling `plan_follow` even when a drag has pin labels with no wires). `overlay/follow.rs`
 renders surviving wires and restored `K6` junction dots in `stage/ink`, `plan.add` wires in
 ghost ink + halo, moved labels (`plan.labels` as outline + dot + cached K8/K9/K11 label text
-via `TextCache::paint_net_label_at`, or stationary anchor dot + text in `stage/ink-secondary`
-when detached/refused/identity while hidden under `WINV11`), and refused ghosts + moved/stationary
+via `TextCache::paint_follow_net_labels` under the shared `K9` 700-label cap and glyph-bounds
+culling, or stationary anchor dot + text in `stage/ink-secondary` when detached/refused/identity while hidden under `WINV11`), and refused ghosts + moved/stationary
 `Blocker` in `mark/conflict` with zero warm Omnia heap allocations (`B10`, `INV6`). Refusal on mouse-up cancels like `Esc` (`WINV4`) and `apply_change`
 forwards move/transform/reorient commit refusals as `CanvasNotice` (`RefusalVerb`, via a
 separate `EventEmitter<CanvasNotice>` keeping `CanvasEvent` exhaustive matches intact),

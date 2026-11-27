@@ -38,13 +38,18 @@ use crate::{
     snap_px::snap_logical,
 };
 
-/// Target parameters for [`TextCache::paint_net_label_at`] (`W3.6`).
-pub(crate) struct NetLabelPaint<'a> {
+/// Target parameters for [`TextCache::paint_follow_net_labels`] (`W3.6`, `K9`, `B10`).
+pub(crate) struct FollowLabelPaint<'a> {
     pub(crate) doc: &'a Doc,
     pub(crate) camera: &'a Camera,
     pub(crate) viewport: Bounds<Pixels>,
     pub(crate) scale_factor: f32,
-    pub(crate) color: Hsla,
+    pub(crate) affected_labels: &'a [LabelId],
+    pub(crate) plan_labels_sorted: &'a [(LabelId, Pt)],
+    pub(crate) is_refused: bool,
+    pub(crate) moved_ink: Hsla,
+    pub(crate) invalid_ink: Hsla,
+    pub(crate) stationary_ink: Hsla,
 }
 
 /// K8/Q3: part designator and value size at 100% zoom, in logical pixels.
@@ -253,6 +258,10 @@ pub(crate) struct TextCache {
     part_lines: Vec<PartLines>,
     label_lines: Vec<CachedLine>,
     candidates: Vec<Candidate>,
+    /// Reusable buffer for overlay follow-label text selection under K9's shared cap (`W3.6`, `B10`).
+    overlay_candidates: Vec<(LabelId, Pt, Hsla)>,
+    /// Count of labels emitted by `SheetView` on its most recent paint (`K9` shared cap, `W3.6`).
+    sheet_painted_labels: usize,
     query_buf: Vec<ItemId>,
     max_net_chars: usize,
     /// Max world-space overhang `(left, right, top, bottom)` of any placed part label beyond the
@@ -266,7 +275,7 @@ pub(crate) struct TextCache {
 }
 
 impl TextCache {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let library = SymbolLibrary::builtin();
         let mut pin_offsets = Vec::with_capacity(library.len());
         let mut pin_lines = Vec::new();
@@ -287,6 +296,8 @@ impl TextCache {
             part_lines: Vec::new(),
             label_lines: Vec::new(),
             candidates: Vec::with_capacity(MAX_VISIBLE_LABELS * 2),
+            overlay_candidates: Vec::with_capacity(MAX_VISIBLE_LABELS * 2),
+            sheet_painted_labels: 0,
             query_buf: Vec::new(),
             max_net_chars: 0,
             max_part_overhang_nm: (0, 0, 0, 0),
@@ -568,6 +579,7 @@ impl TextCache {
         scope: &impl SheetPaintScope,
     ) {
         self.sync(frame.doc);
+        self.sheet_painted_labels = 0;
 
         let buckets = Buckets {
             part: FontBucket::from_logical(PART_LABEL_PX * frame.camera.zoom()),
@@ -592,26 +604,28 @@ impl TextCache {
         self.shape_missing(frame, window, scope);
 
         // Paint all kept labels in one sheet text layer via direct glyph emission (D4, G5, S5).
+        let mut emitted = 0usize;
         scope.gpui(|| {
             window.paint_layer(|window| {
                 scope.omnia(|| {
-                    self.emit_glyphs(frame, window, scope);
+                    emitted = self.emit_glyphs(frame, window, scope);
                 });
             });
         });
+        self.sheet_painted_labels = emitted;
     }
 
-    /// Paints a single net label's cached text at `at` (used by `overlay/follow.rs` to draw
-    /// moved and stationary hidden labels with matching K8/K9/K11 typography and zero warm
-    /// Omnia allocations, `W3.6`, `B10`).
-    pub(crate) fn paint_net_label_at(
+    /// Paints moved and stationary hidden follow-preview net label text under the shared K9
+    /// per-frame cap (`MAX_VISIBLE_LABELS`) and `(y, x, id)` priority rules (`W3.6`, `K9`, `B10`).
+    ///
+    /// Culls each label by its actual glyph bounding box against `target.viewport` rather than
+    /// the marker anchor margin so long labels extending into the viewport remain visible.
+    pub(crate) fn paint_follow_net_labels(
         &mut self,
-        label_id: LabelId,
-        at: Pt,
-        target: NetLabelPaint<'_>,
+        target: FollowLabelPaint<'_>,
         window: &mut Window,
         mut gpui_call: impl FnMut(&mut dyn FnMut()),
-    ) {
+    ) -> usize {
         struct ScopeAdapter<'a, F: FnMut(&mut dyn FnMut())>(&'a std::cell::RefCell<F>);
         impl<F: FnMut(&mut dyn FnMut())> SheetPaintScope for ScopeAdapter<'_, F> {
             fn gpui(&self, paint: impl FnOnce()) {
@@ -626,58 +640,129 @@ impl TextCache {
 
         self.sync(target.doc);
         let Some(bucket) = FontBucket::from_logical(NET_LABEL_PX * target.camera.zoom()) else {
-            return;
+            return 0;
         };
+        let budget = MAX_VISIBLE_LABELS.saturating_sub(self.sheet_painted_labels);
+        if budget == 0 {
+            return 0;
+        }
+
         let gpui_cell = std::cell::RefCell::new(&mut gpui_call);
         let scope = ScopeAdapter(&gpui_cell);
-        self.ensure_label_slot_shaped(label_id, target.color, window, &scope);
-
-        let Some(line) = self
-            .label_lines
-            .get(label_id.0 as usize)
-            .and_then(|s| s.line.as_ref())
-        else {
-            return;
-        };
-
         let zoom = target.camera.zoom();
-        let anchor = target.camera.world_to_screen(at);
-        let left_x = anchor.x + 2.0 * zoom;
-        let baseline_y = anchor.y;
-        let bucket_px = bucket.pixels();
-        let scale = font_scale_f32(line, bucket);
-
-        let origin_x = snap_logical(left_x, target.scale_factor) as f32;
-        let baseline_y = snap_logical(baseline_y, target.scale_factor) as f32;
-        let top_y = baseline_y - f32::from(line.ascent) * scale;
-        let bottom_y = baseline_y + f32::from(line.descent).max(0.0) * scale;
-        let right_x = origin_x + f32::from(line.width) * scale;
         let v_left = f32::from(target.viewport.left());
         let v_right = f32::from(target.viewport.right());
         let v_top = f32::from(target.viewport.top());
         let v_bottom = f32::from(target.viewport.bottom());
-        if right_x < v_left || origin_x > v_right || bottom_y < v_top || top_y > v_bottom {
-            return;
-        }
 
-        for run in &line.runs {
-            for glyph in &run.glyphs {
-                let pos = point(
-                    px(origin_x + f32::from(glyph.position.x) * scale),
-                    px(baseline_y + f32::from(glyph.position.y) * scale),
-                );
-                scope.gpui(|| {
-                    let result = if glyph.is_emoji {
-                        window.paint_emoji(pos, run.font_id, glyph.id, bucket_px)
-                    } else {
-                        window.paint_glyph(pos, run.font_id, glyph.id, bucket_px, target.color)
-                    };
-                    if let Err(error) = result {
-                        eprintln!("follow label glyph: {error}");
-                    }
-                });
+        self.overlay_candidates.clear();
+        let push_visible = |cache: &mut Self, id: LabelId, at: Pt, color: Hsla, window: &Window| {
+            cache.ensure_label_slot_shaped(id, color, window, &scope);
+            let Some(line) = cache
+                .label_lines
+                .get(id.0 as usize)
+                .and_then(|s| s.line.as_ref())
+            else {
+                return;
+            };
+            let anchor = target.camera.world_to_screen(at);
+            let origin_x = snap_logical(anchor.x + 2.0 * zoom, target.scale_factor) as f32;
+            let baseline_y = snap_logical(anchor.y, target.scale_factor) as f32;
+            let scale = font_scale_f32(line, bucket);
+            let top_y = baseline_y - f32::from(line.ascent) * scale;
+            let bottom_y = baseline_y + f32::from(line.descent).max(0.0) * scale;
+            let right_x = origin_x + f32::from(line.width) * scale;
+            if right_x < v_left || origin_x > v_right || bottom_y < v_top || top_y > v_bottom {
+                return;
+            }
+            if cache.overlay_candidates.len() == MAX_VISIBLE_LABELS * 2 {
+                cache
+                    .overlay_candidates
+                    .select_nth_unstable_by_key(budget, |&(lid, pt, _)| (pt.y, pt.x, lid.0));
+                cache.overlay_candidates.truncate(budget);
+            }
+            cache.overlay_candidates.push((id, at, color));
+        };
+
+        if !target.is_refused {
+            for &(id, moved_at) in target.plan_labels_sorted {
+                let color = if moved_at.is_in_bounds() {
+                    target.moved_ink
+                } else {
+                    target.invalid_ink
+                };
+                push_visible(self, id, moved_at, color, window);
             }
         }
+        for &id in target.affected_labels {
+            if (target.is_refused
+                || target
+                    .plan_labels_sorted
+                    .binary_search_by_key(&id.0, |(lid, _)| lid.0)
+                    .is_err())
+                && let Some(label) = target.doc.label(id)
+            {
+                push_visible(self, id, label.at, target.stationary_ink, window);
+            }
+        }
+
+        if self.overlay_candidates.is_empty() {
+            return 0;
+        }
+        if self.overlay_candidates.len() > budget {
+            self.overlay_candidates
+                .select_nth_unstable_by_key(budget, |&(lid, pt, _)| (pt.y, pt.x, lid.0));
+            self.overlay_candidates.truncate(budget);
+        }
+
+        let bucket_px = bucket.pixels();
+        let mut emitted = 0usize;
+        for &(id, at, color) in &self.overlay_candidates {
+            let Some(line) = self
+                .label_lines
+                .get(id.0 as usize)
+                .and_then(|s| s.line.as_ref())
+            else {
+                continue;
+            };
+            let anchor = target.camera.world_to_screen(at);
+            let origin_x = snap_logical(anchor.x + 2.0 * zoom, target.scale_factor) as f32;
+            let baseline_y = snap_logical(anchor.y, target.scale_factor) as f32;
+            let scale = font_scale_f32(line, bucket);
+            for run in &line.runs {
+                for glyph in &run.glyphs {
+                    let pos = point(
+                        px(origin_x + f32::from(glyph.position.x) * scale),
+                        px(baseline_y + f32::from(glyph.position.y) * scale),
+                    );
+                    scope.gpui(|| {
+                        let result = if glyph.is_emoji {
+                            window.paint_emoji(pos, run.font_id, glyph.id, bucket_px)
+                        } else {
+                            window.paint_glyph(pos, run.font_id, glyph.id, bucket_px, color)
+                        };
+                        if let Err(error) = result {
+                            eprintln!("follow label glyph: {error}");
+                        }
+                    });
+                }
+            }
+            emitted += 1;
+        }
+        emitted
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_sheet_painted_labels_for_test(&mut self, count: usize) {
+        self.sheet_painted_labels = count;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn overlay_candidate_ids_for_test(&self) -> Vec<LabelId> {
+        self.overlay_candidates
+            .iter()
+            .map(|&(id, _, _)| id)
+            .collect()
     }
 
     fn collect_from_query_buf(
@@ -1171,12 +1256,13 @@ impl TextCache {
         frame: &TextFrame<'_>,
         window: &mut Window,
         scope: &impl SheetPaintScope,
-    ) {
+    ) -> usize {
         let zoom = frame.camera.zoom();
         let v_left = f32::from(frame.viewport.left());
         let v_right = f32::from(frame.viewport.right());
         let v_top = f32::from(frame.viewport.top());
         let v_bottom = f32::from(frame.viewport.bottom());
+        let mut emitted = 0usize;
 
         for &c in &self.candidates {
             let (line, color, left_x, baseline_y) = match c.kind {
@@ -1285,7 +1371,9 @@ impl TextCache {
                     });
                 }
             }
+            emitted += 1;
         }
+        emitted
     }
 }
 

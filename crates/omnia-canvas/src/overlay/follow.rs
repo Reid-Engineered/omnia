@@ -250,12 +250,11 @@ pub(super) fn paint_follow_preview(
             }
             paint_junction_dots(data.preview_junctions, full_ink, params, window, cx);
             if !is_refused {
-                for &(id, moved_at) in data.plan_labels_sorted {
-                    let in_bounds = moved_at.is_in_bounds();
+                for &(_, moved_at) in data.plan_labels_sorted {
                     paint_ghost_label_fg(
                         GhostLabel {
                             at: moved_at,
-                            in_bounds,
+                            in_bounds: moved_at.is_in_bounds(),
                         },
                         sizes.outline_dev,
                         sizes.label_dot_dev,
@@ -263,21 +262,6 @@ pub(super) fn paint_follow_preview(
                         palette,
                         window,
                     );
-                    if let Some(text_cache) = params.text_cache {
-                        text_cache.borrow_mut().paint_net_label_at(
-                            id,
-                            moved_at,
-                            crate::sheet::text::NetLabelPaint {
-                                doc: params.doc,
-                                camera: params.camera,
-                                viewport: params.bounds,
-                                scale_factor: params.sf,
-                                color: palette.ink_for(in_bounds),
-                            },
-                            window,
-                            |work| run_gpui(params.scope, work),
-                        );
-                    }
                 }
             }
             for &id in data.affected_labels {
@@ -298,22 +282,25 @@ pub(super) fn paint_follow_preview(
                         ),
                         params.scope,
                     );
-                    if let Some(text_cache) = params.text_cache {
-                        text_cache.borrow_mut().paint_net_label_at(
-                            id,
-                            label.at,
-                            crate::sheet::text::NetLabelPaint {
-                                doc: params.doc,
-                                camera: params.camera,
-                                viewport: params.bounds,
-                                scale_factor: params.sf,
-                                color: ink_secondary,
-                            },
-                            window,
-                            |work| run_gpui(params.scope, work),
-                        );
-                    }
                 }
+            }
+            if let Some(text_cache) = params.text_cache {
+                text_cache.borrow_mut().paint_follow_net_labels(
+                    crate::sheet::text::FollowLabelPaint {
+                        doc: params.doc,
+                        camera: params.camera,
+                        viewport: params.bounds,
+                        scale_factor: params.sf,
+                        affected_labels: data.affected_labels,
+                        plan_labels_sorted: data.plan_labels_sorted,
+                        is_refused,
+                        moved_ink: palette.ink_for(true),
+                        invalid_ink: palette.ink_for(false),
+                        stationary_ink: ink_secondary,
+                    },
+                    window,
+                    |work| run_gpui(params.scope, work),
+                );
             }
             paint_drag_items_fg(
                 data.items,
@@ -832,5 +819,171 @@ mod tests {
             0,
             "B10: warm rerouted/pin-label follow overlay paint must make 0 Omnia allocations"
         );
+    }
+
+    /// W3.6 / K9: follow-preview label text renders long stationary labels whose anchors sit
+    /// past the 16 px marker margin when their glyphs extend into the viewport, and strictly
+    /// shares K9's `MAX_VISIBLE_LABELS` (700) per-frame cap and `(y, x, id)` priority with
+    /// `SheetView`.
+    #[gpui::test]
+    fn w3_6_follow_net_labels_edge_visibility_and_k9_shared_cap(cx: &mut TestAppContext) {
+        use crate::sheet::text::{FollowLabelPaint, MAX_VISIBLE_LABELS, TextCache};
+        use gpui::{Hsla, Pixels};
+        use omnia_doc::LabelId;
+
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        // Camera centered at (0, 0) at 100% zoom: viewport spans x in [-400, 400] px = [-20, 20] grid.
+        let camera = Camera::new(Pt::ZERO, 1.0, viewport);
+        let ink = super::gpui_color(GRAPHITE.stage_ink_secondary);
+
+        let mut doc = Doc::new();
+        // Anchor at x = -22 grid (-440 px -> 40 px left of viewport, well past the 16 px marker margin)
+        // with a long label string whose glyphs extend well past x = 0 px into the viewport.
+        let ItemId::Label(edge_lbl) = doc
+            .apply(Command::AddLabel(Label {
+                at: Pt {
+                    x: -22 * GRID_NM,
+                    y: 0,
+                },
+                text: "VERY_LONG_NET_LABEL_EXTENDING_INTO_VIEWPORT".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        let mut extra_labels = Vec::new();
+        for i in 0..5i32 {
+            let ItemId::Label(id) = doc
+                .apply(Command::AddLabel(Label {
+                    at: Pt {
+                        x: i * GRID_NM,
+                        y: (4 - i) * GRID_NM,
+                    },
+                    text: format!("N{i}").into(),
+                }))
+                .unwrap()
+                .added[0]
+            else {
+                unreachable!();
+            };
+            extra_labels.push(id);
+        }
+
+        let ran = Rc::new(Cell::new(false));
+        let ran_paint = ran.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| {
+            struct CanvasHost {
+                doc: Doc,
+                camera: Camera,
+                viewport: Bounds<Pixels>,
+                ink: Hsla,
+                edge_lbl: LabelId,
+                extra_labels: Vec<LabelId>,
+                ran: Rc<Cell<bool>>,
+            }
+            impl Render for CanvasHost {
+                fn render(
+                    &mut self,
+                    _window: &mut Window,
+                    _cx: &mut Context<Self>,
+                ) -> impl IntoElement {
+                    let doc = self.doc.fork();
+                    let camera = self.camera.clone();
+                    let viewport = self.viewport;
+                    let ink = self.ink;
+                    let edge_lbl = self.edge_lbl;
+                    let extra_labels = self.extra_labels.clone();
+                    let ran = self.ran.clone();
+                    gpui::canvas(
+                        |_, _, _| {},
+                        move |_, _, window, _| {
+                            let mut cache = TextCache::new();
+                            // 1. Stationary edge-crossing label beyond the 16 px marker margin is emitted.
+                            let emitted_edge = cache.paint_follow_net_labels(
+                                FollowLabelPaint {
+                                    doc: &doc,
+                                    camera: &camera,
+                                    viewport,
+                                    scale_factor: 1.0,
+                                    affected_labels: &[edge_lbl],
+                                    plan_labels_sorted: &[],
+                                    is_refused: true,
+                                    moved_ink: ink,
+                                    invalid_ink: ink,
+                                    stationary_ink: ink,
+                                },
+                                window,
+                                |work| work(),
+                            );
+                            assert_eq!(
+                                emitted_edge, 1,
+                                "stationary label whose glyphs enter viewport must render even when anchor is >16 px outside"
+                            );
+
+                            // 2. When SheetView already painted 700 labels (K9 cap), overlay emits 0.
+                            cache.set_sheet_painted_labels_for_test(MAX_VISIBLE_LABELS);
+                            let emitted_full = cache.paint_follow_net_labels(
+                                FollowLabelPaint {
+                                    doc: &doc,
+                                    camera: &camera,
+                                    viewport,
+                                    scale_factor: 1.0,
+                                    affected_labels: &extra_labels,
+                                    plan_labels_sorted: &[],
+                                    is_refused: true,
+                                    moved_ink: ink,
+                                    invalid_ink: ink,
+                                    stationary_ink: ink,
+                                },
+                                window,
+                                |work| work(),
+                            );
+                            assert_eq!(
+                                emitted_full, 0,
+                                "K9: 700 sheet labels leaves 0 overlay budget"
+                            );
+
+                            // 3. When SheetView painted 698 labels, overlay emits exactly 2 highest-priority
+                            // labels (lowest y, then x, then id).
+                            cache.set_sheet_painted_labels_for_test(MAX_VISIBLE_LABELS - 2);
+                            let emitted_partial = cache.paint_follow_net_labels(
+                                FollowLabelPaint {
+                                    doc: &doc,
+                                    camera: &camera,
+                                    viewport,
+                                    scale_factor: 1.0,
+                                    affected_labels: &extra_labels,
+                                    plan_labels_sorted: &[],
+                                    is_refused: true,
+                                    moved_ink: ink,
+                                    invalid_ink: ink,
+                                    stationary_ink: ink,
+                                },
+                                window,
+                                |work| work(),
+                            );
+                            assert_eq!(emitted_partial, 2);
+                            let mut kept_ids = cache.overlay_candidate_ids_for_test();
+                            kept_ids.sort_unstable_by_key(|id| id.0);
+                            // extra_labels[4] has y=0, extra_labels[3] has y=1 (lowest y values).
+                            assert_eq!(kept_ids, vec![extra_labels[3], extra_labels[4]]);
+                            ran.set(true);
+                        },
+                    )
+                }
+            }
+            CanvasHost {
+                doc,
+                camera,
+                viewport,
+                ink,
+                edge_lbl,
+                extra_labels,
+                ran: ran_paint,
+            }
+        });
+        cx.run_until_parked();
+        assert!(ran.get(), "paint callback must execute");
     }
 }
