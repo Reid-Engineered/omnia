@@ -5,8 +5,10 @@ use std::{fmt, sync::Arc};
 use smallvec::SmallVec;
 
 use crate::{
-    Doc, FollowError, FollowPlan, GeomError, Isometry, ItemId, Label, LabelId, Orient, Part,
-    PartId, Pt, Rect, StoreError, Wire, WireId,
+    DefError, Doc, EmbeddedPartDef, FollowError, FollowPlan, GeomError, InstanceError, Isometry,
+    ItemId, Label, LabelId, Orient, ParamKind, ParamValue, Params, Part, PartDefId, PartId, Pt,
+    Rect, StoreError, Wire, WireId,
+    part_def::{MAX_PINS, validate, validate_instance},
     points::End,
     prefs::FollowPolicy,
     route::Blocker,
@@ -20,12 +22,26 @@ pub enum TextField {
     Label,
 }
 
+/// Which definition a [`Command::PlacePart`] binds its new part to (`PD8`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlaceDef {
+    /// Synthesise the `PD8` unmodelled definition from the part's symbol and geometry.
+    Unmodelled,
+    /// Bind to an already-referenced definition id in this document. A retained or missing id
+    /// is refused with [`CommandError::MissingDef`].
+    Existing(PartDefId),
+    /// Validate (`PD10`) and intern against referenced definitions (`PD8`).
+    Embed(Arc<EmbeddedPartDef>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     PlacePart {
         part: Part,
         local_pins: Vec<Pt>,
         local_bounds: Rect,
+        def: PlaceDef,
+        params: Params,
     },
     AddWires(Vec<Wire>),
     AddLabel(Label),
@@ -65,6 +81,19 @@ pub enum Command {
         field: TextField,
         text: Arc<str>,
     },
+    /// PD8/PD6: set or reset (`None`) one parameter override on a live part, syncing
+    /// `Part::value` when `name` is the definition's `primary_param`.
+    SetParam {
+        part: PartId,
+        name: Arc<str>,
+        value: Option<ParamValue>,
+    },
+    /// PD8/PD9: validate and intern `to`, move every live part referencing `from` onto it,
+    /// and refresh each moved part's `Part::value` from `to`'s resolved primary parameter.
+    UpdatePartDef {
+        from: PartDefId,
+        to: Arc<EmbeddedPartDef>,
+    },
     Paste {
         clip: crate::Clip,
         at: Pt,
@@ -72,7 +101,7 @@ pub enum Command {
     Batch(Vec<Command>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandError {
     OutOfBounds,
     InvalidWire,
@@ -95,6 +124,17 @@ pub enum CommandError {
     /// WK1/WINV3: `Move`, `Reorient`, or `Transform` would take a wire end off the pin
     /// lattice, or land an off-lattice pin or label on a wire body.
     OffLattice(Pt),
+    /// PD6/PD8: a parameter override or primary-value edit failed validation.
+    InvalidParam {
+        part: PartId,
+        name: Arc<str>,
+    },
+    /// PD10: an embedded definition failed validation.
+    InvalidDef(DefError),
+    /// PD8/PINV12: a part's geometry, overrides or value disagreed with its definition.
+    InvalidInstance(InstanceError),
+    /// PD8: `PlaceDef::Existing` or `UpdatePartDef` named a missing or retained definition id.
+    MissingDef(PartDefId),
 }
 
 impl fmt::Display for CommandError {
@@ -115,6 +155,12 @@ impl fmt::Display for CommandError {
             Self::OffLattice(at) => {
                 write!(f, "move would put a wire point off the lattice at {at:?}")
             }
+            Self::InvalidParam { part, name } => {
+                write!(f, "invalid parameter {name:?} for part {part:?}")
+            }
+            Self::InvalidDef(error) => write!(f, "invalid part definition: {error}"),
+            Self::InvalidInstance(error) => write!(f, "invalid part instance: {error}"),
+            Self::MissingDef(id) => write!(f, "definition {id:?} is missing or not referenced"),
         }
     }
 }
@@ -153,6 +199,10 @@ pub struct Change {
     /// Added and removed IDs are unordered sets, independent of command input order.
     pub added: Vec<ItemId>,
     pub removed: Vec<ItemId>,
+    /// XD7/PD8: parts whose `params` or `def` changed (`SetParam`, primary-synced `SetText`,
+    /// every instance of an `UpdatePartDef`), even when geometry and text did not.
+    /// Deterministic ascending `PartId` order, deduplicated; reported on apply, undo and redo.
+    pub modified: Vec<PartId>,
     pub nets_changed: bool,
 }
 
@@ -161,6 +211,7 @@ pub(crate) struct ChangeAcc {
     pub(crate) dirty: Option<Rect>,
     pub(crate) added: Vec<ItemId>,
     pub(crate) removed: Vec<ItemId>,
+    pub(crate) modified: Vec<PartId>,
     pub(crate) nets_changed: bool,
 }
 
@@ -188,12 +239,19 @@ impl ChangeAcc {
         }
     }
 
-    pub(crate) fn into_change(self, revision: u64) -> Change {
+    pub(crate) fn record_modified(&mut self, id: PartId) {
+        self.modified.push(id);
+    }
+
+    pub(crate) fn into_change(mut self, revision: u64) -> Change {
+        self.modified.sort_unstable_by_key(|id| id.0);
+        self.modified.dedup();
         Change {
             revision,
             dirty: self.dirty,
             added: self.added,
             removed: self.removed,
+            modified: self.modified,
             nets_changed: self.nets_changed,
         }
     }
@@ -218,16 +276,9 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
             part,
             local_pins,
             local_bounds,
-        } => {
-            let has_pins = !local_pins.is_empty();
-            let (id, bounds) = doc.insert_part_raw(part, &local_pins, local_bounds)?;
-            acc.record_dirty(bounds);
-            acc.record_added(ItemId::Part(id));
-            if has_pins {
-                acc.nets_changed = true;
-            }
-            Ok(UndoOp::RemovePart(id))
-        }
+            def,
+            params,
+        } => apply_place_part(doc, part, local_pins, local_bounds, def, params, acc),
         Command::AddWires(wires) => {
             for &wire in &wires {
                 Doc::validate_wire(wire)?;
@@ -402,25 +453,384 @@ fn apply_inner(doc: &mut Doc, cmd: Command, acc: &mut ChangeAcc) -> Result<UndoO
                 merge_inverse,
             ]))
         }
-        Command::SetText { item, field, text } => {
-            let (old_text, bounds, nets_changed) =
-                doc.set_text_raw(item, field, Arc::clone(&text))?;
-            if old_text == text {
-                return Ok(UndoOp::Batch(Vec::new()));
-            }
-            acc.record_dirty(bounds);
-            if nets_changed {
-                acc.nets_changed = true;
-            }
-            Ok(UndoOp::SetText {
-                item,
-                field,
-                text: old_text,
-            })
-        }
+        Command::SetText { item, field, text } => apply_set_text(doc, item, field, text, acc),
+        Command::SetParam { part, name, value } => apply_set_param(doc, part, name, value, acc),
+        Command::UpdatePartDef { from, to } => apply_update_part_def(doc, from, to, acc),
         Command::Paste { clip, at } => crate::clip::apply_paste(doc, clip, at, acc),
         Command::Batch(cmds) => apply_batch(doc, cmds, acc),
     }
+}
+
+pub(crate) fn insert_part_with_def_raw(
+    doc: &mut Doc,
+    part: Part,
+    pins: Vec<Pt>,
+    local_bounds: Rect,
+    area: Rect,
+    def: PartDefId,
+    params: Params,
+) -> PartId {
+    doc.part_defs.acquire(def);
+    let id = PartId(doc.parts.insert(crate::doc::StoredPart {
+        part,
+        pins,
+        local_bounds,
+        def,
+        params,
+    }));
+    doc.index.insert(ItemId::Part(id), area).unwrap();
+    let pins_slice = &doc.parts.get(id.0).unwrap().pins;
+    doc.connectivity.add_part(id, pins_slice);
+    for (pin, &at) in pins_slice.iter().enumerate() {
+        doc.points.insert(at, End::Pin { part: id, pin });
+    }
+    id
+}
+
+fn param_display_arc(value: &ParamValue) -> Arc<str> {
+    match value {
+        ParamValue::Real { raw, .. } => Arc::clone(raw),
+        ParamValue::Enum(text) | ParamValue::Text(text) => Arc::clone(text),
+        ParamValue::Int(n) => Arc::from(n.to_string()),
+        ParamValue::Bool(b) => Arc::from(if *b { "true" } else { "false" }),
+    }
+}
+
+fn compute_world_part_geometry(
+    part: &Part,
+    local_pins: &[Pt],
+    local_bounds: Rect,
+) -> Result<(Vec<Pt>, Rect), CommandError> {
+    Rect::new(local_bounds.min, local_bounds.max).map_err(|_| CommandError::OutOfBounds)?;
+    if !part.at.is_in_bounds() {
+        return Err(CommandError::OutOfBounds);
+    }
+    let pins = local_pins
+        .iter()
+        .map(|&pin| {
+            if !pin.is_in_bounds() {
+                return Err(CommandError::OutOfBounds);
+            }
+            part.at
+                .checked_add(part.orient.apply(pin))
+                .map_err(|_| CommandError::OutOfBounds)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let area = Doc::part_envelope_raw(part.at, part.orient, local_bounds, &pins)?;
+    Ok((pins, area))
+}
+
+fn apply_place_part(
+    doc: &mut Doc,
+    part: Part,
+    local_pins: Vec<Pt>,
+    local_bounds: Rect,
+    def: PlaceDef,
+    params: Params,
+    acc: &mut ChangeAcc,
+) -> Result<UndoOp, CommandError> {
+    // Every fallible check (definition validation, instance validation and world-space bounds)
+    // precedes interning and insertion so a refused command mutates nothing (`PD8`, `PINV7`).
+    let (pins, area, def_id) = match def {
+        PlaceDef::Unmodelled => {
+            if local_pins.len() > MAX_PINS {
+                return Err(CommandError::InvalidDef(DefError::TooMany {
+                    field: "local pins",
+                    count: local_pins.len(),
+                    max: MAX_PINS,
+                }));
+            }
+            if let Some(name) = params.keys().next() {
+                return Err(CommandError::InvalidInstance(
+                    InstanceError::UndeclaredParam {
+                        name: Arc::clone(name),
+                    },
+                ));
+            }
+            let (pins, area) = compute_world_part_geometry(&part, &local_pins, local_bounds)?;
+            let def_id = doc
+                .part_defs
+                .intern_unmodelled(part.symbol, &local_pins, local_bounds);
+            (pins, area, def_id)
+        }
+        PlaceDef::Existing(def_id) => {
+            if !doc.part_defs.is_referenced(def_id) {
+                return Err(CommandError::MissingDef(def_id));
+            }
+            let existing = doc.part_defs.get(def_id).expect("referenced def exists");
+            validate_instance(
+                existing,
+                part.symbol,
+                &local_pins,
+                local_bounds,
+                &part.value,
+                &params,
+            )
+            .map_err(CommandError::InvalidInstance)?;
+            let (pins, area) = compute_world_part_geometry(&part, &local_pins, local_bounds)?;
+            (pins, area, def_id)
+        }
+        PlaceDef::Embed(embedded) => {
+            validate(&embedded).map_err(CommandError::InvalidDef)?;
+            validate_instance(
+                &embedded,
+                part.symbol,
+                &local_pins,
+                local_bounds,
+                &part.value,
+                &params,
+            )
+            .map_err(CommandError::InvalidInstance)?;
+            let (pins, area) = compute_world_part_geometry(&part, &local_pins, local_bounds)?;
+            let def_id = doc.part_defs.intern(embedded);
+            (pins, area, def_id)
+        }
+    };
+    let has_pins = !pins.is_empty();
+    let id = insert_part_with_def_raw(doc, part, pins, local_bounds, area, def_id, params);
+    acc.record_dirty(area);
+    acc.record_added(ItemId::Part(id));
+    if has_pins {
+        acc.nets_changed = true;
+    }
+    Ok(UndoOp::RemovePart(id))
+}
+
+fn apply_set_text(
+    doc: &mut Doc,
+    item: ItemId,
+    field: TextField,
+    text: Arc<str>,
+    acc: &mut ChangeAcc,
+) -> Result<UndoOp, CommandError> {
+    // PD6: editing `Part::value` on a part whose definition declares `primary_param` parses
+    // and updates `primary_param` in the same transaction; unmodelled parts (and definitions
+    // without a primary parameter) keep free display text.
+    if let (ItemId::Part(part_id), TextField::Value) = (item, field) {
+        let stored = doc
+            .parts
+            .get(part_id.0)
+            .ok_or(CommandError::MissingItem(item))?;
+        let def = doc
+            .part_defs
+            .get(stored.def)
+            .expect("live part must reference a definition");
+        if let Some(primary) = def.primary_param.clone() {
+            let spec = def
+                .param(&primary)
+                .expect("validated definition has declared primary_param");
+            let parsed = match &spec.kind {
+                ParamKind::Real { unit, .. } => {
+                    let value = crate::parse_value(&text, unit.as_deref()).map_err(|_| {
+                        CommandError::InvalidParam {
+                            part: part_id,
+                            name: Arc::clone(&primary),
+                        }
+                    })?;
+                    ParamValue::Real {
+                        raw: Arc::clone(&text),
+                        value,
+                    }
+                }
+                ParamKind::Int { .. } => {
+                    let value =
+                        text.trim()
+                            .parse::<i64>()
+                            .map_err(|_| CommandError::InvalidParam {
+                                part: part_id,
+                                name: Arc::clone(&primary),
+                            })?;
+                    ParamValue::Int(value)
+                }
+                ParamKind::Bool => {
+                    let value = match text.trim() {
+                        "true" => true,
+                        "false" => false,
+                        _ => {
+                            return Err(CommandError::InvalidParam {
+                                part: part_id,
+                                name: Arc::clone(&primary),
+                            });
+                        }
+                    };
+                    ParamValue::Bool(value)
+                }
+                ParamKind::Enum(_) => ParamValue::Enum(Arc::clone(&text)),
+                ParamKind::Text => ParamValue::Text(Arc::clone(&text)),
+            };
+            return apply_set_param(doc, part_id, primary, Some(parsed), acc);
+        }
+    }
+    let (old_text, bounds, nets_changed) = doc.set_text_raw(item, field, Arc::clone(&text))?;
+    if old_text == text {
+        return Ok(UndoOp::Batch(Vec::new()));
+    }
+    acc.record_dirty(bounds);
+    if nets_changed {
+        acc.nets_changed = true;
+    }
+    Ok(UndoOp::SetText {
+        item,
+        field,
+        text: old_text,
+    })
+}
+
+fn apply_set_param(
+    doc: &mut Doc,
+    part: PartId,
+    name: Arc<str>,
+    value: Option<ParamValue>,
+    acc: &mut ChangeAcc,
+) -> Result<UndoOp, CommandError> {
+    let stored = doc
+        .parts
+        .get(part.0)
+        .ok_or(CommandError::MissingItem(ItemId::Part(part)))?;
+    let def = doc
+        .part_defs
+        .get(stored.def)
+        .expect("live part must reference a definition");
+    let spec = def.param(&name).ok_or_else(|| CommandError::InvalidParam {
+        part,
+        name: Arc::clone(&name),
+    })?;
+    // PD6: setting a parameter to its default removes the override.
+    let new_entry = match value {
+        Some(val) if val == spec.default => None,
+        other => other,
+    };
+    let mut candidate_params = stored.params.clone();
+    match &new_entry {
+        Some(val) => {
+            candidate_params.insert(Arc::clone(&name), val.clone());
+        }
+        None => {
+            candidate_params.remove(&name);
+        }
+    }
+    let new_part_value = if def.primary_param.as_deref() == Some(&*name) {
+        let resolved = new_entry.as_ref().unwrap_or(&spec.default);
+        param_display_arc(resolved)
+    } else {
+        Arc::clone(&stored.part.value)
+    };
+    validate_instance(
+        def,
+        stored.part.symbol,
+        &def.local_pins,
+        stored.local_bounds,
+        &new_part_value,
+        &candidate_params,
+    )
+    .map_err(|err| match err {
+        InstanceError::UndeclaredParam { name }
+        | InstanceError::Param { name, .. }
+        | InstanceError::DefaultOverride { name } => CommandError::InvalidParam { part, name },
+        other => CommandError::InvalidInstance(other),
+    })?;
+
+    if stored.params.get(&name) == new_entry.as_ref() && stored.part.value == new_part_value {
+        return Ok(UndoOp::Batch(Vec::new()));
+    }
+
+    let stored = doc.parts.get_mut(part.0).expect("validated part exists");
+    let old_entry = match new_entry {
+        Some(val) => stored.params.insert(Arc::clone(&name), val),
+        None => stored.params.remove(&name),
+    };
+    let old_part_value = std::mem::replace(&mut stored.part.value, new_part_value);
+    let bounds = doc
+        .index
+        .bounds(ItemId::Part(part))
+        .expect("live part must exist in index");
+    acc.record_dirty(bounds);
+    acc.record_modified(part);
+    Ok(UndoOp::SetParam {
+        part,
+        name,
+        value: old_entry,
+        part_value: old_part_value,
+    })
+}
+
+fn apply_update_part_def(
+    doc: &mut Doc,
+    from: PartDefId,
+    to: Arc<EmbeddedPartDef>,
+    acc: &mut ChangeAcc,
+) -> Result<UndoOp, CommandError> {
+    if !doc.part_defs.is_referenced(from) {
+        return Err(CommandError::MissingDef(from));
+    }
+    validate(&to).map_err(CommandError::InvalidDef)?;
+    let from_def = doc.part_defs.get(from).expect("referenced def exists");
+    if *from_def == *to {
+        return Ok(UndoOp::Batch(Vec::new()));
+    }
+
+    // Validate every instance referencing `from` before interning `to` or mutating anything.
+    let mut planned = Vec::new();
+    for (slot_idx, slot) in doc.parts.slots.iter().enumerate() {
+        let Some(stored) = slot.as_ref() else {
+            continue;
+        };
+        if stored.def != from {
+            continue;
+        }
+        let part_id = PartId(slot_idx as u32);
+        // Keep overrides, dropping any that now equal `to`'s new default so overrides remain
+        // canonical (`PD6`, `PINV12`); undeclared, wrong-kind or out-of-bounds overrides stay
+        // and are refused by `validate_instance` below.
+        let mut new_params = stored.params.clone();
+        new_params.retain(|name, value| to.param(name).is_none_or(|spec| *value != spec.default));
+        // PD8: refresh `Part::value` from `to`'s resolved primary parameter in every case;
+        // leave `Part::value` unchanged when `to` has no primary parameter.
+        let new_value = if let Some(primary) = &to.primary_param {
+            let resolved = new_params.get(primary).unwrap_or_else(|| {
+                &to.param(primary)
+                    .expect("validated definition has declared primary_param")
+                    .default
+            });
+            param_display_arc(resolved)
+        } else {
+            Arc::clone(&stored.part.value)
+        };
+        validate_instance(
+            &to,
+            stored.part.symbol,
+            &from_def.local_pins,
+            stored.local_bounds,
+            &new_value,
+            &new_params,
+        )
+        .map_err(CommandError::InvalidInstance)?;
+        planned.push((part_id, new_value, new_params));
+    }
+
+    let to_id = doc.part_defs.intern(to);
+    debug_assert_ne!(to_id, from);
+    let mut undo_parts = Vec::with_capacity(planned.len());
+    for (part_id, new_value, new_params) in planned {
+        doc.part_defs.release(from);
+        doc.part_defs.acquire(to_id);
+        let stored = doc.parts.get_mut(part_id.0).expect("validated part exists");
+        stored.def = to_id;
+        let old_value = std::mem::replace(&mut stored.part.value, new_value);
+        let old_params = std::mem::replace(&mut stored.params, new_params);
+        let bounds = doc
+            .index
+            .bounds(ItemId::Part(part_id))
+            .expect("live part must exist in index");
+        acc.record_dirty(bounds);
+        acc.record_modified(part_id);
+        undo_parts.push((part_id, old_value, old_params));
+    }
+    Ok(UndoOp::UpdatePartDef {
+        from: to_id,
+        to: from,
+        parts: undo_parts,
+    })
 }
 
 /// W2.2: plan against the untouched sheet, then commit geometry and wires as one
@@ -1509,16 +1919,53 @@ mod tests {
         expected_junctions.sort_by_key(|p| (p.x, p.y));
         assert_eq!(junctions, expected_junctions);
 
-        // v2 save/load stays byte-compatible for unmodelled sheets. Version 2 stores no
-        // definition ids (`PD8`), so the reload is compared by re-saving it, which covers every
-        // slot, reserved ones included, and the revision; in-memory snapshots cover the ids.
+        // PINV12 / PD10: every referenced definition passes `validate` and every live part
+        // passes `validate_instance` against its referenced definition.
+        for (def_id, def) in doc.part_defs() {
+            assert!(doc.part_defs.is_referenced(def_id));
+            validate(def).expect("referenced definition must pass PD10 validate");
+        }
+        let mut all_unmodelled_no_params = true;
+        for (part_id, part) in doc.parts() {
+            let def_id = doc.part_def_id(part_id).expect("live part has def_id");
+            assert!(doc.part_defs.is_referenced(def_id));
+            let def = doc.part_def(def_id).expect("live part def exists");
+            let stored = doc.parts.get(part_id.0).unwrap();
+            let params = doc.part_params(part_id).expect("live part has params");
+            if !def.is_unmodelled() || !params.is_empty() {
+                all_unmodelled_no_params = false;
+            }
+            let local_pins: Vec<Pt> = stored
+                .pins
+                .iter()
+                .map(|&p| part.orient.inverse().apply(p - part.at))
+                .collect();
+            validate_instance(
+                def,
+                part.symbol,
+                &local_pins,
+                stored.local_bounds,
+                &part.value,
+                params,
+            )
+            .expect("PINV12: every live part must pass validate_instance");
+        }
+
+        // v2 save/load stays byte-compatible for unmodelled sheets, and refuses lossy saves for
+        // documents holding modelled definitions or parameter overrides (`PD8`, `PTC-no-lossy-save`).
         let mut bytes = Vec::new();
-        doc.save(&mut bytes).unwrap();
-        let loaded = Doc::load(bytes.as_slice()).unwrap();
-        let mut again = Vec::new();
-        loaded.save(&mut again).unwrap();
-        assert_eq!(again, bytes);
-        assert_eq!(loaded.revision(), doc.revision());
+        if all_unmodelled_no_params {
+            doc.save(&mut bytes).unwrap();
+            let loaded = Doc::load(bytes.as_slice()).unwrap();
+            let mut again = Vec::new();
+            loaded.save(&mut again).unwrap();
+            assert_eq!(again, bytes);
+            assert_eq!(loaded.revision(), doc.revision());
+        } else {
+            let err = doc.save(&mut bytes).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+            assert!(bytes.is_empty());
+        }
     }
 
     // W3.5 fixtures use the pin lattice so the normal-form oracle checks WINV3 too.
@@ -1535,6 +1982,8 @@ mod tests {
                 part: make_part(at, Orient::IDENTITY, "P", ""),
                 local_pins: vec![Pt::ZERO],
                 local_bounds: rect(0, 0, 0, 0),
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             })
             .unwrap();
         change.added[0]
@@ -1763,6 +2212,8 @@ mod tests {
                 ),
                 local_pins: vec![Pt::ZERO],
                 local_bounds: rect(-1_270_000, -1_270_000, 1_270_000, 1_270_000),
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             })
             .unwrap()
             .added[0];
@@ -2072,6 +2523,8 @@ mod tests {
                 part: make_part(del_point(0, 0), Orient::IDENTITY, "M1", ""),
                 local_pins: Vec::new(),
                 local_bounds: rect(-1_270_000, -1_270_000, 1_270_000, 1_270_000),
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             })
             .unwrap()
             .added[0];
@@ -2208,214 +2661,219 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(crate::proptest_config(96))]
-        /// T5.5 Done-when: combined Transform matches expected final geometry, keeps normal form
-        /// (WINV3), round-trips under undo/redo with exact ids (INV4) and keeps connectivity
-        /// consistent (INV10, WINV1/WINV2/WINV4).
-        #[test]
-        fn t5_5_transform_geometry_follow_inv4_inv10(
-            counts in prop::collection::vec(1usize..5, 1..4),
-            init_orients in prop::collection::vec(0usize..8, 1..4),
-            extra_wires in prop::collection::vec((-8i32..9, -4i32..14, 1i32..5, any::<bool>()), 0..4),
-            extra_labels in prop::collection::vec((-8i32..9, -4i32..14), 0..3),
-            obstacles in prop::collection::vec((0u8..3, -14i32..8, -3i32..18), 0..6),
-            pick_mask in prop::collection::vec(any::<usize>(), 1..4),
-            dx in -4i32..5,
-            dy in -4i32..5,
-            px in -6i32..7,
-            py in -6i32..7,
-            orientation in 0usize..8,
-        ) {
-            let mut base = Doc::new();
-            let mut candidates = Vec::new();
-            for (i, &count) in counts.iter().enumerate() {
-                let x = i as i32 * 40;
-                let init_orient = Orient::ALL[init_orients[i % init_orients.len()]];
-                let change = base.apply(Command::PlacePart {
-                    part: make_part(del_point(x, 0), init_orient, "P", "1k"),
-                    local_pins: (0..count).map(|j| del_point(0, j as i32 * 4)).collect(),
-                    local_bounds: rect(-1_270_000, -1_270_000, 1_270_000, 1_270_000),
-                }).unwrap();
-                let pid = change.added[0];
-                candidates.push(pid);
-                let ItemId::Part(part_id) = pid else { unreachable!() };
-                let world_pins: Vec<Pt> = base.pins(part_id).unwrap().to_vec();
-                for (j, pin) in world_pins.into_iter().enumerate() {
-                    let far = Pt { x: pin.x - 12 * 1_270_000, y: pin.y };
+            #![proptest_config(crate::proptest_config(96))]
+            /// T5.5 Done-when: combined Transform matches expected final geometry, keeps normal form
+            /// (WINV3), round-trips under undo/redo with exact ids (INV4) and keeps connectivity
+            /// consistent (INV10, WINV1/WINV2/WINV4).
+            #[test]
+            fn t5_5_transform_geometry_follow_inv4_inv10(
+                counts in prop::collection::vec(1usize..5, 1..4),
+                init_orients in prop::collection::vec(0usize..8, 1..4),
+                extra_wires in prop::collection::vec((-8i32..9, -4i32..14, 1i32..5, any::<bool>()), 0..4),
+                extra_labels in prop::collection::vec((-8i32..9, -4i32..14), 0..3),
+                obstacles in prop::collection::vec((0u8..3, -14i32..8, -3i32..18), 0..6),
+                pick_mask in prop::collection::vec(any::<usize>(), 1..4),
+                dx in -4i32..5,
+                dy in -4i32..5,
+                px in -6i32..7,
+                py in -6i32..7,
+                orientation in 0usize..8,
+            ) {
+                let mut base = Doc::new();
+                let mut candidates = Vec::new();
+                for (i, &count) in counts.iter().enumerate() {
+                    let x = i as i32 * 40;
+                    let init_orient = Orient::ALL[init_orients[i % init_orients.len()]];
+                    let change = base.apply(Command::PlacePart {
+                        part: make_part(del_point(x, 0), init_orient, "P", "1k"),
+                        local_pins: (0..count).map(|j| del_point(0, j as i32 * 4)).collect(),
+                        local_bounds: rect(-1_270_000, -1_270_000, 1_270_000, 1_270_000),
+                        def: PlaceDef::Unmodelled,
+                        params: Params::new(),
+                    }).unwrap();
+                    let pid = change.added[0];
+                    candidates.push(pid);
+                    let ItemId::Part(part_id) = pid else { unreachable!() };
+                    let world_pins: Vec<Pt> = base.pins(part_id).unwrap().to_vec();
+                    for (j, pin) in world_pins.into_iter().enumerate() {
+                        let far = Pt { x: pin.x - 12 * 1_270_000, y: pin.y };
+                        let mut hits = Vec::new();
+                        base.query(Rect { min: far, max: far }, &mut hits);
+                        if !hits.is_empty() {
+                            continue;
+                        }
+                        del_part(&mut base, far);
+                        let mid_x = pin.x - 6 * 1_270_000;
+                        let jog_y = pin.y + if j % 2 == 0 { 2 * 1_270_000 } else { -2 * 1_270_000 };
+                        let _ = base.apply(Command::AddWires(vec![
+                            del_wire(pin, Pt { x: mid_x, y: pin.y }),
+                            del_wire(Pt { x: mid_x, y: pin.y }, Pt { x: mid_x, y: jog_y }),
+                            del_wire(Pt { x: mid_x, y: jog_y }, Pt { x: far.x, y: jog_y }),
+                            del_wire(Pt { x: far.x, y: jog_y }, far),
+                        ]));
+                    }
+                }
+                for (wx, wy, len, horiz) in extra_wires {
+                    let a = del_point(wx, wy);
+                    let b = if horiz { del_point(wx + len, wy) } else { del_point(wx, wy + len) };
+                    if let Ok(c) = base.apply(Command::AddWires(vec![del_wire(a, b)])) {
+                        candidates.extend(c.added);
+                    }
+                }
+                for (lx, ly) in extra_labels {
+                    let at = del_point(lx, ly);
                     let mut hits = Vec::new();
-                    base.query(Rect { min: far, max: far }, &mut hits);
-                    if !hits.is_empty() {
+                    base.query(Rect { min: at, max: at }, &mut hits);
+                    if hits.is_empty() {
+                        let c = base.apply(Command::AddLabel(Label { at, text: "N".into() })).unwrap();
+                        candidates.extend(c.added);
+                    }
+                }
+                let mut hits = Vec::new();
+                for &(kind, x, y) in &obstacles {
+                    let at = del_point(x, y);
+                    base.query(Rect { min: at, max: at }, &mut hits);
+                    if kind == 0 && !hits.is_empty() {
                         continue;
                     }
-                    del_part(&mut base, far);
-                    let mid_x = pin.x - 6 * 1_270_000;
-                    let jog_y = pin.y + if j % 2 == 0 { 2 * 1_270_000 } else { -2 * 1_270_000 };
-                    let _ = base.apply(Command::AddWires(vec![
-                        del_wire(pin, Pt { x: mid_x, y: pin.y }),
-                        del_wire(Pt { x: mid_x, y: pin.y }, Pt { x: mid_x, y: jog_y }),
-                        del_wire(Pt { x: mid_x, y: jog_y }, Pt { x: far.x, y: jog_y }),
-                        del_wire(Pt { x: far.x, y: jog_y }, far),
-                    ]));
+                    let _ = match kind {
+                        0 => base.apply(Command::PlacePart {
+                            part: make_part(at, Orient::IDENTITY, "Q", ""),
+                            local_pins: vec![Pt::ZERO],
+                            local_bounds: rect(0, 0, 0, 0),
+        def: PlaceDef::Unmodelled,
+        params: Params::new(),
+    }),
+                        1 => base.apply(Command::AddWires(vec![del_wire(at, del_point(x + 2, y))])),
+                        _ => base.apply(Command::AddWires(vec![del_wire(at, del_point(x, y + 2))])),
+                    };
                 }
-            }
-            for (wx, wy, len, horiz) in extra_wires {
-                let a = del_point(wx, wy);
-                let b = if horiz { del_point(wx + len, wy) } else { del_point(wx, wy + len) };
-                if let Ok(c) = base.apply(Command::AddWires(vec![del_wire(a, b)])) {
-                    candidates.extend(c.added);
+                // Keep only still-live candidates and build a unique selection.
+                let live_candidates: Vec<ItemId> = candidates
+                    .into_iter()
+                    .filter(|&item| match item {
+                        ItemId::Part(id) => base.part(id).is_some(),
+                        ItemId::Wire(id) => base.wire(id).is_some(),
+                        ItemId::Label(id) => base.label(id).is_some(),
+                    })
+                    .collect();
+                let mut selection = Vec::new();
+                for pick in pick_mask {
+                    let item = live_candidates[pick % live_candidates.len()];
+                    if !selection.contains(&item) {
+                        selection.push(item);
+                    }
                 }
-            }
-            for (lx, ly) in extra_labels {
-                let at = del_point(lx, ly);
-                let mut hits = Vec::new();
-                base.query(Rect { min: at, max: at }, &mut hits);
-                if hits.is_empty() {
-                    let c = base.apply(Command::AddLabel(Label { at, text: "N".into() })).unwrap();
-                    candidates.extend(c.added);
-                }
-            }
-            let mut hits = Vec::new();
-            for &(kind, x, y) in &obstacles {
-                let at = del_point(x, y);
-                base.query(Rect { min: at, max: at }, &mut hits);
-                if kind == 0 && !hits.is_empty() {
-                    continue;
-                }
-                let _ = match kind {
-                    0 => base.apply(Command::PlacePart {
-                        part: make_part(at, Orient::IDENTITY, "Q", ""),
-                        local_pins: vec![Pt::ZERO],
-                        local_bounds: rect(0, 0, 0, 0),
-                    }),
-                    1 => base.apply(Command::AddWires(vec![del_wire(at, del_point(x + 2, y))])),
-                    _ => base.apply(Command::AddWires(vec![del_wire(at, del_point(x, y + 2))])),
-                };
-            }
-            // Keep only still-live candidates and build a unique selection.
-            let live_candidates: Vec<ItemId> = candidates
-                .into_iter()
-                .filter(|&item| match item {
-                    ItemId::Part(id) => base.part(id).is_some(),
-                    ItemId::Wire(id) => base.wire(id).is_some(),
-                    ItemId::Label(id) => base.label(id).is_some(),
-                })
-                .collect();
-            let mut selection = Vec::new();
-            for pick in pick_mask {
-                let item = live_candidates[pick % live_candidates.len()];
-                if !selection.contains(&item) {
-                    selection.push(item);
-                }
-            }
-            base.assert_normal_form();
-            let delta = del_point(dx, dy);
-            let pivot = del_point(px, py);
-            let by = Orient::ALL[orientation];
-            let transform = Isometry::Transform { delta, pivot, by };
-            let parts_only = selection.iter().all(|item| matches!(item, ItemId::Part(_)));
-            let all_pins: Vec<_> = base
-                .parts()
-                .flat_map(|(id, _)| {
-                    base.pins(id)
-                        .unwrap()
-                        .iter()
-                        .map(move |&p| (ItemId::Part(id), p))
-                })
-                .collect();
-            let left_behind: Vec<bool> = all_pins
-                .iter()
-                .map(|&(a, p)| {
-                    !selection.contains(&a)
-                        && all_pins
+                base.assert_normal_form();
+                let delta = del_point(dx, dy);
+                let pivot = del_point(px, py);
+                let by = Orient::ALL[orientation];
+                let transform = Isometry::Transform { delta, pivot, by };
+                let parts_only = selection.iter().all(|item| matches!(item, ItemId::Part(_)));
+                let all_pins: Vec<_> = base
+                    .parts()
+                    .flat_map(|(id, _)| {
+                        base.pins(id)
+                            .unwrap()
                             .iter()
-                            .any(|&(b, q)| selection.contains(&b) && q == p)
-                })
-                .collect();
-            let before_partition = pin_partition(&base);
+                            .map(move |&p| (ItemId::Part(id), p))
+                    })
+                    .collect();
+                let left_behind: Vec<bool> = all_pins
+                    .iter()
+                    .map(|&(a, p)| {
+                        !selection.contains(&a)
+                            && all_pins
+                                .iter()
+                                .any(|&(b, q)| selection.contains(&b) && q == p)
+                    })
+                    .collect();
+                let before_partition = pin_partition(&base);
 
-            for follow in [false, true] {
-                let mut doc = del_snapshot(&base);
-                let mut preview = FollowPlan::default();
-                let plan_ok = crate::plan_follow(
-                    &base,
-                    &selection,
-                    transform,
-                    follow_policy(follow),
-                    &mut preview,
-                )
-                .is_ok();
-                let result = follow_roundtrip(
-                    &mut doc,
-                    Command::Transform {
-                        items: selection.clone(),
-                        delta,
-                        pivot,
-                        by,
-                        follow: follow_policy(follow),
-                    },
-                );
-                if transform.is_identity() {
-                    prop_assert!(result.is_ok() && doc.content_eq(&base));
-                    continue;
-                }
-                if parts_only {
-                    prop_assert_eq!(result.is_ok(), plan_ok, "{:?}", result);
-                }
-                if result.is_ok() {
-                    doc.assert_normal_form();
-                    // Verify expected final geometry for every selected item.
-                    for &item in &selection {
-                        match item {
-                            ItemId::Part(id) => {
-                                let old = base.part(id).unwrap();
-                                let new = doc.part(id).unwrap();
-                                prop_assert_eq!(new.at, transform.apply(old.at).unwrap());
-                                prop_assert_eq!(new.orient, old.orient.then(by));
-                                let expected_pins: Vec<Pt> = base
-                                    .pins(id)
-                                    .unwrap()
-                                    .iter()
-                                    .map(|&p| transform.apply(p).unwrap())
-                                    .collect();
-                                prop_assert_eq!(doc.pins(id).unwrap(), expected_pins.as_slice());
-                            }
-                            ItemId::Label(id) => {
-                                let old = base.label(id).unwrap();
-                                let new = doc.label(id).unwrap();
-                                prop_assert_eq!(new.at, transform.apply(old.at).unwrap());
-                            }
-                            ItemId::Wire(id) => {
-                                let old = *base.wire(id).unwrap();
-                                let expected = Wire {
-                                    a: transform.apply(old.a).unwrap(),
-                                    b: transform.apply(old.b).unwrap(),
-                                };
-                                prop_assert!(
-                                    wire_covered_by_doc(&doc, expected),
-                                    "transformed wire {:?} not covered in final doc",
-                                    expected
-                                );
+                for follow in [false, true] {
+                    let mut doc = del_snapshot(&base);
+                    let mut preview = FollowPlan::default();
+                    let plan_ok = crate::plan_follow(
+                        &base,
+                        &selection,
+                        transform,
+                        follow_policy(follow),
+                        &mut preview,
+                    )
+                    .is_ok();
+                    let result = follow_roundtrip(
+                        &mut doc,
+                        Command::Transform {
+                            items: selection.clone(),
+                            delta,
+                            pivot,
+                            by,
+                            follow: follow_policy(follow),
+                        },
+                    );
+                    if transform.is_identity() {
+                        prop_assert!(result.is_ok() && doc.content_eq(&base));
+                        continue;
+                    }
+                    if parts_only {
+                        prop_assert_eq!(result.is_ok(), plan_ok, "{:?}", result);
+                    }
+                    if result.is_ok() {
+                        doc.assert_normal_form();
+                        // Verify expected final geometry for every selected item.
+                        for &item in &selection {
+                            match item {
+                                ItemId::Part(id) => {
+                                    let old = base.part(id).unwrap();
+                                    let new = doc.part(id).unwrap();
+                                    prop_assert_eq!(new.at, transform.apply(old.at).unwrap());
+                                    prop_assert_eq!(new.orient, old.orient.then(by));
+                                    let expected_pins: Vec<Pt> = base
+                                        .pins(id)
+                                        .unwrap()
+                                        .iter()
+                                        .map(|&p| transform.apply(p).unwrap())
+                                        .collect();
+                                    prop_assert_eq!(doc.pins(id).unwrap(), expected_pins.as_slice());
+                                }
+                                ItemId::Label(id) => {
+                                    let old = base.label(id).unwrap();
+                                    let new = doc.label(id).unwrap();
+                                    prop_assert_eq!(new.at, transform.apply(old.at).unwrap());
+                                }
+                                ItemId::Wire(id) => {
+                                    let old = *base.wire(id).unwrap();
+                                    let expected = Wire {
+                                        a: transform.apply(old.a).unwrap(),
+                                        b: transform.apply(old.b).unwrap(),
+                                    };
+                                    prop_assert!(
+                                        wire_covered_by_doc(&doc, expected),
+                                        "transformed wire {:?} not covered in final doc",
+                                        expected
+                                    );
+                                }
                             }
                         }
-                    }
-                    // Unselected parts stay in place.
-                    for (id, old) in base.parts() {
-                        if !selection.contains(&ItemId::Part(id)) {
-                            prop_assert_eq!(doc.part(id), Some(old));
-                            prop_assert_eq!(doc.pins(id), base.pins(id));
+                        // Unselected parts stay in place.
+                        for (id, old) in base.parts() {
+                            if !selection.contains(&ItemId::Part(id)) {
+                                prop_assert_eq!(doc.part(id), Some(old));
+                                prop_assert_eq!(doc.pins(id), base.pins(id));
+                            }
                         }
-                    }
-                    if parts_only && follow {
-                        let after = pin_partition(&doc);
-                        let expected_part =
-                            expected_follow_partition(&base, &selection, transform, true);
-                        let n = all_pins.len();
-                        let exempt = |k: usize| left_behind[k / n] || left_behind[k % n];
-                        for k in 0..after.len() {
-                            if !exempt(k) {
-                                prop_assert_eq!(after[k], expected_part[k], "pin pair {}", k);
-                                if before_partition[k] {
-                                    prop_assert!(after[k], "WINV1: pin pair {} lost connection", k);
+                        if parts_only && follow {
+                            let after = pin_partition(&doc);
+                            let expected_part =
+                                expected_follow_partition(&base, &selection, transform, true);
+                            let n = all_pins.len();
+                            let exempt = |k: usize| left_behind[k / n] || left_behind[k % n];
+                            for k in 0..after.len() {
+                                if !exempt(k) {
+                                    prop_assert_eq!(after[k], expected_part[k], "pin pair {}", k);
+                                    if before_partition[k] {
+                                        prop_assert!(after[k], "WINV1: pin pair {} lost connection", k);
+                                    }
                                 }
                             }
                         }
@@ -2423,7 +2881,6 @@ mod tests {
                 }
             }
         }
-    }
 
     #[test]
     fn tc_move_14_landed_pin_and_wire_end_split_body_inv4_inv10() {
@@ -2982,148 +3439,152 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(crate::proptest_config(128))]
-        #[test]
-        fn w22_winv1_winv2_winv4_inv10_random_sheets_moves_and_reorientations(
-            counts in prop::collection::vec(1usize..6, 1..6),
-            pick in any::<usize>(), dx in -2i32..3, dy in -2i32..3,
-            orientation in 0usize..8, rotate in any::<bool>(),
-            obstacles in prop::collection::vec((0u8..4, -14i32..5, -3i32..22), 0..8),
-            second in any::<Option<usize>>(),
-        ) {
-            let mut base = Doc::new();
-            let mut movable = Vec::new();
-            for (i, &count) in counts.iter().enumerate() {
-                let x = i as i32 * 40;
-                let change = base.apply(Command::PlacePart {
-                    part: make_part(del_point(x, 0), Orient::IDENTITY, "P", ""),
-                    local_pins: (0..count).map(|j| del_point(0, j as i32 * 4)).collect(),
-                    local_bounds: rect(0, 0, 0, 0),
-                }).unwrap();
-                movable.push(change.added[0]);
-                for j in 0..count {
-                    let y = j as i32 * 4;
-                    del_part(&mut base, del_point(x - 12, y));
-                    base.apply(Command::AddWires(vec![
-                        del_wire(del_point(x, y), del_point(x - 6, y)),
-                        del_wire(del_point(x - 6, y), del_point(x - 6, y + 2)),
-                        del_wire(del_point(x - 6, y + 2), del_point(x - 12, y + 2)),
-                        del_wire(del_point(x - 12, y + 2), del_point(x - 12, y)),
-                    ])).unwrap();
-                }
-            }
-            let index = pick % movable.len();
-            // Foreign pins and short wires around the selected part, so moved pins
-            // land on, route around and get blocked by unrelated geometry.
-            let ox = index as i32 * 40;
-            let mut hits = Vec::new();
-            for &(kind, x, y) in &obstacles {
-                let at = del_point(ox + x, y);
-                // PlacePart does not split wires: keep the base sheet in normal
-                // form by placing foreign pins only on empty points.
-                base.query(Rect { min: at, max: at }, &mut hits);
-                if kind == 0 && !hits.is_empty() {
-                    continue;
-                }
-                // Kind 3: a foreign pin directly on one of the selected part's pins (WQ6).
-                let at = if kind == 3 { del_point(ox, y.rem_euclid(counts[index] as i32) * 4) } else { at };
-                let _ = match kind {
-                    0 | 3 => base.apply(Command::PlacePart {
-                        part: make_part(at, Orient::IDENTITY, "Q", ""),
-                        local_pins: vec![Pt::ZERO],
+            #![proptest_config(crate::proptest_config(128))]
+            #[test]
+            fn w22_winv1_winv2_winv4_inv10_random_sheets_moves_and_reorientations(
+                counts in prop::collection::vec(1usize..6, 1..6),
+                pick in any::<usize>(), dx in -2i32..3, dy in -2i32..3,
+                orientation in 0usize..8, rotate in any::<bool>(),
+                obstacles in prop::collection::vec((0u8..4, -14i32..5, -3i32..22), 0..8),
+                second in any::<Option<usize>>(),
+            ) {
+                let mut base = Doc::new();
+                let mut movable = Vec::new();
+                for (i, &count) in counts.iter().enumerate() {
+                    let x = i as i32 * 40;
+                    let change = base.apply(Command::PlacePart {
+                        part: make_part(del_point(x, 0), Orient::IDENTITY, "P", ""),
+                        local_pins: (0..count).map(|j| del_point(0, j as i32 * 4)).collect(),
                         local_bounds: rect(0, 0, 0, 0),
-                    }),
-                    1 => base.apply(Command::AddWires(vec![del_wire(at, del_point(ox + x + 1, y))])),
-                    _ => base.apply(Command::AddWires(vec![del_wire(at, del_point(ox + x, y + 1))])),
-                };
-            }
-            // Selections of one or two parts; both keep their relative geometry.
-            let mut selection = vec![movable[index]];
-            if let Some(other) = second.map(|s| s % movable.len()).filter(|&s| s != index) {
-                selection.push(movable[other]);
-            }
-            // A selected pin on an unselected pin connects directly; WQ6 lets that
-            // contact separate. Which side keeps a wire at such a junction is open
-            // (logged for the owner, 2026-11-17), so under follow only pairs that
-            // include such a left-behind foreign pin are exempt.
-            let all_pins: Vec<_> = base.parts().flat_map(|(id, _)| base.pins(id).unwrap().iter().map(move |&p| (ItemId::Part(id), p))).collect();
-            let left_behind: Vec<bool> = all_pins.iter()
-                .map(|&(a, p)| !selection.contains(&a) && all_pins.iter().any(|&(b, q)| selection.contains(&b) && q == p))
-                .collect();
-            base.assert_normal_form();
-            let before = pin_partition(&base);
-            for follow in [false, true] {
-                let mut doc = del_snapshot(&base);
-                let command = if rotate {
-                    Command::Reorient { items: selection.clone(), pivot: del_point(index as i32 * 40, 0), by: Orient::ALL[orientation], follow: follow_policy(follow) }
-                } else {
-                    Command::Move { items: selection.clone(), delta: del_point(dx, dy), follow: follow_policy(follow) }
-                };
-                let transform = if rotate {
-                    Isometry::Reorient { pivot: del_point(index as i32 * 40, 0), by: Orient::ALL[orientation] }
-                } else { Isometry::Translate(del_point(dx, dy)) };
-                let mut preview = FollowPlan::default();
-                let expected = crate::plan_follow(&base, &selection, transform, follow_policy(follow), &mut preview)
-                    .ok().map(|()| expected_follow_partition(&base, &selection, transform, follow));
-                let result = follow_roundtrip(&mut doc, command);
-                // An identity transform is an inert command (T5.1) even where the
-                // planner, asked to re-route in place, would refuse; logged for W2.1.
-                let identity = transform == Isometry::Translate(Pt::ZERO)
-                    || matches!(transform, Isometry::Reorient { by: Orient::IDENTITY, .. });
-                if identity {
-                    prop_assert!(result.is_ok() && doc.content_eq(&base));
-                    continue;
-                }
-                // Only parts move here, so the command refuses exactly when planning does.
-                prop_assert_eq!(result.is_ok(), expected.is_some(), "{:?}", result);
-                if result.is_ok() {
-                    let after = pin_partition(&doc);
-                    let n = all_pins.len();
-                    let exempt = |k: usize| follow && (left_behind[k / n] || left_behind[k % n]);
-                    let expected = expected.as_ref().unwrap();
-                    for k in 0..after.len() {
-                        if !exempt(k) {
-                            prop_assert_eq!(after[k], expected[k], "pin pair {}", k);
-                        } else {
-                            // A left-behind pin may lose connections, never gain one.
-                            prop_assert!(!after[k] || expected[k], "pin pair {} gained a connection", k);
-                        }
+                        def: PlaceDef::Unmodelled,
+                        params: Params::new(),
+                    }).unwrap();
+                    movable.push(change.added[0]);
+                    for j in 0..count {
+                        let y = j as i32 * 4;
+                        del_part(&mut base, del_point(x - 12, y));
+                        base.apply(Command::AddWires(vec![
+                            del_wire(del_point(x, y), del_point(x - 6, y)),
+                            del_wire(del_point(x - 6, y), del_point(x - 6, y + 2)),
+                            del_wire(del_point(x - 6, y + 2), del_point(x - 12, y + 2)),
+                            del_wire(del_point(x - 12, y + 2), del_point(x - 12, y)),
+                        ])).unwrap();
                     }
-                    if follow {
-                        for (k, &connected) in before.iter().enumerate() {
-                            if connected && !exempt(k) {
-                                prop_assert!(after[k], "WINV1: pin pair {} lost its connection", k);
-                            }
-                        }
-                        doc.assert_normal_form();
+                }
+                let index = pick % movable.len();
+                // Foreign pins and short wires around the selected part, so moved pins
+                // land on, route around and get blocked by unrelated geometry.
+                let ox = index as i32 * 40;
+                let mut hits = Vec::new();
+                for &(kind, x, y) in &obstacles {
+                    let at = del_point(ox + x, y);
+                    // PlacePart does not split wires: keep the base sheet in normal
+                    // form by placing foreign pins only on empty points.
+                    base.query(Rect { min: at, max: at }, &mut hits);
+                    if kind == 0 && !hits.is_empty() {
+                        continue;
+                    }
+                    // Kind 3: a foreign pin directly on one of the selected part's pins (WQ6).
+                    let at = if kind == 3 { del_point(ox, y.rem_euclid(counts[index] as i32) * 4) } else { at };
+                    let _ = match kind {
+                        0 | 3 => base.apply(Command::PlacePart {
+                            part: make_part(at, Orient::IDENTITY, "Q", ""),
+                            local_pins: vec![Pt::ZERO],
+                            local_bounds: rect(0, 0, 0, 0),
+        def: PlaceDef::Unmodelled,
+        params: Params::new(),
+    }),
+                        1 => base.apply(Command::AddWires(vec![del_wire(at, del_point(ox + x + 1, y))])),
+                        _ => base.apply(Command::AddWires(vec![del_wire(at, del_point(ox + x, y + 1))])),
+                    };
+                }
+                // Selections of one or two parts; both keep their relative geometry.
+                let mut selection = vec![movable[index]];
+                if let Some(other) = second.map(|s| s % movable.len()).filter(|&s| s != index) {
+                    selection.push(movable[other]);
+                }
+                // A selected pin on an unselected pin connects directly; WQ6 lets that
+                // contact separate. Which side keeps a wire at such a junction is open
+                // (logged for the owner, 2026-11-17), so under follow only pairs that
+                // include such a left-behind foreign pin are exempt.
+                let all_pins: Vec<_> = base.parts().flat_map(|(id, _)| base.pins(id).unwrap().iter().map(move |&p| (ItemId::Part(id), p))).collect();
+                let left_behind: Vec<bool> = all_pins.iter()
+                    .map(|&(a, p)| !selection.contains(&a) && all_pins.iter().any(|&(b, q)| selection.contains(&b) && q == p))
+                    .collect();
+                base.assert_normal_form();
+                let before = pin_partition(&base);
+                for follow in [false, true] {
+                    let mut doc = del_snapshot(&base);
+                    let command = if rotate {
+                        Command::Reorient { items: selection.clone(), pivot: del_point(index as i32 * 40, 0), by: Orient::ALL[orientation], follow: follow_policy(follow) }
                     } else {
-                        // WINV3 holds in detach mode too (owner decision 2026-11-17).
-                        doc.assert_normal_form();
-                        let parts: Vec<_> = selection.iter().map(|&item| match item {
-                            ItemId::Part(part) => part,
-                            _ => unreachable!(),
-                        }).collect();
-                        let old_pins: Vec<Pt> = parts.iter().flat_map(|&p| base.pins(p).unwrap().iter().copied()).collect();
-                        let new_pins: Vec<Pt> = parts.iter().flat_map(|&p| doc.pins(p).unwrap().iter().copied()).collect();
-                        for (id, &wire) in base.wires() {
-                            let landed = new_pins.iter().any(|&at| contains(wire, at));
-                            let vacated = old_pins.contains(&wire.a) || old_pins.contains(&wire.b);
-                            if !landed && !vacated {
-                                // WINV2 outside TC-move-14 splits and vacated-point merges.
-                                prop_assert_eq!(doc.wire(id), Some(&wire));
+                        Command::Move { items: selection.clone(), delta: del_point(dx, dy), follow: follow_policy(follow) }
+                    };
+                    let transform = if rotate {
+                        Isometry::Reorient { pivot: del_point(index as i32 * 40, 0), by: Orient::ALL[orientation] }
+                    } else { Isometry::Translate(del_point(dx, dy)) };
+                    let mut preview = FollowPlan::default();
+                    let expected = crate::plan_follow(&base, &selection, transform, follow_policy(follow), &mut preview)
+                        .ok().map(|()| expected_follow_partition(&base, &selection, transform, follow));
+                    let result = follow_roundtrip(&mut doc, command);
+                    // An identity transform is an inert command (T5.1) even where the
+                    // planner, asked to re-route in place, would refuse; logged for W2.1.
+                    let identity = transform == Isometry::Translate(Pt::ZERO)
+                        || matches!(transform, Isometry::Reorient { by: Orient::IDENTITY, .. });
+                    if identity {
+                        prop_assert!(result.is_ok() && doc.content_eq(&base));
+                        continue;
+                    }
+                    // Only parts move here, so the command refuses exactly when planning does.
+                    prop_assert_eq!(result.is_ok(), expected.is_some(), "{:?}", result);
+                    if result.is_ok() {
+                        let after = pin_partition(&doc);
+                        let n = all_pins.len();
+                        let exempt = |k: usize| follow && (left_behind[k / n] || left_behind[k % n]);
+                        let expected = expected.as_ref().unwrap();
+                        for k in 0..after.len() {
+                            if !exempt(k) {
+                                prop_assert_eq!(after[k], expected[k], "pin pair {}", k);
+                            } else {
+                                // A left-behind pin may lose connections, never gain one.
+                                prop_assert!(!after[k] || expected[k], "pin pair {} gained a connection", k);
                             }
                         }
-                        // The only moving pins belong to the selected boundary parts.
-                        for (id, _) in base.parts() {
-                            if !selection.contains(&ItemId::Part(id)) {
-                                prop_assert_eq!(doc.pins(id), base.pins(id));
+                        if follow {
+                            for (k, &connected) in before.iter().enumerate() {
+                                if connected && !exempt(k) {
+                                    prop_assert!(after[k], "WINV1: pin pair {} lost its connection", k);
+                                }
+                            }
+                            doc.assert_normal_form();
+                        } else {
+                            // WINV3 holds in detach mode too (owner decision 2026-11-17).
+                            doc.assert_normal_form();
+                            let parts: Vec<_> = selection.iter().map(|&item| match item {
+                                ItemId::Part(part) => part,
+                                _ => unreachable!(),
+                            }).collect();
+                            let old_pins: Vec<Pt> = parts.iter().flat_map(|&p| base.pins(p).unwrap().iter().copied()).collect();
+                            let new_pins: Vec<Pt> = parts.iter().flat_map(|&p| doc.pins(p).unwrap().iter().copied()).collect();
+                            for (id, &wire) in base.wires() {
+                                let landed = new_pins.iter().any(|&at| contains(wire, at));
+                                let vacated = old_pins.contains(&wire.a) || old_pins.contains(&wire.b);
+                                if !landed && !vacated {
+                                    // WINV2 outside TC-move-14 splits and vacated-point merges.
+                                    prop_assert_eq!(doc.wire(id), Some(&wire));
+                                }
+                            }
+                            // The only moving pins belong to the selected boundary parts.
+                            for (id, _) in base.parts() {
+                                if !selection.contains(&ItemId::Part(id)) {
+                                    prop_assert_eq!(doc.pins(id), base.pins(id));
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
 
     fn contains(wire: Wire, at: Pt) -> bool {
         Rect::from_points(wire.a, wire.b).unwrap().contains(at)
@@ -3428,6 +3889,8 @@ mod tests {
                     part: make_part(at, Orient::IDENTITY, "R", "1k"),
                     local_pins: local_pins.clone(),
                     local_bounds,
+                    def: PlaceDef::Unmodelled,
+                    params: Params::new(),
                 })
                 .unwrap();
             items.extend(ch.added);
@@ -3580,6 +4043,8 @@ mod tests {
                 part: make_part(Pt { x: 100, y: 0 }, Orient::IDENTITY, "R1", "10k"),
                 local_pins: pins.clone(),
                 local_bounds: bounds,
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             })
             .unwrap()
             .added[0]
@@ -3784,6 +4249,8 @@ mod tests {
                 part: make_part(Pt { x: -500, y: -500 }, Orient::IDENTITY, "C1", "100n"),
                 local_pins: vec![Pt::ZERO],
                 local_bounds: rect(-5, -5, 5, 5),
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             },
             Command::AddWires(vec![Wire {
                 a: Pt::ZERO,
@@ -3822,6 +4289,8 @@ mod tests {
                 part: make_part(Pt::ZERO, Orient::IDENTITY, "U1", "OPA"),
                 local_pins: vec![Pt { x: -120, y: 0 }, Pt { x: 120, y: 0 }],
                 local_bounds: bounds,
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             })
             .unwrap();
         assert_eq!(p0.dirty, Some(rect(-120, -50, 120, 50)));
@@ -3874,6 +4343,8 @@ mod tests {
                 ),
                 local_pins: vec![Pt { x: -20, y: 0 }, Pt::ZERO],
                 local_bounds: bounds,
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             })
             .unwrap()
             .added[0];
@@ -3906,6 +4377,8 @@ mod tests {
                 part: make_part(Pt::ZERO, Orient::IDENTITY, "U2", "OP"),
                 local_pins: vec![Pt::ZERO],
                 local_bounds: bounds,
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             })
             .unwrap()
             .added[0];
@@ -3974,6 +4447,33 @@ mod tests {
             dx: i32,
             fail_second: bool,
         },
+        PlaceModelled {
+            x: i32,
+            y: i32,
+            orient: u8,
+            kind: u8,
+            override_val: u8,
+            bad_mode: u8,
+        },
+        SetParam {
+            pick: usize,
+            param_kind: u8,
+            val_kind: u8,
+        },
+        UpdatePartDef {
+            pick: usize,
+            variant: u8,
+        },
+        BatchEmbedAndFail {
+            x: i32,
+            y: i32,
+            fail: bool,
+        },
+        PasteLive {
+            pick: usize,
+            tx: i32,
+            ty: i32,
+        },
         Undo,
         Redo,
     }
@@ -3983,19 +4483,29 @@ mod tests {
             3 => (-10i32..=10, -10i32..=10, 0u8..8, prop::bool::weighted(0.15)).prop_map(
                 |(x, y, orient, invalid_oob)| GenStep::PlacePart { x, y, orient, invalid_oob }
             ),
+            3 => (-10i32..=10, -10i32..=10, 0u8..8, 0u8..4, 0u8..4, 0u8..6).prop_map(
+                |(x, y, orient, kind, override_val, bad_mode)| GenStep::PlaceModelled {
+                    x,
+                    y,
+                    orient,
+                    kind,
+                    override_val,
+                    bad_mode,
+                }
+            ),
             4 => (-10i32..=10, -10i32..=10, any::<bool>(), prop::bool::weighted(0.15)).prop_map(
                 |(x, y, horiz, bad_diag)| GenStep::AddWires { x, y, horiz, bad_diag }
             ),
             3 => (-10i32..=10, -10i32..=10, 0u8..4, prop::bool::weighted(0.1)).prop_map(
                 |(x, y, net, invalid_oob)| GenStep::AddLabel { x, y, net, invalid_oob }
             ),
-            4 => (0usize..32, -5i32..=5, -5i32..=5, prop::bool::weighted(0.1), prop::bool::weighted(0.1)).prop_map(
+            3 => (0usize..32, -5i32..=5, -5i32..=5, prop::bool::weighted(0.1), prop::bool::weighted(0.1)).prop_map(
                 |(pick, dx, dy, dup, missing)| GenStep::Move { pick, dx, dy, dup, missing }
             ),
-            3 => (0usize..32, -4i32..=4, -4i32..=4, 0u8..8, prop::bool::weighted(0.1)).prop_map(
+            2 => (0usize..32, -4i32..=4, -4i32..=4, 0u8..8, prop::bool::weighted(0.1)).prop_map(
                 |(pick, px, py, orient, dup)| GenStep::Reorient { pick, px, py, orient, dup }
             ),
-            3 => (
+            2 => (
                 0usize..32,
                 -5i32..=5,
                 -5i32..=5,
@@ -4016,11 +4526,23 @@ mod tests {
             3 => (0usize..32, 1usize..4, prop::bool::weighted(0.1), prop::bool::weighted(0.1)).prop_map(
                 |(pick, count, dup, missing)| GenStep::Delete { pick, count, dup, missing }
             ),
-            3 => (0usize..32, 0u8..3, 0u8..4, prop::bool::weighted(0.1)).prop_map(
+            3 => (0usize..32, 0u8..3, 0u8..6, prop::bool::weighted(0.1)).prop_map(
                 |(pick, field, net, missing)| GenStep::SetText { pick, field, net, missing }
+            ),
+            4 => (0usize..32, 0u8..4, 0u8..6).prop_map(
+                |(pick, param_kind, val_kind)| GenStep::SetParam { pick, param_kind, val_kind }
+            ),
+            3 => (0usize..32, 0u8..6).prop_map(
+                |(pick, variant)| GenStep::UpdatePartDef { pick, variant }
             ),
             2 => (0usize..32, -4i32..=4, prop::bool::weighted(0.35)).prop_map(
                 |(pick, dx, fail_second)| GenStep::BatchMoveAndAdd { pick, dx, fail_second }
+            ),
+            2 => (-10i32..=10, -10i32..=10, prop::bool::weighted(0.5)).prop_map(
+                |(x, y, fail)| GenStep::BatchEmbedAndFail { x, y, fail }
+            ),
+            2 => (0usize..32, -5i32..=5, -5i32..=5).prop_map(
+                |(pick, tx, ty)| GenStep::PasteLive { pick, tx, ty }
             ),
             3 => Just(GenStep::Undo),
             2 => Just(GenStep::Redo),
@@ -4036,232 +4558,439 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(crate::proptest_config(128))]
-        #[test]
-        fn inv4_and_inv10_over_random_legal_and_invalid_sequences(
-            steps in prop::collection::vec(gen_step(), 1..80),
-        ) {
-            let mut doc = Doc::new();
-            let local_bounds = rect(-2, -1, 2, 1);
-            let local_pins = vec![Pt::ZERO, Pt { x: 1, y: 0 }];
-            let names = ["GND", "VCC", "SIG", "CLK"];
+            #![proptest_config(crate::proptest_config(128))]
+            #[test]
+            fn inv4_and_inv10_over_random_legal_and_invalid_sequences(
+                steps in prop::collection::vec(gen_step(), 1..80),
+            ) {
+                let mut doc = Doc::new();
+                let local_bounds = rect(-2, -1, 2, 1);
+                let local_pins = vec![Pt::ZERO, Pt { x: 1, y: 0 }];
+                let names = ["GND", "VCC", "SIG", "CLK", "4.7k", "10k"];
+                let r_def_10k = Arc::new(p2_2_resistor_def(
+                    "omnia:resistor",
+                    "10k",
+                    local_pins.clone(),
+                    local_bounds,
+                ));
+                let r_def_22k = Arc::new(p2_2_resistor_def(
+                    "omnia:resistor",
+                    "22k",
+                    local_pins.clone(),
+                    local_bounds,
+                ));
+                let r_def_hostile = Arc::new(p2_2_hostile_def(local_pins.clone(), local_bounds));
 
-            for step in steps {
-                match step {
-                    GenStep::Undo => {
-                        let pre_rev = doc.revision();
-                        let snap_before = doc.fork();
-                        if doc.undo().is_some() {
-                            prop_assert_eq!(doc.revision(), pre_rev + 1);
-                            assert_doc_consistent(&doc);
-                            let snap_after_undo = doc.fork();
-                            // INV4: undo then redo recovers document equal to pre-undo (IDs included).
-                            prop_assert!(doc.redo().is_some());
-                            prop_assert_eq!(doc.revision(), pre_rev + 2);
-                            prop_assert!(doc.content_eq(&snap_before));
-                            assert_doc_consistent(&doc);
-                            // Undo back so history state stays at the undone point.
-                            prop_assert!(doc.undo().is_some());
-                            prop_assert!(doc.content_eq(&snap_after_undo));
-                        } else {
-                            prop_assert_eq!(doc.revision(), pre_rev);
+                for step in steps {
+                    match step {
+                        GenStep::Undo => {
+                            let pre_rev = doc.revision();
+                            let snap_before = doc.fork();
+                            if doc.undo().is_some() {
+                                prop_assert_eq!(doc.revision(), pre_rev + 1);
+                                assert_doc_consistent(&doc);
+                                let snap_after_undo = doc.fork();
+                                // INV4: undo then redo recovers document equal to pre-undo (IDs included).
+                                prop_assert!(doc.redo().is_some());
+                                prop_assert_eq!(doc.revision(), pre_rev + 2);
+                                prop_assert!(doc.content_eq(&snap_before));
+                                assert_doc_consistent(&doc);
+                                // Undo back so history state stays at the undone point.
+                                prop_assert!(doc.undo().is_some());
+                                prop_assert!(doc.content_eq(&snap_after_undo));
+                            } else {
+                                prop_assert_eq!(doc.revision(), pre_rev);
+                            }
                         }
-                    }
-                    GenStep::Redo => {
-                        let pre_rev = doc.revision();
-                        if doc.redo().is_some() {
-                            prop_assert_eq!(doc.revision(), pre_rev + 1);
-                            assert_doc_consistent(&doc);
-                        } else {
-                            prop_assert_eq!(doc.revision(), pre_rev);
+                        GenStep::Redo => {
+                            let pre_rev = doc.revision();
+                            if doc.redo().is_some() {
+                                prop_assert_eq!(doc.revision(), pre_rev + 1);
+                                assert_doc_consistent(&doc);
+                            } else {
+                                prop_assert_eq!(doc.revision(), pre_rev);
+                            }
                         }
-                    }
-                    other => {
-                        let live = all_live_ids(&doc);
-                        let cmd = match other {
-                            GenStep::PlacePart { x, y, orient, invalid_oob } => Command::PlacePart {
-                                part: make_part(
-                                    Pt {
+                        other => {
+                            let live = all_live_ids(&doc);
+                            let cmd = match other {
+                                GenStep::PlacePart { x, y, orient, invalid_oob } => Command::PlacePart {
+                                    part: make_part(
+                                        Pt {
+                                            x: if invalid_oob { SHEET_LIMIT_NM + 1 } else { x },
+                                            y,
+                                        },
+                                        Orient::ALL[orient as usize],
+                                        "U1",
+                                        "1k",
+                                    ),
+                                    local_pins: local_pins.clone(),
+                                    local_bounds,
+        def: PlaceDef::Unmodelled,
+        params: Params::new(),
+    },
+                                GenStep::AddWires { x, y, horiz, bad_diag } => {
+                                    let a = Pt { x, y };
+                                    let b = if bad_diag {
+                                        Pt { x: x + 1, y: y + 1 }
+                                    } else if horiz {
+                                        Pt { x: x + 1, y }
+                                    } else {
+                                        Pt { x, y: y + 1 }
+                                    };
+                                    Command::AddWires(vec![Wire { a, b }])
+                                }
+                                GenStep::AddLabel { x, y, net, invalid_oob } => Command::AddLabel(Label {
+                                    at: Pt {
                                         x: if invalid_oob { SHEET_LIMIT_NM + 1 } else { x },
                                         y,
                                     },
-                                    Orient::ALL[orient as usize],
-                                    "U1",
-                                    "1k",
-                                ),
-                                local_pins: local_pins.clone(),
-                                local_bounds,
-                            },
-                            GenStep::AddWires { x, y, horiz, bad_diag } => {
-                                let a = Pt { x, y };
-                                let b = if bad_diag {
-                                    Pt { x: x + 1, y: y + 1 }
-                                } else if horiz {
-                                    Pt { x: x + 1, y }
-                                } else {
-                                    Pt { x, y: y + 1 }
-                                };
-                                Command::AddWires(vec![Wire { a, b }])
-                            }
-                            GenStep::AddLabel { x, y, net, invalid_oob } => Command::AddLabel(Label {
-                                at: Pt {
-                                    x: if invalid_oob { SHEET_LIMIT_NM + 1 } else { x },
-                                    y,
-                                },
-                                text: names[net as usize].into(),
-                            }),
-                            GenStep::Move { pick, dx, dy, dup, missing } => {
-                                let mut items = if live.is_empty() {
-                                    Vec::new()
-                                } else {
-                                    vec![live[pick % live.len()]]
-                                };
-                                if dup && !items.is_empty() {
-                                    items.push(items[0]);
-                                }
-                                if missing {
-                                    items.push(ItemId::Part(PartId(99_999)));
-                                }
-                                Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
-                                    items,
-                                    delta: Pt { x: dx, y: dy },
-                                }
-                            }
-                            GenStep::Reorient { pick, px, py, orient, dup } => {
-                                let mut items = if live.is_empty() {
-                                    Vec::new()
-                                } else {
-                                    vec![live[pick % live.len()]]
-                                };
-                                if dup && !items.is_empty() {
-                                    items.push(items[0]);
-                                }
-                                Command::Reorient { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
-                                    items,
-                                    pivot: Pt { x: px, y: py },
-                                    by: Orient::ALL[orient as usize],
-                                }
-                            }
-                            GenStep::Transform { pick, dx, dy, px, py, orient, dup } => {
-                                let mut items = if live.is_empty() {
-                                    Vec::new()
-                                } else {
-                                    vec![live[pick % live.len()]]
-                                };
-                                if dup && !items.is_empty() {
-                                    items.push(items[0]);
-                                }
-                                Command::Transform {
-                                    follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
-                                    items,
-                                    delta: Pt { x: dx, y: dy },
-                                    pivot: Pt { x: px, y: py },
-                                    by: Orient::ALL[orient as usize],
-                                }
-                            }
-                            GenStep::Delete { pick, count, dup, missing } => {
-                                let mut items = Vec::new();
-                                for i in 0..count {
-                                    if !live.is_empty() {
-                                        let id = live[(pick + i) % live.len()];
-                                        if !items.contains(&id) {
-                                            items.push(id);
-                                        }
+                                    text: names[net as usize].into(),
+                                }),
+                                GenStep::Move { pick, dx, dy, dup, missing } => {
+                                    let mut items = if live.is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        vec![live[pick % live.len()]]
+                                    };
+                                    if dup && !items.is_empty() {
+                                        items.push(items[0]);
+                                    }
+                                    if missing {
+                                        items.push(ItemId::Part(PartId(99_999)));
+                                    }
+                                    Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
+                                        items,
+                                        delta: Pt { x: dx, y: dy },
                                     }
                                 }
-                                if dup && !items.is_empty() {
-                                    items.push(items[0]);
+                                GenStep::Reorient { pick, px, py, orient, dup } => {
+                                    let mut items = if live.is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        vec![live[pick % live.len()]]
+                                    };
+                                    if dup && !items.is_empty() {
+                                        items.push(items[0]);
+                                    }
+                                    Command::Reorient { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
+                                        items,
+                                        pivot: Pt { x: px, y: py },
+                                        by: Orient::ALL[orient as usize],
+                                    }
                                 }
-                                if missing {
-                                    items.push(ItemId::Label(LabelId(99_999)));
+                                GenStep::Transform { pick, dx, dy, px, py, orient, dup } => {
+                                    let mut items = if live.is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        vec![live[pick % live.len()]]
+                                    };
+                                    if dup && !items.is_empty() {
+                                        items.push(items[0]);
+                                    }
+                                    Command::Transform {
+                                        follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
+                                        items,
+                                        delta: Pt { x: dx, y: dy },
+                                        pivot: Pt { x: px, y: py },
+                                        by: Orient::ALL[orient as usize],
+                                    }
                                 }
-                                Command::Delete { items, with_wires: false }
-                            }
-                            GenStep::SetText { pick, field, net, missing } => {
-                                let item = if missing || live.is_empty() {
-                                    ItemId::Wire(WireId(99_999))
-                                } else {
-                                    live[pick % live.len()]
-                                };
-                                let field = match field {
-                                    0 => TextField::Designator,
-                                    1 => TextField::Value,
-                                    _ => TextField::Label,
-                                };
-                                Command::SetText {
-                                    item,
-                                    field,
-                                    text: names[net as usize].into(),
+                                GenStep::Delete { pick, count, dup, missing } => {
+                                    let mut items = Vec::new();
+                                    for i in 0..count {
+                                        if !live.is_empty() {
+                                            let id = live[(pick + i) % live.len()];
+                                            if !items.contains(&id) {
+                                                items.push(id);
+                                            }
+                                        }
+                                    }
+                                    if dup && !items.is_empty() {
+                                        items.push(items[0]);
+                                    }
+                                    if missing {
+                                        items.push(ItemId::Label(LabelId(99_999)));
+                                    }
+                                    Command::Delete { items, with_wires: false }
                                 }
-                            }
-                            GenStep::BatchMoveAndAdd { pick, dx, fail_second } => {
-                                let mut cmds = vec![Command::PlacePart {
-                                    part: make_part(Pt::ZERO, Orient::IDENTITY, "B", "10"),
-                                    local_pins: local_pins.clone(),
-                                    local_bounds,
-                                }];
-                                if !live.is_empty() {
-                                    cmds.push(Command::Move { follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
-                                        items: vec![live[pick % live.len()]],
-                                        delta: Pt { x: dx, y: 0 },
-                                    });
+                                GenStep::SetText { pick, field, net, missing } => {
+                                    let item = if missing || live.is_empty() {
+                                        ItemId::Wire(WireId(99_999))
+                                    } else {
+                                        live[pick % live.len()]
+                                    };
+                                    let field = match field {
+                                        0 => TextField::Designator,
+                                        1 => TextField::Value,
+                                        _ => TextField::Label,
+                                    };
+                                    Command::SetText {
+                                        item,
+                                        field,
+                                        text: names[net as usize].into(),
+                                    }
                                 }
-                                if fail_second {
-                                    cmds.push(Command::AddWires(vec![Wire {
-                                        a: Pt::ZERO,
-                                        b: Pt::ZERO,
-                                    }]));
+                                GenStep::BatchMoveAndAdd { pick, dx, fail_second } => {
+                                    let mut cmds = vec![Command::PlacePart {
+                                        part: make_part(Pt::ZERO, Orient::IDENTITY, "B", "10"),
+                                        local_pins: local_pins.clone(),
+                                        local_bounds,
+                                        def: PlaceDef::Unmodelled,
+                                        params: Params::new(),
+                                    }];
+                                    if !live.is_empty() {
+                                        cmds.push(Command::Move {
+                                            follow: crate::prefs::FollowPolicy::new(false, 10, false).unwrap(),
+                                            items: vec![live[pick % live.len()]],
+                                            delta: Pt { x: dx, y: 0 },
+                                        });
+                                    }
+                                    if fail_second {
+                                        cmds.push(Command::AddWires(vec![Wire {
+                                            a: Pt::ZERO,
+                                            b: Pt::ZERO,
+                                        }]));
+                                    }
+                                    Command::Batch(cmds)
                                 }
-                                Command::Batch(cmds)
-                            }
-                            GenStep::Undo | GenStep::Redo => unreachable!(),
-                        };
+                                GenStep::PlaceModelled { x, y, orient, kind, override_val, bad_mode } => {
+                                    let (def_opt, base_val) = match kind {
+                                        0 => (PlaceDef::Embed(Arc::clone(&r_def_10k)), "10k"),
+                                        1 => (PlaceDef::Embed(Arc::clone(&r_def_22k)), "22k"),
+                                        2 => {
+                                            let defs: Vec<PartDefId> =
+                                                doc.part_defs().map(|(id, _)| id).collect();
+                                            if let Some(&id) =
+                                                defs.get(x.unsigned_abs() as usize % defs.len().max(1))
+                                            {
+                                                let primary_default = doc
+                                                    .part_def(id)
+                                                    .and_then(|d| {
+                                                        d.primary_param
+                                                            .as_deref()
+                                                            .and_then(|p| d.param(p))
+                                                    })
+                                                    .map(|s| s.default.display_text().into_owned())
+                                                    .unwrap_or_else(|| "10k".into());
+                                                (
+                                                    PlaceDef::Existing(id),
+                                                    if primary_default == "22k" { "22k" } else { "10k" },
+                                                )
+                                            } else {
+                                                (PlaceDef::Existing(PartDefId(99)), "10k")
+                                            }
+                                        }
+                                        _ => (PlaceDef::Embed(Arc::clone(&r_def_hostile)), "10k"),
+                                    };
+                                    let mut params = Params::new();
+                                    let mut value = base_val.to_owned();
+                                    match override_val {
+                                        0 => {}
+                                        1 => {
+                                            params.insert(
+                                                "resistance".into(),
+                                                p2_2_real("4.7k", Some("ohm")),
+                                            );
+                                            value = "4.7k".into();
+                                        }
+                                        2 => {
+                                            params.insert(
+                                                "tc1".into(),
+                                                p2_2_real("1e-3", Some("1/K")),
+                                            );
+                                        }
+                                        _ => {
+                                            params.insert(
+                                                "resistance".into(),
+                                                p2_2_real("-5", Some("ohm")),
+                                            );
+                                            value = "-5".into();
+                                        }
+                                    }
+                                    let mut pins = local_pins.clone();
+                                    if bad_mode == 1 {
+                                        pins.reverse();
+                                    } else if bad_mode == 2 {
+                                        value = "wrong".into();
+                                    }
+                                    Command::PlacePart {
+                                        part: make_part(
+                                            Pt { x, y },
+                                            Orient::ALL[orient as usize],
+                                            "R",
+                                            &value,
+                                        ),
+                                        local_pins: pins,
+                                        local_bounds,
+                                        def: def_opt,
+                                        params,
+                                    }
+                                }
+                                GenStep::SetParam { pick, param_kind, val_kind } => {
+                                    let part_ids: Vec<PartId> =
+                                        doc.parts().map(|(id, _)| id).collect();
+                                    let part = if part_ids.is_empty() {
+                                        PartId(99_999)
+                                    } else {
+                                        part_ids[pick % part_ids.len()]
+                                    };
+                                    let name: Arc<str> = match param_kind {
+                                        0 | 1 => "resistance".into(),
+                                        2 => "tc1".into(),
+                                        _ => "bogus".into(),
+                                    };
+                                    let value = match (param_kind, val_kind) {
+                                        (_, 0) => None,
+                                        (0 | 1, 1) => Some(p2_2_real("4.7k", Some("ohm"))),
+                                        (0 | 1, 2) => Some(p2_2_real("10k", Some("ohm"))),
+                                        (0 | 1, 3) => Some(p2_2_real("22k", Some("ohm"))),
+                                        (0 | 1, 4) => Some(p2_2_real("-5", Some("ohm"))),
+                                        (2, 1 | 2) => Some(p2_2_real("1e-3", Some("1/K"))),
+                                        (2, 3) => Some(p2_2_real("0", Some("1/K"))),
+                                        _ => Some(ParamValue::Int(7)),
+                                    };
+                                    Command::SetParam { part, name, value }
+                                }
+                                GenStep::UpdatePartDef { pick, variant } => {
+                                    let defs: Vec<PartDefId> =
+                                        doc.part_defs().map(|(id, _)| id).collect();
+                                    let from = if defs.is_empty() || variant == 5 {
+                                        PartDefId(99)
+                                    } else {
+                                        defs[pick % defs.len()]
+                                    };
+                                    let to = match variant {
+                                        0 => Arc::clone(&r_def_10k),
+                                        1 => Arc::clone(&r_def_22k),
+                                        2 => Arc::new(p2_2_resistor_def(
+                                            "omnia:resistor-v3",
+                                            "33k",
+                                            local_pins.clone(),
+                                            local_bounds,
+                                        )),
+                                        3 => Arc::clone(&r_def_hostile),
+                                        _ => {
+                                            let mut bad_pins = p2_2_resistor_def(
+                                                "omnia:resistor-swapped",
+                                                "10k",
+                                                local_pins.clone(),
+                                                local_bounds,
+                                            );
+                                            bad_pins.local_pins.reverse();
+                                            Arc::new(bad_pins)
+                                        }
+                                    };
+                                    Command::UpdatePartDef { from, to }
+                                }
+                                GenStep::BatchEmbedAndFail { x, y, fail } => {
+                                    let fresh = Arc::new(p2_2_resistor_def(
+                                        &format!("omnia:batch-{x}-{y}"),
+                                        "10k",
+                                        local_pins.clone(),
+                                        local_bounds,
+                                    ));
+                                    let mut cmds = vec![Command::PlacePart {
+                                        part: make_part(Pt { x, y }, Orient::IDENTITY, "RB", "10k"),
+                                        local_pins: local_pins.clone(),
+                                        local_bounds,
+                                        def: PlaceDef::Embed(fresh),
+                                        params: Params::new(),
+                                    }];
+                                    if fail {
+                                        cmds.push(Command::SetParam {
+                                            part: PartId(0),
+                                            name: "bogus".into(),
+                                            value: Some(ParamValue::Int(1)),
+                                        });
+                                    }
+                                    Command::Batch(cmds)
+                                }
+                                GenStep::PasteLive { pick, tx, ty } => {
+                                    let selected = if live.is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        vec![live[pick % live.len()]]
+                                    };
+                                    let clip = doc.copy(&selected);
+                                    Command::Paste {
+                                        clip,
+                                        at: Pt { x: tx, y: ty },
+                                    }
+                                }
+                                GenStep::Undo | GenStep::Redo => unreachable!(),
+                            };
 
-                        let before_snap = doc.snapshot();
-                        let before_doc = doc.fork();
-                        let pre_rev = doc.revision();
-                        match doc.apply(cmd) {
-                            Ok(change) if change.dirty.is_none() => {
-                                prop_assert_eq!(change.revision, pre_rev);
-                                prop_assert_eq!(doc.revision(), pre_rev);
-                                prop_assert_eq!(doc.snapshot(), before_snap);
-                                prop_assert_eq!(&doc, &before_doc);
-                                prop_assert!(change.added.is_empty() && change.removed.is_empty());
-                                prop_assert!(!change.nets_changed);
-                                assert_doc_consistent(&doc);
-                            }
-                            Ok(change) => {
-                                prop_assert_eq!(change.revision, pre_rev + 1);
-                                prop_assert_eq!(doc.revision(), pre_rev + 1);
-                                assert_doc_consistent(&doc);
-                                let after_doc = doc.fork();
+                            let before_snap = doc.snapshot();
+                            let before_doc = doc.fork();
+                            let pre_rev = doc.revision();
+                            let pre_cursor = doc.history_cursor();
+                            let pre_can_undo = doc.can_undo();
+                            let pre_can_redo = doc.can_redo();
+                            let pre_defs_len = doc.part_defs.len();
+                            match doc.apply(cmd) {
+                                Ok(change) if change.dirty.is_none() => {
+                                    prop_assert_eq!(change.revision, pre_rev);
+                                    prop_assert_eq!(doc.revision(), pre_rev);
+                                    prop_assert_eq!(doc.history_cursor(), pre_cursor);
+                                    prop_assert_eq!(doc.can_undo(), pre_can_undo);
+                                    prop_assert_eq!(doc.can_redo(), pre_can_redo);
+                                    prop_assert_eq!(doc.part_defs.len(), pre_defs_len);
+                                    prop_assert_eq!(doc.snapshot(), before_snap);
+                                    prop_assert_eq!(&doc, &before_doc);
+                                    prop_assert!(
+                                        change.added.is_empty()
+                                            && change.removed.is_empty()
+                                            && change.modified.is_empty()
+                                    );
+                                    prop_assert!(!change.nets_changed);
+                                    assert_doc_consistent(&doc);
+                                }
+                                Ok(change) => {
+                                    prop_assert_eq!(change.revision, pre_rev + 1);
+                                    prop_assert_eq!(doc.revision(), pre_rev + 1);
+                                    assert_doc_consistent(&doc);
+                                    let after_doc = doc.fork();
 
-                                // INV4: apply(c) then undo() gives a document equal to original, IDs included.
-                                let undo_change = doc.undo();
-                                prop_assert!(undo_change.is_some());
-                                prop_assert_eq!(doc.revision(), pre_rev + 2);
-                                prop_assert!(doc.content_eq(&before_doc));
-                                assert_doc_consistent(&doc);
+                                    // INV4 / PINV7: apply(c) then undo() gives a document equal to original, IDs included.
+                                    let undo_change = doc.undo();
+                                    prop_assert!(undo_change.is_some());
+                                    prop_assert_eq!(doc.revision(), pre_rev + 2);
+                                    prop_assert!(doc.content_eq(&before_doc));
+                                    prop_assert_eq!(
+                                        &undo_change.as_ref().unwrap().modified,
+                                        &change.modified
+                                    );
+                                    assert_doc_consistent(&doc);
 
-                                // INV4: undo() then redo() gives a document equal to after apply(c), IDs included.
-                                let redo_change = doc.redo();
-                                prop_assert!(redo_change.is_some());
-                                prop_assert_eq!(doc.revision(), pre_rev + 3);
-                                prop_assert!(doc.content_eq(&after_doc));
-                                assert_doc_consistent(&doc);
-                            }
-                            Err(_) => {
-                                prop_assert_eq!(doc.revision(), pre_rev);
-                                prop_assert_eq!(doc.snapshot(), before_snap);
-                                prop_assert_eq!(&doc, &before_doc);
-                                assert_doc_consistent(&doc);
+                                    // INV4 / PINV7: undo() then redo() gives a document equal to after apply(c), IDs included.
+                                    let redo_change = doc.redo();
+                                    prop_assert!(redo_change.is_some());
+                                    prop_assert_eq!(doc.revision(), pre_rev + 3);
+                                    prop_assert!(doc.content_eq(&after_doc));
+                                    prop_assert_eq!(
+                                        &redo_change.as_ref().unwrap().modified,
+                                        &change.modified
+                                    );
+                                    assert_doc_consistent(&doc);
+                                }
+                                Err(_) => {
+                                    // PINV7: refused commands preserve revision, arena length, retained records and history.
+                                    prop_assert_eq!(doc.revision(), pre_rev);
+                                    prop_assert_eq!(doc.history_cursor(), pre_cursor);
+                                    prop_assert_eq!(doc.can_undo(), pre_can_undo);
+                                    prop_assert_eq!(doc.can_redo(), pre_can_redo);
+                                    prop_assert_eq!(doc.part_defs.len(), pre_defs_len);
+                                    prop_assert_eq!(doc.snapshot(), before_snap);
+                                    prop_assert_eq!(&doc, &before_doc);
+                                    assert_doc_consistent(&doc);
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
 
     #[test]
     fn t7_2_add_label_on_wire_interior_splits_and_undoes_inv4_inv10_wd9() {
@@ -4577,5 +5306,1347 @@ mod tests {
             doc.assert_normal_form();
             prop_assert_ne!(doc.net_at(a1), doc.net_at(a2));
         }
+    }
+
+    // ---- P2.2 helpers and scenario tests -------------------------------------------------------
+
+    fn p2_2_real(raw: &str, unit: Option<&str>) -> ParamValue {
+        ParamValue::Real {
+            raw: raw.into(),
+            value: crate::parse_value(raw, unit).unwrap(),
+        }
+    }
+
+    fn p2_2_f(v: f64) -> crate::FiniteF64 {
+        crate::FiniteF64::new(v).unwrap()
+    }
+
+    fn p2_2_pin(number: &str, name: &str, role: crate::PinRole) -> crate::EmbeddedPin {
+        crate::EmbeddedPin {
+            number: number.into(),
+            name: name.into(),
+            role,
+        }
+    }
+
+    fn p2_2_resistor_def(
+        source_id: &str,
+        default_raw: &str,
+        local_pins: Vec<Pt>,
+        local_bounds: Rect,
+    ) -> EmbeddedPartDef {
+        EmbeddedPartDef {
+            source_id: source_id.into(),
+            content_hash: None,
+            name: "Resistor".into(),
+            category: "Passives".into(),
+            description: "Ideal linear two-terminal resistor".into(),
+            designator_prefix: "R".into(),
+            symbol: SymbolId(0),
+            local_pins,
+            local_bounds,
+            pins: vec![
+                p2_2_pin("1", "a", crate::PinRole::Passive),
+                p2_2_pin("2", "b", crate::PinRole::Passive),
+            ],
+            params: vec![
+                crate::EmbeddedParamSpec {
+                    name: "resistance".into(),
+                    label: "Resistance".into(),
+                    kind: ParamKind::Real {
+                        unit: Some("ohm".into()),
+                        min: Some(p2_2_f(1e-6)),
+                        max: Some(p2_2_f(1e12)),
+                    },
+                    default: p2_2_real(default_raw, Some("ohm")),
+                    optional: false,
+                },
+                crate::EmbeddedParamSpec {
+                    name: "tc1".into(),
+                    label: "Linear tempco".into(),
+                    kind: ParamKind::Real {
+                        unit: Some("1/K".into()),
+                        min: None,
+                        max: None,
+                    },
+                    default: p2_2_real("0", Some("1/K")),
+                    optional: true,
+                },
+            ],
+            primary_param: Some("resistance".into()),
+            sim: crate::EmbeddedSimBinding::Primitive {
+                kind: crate::PrimitiveKind::Resistor,
+                terminals: vec![0, 1],
+            },
+        }
+    }
+
+    fn p2_2_opamp_def() -> EmbeddedPartDef {
+        EmbeddedPartDef {
+            source_id: "omnia:opamp-generic".into(),
+            content_hash: Some([0x22; 32]),
+            name: "Op-amp (generic)".into(),
+            category: "Op-Amps".into(),
+            description: "Behavioural voltage-feedback operational amplifier".into(),
+            designator_prefix: "U".into(),
+            symbol: SymbolId(4),
+            local_pins: vec![
+                Pt { x: -20, y: -10 },
+                Pt { x: -20, y: 10 },
+                Pt { x: 0, y: -20 },
+                Pt { x: 0, y: 20 },
+                Pt { x: 20, y: 0 },
+            ],
+            local_bounds: rect(-20, -20, 20, 20),
+            pins: vec![
+                p2_2_pin("3", "in+", crate::PinRole::Input),
+                p2_2_pin("2", "in-", crate::PinRole::Input),
+                p2_2_pin("8", "v+", crate::PinRole::Power),
+                p2_2_pin("4", "v-", crate::PinRole::Power),
+                p2_2_pin("1", "out", crate::PinRole::Output),
+            ],
+            params: vec![],
+            primary_param: None,
+            sim: crate::EmbeddedSimBinding::Subckt {
+                entry: "OPAMP_GENERIC".into(),
+                terminals: vec![0, 1, 2, 3, 4],
+                spice: ".subckt OPAMP_GENERIC inp inn vcc vee out\nR1 inp inn 1e6\n.ends OPAMP_GENERIC\n"
+                    .into(),
+                supply: Some(crate::SupplyDecl {
+                    pos: 2,
+                    neg: 3,
+                    implicit: Some((p2_2_f(15.0), p2_2_f(-15.0))),
+                }),
+            },
+        }
+    }
+
+    fn p2_2_hostile_def(local_pins: Vec<Pt>, local_bounds: Rect) -> EmbeddedPartDef {
+        EmbeddedPartDef {
+            source_id: "hostile:bad".into(),
+            content_hash: None,
+            name: "Bad".into(),
+            category: "Test".into(),
+            description: "".into(),
+            designator_prefix: "D".into(),
+            symbol: SymbolId(0),
+            local_pins,
+            local_bounds,
+            pins: vec![
+                p2_2_pin("1", "a", crate::PinRole::Passive),
+                p2_2_pin("2", "b", crate::PinRole::Passive),
+            ],
+            params: vec![],
+            primary_param: None,
+            sim: crate::EmbeddedSimBinding::Model {
+                spice_prefix: 'D',
+                entry: "DBAD".into(),
+                terminals: vec![0, 1],
+                spice: ".include x.lib\n.model DBAD D(IS=1e-14)\n".into(),
+                supply: None,
+            },
+        }
+    }
+
+    fn p2_2_place_resistor(
+        doc: &mut Doc,
+        at: Pt,
+        des: &str,
+        value: &str,
+        def: PlaceDef,
+        params: Params,
+    ) -> Result<Change, CommandError> {
+        doc.apply(Command::PlacePart {
+            part: Part {
+                symbol: SymbolId(0),
+                at,
+                orient: Orient::IDENTITY,
+                designator: des.into(),
+                value: value.into(),
+            },
+            local_pins: vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            local_bounds: rect(-10, -5, 10, 5),
+            def,
+            params,
+        })
+    }
+
+    /// P2.2 Done-when: `PlacePart` with a valid initial override stores it and shows its text;
+    /// invalid override or disagreeing `Part::value` is refused with the document unchanged.
+    #[test]
+    fn p2_2_place_part_initial_override_accept_and_refuse() {
+        let mut doc = Doc::new();
+        let def = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "10k",
+            vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            rect(-10, -5, 10, 5),
+        ));
+
+        let mut valid_params = Params::new();
+        valid_params.insert("resistance".into(), p2_2_real("4.7k", Some("ohm")));
+        let c = p2_2_place_resistor(
+            &mut doc,
+            Pt::ZERO,
+            "R1",
+            "4.7k",
+            PlaceDef::Embed(Arc::clone(&def)),
+            valid_params.clone(),
+        )
+        .unwrap();
+        let [ItemId::Part(r1)] = c.added[..] else {
+            panic!("expected placed part");
+        };
+        assert!(c.modified.is_empty());
+        assert_eq!(&*doc.part(r1).unwrap().value, "4.7k");
+        assert_eq!(doc.part_params(r1), Some(&valid_params));
+        assert_eq!(
+            doc.resolved_param(r1, "resistance"),
+            Some(&p2_2_real("4.7k", Some("ohm")))
+        );
+
+        let before_snap = doc.snapshot();
+        let before_rev = doc.revision();
+        let before_cursor = doc.history_cursor();
+
+        // Value disagrees with initial override -> refused, doc unchanged.
+        let err = p2_2_place_resistor(
+            &mut doc,
+            Pt { x: 40, y: 0 },
+            "R2",
+            "10k",
+            PlaceDef::Embed(Arc::clone(&def)),
+            valid_params,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::InvalidInstance(InstanceError::Value {
+                primary: "resistance".into()
+            })
+        );
+        assert_eq!(doc.snapshot(), before_snap);
+        assert_eq!(doc.revision(), before_rev);
+        assert_eq!(doc.history_cursor(), before_cursor);
+
+        // Out-of-bounds initial override -> refused, doc unchanged.
+        let mut bad_params = Params::new();
+        bad_params.insert("resistance".into(), p2_2_real("-5", Some("ohm")));
+        let err = p2_2_place_resistor(
+            &mut doc,
+            Pt { x: 40, y: 0 },
+            "R3",
+            "-5",
+            PlaceDef::Embed(Arc::clone(&def)),
+            bad_params,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::InvalidInstance(InstanceError::Param {
+                name: "resistance".into(),
+                fault: crate::ParamFault::BelowMin,
+            })
+        );
+        assert_eq!(doc.snapshot(), before_snap);
+        assert_eq!(doc.revision(), before_rev);
+        assert_eq!(doc.history_cursor(), before_cursor);
+
+        // Non-empty params on Unmodelled -> refused, doc unchanged.
+        let mut unmodelled_params = Params::new();
+        unmodelled_params.insert("resistance".into(), p2_2_real("4.7k", Some("ohm")));
+        let err = p2_2_place_resistor(
+            &mut doc,
+            Pt { x: 40, y: 0 },
+            "R4",
+            "4.7k",
+            PlaceDef::Unmodelled,
+            unmodelled_params,
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::InvalidInstance(InstanceError::UndeclaredParam {
+                name: "resistance".into()
+            })
+        );
+        assert_eq!(doc.snapshot(), before_snap);
+    }
+
+    /// `PTC-place-dedup`, `PINV5`, `PINV6`: placing 50 resistors and 10 op-amps creates 2
+    /// referenced definitions; primitive stores zero SPICE text; subckt embeds once.
+    #[test]
+    fn ptc_place_dedup_pinv5_pinv6() {
+        let mut doc = Doc::new();
+        let resistor = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "10k",
+            vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            rect(-10, -5, 10, 5),
+        ));
+        let opamp = Arc::new(p2_2_opamp_def());
+
+        for i in 0..50 {
+            p2_2_place_resistor(
+                &mut doc,
+                Pt { x: i * 50, y: 0 },
+                &format!("R{}", i + 1),
+                "10k",
+                PlaceDef::Embed(Arc::clone(&resistor)),
+                Params::new(),
+            )
+            .unwrap();
+        }
+        for i in 0..10 {
+            doc.apply(Command::PlacePart {
+                part: Part {
+                    symbol: SymbolId(4),
+                    at: Pt { x: i * 100, y: 200 },
+                    orient: Orient::IDENTITY,
+                    designator: format!("U{}", i + 1).into(),
+                    value: "".into(),
+                },
+                local_pins: opamp.local_pins.clone(),
+                local_bounds: opamp.local_bounds,
+                def: PlaceDef::Embed(Arc::clone(&opamp)),
+                params: Params::new(),
+            })
+            .unwrap();
+        }
+        let defs: Vec<_> = doc.part_defs().collect();
+        assert_eq!(defs.len(), 2, "PINV5: 50 resistors + 10 op-amps -> 2 defs");
+        assert!(
+            defs[0].1.sim.spice().is_none(),
+            "PINV6: primitive stores no SPICE"
+        );
+        assert!(
+            defs[1]
+                .1
+                .sim
+                .spice()
+                .is_some_and(|s| s.contains(".subckt OPAMP_GENERIC"))
+        );
+        assert_doc_consistent(&doc);
+    }
+
+    /// `PTC-param-sync` (`PD6`, `PINV7`, `XD7`): `SetParam` and `SetText(Value)` stay synced
+    /// through apply, undo and redo, listing the part in `Change::modified` on every step.
+    #[test]
+    fn ptc_param_sync_and_noop() {
+        let mut doc = Doc::new();
+        let resistor = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "10k",
+            vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            rect(-10, -5, 10, 5),
+        ));
+        let ItemId::Part(r1) = p2_2_place_resistor(
+            &mut doc,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Embed(resistor),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+
+        // Validated no-op: resetting already-default param changes nothing.
+        let pre_rev = doc.revision();
+        let noop = doc
+            .apply(Command::SetParam {
+                part: r1,
+                name: "resistance".into(),
+                value: None,
+            })
+            .unwrap();
+        assert_eq!(noop.dirty, None);
+        assert!(noop.modified.is_empty());
+        assert_eq!(doc.revision(), pre_rev);
+
+        let c1 = doc
+            .apply(Command::SetParam {
+                part: r1,
+                name: "resistance".into(),
+                value: Some(p2_2_real("4.7k", Some("ohm"))),
+            })
+            .unwrap();
+        assert_eq!(&*doc.part(r1).unwrap().value, "4.7k");
+        assert_eq!(c1.modified, vec![r1]);
+        assert!(c1.dirty.is_some());
+
+        let c2 = doc
+            .apply(Command::SetText {
+                item: ItemId::Part(r1),
+                field: TextField::Value,
+                text: "2.2k".into(),
+            })
+            .unwrap();
+        assert_eq!(&*doc.part(r1).unwrap().value, "2.2k");
+        assert_eq!(
+            doc.resolved_param(r1, "resistance"),
+            Some(&p2_2_real("2.2k", Some("ohm")))
+        );
+        assert_eq!(c2.modified, vec![r1]);
+
+        let u1 = doc.undo().unwrap();
+        assert_eq!(&*doc.part(r1).unwrap().value, "4.7k");
+        assert_eq!(u1.modified, vec![r1]);
+
+        let u2 = doc.undo().unwrap();
+        assert_eq!(&*doc.part(r1).unwrap().value, "10k");
+        assert!(doc.part_params(r1).unwrap().is_empty());
+        assert_eq!(u2.modified, vec![r1]);
+
+        let rd1 = doc.redo().unwrap();
+        assert_eq!(&*doc.part(r1).unwrap().value, "4.7k");
+        assert_eq!(rd1.modified, vec![r1]);
+
+        let rd2 = doc.redo().unwrap();
+        assert_eq!(&*doc.part(r1).unwrap().value, "2.2k");
+        assert_eq!(rd2.modified, vec![r1]);
+
+        // Setting back to default via SetText removes override canonically (`PD6`).
+        let c3 = doc
+            .apply(Command::SetText {
+                item: ItemId::Part(r1),
+                field: TextField::Value,
+                text: "10k".into(),
+            })
+            .unwrap();
+        assert_eq!(&*doc.part(r1).unwrap().value, "10k");
+        assert!(doc.part_params(r1).unwrap().is_empty());
+        assert_eq!(c3.modified, vec![r1]);
+        assert_doc_consistent(&doc);
+    }
+
+    /// `PTC-param-refuse` (`PD6`, `PINV7`): below min, undeclared name and non-finite `1e999`
+    /// are all refused with `CommandError::InvalidParam`, leaving the document unchanged.
+    #[test]
+    fn ptc_param_refuse() {
+        let mut doc = Doc::new();
+        let resistor = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "10k",
+            vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            rect(-10, -5, 10, 5),
+        ));
+        let ItemId::Part(r1) = p2_2_place_resistor(
+            &mut doc,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Embed(resistor),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+
+        let before = doc.fork();
+        let before_snap = doc.snapshot();
+        let before_cursor = doc.history_cursor();
+
+        // Below min = 1e-6
+        assert_eq!(
+            doc.apply(Command::SetParam {
+                part: r1,
+                name: "resistance".into(),
+                value: Some(p2_2_real("-5", Some("ohm"))),
+            }),
+            Err(CommandError::InvalidParam {
+                part: r1,
+                name: "resistance".into(),
+            })
+        );
+        // Undeclared parameter name
+        assert_eq!(
+            doc.apply(Command::SetParam {
+                part: r1,
+                name: "bogus".into(),
+                value: Some(p2_2_real("1", None)),
+            }),
+            Err(CommandError::InvalidParam {
+                part: r1,
+                name: "bogus".into(),
+            })
+        );
+        // Non-finite parse `1e999` via SetParam (mismatched raw) and SetText(Value)
+        assert_eq!(
+            doc.apply(Command::SetParam {
+                part: r1,
+                name: "resistance".into(),
+                value: Some(ParamValue::Real {
+                    raw: "1e999".into(),
+                    value: p2_2_f(1.0),
+                }),
+            }),
+            Err(CommandError::InvalidParam {
+                part: r1,
+                name: "resistance".into(),
+            })
+        );
+        assert_eq!(
+            doc.apply(Command::SetText {
+                item: ItemId::Part(r1),
+                field: TextField::Value,
+                text: "1e999".into(),
+            }),
+            Err(CommandError::InvalidParam {
+                part: r1,
+                name: "resistance".into(),
+            })
+        );
+        assert_eq!(doc, before);
+        assert_eq!(doc.snapshot(), before_snap);
+        assert_eq!(doc.history_cursor(), before_cursor);
+    }
+
+    /// `PTC-param-silent` (`XD7`): editing a non-primary parameter leaves `Part::value`
+    /// unchanged, advances revision, and reports the part in `Change::modified` on apply/undo/redo.
+    #[test]
+    fn ptc_param_silent() {
+        let mut doc = Doc::new();
+        let resistor = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "10k",
+            vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            rect(-10, -5, 10, 5),
+        ));
+        let ItemId::Part(r1) = p2_2_place_resistor(
+            &mut doc,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Embed(resistor),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+
+        let pre_rev = doc.revision();
+        let c = doc
+            .apply(Command::SetParam {
+                part: r1,
+                name: "tc1".into(),
+                value: Some(p2_2_real("1e-3", Some("1/K"))),
+            })
+            .unwrap();
+        assert_eq!(&*doc.part(r1).unwrap().value, "10k");
+        assert_eq!(doc.revision(), pre_rev + 1);
+        assert_eq!(c.modified, vec![r1]);
+        assert!(c.dirty.is_some());
+        assert!(!c.nets_changed);
+
+        let u = doc.undo().unwrap();
+        assert_eq!(u.modified, vec![r1]);
+        assert!(doc.part_params(r1).unwrap().is_empty());
+
+        let r = doc.redo().unwrap();
+        assert_eq!(r.modified, vec![r1]);
+        assert_eq!(
+            doc.resolved_param(r1, "tc1"),
+            Some(&p2_2_real("1e-3", Some("1/K")))
+        );
+    }
+
+    /// `PTC-batch-intern-refused` (`PINV7`): a batch of `PlacePart { def: Embed(new) }` followed
+    /// by an invalid `SetParam` rolls back arena length, records, parts, revision and history.
+    #[test]
+    fn ptc_batch_intern_refused() {
+        let mut doc = Doc::new();
+        let base_def = Arc::new(p2_2_resistor_def(
+            "omnia:resistor-base",
+            "10k",
+            vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            rect(-10, -5, 10, 5),
+        ));
+        let ItemId::Part(r0) = p2_2_place_resistor(
+            &mut doc,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Embed(base_def),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+        // Seed a non-empty redo stack to verify it survives a refused batch.
+        doc.apply(Command::SetParam {
+            part: r0,
+            name: "tc1".into(),
+            value: Some(p2_2_real("2e-3", Some("1/K"))),
+        })
+        .unwrap();
+        doc.undo().unwrap();
+        assert!(doc.can_redo());
+
+        let before = doc.fork();
+        let before_snap = doc.snapshot();
+        let before_cursor = doc.history_cursor();
+        let before_defs_len = doc.part_defs.len();
+
+        let new_def = Arc::new(p2_2_resistor_def(
+            "omnia:resistor-brand-new",
+            "22k",
+            vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            rect(-10, -5, 10, 5),
+        ));
+        let err = doc
+            .apply(Command::Batch(vec![
+                Command::PlacePart {
+                    part: Part {
+                        symbol: SymbolId(0),
+                        at: Pt { x: 100, y: 0 },
+                        orient: Orient::IDENTITY,
+                        designator: "R2".into(),
+                        value: "22k".into(),
+                    },
+                    local_pins: vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+                    local_bounds: rect(-10, -5, 10, 5),
+                    def: PlaceDef::Embed(new_def),
+                    params: Params::new(),
+                },
+                Command::SetParam {
+                    part: r0,
+                    name: "resistance".into(),
+                    value: Some(p2_2_real("-5", Some("ohm"))),
+                },
+            ]))
+            .unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::InvalidParam {
+                part: r0,
+                name: "resistance".into(),
+            }
+        );
+        assert_eq!(doc, before);
+        assert_eq!(doc.snapshot(), before_snap);
+        assert_eq!(doc.part_defs.len(), before_defs_len);
+        assert_eq!(doc.history_cursor(), before_cursor);
+        assert!(doc.can_undo());
+        assert!(doc.can_redo());
+        assert_doc_consistent(&doc);
+    }
+
+    /// `PTC-pin-order` (`PD5`, `PINV11`): two definitions for the same 3-pin symbol differing
+    /// only in source pin declaration order normalize to identical embedded pin tables and
+    /// terminals; swapping terminals maps to swapped pin indices; a repeated pin is refused.
+    #[test]
+    fn ptc_pin_order_pinv11() {
+        let local_pins = vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }, Pt { x: 0, y: -10 }];
+        let local_bounds = rect(-10, -10, 10, 10);
+        // Simulate normalizing two TOML declaration orders onto stored pin indices 0, 1, 2.
+        let symbol_numbers = ["1", "2", "3"];
+        let build_from_order = |decls: &[(&str, &str)], sim_pins: &[&str]| -> EmbeddedPartDef {
+            let pins: Vec<_> = symbol_numbers
+                .iter()
+                .map(|&num| {
+                    let (_, name) = decls.iter().find(|&&(n, _)| n == num).unwrap();
+                    p2_2_pin(num, name, crate::PinRole::Passive)
+                })
+                .collect();
+            let terminals: Vec<u16> = sim_pins
+                .iter()
+                .map(|&num| {
+                    pins.iter()
+                        .position(|p| &*p.number == num)
+                        .expect("pin number exists") as u16
+                })
+                .collect();
+            EmbeddedPartDef {
+                source_id: "omnia:potentiometer".into(),
+                content_hash: None,
+                name: "Potentiometer".into(),
+                category: "Passives".into(),
+                description: "Three-terminal potentiometer".into(),
+                designator_prefix: "RV".into(),
+                symbol: SymbolId(1),
+                local_pins: local_pins.clone(),
+                local_bounds,
+                pins,
+                params: vec![],
+                primary_param: None,
+                sim: crate::EmbeddedSimBinding::Primitive {
+                    kind: crate::PrimitiveKind::Potentiometer,
+                    terminals,
+                },
+            }
+        };
+
+        let def_a = Arc::new(build_from_order(
+            &[("1", "a"), ("2", "b"), ("3", "wiper")],
+            &["1", "2", "3"],
+        ));
+        let def_b = Arc::new(build_from_order(
+            &[("3", "wiper"), ("1", "a"), ("2", "b")],
+            &["1", "2", "3"],
+        ));
+        let def_swapped = Arc::new(build_from_order(
+            &[("1", "a"), ("2", "b"), ("3", "wiper")],
+            &["2", "1", "3"],
+        ));
+        let def_repeated = Arc::new(build_from_order(
+            &[("1", "a"), ("2", "b"), ("3", "wiper")],
+            &["1", "1", "3"],
+        ));
+
+        let mut doc = Doc::new();
+        let place_pot = |doc: &mut Doc, x: i32, des: &str, def: Arc<EmbeddedPartDef>| {
+            doc.apply(Command::PlacePart {
+                part: Part {
+                    symbol: SymbolId(1),
+                    at: Pt { x, y: 0 },
+                    orient: Orient::IDENTITY,
+                    designator: des.into(),
+                    value: "".into(),
+                },
+                local_pins: local_pins.clone(),
+                local_bounds,
+                def: PlaceDef::Embed(def),
+                params: Params::new(),
+            })
+        };
+
+        let ItemId::Part(p_a) = place_pot(&mut doc, 0, "RV1", def_a).unwrap().added[0] else {
+            unreachable!();
+        };
+        let ItemId::Part(p_b) = place_pot(&mut doc, 50, "RV2", def_b).unwrap().added[0] else {
+            unreachable!();
+        };
+        let ItemId::Part(p_s) = place_pot(&mut doc, 100, "RV3", def_swapped).unwrap().added[0]
+        else {
+            unreachable!();
+        };
+
+        // First two deduplicate onto the exact same definition id with identical pins & terminals.
+        let id_a = doc.part_def_id(p_a).unwrap();
+        let id_b = doc.part_def_id(p_b).unwrap();
+        let id_s = doc.part_def_id(p_s).unwrap();
+        assert_eq!(id_a, id_b);
+        assert_ne!(id_a, id_s);
+        assert_eq!(doc.part_def(id_a).unwrap().sim.terminals(), &[0, 1, 2]);
+        assert_eq!(doc.part_def(id_s).unwrap().sim.terminals(), &[1, 0, 2]);
+
+        // Repeated pin in terminal list is refused (`PINV11`).
+        let before = doc.snapshot();
+        let err = place_pot(&mut doc, 150, "RV4", def_repeated).unwrap_err();
+        assert_eq!(
+            err,
+            CommandError::InvalidDef(DefError::Terminal {
+                terminal: 1,
+                pin: 0,
+            })
+        );
+        assert_eq!(doc.snapshot(), before);
+    }
+
+    /// Command half of `PTC-instance-refuse` (`PD8`, `PINV12`): `PlacePart { def: Existing(id) }`
+    /// with two local pins swapped at equal count is refused with `InvalidInstance`; retained id
+    /// is refused with `MissingDef`.
+    #[test]
+    fn ptc_instance_refuse_command_half() {
+        let mut doc = Doc::new();
+        let resistor = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "10k",
+            vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            rect(-10, -5, 10, 5),
+        ));
+        let ItemId::Part(r1) = p2_2_place_resistor(
+            &mut doc,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Embed(resistor),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+        let def_id = doc.part_def_id(r1).unwrap();
+        let before = doc.fork();
+        let before_snap = doc.snapshot();
+
+        // Same pin count (2), swapped order -> refused with InvalidInstance(LocalPins).
+        let err = doc
+            .apply(Command::PlacePart {
+                part: Part {
+                    symbol: SymbolId(0),
+                    at: Pt { x: 40, y: 0 },
+                    orient: Orient::IDENTITY,
+                    designator: "R2".into(),
+                    value: "10k".into(),
+                },
+                local_pins: vec![Pt { x: 10, y: 0 }, Pt { x: -10, y: 0 }],
+                local_bounds: rect(-10, -5, 10, 5),
+                def: PlaceDef::Existing(def_id),
+                params: Params::new(),
+            })
+            .unwrap_err();
+        assert_eq!(err, CommandError::InvalidInstance(InstanceError::LocalPins));
+        assert_eq!(doc, before);
+        assert_eq!(doc.snapshot(), before_snap);
+
+        // Delete r1 so def_id becomes retained; Existing(def_id) must now be refused (`PD8`).
+        doc.apply(Command::Delete {
+            items: vec![ItemId::Part(r1)],
+            with_wires: false,
+        })
+        .unwrap();
+        let retained_snap = doc.snapshot();
+        let err = p2_2_place_resistor(
+            &mut doc,
+            Pt { x: 40, y: 0 },
+            "R3",
+            "10k",
+            PlaceDef::Existing(def_id),
+            Params::new(),
+        )
+        .unwrap_err();
+        assert_eq!(err, CommandError::MissingDef(def_id));
+        assert_eq!(doc.snapshot(), retained_snap);
+    }
+
+    /// Command half of `PTC-hostile-embedded` (`PD10`, `PINV9`): `PlacePart { def: Embed(..) }`
+    /// and `UpdatePartDef` with a deck containing `.include x.lib` are refused, doc unchanged.
+    #[test]
+    fn ptc_hostile_embedded_command_half() {
+        let pins = vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }];
+        let bounds = rect(-10, -5, 10, 5);
+        let mut doc = Doc::new();
+        let resistor = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "10k",
+            pins.clone(),
+            bounds,
+        ));
+        let ItemId::Part(r1) = p2_2_place_resistor(
+            &mut doc,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Embed(resistor),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+        let def_id = doc.part_def_id(r1).unwrap();
+        let hostile = Arc::new(p2_2_hostile_def(pins, bounds));
+
+        let before = doc.fork();
+        let before_snap = doc.snapshot();
+
+        let err1 = p2_2_place_resistor(
+            &mut doc,
+            Pt { x: 50, y: 0 },
+            "D1",
+            "",
+            PlaceDef::Embed(Arc::clone(&hostile)),
+            Params::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err1,
+            CommandError::InvalidDef(DefError::Screen(crate::ScreenError::Include { .. }))
+        ));
+        assert_eq!(doc, before);
+        assert_eq!(doc.snapshot(), before_snap);
+
+        let err2 = doc
+            .apply(Command::UpdatePartDef {
+                from: def_id,
+                to: hostile,
+            })
+            .unwrap_err();
+        assert!(matches!(
+            err2,
+            CommandError::InvalidDef(DefError::Screen(crate::ScreenError::Include { .. }))
+        ));
+        assert_eq!(doc, before);
+        assert_eq!(doc.snapshot(), before_snap);
+    }
+
+    /// `PTC-update-value` (`PD8`, `XD7`): `UpdatePartDef` refreshes `Part::value` from `to`'s
+    /// resolved primary parameter in every case (new default, existing override, moved primary,
+    /// override matching new default, and `primary_param: None`), and undo restores old text/def.
+    #[test]
+    fn ptc_update_value() {
+        let pins = vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }];
+        let bounds = rect(-10, -5, 10, 5);
+        let mut doc = Doc::new();
+        let def_10k = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "10k",
+            pins.clone(),
+            bounds,
+        ));
+        let def_22k = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "22k",
+            pins.clone(),
+            bounds,
+        ));
+
+        let ItemId::Part(r1) = p2_2_place_resistor(
+            &mut doc,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Embed(Arc::clone(&def_10k)),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+        let mut r2_params = Params::new();
+        r2_params.insert("resistance".into(), p2_2_real("4.7k", Some("ohm")));
+        let ItemId::Part(r2) = p2_2_place_resistor(
+            &mut doc,
+            Pt { x: 50, y: 0 },
+            "R2",
+            "4.7k",
+            PlaceDef::Embed(Arc::clone(&def_10k)),
+            r2_params,
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+        // A third resistor whose override matches `def_22k`'s new default (`22k`):
+        // its override is pruned canonically (`PINV12`) and restored on undo.
+        let mut r3_params = Params::new();
+        r3_params.insert("resistance".into(), p2_2_real("22k", Some("ohm")));
+        let ItemId::Part(r3) = p2_2_place_resistor(
+            &mut doc,
+            Pt { x: 100, y: 0 },
+            "R3",
+            "22k",
+            PlaceDef::Embed(Arc::clone(&def_10k)),
+            r3_params.clone(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+
+        let def_id = doc.part_def_id(r1).unwrap();
+        let before_update = doc.fork();
+        let c = doc
+            .apply(Command::UpdatePartDef {
+                from: def_id,
+                to: def_22k,
+            })
+            .unwrap();
+        assert_eq!(c.modified, vec![r1, r2, r3]);
+        assert_eq!(&*doc.part(r1).unwrap().value, "22k");
+        assert_eq!(&*doc.part(r2).unwrap().value, "4.7k");
+        assert_eq!(&*doc.part(r3).unwrap().value, "22k");
+        assert!(doc.part_params(r3).unwrap().is_empty());
+        assert_doc_consistent(&doc);
+
+        let u = doc.undo().unwrap();
+        assert_eq!(u.modified, vec![r1, r2, r3]);
+        assert!(doc.content_eq(&before_update));
+        assert_eq!(&*doc.part(r1).unwrap().value, "10k");
+        assert_eq!(&*doc.part(r2).unwrap().value, "4.7k");
+        assert_eq!(&*doc.part(r3).unwrap().value, "22k");
+        assert_eq!(doc.part_params(r3), Some(&r3_params));
+
+        // Second half: primary moves from parameter `a` to parameter `b` on a part that
+        // already overrides `b`.
+        let make_ab_def = |primary: &str| {
+            Arc::new(EmbeddedPartDef {
+                source_id: "omnia:ab".into(),
+                content_hash: None,
+                name: "AB".into(),
+                category: "Test".into(),
+                description: "".into(),
+                designator_prefix: "X".into(),
+                symbol: SymbolId(2),
+                local_pins: pins.clone(),
+                local_bounds: bounds,
+                pins: vec![
+                    p2_2_pin("1", "a", crate::PinRole::Passive),
+                    p2_2_pin("2", "b", crate::PinRole::Passive),
+                ],
+                params: vec![
+                    crate::EmbeddedParamSpec {
+                        name: "a".into(),
+                        label: "A".into(),
+                        kind: ParamKind::Real {
+                            unit: Some("ohm".into()),
+                            min: None,
+                            max: None,
+                        },
+                        default: p2_2_real("1k", Some("ohm")),
+                        optional: false,
+                    },
+                    crate::EmbeddedParamSpec {
+                        name: "b".into(),
+                        label: "B".into(),
+                        kind: ParamKind::Real {
+                            unit: Some("ohm".into()),
+                            min: None,
+                            max: None,
+                        },
+                        default: p2_2_real("2k", Some("ohm")),
+                        optional: false,
+                    },
+                ],
+                primary_param: Some(primary.into()),
+                sim: crate::EmbeddedSimBinding::None,
+            })
+        };
+
+        let def_a = make_ab_def("a");
+        let def_b = make_ab_def("b");
+        let mut ab_params = Params::new();
+        ab_params.insert("b".into(), p2_2_real("5.6k", Some("ohm")));
+        let ItemId::Part(p_ab) = doc
+            .apply(Command::PlacePart {
+                part: Part {
+                    symbol: SymbolId(2),
+                    at: Pt { x: 200, y: 0 },
+                    orient: Orient::IDENTITY,
+                    designator: "X1".into(),
+                    value: "1k".into(),
+                },
+                local_pins: pins,
+                local_bounds: bounds,
+                def: PlaceDef::Embed(def_a),
+                params: ab_params,
+            })
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        let ab_def_id = doc.part_def_id(p_ab).unwrap();
+        let before_ab = doc.fork();
+
+        let c_ab = doc
+            .apply(Command::UpdatePartDef {
+                from: ab_def_id,
+                to: def_b,
+            })
+            .unwrap();
+        assert_eq!(c_ab.modified, vec![p_ab]);
+        assert_eq!(&*doc.part(p_ab).unwrap().value, "5.6k");
+        assert_doc_consistent(&doc);
+
+        let u_ab = doc.undo().unwrap();
+        assert_eq!(u_ab.modified, vec![p_ab]);
+        assert_eq!(&*doc.part(p_ab).unwrap().value, "1k");
+        assert!(doc.content_eq(&before_ab));
+    }
+
+    /// `UpdatePartDef` merging onto another already-referenced definition moves only `from`'s
+    /// parts, and `undo` moves only those parts back without touching parts already on `to`.
+    #[test]
+    fn p2_2_update_part_def_interns_onto_existing_and_undoes_only_moved_parts() {
+        let pins = vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }];
+        let bounds = rect(-10, -5, 10, 5);
+        let mut doc = Doc::new();
+        let def_a = Arc::new(p2_2_resistor_def(
+            "omnia:res-a",
+            "10k",
+            pins.clone(),
+            bounds,
+        ));
+        let def_b = Arc::new(p2_2_resistor_def("omnia:res-b", "22k", pins, bounds));
+
+        let ItemId::Part(ra) = p2_2_place_resistor(
+            &mut doc,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Embed(def_a),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+        let ItemId::Part(rb) = p2_2_place_resistor(
+            &mut doc,
+            Pt { x: 50, y: 0 },
+            "R2",
+            "22k",
+            PlaceDef::Embed(Arc::clone(&def_b)),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+        let id_a = doc.part_def_id(ra).unwrap();
+        let id_b = doc.part_def_id(rb).unwrap();
+        assert_ne!(id_a, id_b);
+        let defs_len_before = doc.part_defs.len();
+
+        let c = doc
+            .apply(Command::UpdatePartDef {
+                from: id_a,
+                to: def_b,
+            })
+            .unwrap();
+        assert_eq!(doc.part_defs.len(), defs_len_before, "must reuse id_b");
+        assert_eq!(c.modified, vec![ra]);
+        assert_eq!(doc.part_def_id(ra), Some(id_b));
+        assert_eq!(doc.part_def_id(rb), Some(id_b));
+        assert_eq!(&*doc.part(ra).unwrap().value, "22k");
+        assert_doc_consistent(&doc);
+
+        let u = doc.undo().unwrap();
+        assert_eq!(u.modified, vec![ra]);
+        assert_eq!(doc.part_def_id(ra), Some(id_a));
+        assert_eq!(doc.part_def_id(rb), Some(id_b));
+        assert_eq!(&*doc.part(ra).unwrap().value, "10k");
+        assert_doc_consistent(&doc);
+    }
+
+    /// Refusal half of `PTC-no-lossy-save` (`PD8`): placing a part with `PlaceDef::Embed` or
+    /// applying `SetParam` causes `Doc::save` to return `InvalidData` and write 0 bytes, while
+    /// an unmodelled document still saves byte-identical v2.
+    #[test]
+    fn ptc_no_lossy_save_refusal_half() {
+        // 1. Unmodelled doc saves byte-identical v2.
+        let mut unmodelled = Doc::new();
+        p2_2_place_resistor(
+            &mut unmodelled,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Unmodelled,
+            Params::new(),
+        )
+        .unwrap();
+        let mut v2_bytes = Vec::new();
+        unmodelled.save(&mut v2_bytes).unwrap();
+        let reloaded = Doc::load(v2_bytes.as_slice()).unwrap();
+        let mut v2_again = Vec::new();
+        reloaded.save(&mut v2_again).unwrap();
+        assert_eq!(v2_again, v2_bytes);
+
+        // 2. Document with PlaceDef::Embed is refused on save.
+        let mut embedded = Doc::new();
+        let resistor = Arc::new(p2_2_resistor_def(
+            "omnia:resistor",
+            "10k",
+            vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }],
+            rect(-10, -5, 10, 5),
+        ));
+        let ItemId::Part(r1) = p2_2_place_resistor(
+            &mut embedded,
+            Pt::ZERO,
+            "R1",
+            "10k",
+            PlaceDef::Embed(resistor),
+            Params::new(),
+        )
+        .unwrap()
+        .added[0] else {
+            unreachable!();
+        };
+        let mut out = Vec::new();
+        let err = embedded.save(&mut out).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(out.is_empty());
+
+        // 3. After SetParam, save is still refused and writes nothing.
+        embedded
+            .apply(Command::SetParam {
+                part: r1,
+                name: "resistance".into(),
+                value: Some(p2_2_real("4.7k", Some("ohm"))),
+            })
+            .unwrap();
+        let err = embedded.save(&mut out).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(out.is_empty());
+    }
+
+    /// Covers `SetText(Value)` sync for `Int`, `Bool`, `Enum` and `Text` primary parameters,
+    /// `UpdatePartDef` with `primary_param: None`, validated no-op `UpdatePartDef`, and
+    /// `UpdatePartDef` refusals (missing/retained `from`, incompatible override/geometry).
+    #[test]
+    fn p2_2_set_text_all_kinds_and_update_part_def_edges() {
+        let pins = vec![Pt { x: -10, y: 0 }, Pt { x: 10, y: 0 }];
+        let bounds = rect(-10, -5, 10, 5);
+        let mk_def = |source_id: &str, kind: ParamKind, default: ParamValue| {
+            Arc::new(EmbeddedPartDef {
+                source_id: source_id.into(),
+                content_hash: None,
+                name: source_id.into(),
+                category: "Test".into(),
+                description: "".into(),
+                designator_prefix: "X".into(),
+                symbol: SymbolId(0),
+                local_pins: pins.clone(),
+                local_bounds: bounds,
+                pins: vec![
+                    p2_2_pin("1", "a", crate::PinRole::Passive),
+                    p2_2_pin("2", "b", crate::PinRole::Passive),
+                ],
+                params: vec![crate::EmbeddedParamSpec {
+                    name: "p".into(),
+                    label: "P".into(),
+                    kind,
+                    default,
+                    optional: false,
+                }],
+                primary_param: Some("p".into()),
+                sim: crate::EmbeddedSimBinding::None,
+            })
+        };
+
+        let mut doc = Doc::new();
+        for (idx, (def, init, good_text, expected_val, bad_text)) in [
+            (
+                mk_def(
+                    "test:int",
+                    ParamKind::Int {
+                        min: Some(1),
+                        max: Some(10),
+                    },
+                    ParamValue::Int(5),
+                ),
+                "5",
+                "8",
+                ParamValue::Int(8),
+                "99",
+            ),
+            (
+                mk_def("test:bool", ParamKind::Bool, ParamValue::Bool(false)),
+                "false",
+                "true",
+                ParamValue::Bool(true),
+                "maybe",
+            ),
+            (
+                mk_def(
+                    "test:enum",
+                    ParamKind::Enum(vec!["dc".into(), "sin".into()]),
+                    ParamValue::Enum("dc".into()),
+                ),
+                "dc",
+                "sin",
+                ParamValue::Enum("sin".into()),
+                "triangle",
+            ),
+            (
+                mk_def("test:text", ParamKind::Text, ParamValue::Text("a".into())),
+                "a",
+                "hello",
+                ParamValue::Text("hello".into()),
+                &"x".repeat(crate::part_def::MAX_PARAM_STRING_BYTES + 1),
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let ItemId::Part(pid) = p2_2_place_resistor(
+                &mut doc,
+                Pt {
+                    x: (idx as i32) * 50,
+                    y: 0,
+                },
+                &format!("X{}", idx + 1),
+                init,
+                PlaceDef::Embed(def),
+                Params::new(),
+            )
+            .unwrap()
+            .added[0] else {
+                unreachable!();
+            };
+            assert_eq!(
+                doc.apply(Command::SetText {
+                    item: ItemId::Part(pid),
+                    field: TextField::Value,
+                    text: bad_text.into(),
+                }),
+                Err(CommandError::InvalidParam {
+                    part: pid,
+                    name: "p".into(),
+                })
+            );
+            let c = doc
+                .apply(Command::SetText {
+                    item: ItemId::Part(pid),
+                    field: TextField::Value,
+                    text: good_text.into(),
+                })
+                .unwrap();
+            assert_eq!(c.modified, vec![pid]);
+            assert_eq!(doc.resolved_param(pid, "p"), Some(&expected_val));
+            assert_eq!(&*doc.part(pid).unwrap().value, good_text);
+        }
+
+        // Validated no-op UpdatePartDef (`*from_def == *to`).
+        let p0 = PartId(0);
+        let d0 = doc.part_def_id(p0).unwrap();
+        let d0_clone = Arc::new(doc.part_def(d0).unwrap().clone());
+        let rev = doc.revision();
+        let noop = doc
+            .apply(Command::UpdatePartDef {
+                from: d0,
+                to: d0_clone,
+            })
+            .unwrap();
+        assert_eq!(noop.dirty, None);
+        assert!(noop.modified.is_empty());
+        assert_eq!(doc.revision(), rev);
+
+        // UpdatePartDef refused when `from` is missing.
+        assert_eq!(
+            doc.apply(Command::UpdatePartDef {
+                from: PartDefId(999),
+                to: Arc::new(p2_2_resistor_def("omnia:r", "10k", pins.clone(), bounds)),
+            }),
+            Err(CommandError::MissingDef(PartDefId(999)))
+        );
+
+        // UpdatePartDef refused when an existing override becomes undeclared (`InvalidInstance`).
+        let mut without_p = doc.part_def(d0).unwrap().clone();
+        without_p.params.clear();
+        without_p.primary_param = None;
+        let snap = doc.snapshot();
+        assert_eq!(
+            doc.apply(Command::UpdatePartDef {
+                from: d0,
+                to: Arc::new(without_p),
+            }),
+            Err(CommandError::InvalidInstance(
+                InstanceError::UndeclaredParam { name: "p".into() }
+            ))
+        );
+        assert_eq!(doc.snapshot(), snap);
+
+        // UpdatePartDef onto a definition with `primary_param: None` preserves `Part::value`.
+        let mut keep_p_no_primary = doc.part_def(d0).unwrap().clone();
+        keep_p_no_primary.primary_param = None;
+        let c = doc
+            .apply(Command::UpdatePartDef {
+                from: d0,
+                to: Arc::new(keep_p_no_primary),
+            })
+            .unwrap();
+        assert_eq!(c.modified, vec![p0]);
+        assert_eq!(&*doc.part(p0).unwrap().value, "8");
+        assert_doc_consistent(&doc);
     }
 }

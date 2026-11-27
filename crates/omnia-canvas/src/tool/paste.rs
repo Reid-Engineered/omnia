@@ -227,7 +227,7 @@ impl PasteGesture {
 mod tests {
     use super::*;
     use crate::tool::{Tool, ToolMachine, ToolPhase, ToolRequest};
-    use omnia_doc::{Command, Doc, Label, PIN_LATTICE_NM, Part, Wire};
+    use omnia_doc::{Command, Doc, Label, PIN_LATTICE_NM, Params, Part, PlaceDef, Wire};
     use omnia_symbols::SymbolLibrary;
 
     const G: i32 = GRID_NM;
@@ -255,6 +255,8 @@ mod tests {
                 },
                 local_pins: def.pins.iter().map(|p| p.at).collect(),
                 local_bounds: def.bounds,
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             })
             .unwrap()
             .added[0];

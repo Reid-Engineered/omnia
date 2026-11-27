@@ -1204,7 +1204,11 @@ impl DefArena {
         self.records.get(id.0 as usize).map(|record| &**record)
     }
 
-    #[cfg(test)]
+    /// Clones the shared record handle at `id`, referenced or retained.
+    pub(crate) fn get_arc(&self, id: PartDefId) -> Option<Arc<EmbeddedPartDef>> {
+        self.records.get(id.0 as usize).cloned()
+    }
+
     pub(crate) fn is_referenced(&self, id: PartDefId) -> bool {
         self.refs.get(id.0 as usize).is_some_and(|&refs| refs > 0)
     }
@@ -1254,7 +1258,6 @@ impl DefArena {
 
     /// Interns `def` by full structural equality against referenced records (`content_hash` is
     /// a prefilter only, `PD8`).
-    #[cfg(test)]
     pub(crate) fn intern(&mut self, def: Arc<EmbeddedPartDef>) -> PartDefId {
         let probe = def.clone();
         self.intern_with(
@@ -1327,7 +1330,7 @@ mod tests {
     use std::io;
 
     use super::*;
-    use crate::{Command, CommandError, Doc, Orient, Part, SHEET_LIMIT_NM, Wire};
+    use crate::{Command, CommandError, Doc, Orient, Part, PlaceDef, SHEET_LIMIT_NM, Wire};
 
     fn real(raw: &str, unit: Option<&str>) -> ParamValue {
         ParamValue::Real {
@@ -2786,12 +2789,16 @@ X1 inp inn STAGE
             part: resistor_part(Pt::ZERO, "1k"),
             local_pins: vec![Pt::ZERO],
             local_bounds: bounds_a,
+            def: PlaceDef::Unmodelled,
+            params: Params::new(),
         })
         .unwrap();
         doc.apply(Command::PlacePart {
             part: resistor_part(Pt { x: 20, y: 0 }, "2k"),
             local_pins: vec![Pt::ZERO],
             local_bounds: bounds_b,
+            def: PlaceDef::Unmodelled,
+            params: Params::new(),
         })
         .unwrap();
         let after_b = doc.fork();
@@ -2812,6 +2819,8 @@ X1 inp inn STAGE
                 part: resistor_part(Pt { x: 40, y: 0 }, "3k"),
                 local_pins: vec![Pt::ZERO],
                 local_bounds: bounds_c,
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             },
             Command::AddWires(vec![Wire {
                 a: Pt::ZERO,
@@ -2833,6 +2842,8 @@ X1 inp inn STAGE
                 part: resistor_part(Pt { x: 60, y: 0 }, "4k"),
                 local_pins: vec![Pt::ZERO],
                 local_bounds: bounds_a,
+                def: PlaceDef::Unmodelled,
+                params: Params::new(),
             },
             Command::AddWires(vec![Wire {
                 a: Pt::ZERO,

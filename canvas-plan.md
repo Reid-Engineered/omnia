@@ -496,11 +496,15 @@ pub struct Wire { pub a: Pt, pub b: Pt }                  // INV1
 pub struct Label { pub at: Pt, pub text: Arc<str> }
 
 pub enum TextField { Designator, Value, Label }
+pub enum PlaceDef { Unmodelled, Existing(PartDefId), Embed(Arc<EmbeddedPartDef>) } // P2.2 (parts-plan.md PD8)
+// P2.2: `CommandError` is `Clone` (no longer `Copy`) because it carries `Arc<str>`, `DefError`, and `InstanceError`.
 pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
                         DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField },
-                        Follow(FollowError), Segment(Blocker) } // Follow/Segment: wiring-plan.md W2.2, W3.2
+                        Follow(FollowError), Segment(Blocker), Capture { wire: WireId, blocker: Blocker },
+                        OffLattice(Pt), InvalidParam { part: PartId, name: Arc<str> },
+                        InvalidDef(DefError), InvalidInstance(InstanceError), MissingDef(PartDefId) }
 pub enum Command {
-    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect }, // P2.2 adds def: PlaceDef and params: Params (parts-plan.md PD8)
+    PlacePart { part: Part, local_pins: Vec<Pt>, local_bounds: Rect, def: PlaceDef, params: Params }, // P2.2 (parts-plan.md PD8)
     AddWires(Vec<Wire>),
     AddLabel(Label), // T7.2 (WD9): splits wire interiors containing label.at; undo restores wires first (INV4)
     Move { items: Vec<ItemId>, delta: Pt, follow: FollowPolicy }, // follow added in W2.2 (WD3); until then T5.1 detaches
@@ -509,13 +513,14 @@ pub enum Command {
     DragSegment { wire: WireId, offset: i32 }, // wiring-plan.md WD7 (W3.2); nm, signed
     Delete { items: Vec<ItemId>, with_wires: bool }, // with_wires added in W3.5 (WD10, WQ4 default false); merges at vacated wire ends, deleted part pins & deleted label points (WINV3)
     SetText { item: ItemId, field: TextField, text: Arc<str> },
-    // P2.2 (parts-plan.md PD8): SetParam { part, name, value } and UpdatePartDef { from, to }
+    SetParam { part: PartId, name: Arc<str>, value: Option<ParamValue> }, // P2.2 (parts-plan.md PD6, PD8)
+    UpdatePartDef { from: PartDefId, to: Arc<EmbeddedPartDef> },          // P2.2 (parts-plan.md PD8, PD9)
     Paste { clip: Clip, at: Pt },
     Batch(Vec<Command>),
 }
-// T7.1 (clip.rs): self-contained copy/paste payload and deterministic origin/designator rules.
-// P2.2 will extend ClipPart/Command::Paste to carry embedded PartDef + Params alongside parts.
-pub struct ClipPart { pub part: Part, pub local_pins: Vec<Pt>, pub local_bounds: Rect }
+// T7.1/P2.2 (clip.rs): self-contained copy/paste payload and deterministic origin/designator rules.
+pub struct ClipPart { pub part: Part, pub local_pins: Vec<Pt>, pub local_bounds: Rect,
+                      pub def: Arc<EmbeddedPartDef>, pub params: Params }
 pub struct Clip { /* parts: Vec<ClipPart>, wires: Vec<Wire>, labels: Vec<Label> */ }
 impl Clip {
     pub fn is_empty(&self) -> bool;
@@ -527,9 +532,10 @@ impl Clip {
     pub fn reoriented(&self, by: Orient) -> Self;        // reorients around clip-local (0, 0)
 }
 pub struct Change { pub revision: u64, pub dirty: Option<Rect>,
-                    pub added: Vec<ItemId>, pub removed: Vec<ItemId>, pub nets_changed: bool }
-// P2.2 (parts-plan.md PD8, XD7): adds modified: Vec<PartId>, the parts whose params or definition
-// changed (SetParam, every instance of an UpdatePartDef) even when geometry and text did not.
+                    pub added: Vec<ItemId>, pub removed: Vec<ItemId>,
+                    pub modified: Vec<PartId>, pub nets_changed: bool }
+// P2.2 (parts-plan.md PD8, XD7): `modified` lists the parts whose params or definition
+// changed (SetParam, primary-synced SetText, every instance of an UpdatePartDef) even when geometry and text did not.
 // added/removed are membership deltas only: an item that keeps its id with new geometry
 // (moved, reoriented, merge survivor, first piece of a split) is in neither; `dirty` covers
 // its old and new bounds. Consumers invalidate from dirty/revision, not the id lists.

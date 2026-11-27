@@ -464,6 +464,12 @@ pub fn command_error_kind(err: CommandError) -> ErrorKind {
             blocker: blocker.into(),
         },
         CommandError::OffLattice(at) => ErrorKind::OffLattice { at: at.into() },
+        // P2.2 mechanical arm: agent wire codes for part commands land in the
+        // agent parts-adoption task (`parts-plan.md` §14, `XD8`).
+        CommandError::InvalidParam { .. }
+        | CommandError::InvalidDef(_)
+        | CommandError::InvalidInstance(_)
+        | CommandError::MissingDef(_) => ErrorKind::Internal,
     }
 }
 
@@ -812,6 +818,12 @@ mod tests {
             CommandError::Follow(FollowError::NoRoute { .. }) => 6,
             CommandError::Capture { .. } => 7,
             CommandError::OffLattice(_) => 8,
+            CommandError::InvalidParam { .. }
+            | CommandError::InvalidDef(_)
+            | CommandError::InvalidInstance(_)
+            | CommandError::MissingDef(_) => {
+                unreachable!("P2.2 part errors wait for the agent parts-adoption task")
+            }
         }
     }
 
@@ -820,7 +832,7 @@ mod tests {
         let samples = command_error_samples();
         let mut code_of_variant = vec![None; COMMAND_ERROR_VARIANTS];
         for sample in &samples {
-            let code = AgentError::from(*sample).code();
+            let code = AgentError::from(sample.clone()).code();
             let slot = &mut code_of_variant[variant_index(sample)];
             assert!(
                 slot.is_none_or(|c| c == code),
