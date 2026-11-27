@@ -9,7 +9,8 @@
 use std::{
     collections::BTreeMap,
     fmt::Write as _,
-    fs,
+    fs::{self, File},
+    io::Write as _,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -84,11 +85,26 @@ pub fn run(root: &Path, check: bool) -> Result<(), Error> {
     }
 }
 
-/// Runs `cargo xtask part pack <dir> <out.opart>`: packs to a staging archive, validates the
-/// packed archive's `part.toml` snapshot with `PD10`, and publishes `out.opart` only on success.
+/// Runs `cargo xtask part pack <dir> <out.opart>`: validates the `.opart` extension, packs to a
+/// staging archive, validates the packed archive's `part.toml` snapshot with `PD10`, and publishes
+/// `out.opart` exclusively (never overwriting an existing file) only on success.
 pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
+    if out_path.extension().and_then(|ext| ext.to_str()) != Some("opart") {
+        return Err(format!(
+            "pack {} -> {}: output extension does not match container type (.opart required)",
+            dir.display(),
+            out_path.display()
+        ));
+    }
+    if out_path.exists() {
+        return Err(format!(
+            "pack {} -> {}: destination already exists (refusing to overwrite)",
+            dir.display(),
+            out_path.display()
+        ));
+    }
     let stage_path = staging_opart_path(out_path);
-    let pack_result = (|| -> Result<omnia_parts::ContentHash, Error> {
+    let pack_result = (|| -> Result<(omnia_parts::ContentHash, Vec<u8>), Error> {
         let hash = pack_opart(dir, &stage_path)
             .map_err(|e| format!("pack {} -> {}: {e}", dir.display(), out_path.display()))?;
         let archive = LibrarySource::open(&stage_path)
@@ -97,32 +113,23 @@ pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
         let resolved = resolve_with_context(&archive, part_path, "")?;
         let symbols = SymbolLibrary::builtin();
         let embedded = build_embedded(&resolved, &symbols, format!("custom:{}", resolved.part.id))?;
-        validate(&embedded).map_err(|e| format!("{}/{part_path}: {e}", dir.display()))?;
-        Ok(hash)
+        validate(&embedded).map_err(|e| format!("{}/{part_path}: PD10 validation failed: {e}", dir.display()))?;
+        let bytes = fs::read(&stage_path)
+            .map_err(|e| format!("read staged archive {}: {e}", stage_path.display()))?;
+        Ok((hash, bytes))
     })();
+    let _ = fs::remove_file(&stage_path);
 
-    match pack_result {
-        Ok(hash) => {
-            if out_path.exists() {
-                fs::remove_file(out_path)
-                    .map_err(|e| format!("replace {}: {e}", out_path.display()))?;
-            }
-            fs::rename(&stage_path, out_path).map_err(|e| {
-                let _ = fs::remove_file(&stage_path);
-                format!(
-                    "publish {} -> {}: {e}",
-                    stage_path.display(),
-                    out_path.display()
-                )
-            })?;
-            println!("part pack: wrote {} (sha256:{hash})", out_path.display());
-            Ok(())
-        }
-        Err(err) => {
-            let _ = fs::remove_file(&stage_path);
-            Err(err)
-        }
+    let (hash, bytes) = pack_result?;
+    let mut output = File::create_new(out_path)
+        .map_err(|e| format!("create {}: {e}", out_path.display()))?;
+    if let Err(err) = output.write_all(&bytes) {
+        drop(output);
+        let _ = fs::remove_file(out_path);
+        return Err(format!("write {}: {err}", out_path.display()));
     }
+    println!("part pack: wrote {} (sha256:{hash})", out_path.display());
+    Ok(())
 }
 
 fn staging_opart_path(out_path: &Path) -> PathBuf {
@@ -282,8 +289,19 @@ fn compile_library(root: &Path) -> Result<Vec<CompiledPart>, Error> {
 fn parse_model_spdx(repo_rel: &str, text: &str) -> Result<String, Error> {
     let mut found: Option<String> = None;
     for line in text.lines() {
-        if let Some((_, rest)) = line.split_once("SPDX-License-Identifier:") {
-            let spdx = rest.trim().trim_end_matches([')', ']', ',', ';']);
+        // Only treat a line as an SPDX declaration when the comment body itself starts with
+        // `SPDX-License-Identifier:` (rejecting prose like `* No SPDX-License-Identifier: MIT`).
+        let body = line
+            .trim_start()
+            .trim_start_matches(['*', ';', '#'])
+            .trim_start();
+        if let Some(rest) = body.strip_prefix("SPDX-License-Identifier:") {
+            let spdx = rest.trim();
+            if spdx.is_empty() || spdx.split_whitespace().count() != 1 {
+                return Err(format!(
+                    "{repo_rel}: malformed SPDX-License-Identifier declaration {spdx:?} (PK11)"
+                ));
+            }
             check_pk11_license(repo_rel, spdx)?;
             match &found {
                 None => found = Some(spdx.to_owned()),
@@ -305,8 +323,23 @@ fn has_third_party_attribution(third_party: &str, repo_rel: &str, spdx: &str) ->
     let path_bullet = format!("- `{repo_rel}`");
     let spdx_token = format!("`{spdx}`");
     third_party.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with(&path_bullet) && trimmed.contains(&spdx_token)
+        let Some(after_path) = line.trim_start().strip_prefix(&path_bullet) else {
+            return false;
+        };
+        let after_ws = after_path.trim_start();
+        let after_sep = after_ws
+            .strip_prefix('—')
+            .or_else(|| after_ws.strip_prefix("--"))
+            .or_else(|| after_ws.strip_prefix('-'))
+            .or_else(|| after_ws.strip_prefix(':'));
+        let Some(after_sep) = after_sep else {
+            return false;
+        };
+        let Some(after_spdx) = after_sep.trim_start().strip_prefix(&spdx_token) else {
+            return false;
+        };
+        after_spdx.is_empty()
+            || after_spdx.starts_with(|c: char| c.is_whitespace() || matches!(c, '(' | '.' | ',' | ';'))
     })
 }
 
@@ -1150,17 +1183,23 @@ source = "models/diodes/bad.lib"
         .unwrap();
         fs::write(
             root.join("library/models/diodes/nohdr.lib"),
-            "* No SPDX header here\n.model D_NOHDR D(IS=1e-12)\n",
+            "* No SPDX-License-Identifier: MIT\n.model D_NOHDR D(IS=1e-12)\n",
         )
         .unwrap();
-        let err = run(&root, true).expect_err("model without SPDX header must fail");
+        let err = run(&root, true).expect_err("model without leading SPDX declaration must fail");
         assert!(
             err.contains("library/models/diodes/nohdr.lib")
                 && err.contains("SPDX-License-Identifier"),
             "unexpected diagnostic: {err}"
         );
 
-        // Now give it a valid SPDX header, but a wrong licence in THIRD_PARTY.md.
+        // Now give it a valid SPDX header, but a THIRD_PARTY.md entry that declares Apache-2.0
+        // and only mentions MIT in trailing prose.
+        fs::write(
+            root.join("THIRD_PARTY.md"),
+            "- `library/models/diodes/nohdr.lib` — `Apache-2.0` (not `MIT`)\n",
+        )
+        .unwrap();
         fs::write(
             root.join("library/models/diodes/nohdr.lib"),
             "* SPDX-License-Identifier: MIT\n.model D_NOHDR D(IS=1e-12)\n",
@@ -1467,37 +1506,80 @@ pins = ["1", "2"]
         .unwrap();
         let out = root.join("custom-res.opart");
         run_part_pack(&src, &out).expect("pack valid part");
+        let original_bytes = fs::read(&out).expect("read original .opart");
         let archive = LibrarySource::open(&out).expect("reopen packed .opart");
         let resolved = archive.resolve_part("part.toml").expect("resolve packed");
         assert_eq!(resolved.part.id.as_str(), "custom-res");
 
-        // B4: a part failing PD10 (unknown built-in symbol) must not publish an .opart file.
-        let bad_src = root.join("bad-src");
+        // B4: refusing to overwrite an existing destination leaves it intact, and wrong
+        // extensions are refused before writing.
+        run_part_pack(&src, &out).expect_err("existing output must not be overwritten");
+        assert_eq!(
+            fs::read(&out).expect("existing output preserved"),
+            original_bytes
+        );
+        let wrong_ext = root.join("custom-res.zip");
+        run_part_pack(&src, &wrong_ext).expect_err("non-.opart extension must fail");
+        assert!(!wrong_ext.exists());
+
+        // B4: a fixture that passes `pack_opart` (valid TOML + SPICE) yet fails `PD10`
+        // (`model` enum variant not present in the extracted deck) must be caught on the staged
+        // archive and leave neither the destination nor any staging file behind.
+        let bad_dir = root.join("bad-case");
+        let bad_src = bad_dir.join("src");
         fs::create_dir_all(&bad_src).unwrap();
+        fs::write(
+            bad_src.join("model.lib"),
+            "* SPDX-License-Identifier: CC0-1.0\n.model D_REAL D(IS=1e-12)\n",
+        )
+        .unwrap();
         fs::write(
             bad_src.join("part.toml"),
             r#"
 schema = 1
 id = "bad-custom"
-name = "Bad custom"
-category = "Passives"
+name = "Bad custom diode"
+category = "Diodes"
 
 [symbol]
-builtin = "No-Such-Symbol"
+builtin = "Diode-COM-Standard"
 
 [[pins]]
 number = "1"
 name = "a"
 role = "passive"
 
+[[pins]]
+number = "2"
+name = "k"
+role = "passive"
+
+[params.model]
+kind = "enum"
+variants = ["D_REAL", "D_MISSING"]
+default = "D_REAL"
+
 [sim]
-kind = "none"
+kind = "model"
+spice_prefix = "D"
+file = "model.lib"
+entry = "D_REAL"
+pins = ["1", "2"]
 "#,
         )
         .unwrap();
-        let bad_out = root.join("bad-custom.opart");
-        run_part_pack(&bad_src, &bad_out).expect_err("unknown symbol must fail pack");
-        assert!(!bad_out.exists(), "failed pack must not publish output");
+        let bad_out_dir = bad_dir.join("out");
+        fs::create_dir_all(&bad_out_dir).unwrap();
+        let bad_out = bad_out_dir.join("bad-custom.opart");
+        let err = run_part_pack(&bad_src, &bad_out).expect_err("staged PD10 check must fail");
+        assert!(
+            err.contains("PD10"),
+            "diagnostic must come from staged PD10 validator: {err}"
+        );
+        assert!(
+            fs::read_dir(&bad_out_dir).unwrap().next().is_none(),
+            "neither output nor staging archive may remain after failure"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }
