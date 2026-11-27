@@ -497,6 +497,7 @@ pub struct Label { pub at: Pt, pub text: Arc<str> }
 
 pub enum TextField { Designator, Value, Label }
 pub enum PlaceDef { Unmodelled, Existing(PartDefId), Embed(Arc<EmbeddedPartDef>) } // P2.2 (parts-plan.md PD8)
+// P2.2: `CommandError` is `Clone` (no longer `Copy`) because it carries `Arc<str>`, `DefError`, and `InstanceError`.
 pub enum CommandError { OutOfBounds, InvalidWire, MissingItem(ItemId),
                         DuplicateItem(ItemId), InvalidTextField { item: ItemId, field: TextField },
                         Follow(FollowError), Segment(Blocker), Capture { wire: WireId, blocker: Blocker },
