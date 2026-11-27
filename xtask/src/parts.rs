@@ -113,7 +113,8 @@ pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
         let resolved = resolve_with_context(&archive, part_path, "")?;
         let symbols = SymbolLibrary::builtin();
         let embedded = build_embedded(&resolved, &symbols, format!("custom:{}", resolved.part.id))?;
-        validate(&embedded).map_err(|e| format!("{}/{part_path}: PD10 validation failed: {e}", dir.display()))?;
+        validate(&embedded)
+            .map_err(|e| format!("{}/{part_path}: PD10 validation failed: {e}", dir.display()))?;
         let bytes = fs::read(&stage_path)
             .map_err(|e| format!("read staged archive {}: {e}", stage_path.display()))?;
         Ok((hash, bytes))
@@ -121,8 +122,8 @@ pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
     let _ = fs::remove_file(&stage_path);
 
     let (hash, bytes) = pack_result?;
-    let mut output = File::create_new(out_path)
-        .map_err(|e| format!("create {}: {e}", out_path.display()))?;
+    let mut output =
+        File::create_new(out_path).map_err(|e| format!("create {}: {e}", out_path.display()))?;
     if let Err(err) = output.write_all(&bytes) {
         drop(output);
         let _ = fs::remove_file(out_path);
@@ -339,7 +340,8 @@ fn has_third_party_attribution(third_party: &str, repo_rel: &str, spdx: &str) ->
             return false;
         };
         after_spdx.is_empty()
-            || after_spdx.starts_with(|c: char| c.is_whitespace() || matches!(c, '(' | '.' | ',' | ';'))
+            || after_spdx
+                .starts_with(|c: char| c.is_whitespace() || matches!(c, '(' | '.' | ',' | ';'))
     })
 }
 
