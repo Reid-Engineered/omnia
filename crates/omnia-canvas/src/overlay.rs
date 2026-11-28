@@ -101,6 +101,8 @@ pub struct CachedSheet {
     document: Option<SheetDocument>,
     /// T5.3: dragged items hidden from `SheetView` while rendered as overlay ghosts (D7).
     hidden: Option<Rc<[ItemId]>>,
+    /// W3.6 / K9: count of hidden follow labels competing in the overlay under the shared cap.
+    reserved_follow_labels: usize,
     paints: Rc<Cell<u64>>,
     renders: u64,
 }
@@ -112,6 +114,7 @@ impl CachedSheet {
             theme,
             document,
             hidden: None,
+            reserved_follow_labels: 0,
             paints: Rc::new(Cell::new(0)),
             renders: 0,
         }
@@ -151,6 +154,7 @@ impl Render for CachedSheet {
             Some(document) => {
                 SheetView::with_document(self.camera.clone(), self.theme, document.clone())
                     .with_hidden(self.hidden.clone())
+                    .with_reserved_follow_labels(self.reserved_follow_labels)
             }
             None => SheetView::new(self.camera.clone(), self.theme),
         };
@@ -446,20 +450,29 @@ impl OverlayView {
     /// once the drag lifts off (paint 1) and restores them on drag end (paint 2) (D7, INV11, B10).
     /// Plain clicks that never lift leave `hidden == None` (0 `SheetView` paints, INV11).
     fn sync_hidden_items(&mut self, cx: &mut Context<Self>) {
-        let lifted_items: Option<&[ItemId]> = match self.tools.state() {
-            tool::ToolState::Dragging(drag)
-                if drag.is_lifted() && !drag.hidden_items().is_empty() =>
-            {
-                Some(drag.hidden_items())
-            }
-            tool::ToolState::DraggingSegment(seg)
-                if seg.is_lifted() && !seg.hidden_items().is_empty() =>
-            {
-                Some(seg.hidden_items())
-            }
-            _ => None,
-        };
-        if self.sheet.read(cx).hidden.as_deref() == lifted_items {
+        let (lifted_items, reserved_follow_labels): (Option<&[ItemId]>, usize) =
+            match self.tools.state() {
+                tool::ToolState::Dragging(drag)
+                    if drag.is_lifted() && !drag.hidden_items().is_empty() =>
+                {
+                    let reserved = if drag.items.is_empty() {
+                        0
+                    } else {
+                        drag.affected_labels().len()
+                    };
+                    (Some(drag.hidden_items()), reserved)
+                }
+                tool::ToolState::DraggingSegment(seg)
+                    if seg.is_lifted() && !seg.hidden_items().is_empty() =>
+                {
+                    (Some(seg.hidden_items()), 0)
+                }
+                _ => (None, 0),
+            };
+        let sheet_ref = self.sheet.read(cx);
+        if sheet_ref.hidden.as_deref() == lifted_items
+            && sheet_ref.reserved_follow_labels == reserved_follow_labels
+        {
             return;
         }
         debug_assert!(
@@ -469,6 +482,7 @@ impl OverlayView {
         let next = lifted_items.map(Rc::from);
         self.sheet.update(cx, |sheet, cx| {
             sheet.hidden = next;
+            sheet.reserved_follow_labels = reserved_follow_labels;
             cx.notify();
         });
     }

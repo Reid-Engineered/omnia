@@ -1021,8 +1021,9 @@ widened `affected_labels` in `tool/move_.rs` to collect all affected run corner 
 `plan_follow` for unwired pin-label drags, and exposed `TextCache::paint_follow_net_labels`
 so `overlay/follow.rs` paints cached K8/K9/K11 label text for both moved and stationary
 hidden labels (culling stationary text by glyph bounds rather than the 16 px marker margin
-and enforcing K9's shared 700-label per-frame cap + `(y, x, id)` priority across sheet +
-overlay) with zero warm Omnia allocations (`B10`), updating `wiring-plan.md` and tests in
+and enforcing K9's global 700-label cap + `(font size, y, x, id)` priority across sheet +
+overlay by deferring runner-up sheet candidates to the overlay without extra `SheetView`
+repaints) with zero warm Omnia allocations (`B10`), updating `wiring-plan.md` and tests in
 `tool/move_.rs`, `tool.rs`, `sheet/text.rs`, and `overlay/follow.rs`; (N1) strengthened
 the `WINV4` refusal check in `follow.rs` from `content_eq` to full `Doc` `PartialEq`.
 Merged `origin/main` (keeping `W3.1` and `W3.6` entries in order). All five standard

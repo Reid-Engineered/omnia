@@ -418,6 +418,10 @@ pub struct SheetView {
     document: Option<SheetDocument>,
     /// T5.3: canonically sorted items currently hidden during an active drag (D7, B10).
     hidden: Option<Rc<[ItemId]>>,
+    /// W3.6 / K9: count of hidden follow labels that will compete in the overlay under the shared
+    /// 700-label per-frame cap so high-priority follow labels can displace lower-priority sheet
+    /// labels without repainting `SheetView` during pointer motion (`INV11`).
+    reserved_follow_labels: usize,
 }
 
 impl SheetView {
@@ -428,6 +432,7 @@ impl SheetView {
             theme,
             document: None,
             hidden: None,
+            reserved_follow_labels: 0,
         }
     }
 
@@ -438,6 +443,7 @@ impl SheetView {
             theme,
             document: Some(document),
             hidden: None,
+            reserved_follow_labels: 0,
         }
     }
 
@@ -448,6 +454,13 @@ impl SheetView {
             "SheetView::with_hidden requires canonically sorted items"
         );
         self.hidden = hidden;
+        self
+    }
+
+    /// Reserves up to `count` lowest-priority K9 label slots for follow labels painted by the
+    /// overlay (`W3.6`, `K9`, `INV11`).
+    pub(crate) fn with_reserved_follow_labels(mut self, count: usize) -> Self {
+        self.reserved_follow_labels = count;
         self
     }
 
@@ -521,6 +534,7 @@ impl SheetView {
                             parts: &scratch.items[..scratch.parts_end],
                             labels: &scratch.items[scratch.wires_end..],
                             hidden,
+                            reserved_follow_labels: self.reserved_follow_labels,
                             camera: &camera,
                             viewport: bounds,
                             scale_factor,

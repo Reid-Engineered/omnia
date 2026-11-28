@@ -49,6 +49,7 @@ pub(crate) struct FollowLabelPaint<'a> {
     pub(crate) is_refused: bool,
     pub(crate) moved_ink: Hsla,
     pub(crate) invalid_ink: Hsla,
+    pub(crate) sheet_ink: Hsla,
     pub(crate) stationary_ink: Hsla,
 }
 
@@ -167,6 +168,40 @@ fn priority_key(c: &Candidate) -> (Reverse<u16>, i32, i32, u32, u8, u16) {
     )
 }
 
+#[derive(Clone, Copy, Debug)]
+enum OverlayCandidate {
+    Sheet(Candidate),
+    Follow {
+        id: LabelId,
+        at: Pt,
+        color: Hsla,
+        bucket: FontBucket,
+    },
+}
+
+fn overlay_priority_key(c: &OverlayCandidate) -> (Reverse<u16>, i32, i32, u32, u8, u16) {
+    match *c {
+        OverlayCandidate::Sheet(candidate) => priority_key(&candidate),
+        OverlayCandidate::Follow { id, at, bucket, .. } => (
+            Reverse(bucket.half_px),
+            at.y,
+            at.x,
+            id.0,
+            LabelKind::NetLabel as u8,
+            0,
+        ),
+    }
+}
+
+struct EmitCtx<'a> {
+    doc: &'a Doc,
+    camera: &'a Camera,
+    viewport: Bounds<Pixels>,
+    scale_factor: f32,
+    ink: Hsla,
+    ink_secondary: Hsla,
+}
+
 #[derive(Debug, Default)]
 struct CachedLine {
     /// Prepared single-line display string, updated in `sync()` on `Doc::revision` changes so the
@@ -242,6 +277,7 @@ pub(super) struct TextFrame<'a> {
     pub(super) parts: &'a [ItemId],
     pub(super) labels: &'a [ItemId],
     pub(super) hidden: &'a [ItemId],
+    pub(super) reserved_follow_labels: usize,
     pub(super) camera: &'a Camera,
     pub(super) viewport: Bounds<Pixels>,
     pub(super) scale_factor: f32,
@@ -258,8 +294,13 @@ pub(crate) struct TextCache {
     part_lines: Vec<PartLines>,
     label_lines: Vec<CachedLine>,
     candidates: Vec<Candidate>,
-    /// Reusable buffer for overlay follow-label text selection under K9's shared cap (`W3.6`, `B10`).
-    overlay_candidates: Vec<(LabelId, Pt, Hsla)>,
+    /// Runner-up sheet label candidates deferred by `SheetView` when follow labels are active so
+    /// K9 global priority (`font size`, `(y, x)`, `id`) applies across both layers without
+    /// repainting `SheetView` during pointer motion (`W3.6`, `K9`, `INV11`, `B10`).
+    sheet_displaced: Vec<Candidate>,
+    /// Reusable buffer for combined sheet runner-up + follow-label selection under K9's shared
+    /// 700-label cap (`W3.6`, `K9`, `B10`).
+    overlay_candidates: Vec<OverlayCandidate>,
     /// Count of labels emitted by `SheetView` on its most recent paint (`K9` shared cap, `W3.6`).
     sheet_painted_labels: usize,
     query_buf: Vec<ItemId>,
@@ -296,6 +337,7 @@ impl TextCache {
             part_lines: Vec::new(),
             label_lines: Vec::new(),
             candidates: Vec::with_capacity(MAX_VISIBLE_LABELS * 2),
+            sheet_displaced: Vec::with_capacity(MAX_VISIBLE_LABELS),
             overlay_candidates: Vec::with_capacity(MAX_VISIBLE_LABELS * 2),
             sheet_painted_labels: 0,
             query_buf: Vec::new(),
@@ -579,6 +621,7 @@ impl TextCache {
         scope: &impl SheetPaintScope,
     ) {
         self.sync(frame.doc);
+        self.sheet_displaced.clear();
         self.sheet_painted_labels = 0;
 
         let buckets = Buckets {
@@ -596,12 +639,16 @@ impl TextCache {
         } else {
             self.collect_candidates(frame, buckets, Some(window), scope);
         }
-        if self.candidates.is_empty() {
+        if self.candidates.is_empty() && self.sheet_displaced.is_empty() {
             return;
         }
 
-        // Shape any cache misses before opening the paint layer.
+        // Shape any cache misses before opening the paint layer (including runner-up candidates
+        // deferred to the overlay so warm overlay frames allocate nothing, B10).
         self.shape_missing(frame, window, scope);
+        if self.candidates.is_empty() {
+            return;
+        }
 
         // Paint all kept labels in one sheet text layer via direct glyph emission (D4, G5, S5).
         let mut emitted = 0usize;
@@ -615,11 +662,13 @@ impl TextCache {
         self.sheet_painted_labels = emitted;
     }
 
-    /// Paints moved and stationary hidden follow-preview net label text under the shared K9
-    /// per-frame cap (`MAX_VISIBLE_LABELS`) and `(y, x, id)` priority rules (`W3.6`, `K9`, `B10`).
+    /// Paints moved and stationary hidden follow-preview net label text together with any runner-up
+    /// sheet label candidates deferred by `SheetView`, enforcing K9's global 700-label cap and
+    /// `(font size, y, x, id)` priority across both layers without repainting `SheetView` during
+    /// pointer motion (`W3.6`, `K9`, `INV11`, `B10`).
     ///
-    /// Culls each label by its actual glyph bounding box against `target.viewport` rather than
-    /// the marker anchor margin so long labels extending into the viewport remain visible.
+    /// Culls each follow label by its actual glyph bounding box against `target.viewport` rather
+    /// than the marker anchor margin so long labels extending into the viewport remain visible.
     pub(crate) fn paint_follow_net_labels(
         &mut self,
         target: FollowLabelPaint<'_>,
@@ -639,11 +688,12 @@ impl TextCache {
         }
 
         self.sync(target.doc);
-        let Some(bucket) = FontBucket::from_logical(NET_LABEL_PX * target.camera.zoom()) else {
-            return 0;
-        };
         let budget = MAX_VISIBLE_LABELS.saturating_sub(self.sheet_painted_labels);
         if budget == 0 {
+            return 0;
+        }
+        let net_bucket = FontBucket::from_logical(NET_LABEL_PX * target.camera.zoom());
+        if net_bucket.is_none() && self.sheet_displaced.is_empty() {
             return 0;
         }
 
@@ -656,53 +706,68 @@ impl TextCache {
         let v_bottom = f32::from(target.viewport.bottom());
 
         self.overlay_candidates.clear();
-        let push_visible = |cache: &mut Self, id: LabelId, at: Pt, color: Hsla, window: &Window| {
-            cache.ensure_label_slot_shaped(id, color, window, &scope);
-            let Some(line) = cache
-                .label_lines
-                .get(id.0 as usize)
-                .and_then(|s| s.line.as_ref())
-            else {
-                return;
-            };
-            let anchor = target.camera.world_to_screen(at);
-            let origin_x = snap_logical(anchor.x + 2.0 * zoom, target.scale_factor) as f32;
-            let baseline_y = snap_logical(anchor.y, target.scale_factor) as f32;
-            let scale = font_scale_f32(line, bucket);
-            let top_y = baseline_y - f32::from(line.ascent) * scale;
-            let bottom_y = baseline_y + f32::from(line.descent).max(0.0) * scale;
-            let right_x = origin_x + f32::from(line.width) * scale;
-            if right_x < v_left || origin_x > v_right || bottom_y < v_top || top_y > v_bottom {
-                return;
-            }
-            if cache.overlay_candidates.len() == MAX_VISIBLE_LABELS * 2 {
-                cache
-                    .overlay_candidates
-                    .select_nth_unstable_by_key(budget, |&(lid, pt, _)| (pt.y, pt.x, lid.0));
-                cache.overlay_candidates.truncate(budget);
-            }
-            cache.overlay_candidates.push((id, at, color));
-        };
-
-        if !target.is_refused {
-            for &(id, moved_at) in target.plan_labels_sorted {
-                let color = if moved_at.is_in_bounds() {
-                    target.moved_ink
-                } else {
-                    target.invalid_ink
-                };
-                push_visible(self, id, moved_at, color, window);
-            }
+        for &c in &self.sheet_displaced {
+            self.overlay_candidates.push(OverlayCandidate::Sheet(c));
         }
-        for &id in target.affected_labels {
-            if (target.is_refused
-                || target
-                    .plan_labels_sorted
-                    .binary_search_by_key(&id.0, |(lid, _)| lid.0)
-                    .is_err())
-                && let Some(label) = target.doc.label(id)
-            {
-                push_visible(self, id, label.at, target.stationary_ink, window);
+
+        if let Some(bucket) = net_bucket {
+            let push_visible = |cache: &mut Self,
+                                id: LabelId,
+                                at: Pt,
+                                color: Hsla,
+                                window: &Window| {
+                cache.ensure_label_slot_shaped(id, color, window, &scope);
+                let Some(line) = cache
+                    .label_lines
+                    .get(id.0 as usize)
+                    .and_then(|s| s.line.as_ref())
+                else {
+                    return;
+                };
+                let anchor = target.camera.world_to_screen(at);
+                let origin_x = snap_logical(anchor.x + 2.0 * zoom, target.scale_factor) as f32;
+                let baseline_y = snap_logical(anchor.y, target.scale_factor) as f32;
+                let scale = font_scale_f32(line, bucket);
+                let top_y = baseline_y - f32::from(line.ascent) * scale;
+                let bottom_y = baseline_y + f32::from(line.descent).max(0.0) * scale;
+                let right_x = origin_x + f32::from(line.width) * scale;
+                if right_x < v_left || origin_x > v_right || bottom_y < v_top || top_y > v_bottom {
+                    return;
+                }
+                if cache.overlay_candidates.len() == MAX_VISIBLE_LABELS * 2 {
+                    cache
+                        .overlay_candidates
+                        .select_nth_unstable_by_key(budget, overlay_priority_key);
+                    cache.overlay_candidates.truncate(budget);
+                }
+                cache.overlay_candidates.push(OverlayCandidate::Follow {
+                    id,
+                    at,
+                    color,
+                    bucket,
+                });
+            };
+
+            if !target.is_refused {
+                for &(id, moved_at) in target.plan_labels_sorted {
+                    let color = if moved_at.is_in_bounds() {
+                        target.moved_ink
+                    } else {
+                        target.invalid_ink
+                    };
+                    push_visible(self, id, moved_at, color, window);
+                }
+            }
+            for &id in target.affected_labels {
+                if (target.is_refused
+                    || target
+                        .plan_labels_sorted
+                        .binary_search_by_key(&id.0, |(lid, _)| lid.0)
+                        .is_err())
+                    && let Some(label) = target.doc.label(id)
+                {
+                    push_visible(self, id, label.at, target.stationary_ink, window);
+                }
             }
         }
 
@@ -711,58 +776,122 @@ impl TextCache {
         }
         if self.overlay_candidates.len() > budget {
             self.overlay_candidates
-                .select_nth_unstable_by_key(budget, |&(lid, pt, _)| (pt.y, pt.x, lid.0));
+                .select_nth_unstable_by_key(budget, overlay_priority_key);
             self.overlay_candidates.truncate(budget);
         }
+        // Deterministic paint order regardless of select_nth_unstable partitioning.
+        self.overlay_candidates.sort_unstable_by_key(|c| match *c {
+            OverlayCandidate::Sheet(c) => (0u8, c.kind as u8, c.id, c.extra),
+            OverlayCandidate::Follow { id, .. } => (1u8, LabelKind::NetLabel as u8, id.0, 0),
+        });
 
-        let bucket_px = bucket.pixels();
+        let emit_ctx = EmitCtx {
+            doc: target.doc,
+            camera: target.camera,
+            viewport: target.viewport,
+            scale_factor: target.scale_factor,
+            ink: target.sheet_ink,
+            ink_secondary: target.stationary_ink,
+        };
         let mut emitted = 0usize;
-        for &(id, at, color) in &self.overlay_candidates {
-            let Some(line) = self
-                .label_lines
-                .get(id.0 as usize)
-                .and_then(|s| s.line.as_ref())
-            else {
-                continue;
-            };
-            let anchor = target.camera.world_to_screen(at);
-            let origin_x = snap_logical(anchor.x + 2.0 * zoom, target.scale_factor) as f32;
-            let baseline_y = snap_logical(anchor.y, target.scale_factor) as f32;
-            let scale = font_scale_f32(line, bucket);
-            for run in &line.runs {
-                for glyph in &run.glyphs {
-                    let pos = point(
-                        px(origin_x + f32::from(glyph.position.x) * scale),
-                        px(baseline_y + f32::from(glyph.position.y) * scale),
-                    );
-                    scope.gpui(|| {
-                        let result = if glyph.is_emoji {
-                            window.paint_emoji(pos, run.font_id, glyph.id, bucket_px)
-                        } else {
-                            window.paint_glyph(pos, run.font_id, glyph.id, bucket_px, color)
-                        };
-                        if let Err(error) = result {
-                            eprintln!("follow label glyph: {error}");
+        for &candidate in &self.overlay_candidates {
+            match candidate {
+                OverlayCandidate::Sheet(c) => {
+                    if self.emit_candidate(c, &emit_ctx, window, &scope) {
+                        emitted += 1;
+                    }
+                }
+                OverlayCandidate::Follow {
+                    id,
+                    at,
+                    color,
+                    bucket,
+                } => {
+                    let Some(line) = self
+                        .label_lines
+                        .get(id.0 as usize)
+                        .and_then(|s| s.line.as_ref())
+                    else {
+                        continue;
+                    };
+                    let bucket_px = bucket.pixels();
+                    let anchor = target.camera.world_to_screen(at);
+                    let origin_x = snap_logical(anchor.x + 2.0 * zoom, target.scale_factor) as f32;
+                    let baseline_y = snap_logical(anchor.y, target.scale_factor) as f32;
+                    let scale = font_scale_f32(line, bucket);
+                    for run in &line.runs {
+                        for glyph in &run.glyphs {
+                            let pos = point(
+                                px(origin_x + f32::from(glyph.position.x) * scale),
+                                px(baseline_y + f32::from(glyph.position.y) * scale),
+                            );
+                            scope.gpui(|| {
+                                let result = if glyph.is_emoji {
+                                    window.paint_emoji(pos, run.font_id, glyph.id, bucket_px)
+                                } else {
+                                    window.paint_glyph(pos, run.font_id, glyph.id, bucket_px, color)
+                                };
+                                if let Err(error) = result {
+                                    eprintln!("follow label glyph: {error}");
+                                }
+                            });
                         }
-                    });
+                    }
+                    emitted += 1;
                 }
             }
-            emitted += 1;
         }
         emitted
     }
 
     #[cfg(test)]
-    pub(crate) fn set_sheet_painted_labels_for_test(&mut self, count: usize) {
-        self.sheet_painted_labels = count;
+    pub(crate) fn paint_sheet_for_test(
+        &mut self,
+        doc: &Doc,
+        hidden: &[ItemId],
+        reserved_follow_labels: usize,
+        view: (&Camera, Bounds<Pixels>),
+        inks: (Hsla, Hsla),
+        window: &mut Window,
+    ) -> usize {
+        let mut parts = Vec::new();
+        let mut labels = Vec::new();
+        for (id, _) in doc.parts() {
+            parts.push(ItemId::Part(id));
+        }
+        for (id, _) in doc.labels() {
+            labels.push(ItemId::Label(id));
+        }
+        let frame = TextFrame {
+            doc,
+            parts: &parts,
+            labels: &labels,
+            hidden,
+            reserved_follow_labels,
+            camera: view.0,
+            viewport: view.1,
+            scale_factor: 1.0,
+            ink: inks.0,
+            ink_secondary: inks.1,
+        };
+        self.paint(&frame, window, &());
+        self.sheet_painted_labels
     }
 
     #[cfg(test)]
-    pub(crate) fn overlay_candidate_ids_for_test(&self) -> Vec<LabelId> {
-        self.overlay_candidates
-            .iter()
-            .map(|&(id, _, _)| id)
-            .collect()
+    pub(crate) fn overlay_winner_summary_for_test(&self) -> (Vec<LabelId>, Vec<LabelId>) {
+        let mut follow = Vec::new();
+        let mut sheet_net = Vec::new();
+        for &c in &self.overlay_candidates {
+            match c {
+                OverlayCandidate::Follow { id, .. } => follow.push(id),
+                OverlayCandidate::Sheet(c) if c.kind == LabelKind::NetLabel => {
+                    sheet_net.push(LabelId(c.id));
+                }
+                OverlayCandidate::Sheet(_) => {}
+            }
+        }
+        (follow, sheet_net)
     }
 
     fn collect_from_query_buf(
@@ -791,7 +920,12 @@ impl TextCache {
                 _ => {}
             }
         }
-        self.finish_candidates();
+        let reserved = if buckets.net.is_some() {
+            frame.reserved_follow_labels
+        } else {
+            0
+        };
+        self.finish_candidates(reserved);
     }
 
     fn collect_candidates(
@@ -827,14 +961,32 @@ impl TextCache {
             }
         }
 
-        self.finish_candidates();
+        let reserved = if buckets.net.is_some() {
+            frame.reserved_follow_labels
+        } else {
+            0
+        };
+        self.finish_candidates(reserved);
     }
 
-    fn finish_candidates(&mut self) {
+    fn finish_candidates(&mut self, reserved_follow_labels: usize) {
         if self.candidates.len() > MAX_VISIBLE_LABELS {
             self.candidates
                 .select_nth_unstable_by_key(MAX_VISIBLE_LABELS, priority_key);
             self.candidates.truncate(MAX_VISIBLE_LABELS);
+        }
+        self.sheet_displaced.clear();
+        if reserved_follow_labels > 0
+            && self.candidates.len() + reserved_follow_labels > MAX_VISIBLE_LABELS
+        {
+            let keep = MAX_VISIBLE_LABELS.saturating_sub(reserved_follow_labels);
+            if keep > 0 {
+                self.candidates
+                    .select_nth_unstable_by_key(keep, priority_key);
+            }
+            self.sheet_displaced
+                .extend_from_slice(&self.candidates[keep..]);
+            self.candidates.truncate(keep);
         }
         // Deterministic paint order regardless of select_nth_unstable partitioning.
         self.candidates
@@ -1217,6 +1369,33 @@ impl TextCache {
         );
     }
 
+    fn shape_candidate(
+        &mut self,
+        c: Candidate,
+        frame: &TextFrame<'_>,
+        window: &Window,
+        scope: &impl SheetPaintScope,
+    ) {
+        match c.kind {
+            LabelKind::Designator | LabelKind::Value => {
+                self.ensure_part_slot_shaped(
+                    PartId(c.id),
+                    c.kind == LabelKind::Value,
+                    frame.ink,
+                    window,
+                    scope,
+                );
+            }
+            LabelKind::NetLabel => {
+                self.ensure_label_slot_shaped(LabelId(c.id), frame.ink_secondary, window, scope);
+            }
+            LabelKind::PinNumber => {
+                let slot_idx = self.pin_offsets[c.symbol.index()] + usize::from(c.extra);
+                self.ensure_pin_slot_shaped(slot_idx, frame.ink_secondary, window, scope);
+            }
+        }
+    }
+
     fn shape_missing(
         &mut self,
         frame: &TextFrame<'_>,
@@ -1225,29 +1404,11 @@ impl TextCache {
     ) {
         for index in 0..self.candidates.len() {
             let c = self.candidates[index];
-            match c.kind {
-                LabelKind::Designator | LabelKind::Value => {
-                    self.ensure_part_slot_shaped(
-                        PartId(c.id),
-                        c.kind == LabelKind::Value,
-                        frame.ink,
-                        window,
-                        scope,
-                    );
-                }
-                LabelKind::NetLabel => {
-                    self.ensure_label_slot_shaped(
-                        LabelId(c.id),
-                        frame.ink_secondary,
-                        window,
-                        scope,
-                    );
-                }
-                LabelKind::PinNumber => {
-                    let slot_idx = self.pin_offsets[c.symbol.index()] + usize::from(c.extra);
-                    self.ensure_pin_slot_shaped(slot_idx, frame.ink_secondary, window, scope);
-                }
-            }
+            self.shape_candidate(c, frame, window, scope);
+        }
+        for index in 0..self.sheet_displaced.len() {
+            let c = self.sheet_displaced[index];
+            self.shape_candidate(c, frame, window, scope);
         }
     }
 
@@ -1257,123 +1418,142 @@ impl TextCache {
         window: &mut Window,
         scope: &impl SheetPaintScope,
     ) -> usize {
-        let zoom = frame.camera.zoom();
-        let v_left = f32::from(frame.viewport.left());
-        let v_right = f32::from(frame.viewport.right());
-        let v_top = f32::from(frame.viewport.top());
-        let v_bottom = f32::from(frame.viewport.bottom());
+        let ctx = EmitCtx {
+            doc: frame.doc,
+            camera: frame.camera,
+            viewport: frame.viewport,
+            scale_factor: frame.scale_factor,
+            ink: frame.ink,
+            ink_secondary: frame.ink_secondary,
+        };
         let mut emitted = 0usize;
-
         for &c in &self.candidates {
-            let (line, color, left_x, baseline_y) = match c.kind {
-                LabelKind::Designator | LabelKind::Value => {
-                    let Some(part) = frame.doc.part(PartId(c.id)) else {
-                        continue;
-                    };
-                    let Some(slots) = self.part_lines.get(c.id as usize) else {
-                        continue;
-                    };
-                    let slot = if c.kind == LabelKind::Designator {
-                        &slots.designator
-                    } else {
-                        &slots.value
-                    };
-                    let Some(line) = slot.line.as_ref() else {
-                        continue;
-                    };
-                    let def = self.library.get(part.symbol);
-                    let desig_w = if part.designator.is_empty() {
-                        0.0
-                    } else {
-                        line_metrics(Some(&slots.designator), &part.designator, c.bucket).width
-                    };
-                    let value_w = if part.value.is_empty() {
-                        0.0
-                    } else {
-                        line_metrics(Some(&slots.value), &part.value, c.bucket).width
-                    };
-                    let block_w = desig_w.max(value_w);
-                    let m = metrics_from_shaped(line, c.bucket);
-                    let layout = PartLabelLayout {
-                        placement: slots.placement,
-                        is_value: c.kind == LabelKind::Value,
-                        has_both: c.extra != 0,
-                        block_w,
-                    };
-                    let (left_x, baseline_y) =
-                        part_label_origin(part, def, layout, m, frame.camera);
-                    (line, frame.ink, left_x, baseline_y)
-                }
-                LabelKind::NetLabel => {
-                    let Some(label) = frame.doc.label(LabelId(c.id)) else {
-                        continue;
-                    };
-                    let Some(line) = self
-                        .label_lines
-                        .get(c.id as usize)
-                        .and_then(|s| s.line.as_ref())
-                    else {
-                        continue;
-                    };
-                    let anchor = frame.camera.world_to_screen(label.at);
-                    (line, frame.ink_secondary, anchor.x + 2.0 * zoom, anchor.y)
-                }
-                LabelKind::PinNumber => {
-                    let Some(part) = frame.doc.part(PartId(c.id)) else {
-                        continue;
-                    };
-                    let pin_idx = usize::from(c.extra);
-                    let slot_idx = self.pin_offsets[c.symbol.index()] + pin_idx;
-                    let Some(line) = self.pin_lines[slot_idx].line.as_ref() else {
-                        continue;
-                    };
-                    let def = self.library.get(part.symbol);
-                    let (left_x, baseline_y) = pin_number_origin(
-                        part,
-                        def,
-                        def.pins[pin_idx].at,
-                        metrics_from_shaped(line, c.bucket),
-                        frame.camera,
-                    );
-                    (line, frame.ink_secondary, left_x, baseline_y)
-                }
-            };
-
-            let bucket_px = c.bucket.pixels();
-            let scale = font_scale_f32(line, c.bucket);
-
-            // Snap each label origin to whole device pixels so glyphs hit deterministic subpixel
-            // X variants across pans and repeated zoom sweeps.
-            let origin_x = snap_logical(left_x, frame.scale_factor) as f32;
-            let baseline_y = snap_logical(baseline_y, frame.scale_factor) as f32;
-            let top_y = baseline_y - f32::from(line.ascent) * scale;
-            let bottom_y = baseline_y + f32::from(line.descent).max(0.0) * scale;
-            let right_x = origin_x + f32::from(line.width) * scale;
-            if right_x < v_left || origin_x > v_right || bottom_y < v_top || top_y > v_bottom {
-                continue;
+            if self.emit_candidate(c, &ctx, window, scope) {
+                emitted += 1;
             }
-
-            for run in &line.runs {
-                for glyph in &run.glyphs {
-                    let pos = point(
-                        px(origin_x + f32::from(glyph.position.x) * scale),
-                        px(baseline_y + f32::from(glyph.position.y) * scale),
-                    );
-                    scope.gpui(|| {
-                        let result = if glyph.is_emoji {
-                            window.paint_emoji(pos, run.font_id, glyph.id, bucket_px)
-                        } else {
-                            window.paint_glyph(pos, run.font_id, glyph.id, bucket_px, color)
-                        };
-                        if let Err(error) = result {
-                            eprintln!("sheet glyph: {error}");
-                        }
-                    });
-                }
-            }
-            emitted += 1;
         }
         emitted
+    }
+
+    fn emit_candidate(
+        &self,
+        c: Candidate,
+        ctx: &EmitCtx<'_>,
+        window: &mut Window,
+        scope: &impl SheetPaintScope,
+    ) -> bool {
+        let zoom = ctx.camera.zoom();
+        let v_left = f32::from(ctx.viewport.left());
+        let v_right = f32::from(ctx.viewport.right());
+        let v_top = f32::from(ctx.viewport.top());
+        let v_bottom = f32::from(ctx.viewport.bottom());
+
+        let (line, color, left_x, baseline_y) = match c.kind {
+            LabelKind::Designator | LabelKind::Value => {
+                let Some(part) = ctx.doc.part(PartId(c.id)) else {
+                    return false;
+                };
+                let Some(slots) = self.part_lines.get(c.id as usize) else {
+                    return false;
+                };
+                let slot = if c.kind == LabelKind::Designator {
+                    &slots.designator
+                } else {
+                    &slots.value
+                };
+                let Some(line) = slot.line.as_ref() else {
+                    return false;
+                };
+                let def = self.library.get(part.symbol);
+                let desig_w = if part.designator.is_empty() {
+                    0.0
+                } else {
+                    line_metrics(Some(&slots.designator), &part.designator, c.bucket).width
+                };
+                let value_w = if part.value.is_empty() {
+                    0.0
+                } else {
+                    line_metrics(Some(&slots.value), &part.value, c.bucket).width
+                };
+                let block_w = desig_w.max(value_w);
+                let m = metrics_from_shaped(line, c.bucket);
+                let layout = PartLabelLayout {
+                    placement: slots.placement,
+                    is_value: c.kind == LabelKind::Value,
+                    has_both: c.extra != 0,
+                    block_w,
+                };
+                let (left_x, baseline_y) = part_label_origin(part, def, layout, m, ctx.camera);
+                (line, ctx.ink, left_x, baseline_y)
+            }
+            LabelKind::NetLabel => {
+                let Some(label) = ctx.doc.label(LabelId(c.id)) else {
+                    return false;
+                };
+                let Some(line) = self
+                    .label_lines
+                    .get(c.id as usize)
+                    .and_then(|s| s.line.as_ref())
+                else {
+                    return false;
+                };
+                let anchor = ctx.camera.world_to_screen(label.at);
+                (line, ctx.ink_secondary, anchor.x + 2.0 * zoom, anchor.y)
+            }
+            LabelKind::PinNumber => {
+                let Some(part) = ctx.doc.part(PartId(c.id)) else {
+                    return false;
+                };
+                let pin_idx = usize::from(c.extra);
+                let slot_idx = self.pin_offsets[c.symbol.index()] + pin_idx;
+                let Some(line) = self.pin_lines[slot_idx].line.as_ref() else {
+                    return false;
+                };
+                let def = self.library.get(part.symbol);
+                let (left_x, baseline_y) = pin_number_origin(
+                    part,
+                    def,
+                    def.pins[pin_idx].at,
+                    metrics_from_shaped(line, c.bucket),
+                    ctx.camera,
+                );
+                (line, ctx.ink_secondary, left_x, baseline_y)
+            }
+        };
+
+        let bucket_px = c.bucket.pixels();
+        let scale = font_scale_f32(line, c.bucket);
+
+        // Snap each label origin to whole device pixels so glyphs hit deterministic subpixel
+        // X variants across pans and repeated zoom sweeps.
+        let origin_x = snap_logical(left_x, ctx.scale_factor) as f32;
+        let baseline_y = snap_logical(baseline_y, ctx.scale_factor) as f32;
+        let top_y = baseline_y - f32::from(line.ascent) * scale;
+        let bottom_y = baseline_y + f32::from(line.descent).max(0.0) * scale;
+        let right_x = origin_x + f32::from(line.width) * scale;
+        if right_x < v_left || origin_x > v_right || bottom_y < v_top || top_y > v_bottom {
+            return false;
+        }
+
+        for run in &line.runs {
+            for glyph in &run.glyphs {
+                let pos = point(
+                    px(origin_x + f32::from(glyph.position.x) * scale),
+                    px(baseline_y + f32::from(glyph.position.y) * scale),
+                );
+                scope.gpui(|| {
+                    let result = if glyph.is_emoji {
+                        window.paint_emoji(pos, run.font_id, glyph.id, bucket_px)
+                    } else {
+                        window.paint_glyph(pos, run.font_id, glyph.id, bucket_px, color)
+                    };
+                    if let Err(error) = result {
+                        eprintln!("sheet glyph: {error}");
+                    }
+                });
+            }
+        }
+        true
     }
 }
 
@@ -2041,6 +2221,7 @@ mod tests {
             parts: &items[..parts_end],
             labels: &items[wires_end..],
             hidden: &[],
+            reserved_follow_labels: 0,
             camera: &camera,
             viewport: bounds,
             scale_factor: 1.0,
@@ -2233,6 +2414,7 @@ mod tests {
                 parts: &[],
                 labels: &[],
                 hidden: &[],
+                reserved_follow_labels: 0,
                 camera: &camera_initial,
                 viewport: bounds,
                 scale_factor: 1.0,
@@ -2286,6 +2468,7 @@ mod tests {
                 parts: &[],
                 labels: &[],
                 hidden: &[],
+                reserved_follow_labels: 0,
                 camera: &camera,
                 viewport: bounds,
                 scale_factor: 1.0,
@@ -2328,6 +2511,7 @@ mod tests {
                 parts: &[],
                 labels: &[],
                 hidden: &[],
+                reserved_follow_labels: 0,
                 camera: &camera,
                 viewport: bounds,
                 scale_factor: 1.0,
@@ -2404,6 +2588,7 @@ mod tests {
                     parts: &parts,
                     labels: &labels,
                     hidden: &[],
+                    reserved_follow_labels: 0,
                     camera: cam,
                     viewport: bounds,
                     scale_factor: sf,

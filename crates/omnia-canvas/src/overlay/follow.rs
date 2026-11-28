@@ -296,6 +296,7 @@ pub(super) fn paint_follow_preview(
                         is_refused,
                         moved_ink: palette.ink_for(true),
                         invalid_ink: palette.ink_for(false),
+                        sheet_ink: full_ink,
                         stationary_ink: ink_secondary,
                     },
                     window,
@@ -822,9 +823,11 @@ mod tests {
     }
 
     /// W3.6 / K9: follow-preview label text renders long stationary labels whose anchors sit
-    /// past the 16 px marker margin when their glyphs extend into the viewport, and strictly
-    /// shares K9's `MAX_VISIBLE_LABELS` (700) per-frame cap and `(y, x, id)` priority with
-    /// `SheetView`.
+    /// past the 16 px marker margin when their glyphs extend into the viewport, and enforces
+    /// K9's global `MAX_VISIBLE_LABELS` (700) per-frame cap and `(font size, y, x, id)` priority
+    /// across BOTH `SheetView` and the follow overlay so a higher-priority follow label displaces
+    /// a lower-priority sheet label (and loses to a higher-priority sheet label) without extra
+    /// `SheetView` repaints.
     #[gpui::test]
     fn w3_6_follow_net_labels_edge_visibility_and_k9_shared_cap(cx: &mut TestAppContext) {
         use crate::sheet::text::{FollowLabelPaint, MAX_VISIBLE_LABELS, TextCache};
@@ -832,14 +835,14 @@ mod tests {
         use omnia_doc::LabelId;
 
         let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
-        // Camera centered at (0, 0) at 100% zoom: viewport spans x in [-400, 400] px = [-20, 20] grid.
+        // Camera centered at (0, 0) at 100% zoom: viewport spans x in [-20, 20], y in [-15, 15] grid.
         let camera = Camera::new(Pt::ZERO, 1.0, viewport);
+        let sheet_ink = super::gpui_color(GRAPHITE.stage_ink);
         let ink = super::gpui_color(GRAPHITE.stage_ink_secondary);
 
-        let mut doc = Doc::new();
-        // Anchor at x = -22 grid (-440 px -> 40 px left of viewport, well past the 16 px marker margin)
-        // with a long label string whose glyphs extend well past x = 0 px into the viewport.
-        let ItemId::Label(edge_lbl) = doc
+        // 1. Stationary edge-crossing label beyond the 16 px marker margin.
+        let mut edge_doc = Doc::new();
+        let ItemId::Label(edge_lbl) = edge_doc
             .apply(Command::AddLabel(Label {
                 at: Pt {
                     x: -22 * GRID_NM,
@@ -852,34 +855,53 @@ mod tests {
         else {
             unreachable!();
         };
-        let mut extra_labels = Vec::new();
-        for i in 0..5i32 {
-            let ItemId::Label(id) = doc
-                .apply(Command::AddLabel(Label {
-                    at: Pt {
-                        x: i * GRID_NM,
-                        y: (4 - i) * GRID_NM,
-                    },
-                    text: format!("N{i}").into(),
-                }))
-                .unwrap()
-                .added[0]
-            else {
-                unreachable!();
-            };
-            extra_labels.push(id);
+
+        // 2. Dense sheet with exactly 700 visible unaffected sheet net labels (y in -10..=9,
+        // x in -17..=17) plus 1 hidden follow label whose K9 priority beats the 700th sheet
+        // label (`last_sheet_lbl` at (17, 9)) when placed at (-17, -11), and loses to it when
+        // moved to (17, 10) — all strictly inside the viewport.
+        let mut dense_doc = Doc::new();
+        let mut last_sheet_lbl = LabelId(0);
+        for row in -10..=9i32 {
+            for col in -17..=17i32 {
+                let ItemId::Label(id) = dense_doc
+                    .apply(Command::AddLabel(Label {
+                        at: pt(col, row),
+                        text: "N".into(),
+                    }))
+                    .unwrap()
+                    .added[0]
+                else {
+                    unreachable!();
+                };
+                last_sheet_lbl = id;
+            }
         }
+        assert_eq!(dense_doc.labels().count(), MAX_VISIBLE_LABELS);
+        let ItemId::Label(follow_lbl) = dense_doc
+            .apply(Command::AddLabel(Label {
+                at: pt(-17, -11),
+                text: "FOLLOW".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
 
         let ran = Rc::new(Cell::new(false));
         let ran_paint = ran.clone();
         let (_, cx) = cx.add_window_view(move |_, _| {
             struct CanvasHost {
-                doc: Doc,
+                edge_doc: Doc,
+                dense_doc: Doc,
                 camera: Camera,
                 viewport: Bounds<Pixels>,
+                sheet_ink: Hsla,
                 ink: Hsla,
                 edge_lbl: LabelId,
-                extra_labels: Vec<LabelId>,
+                follow_lbl: LabelId,
+                last_sheet_lbl: LabelId,
                 ran: Rc<Cell<bool>>,
             }
             impl Render for CanvasHost {
@@ -888,21 +910,24 @@ mod tests {
                     _window: &mut Window,
                     _cx: &mut Context<Self>,
                 ) -> impl IntoElement {
-                    let doc = self.doc.fork();
+                    let edge_doc = self.edge_doc.fork();
+                    let dense_doc = self.dense_doc.fork();
                     let camera = self.camera.clone();
                     let viewport = self.viewport;
+                    let sheet_ink = self.sheet_ink;
                     let ink = self.ink;
                     let edge_lbl = self.edge_lbl;
-                    let extra_labels = self.extra_labels.clone();
+                    let follow_lbl = self.follow_lbl;
+                    let last_sheet_lbl = self.last_sheet_lbl;
                     let ran = self.ran.clone();
                     gpui::canvas(
                         |_, _, _| {},
                         move |_, _, window, _| {
-                            let mut cache = TextCache::new();
-                            // 1. Stationary edge-crossing label beyond the 16 px marker margin is emitted.
-                            let emitted_edge = cache.paint_follow_net_labels(
+                            // 1. Stationary edge-crossing label beyond the 16 px marker margin renders.
+                            let mut edge_cache = TextCache::new();
+                            let emitted_edge = edge_cache.paint_follow_net_labels(
                                 FollowLabelPaint {
-                                    doc: &doc,
+                                    doc: &edge_doc,
                                     camera: &camera,
                                     viewport,
                                     scale_factor: 1.0,
@@ -911,6 +936,7 @@ mod tests {
                                     is_refused: true,
                                     moved_ink: ink,
                                     invalid_ink: ink,
+                                    sheet_ink,
                                     stationary_ink: ink,
                                 },
                                 window,
@@ -921,65 +947,87 @@ mod tests {
                                 "stationary label whose glyphs enter viewport must render even when anchor is >16 px outside"
                             );
 
-                            // 2. When SheetView already painted 700 labels (K9 cap), overlay emits 0.
-                            cache.set_sheet_painted_labels_for_test(MAX_VISIBLE_LABELS);
-                            let emitted_full = cache.paint_follow_net_labels(
+                            // 2. Real SheetView paint with 700 visible sheet labels + 1 hidden
+                            // follow label: SheetView paints the 699 guaranteed winners and defers
+                            // the 700th (`last_sheet_lbl`) to the overlay.
+                            let mut cache = TextCache::new();
+                            let sheet_emitted = cache.paint_sheet_for_test(
+                                &dense_doc,
+                                &[ItemId::Label(follow_lbl)],
+                                1,
+                                (&camera, viewport),
+                                (sheet_ink, ink),
+                                window,
+                            );
+                            assert_eq!(sheet_emitted, MAX_VISIBLE_LABELS - 1);
+
+                            // 3. Higher-priority follow label at (-17, -11) displaces the
+                            // lower-priority 700th sheet label at (17, 9); total stays 700.
+                            let overlay_emitted_win = cache.paint_follow_net_labels(
                                 FollowLabelPaint {
-                                    doc: &doc,
+                                    doc: &dense_doc,
                                     camera: &camera,
                                     viewport,
                                     scale_factor: 1.0,
-                                    affected_labels: &extra_labels,
-                                    plan_labels_sorted: &[],
-                                    is_refused: true,
+                                    affected_labels: &[follow_lbl],
+                                    plan_labels_sorted: &[(follow_lbl, pt(-17, -11))],
+                                    is_refused: false,
                                     moved_ink: ink,
                                     invalid_ink: ink,
+                                    sheet_ink,
                                     stationary_ink: ink,
                                 },
                                 window,
                                 |work| work(),
                             );
+                            assert_eq!(sheet_emitted + overlay_emitted_win, MAX_VISIBLE_LABELS);
                             assert_eq!(
-                                emitted_full, 0,
-                                "K9: 700 sheet labels leaves 0 overlay budget"
+                                cache.overlay_winner_summary_for_test(),
+                                (vec![follow_lbl], vec![]),
+                                "K9: higher-priority follow label must displace lower-priority 700th sheet label"
                             );
 
-                            // 3. When SheetView painted 698 labels, overlay emits exactly 2 highest-priority
-                            // labels (lowest y, then x, then id).
-                            cache.set_sheet_painted_labels_for_test(MAX_VISIBLE_LABELS - 2);
-                            let emitted_partial = cache.paint_follow_net_labels(
+                            // 4. Moving the follow label to (17, 10) (lower priority than
+                            // `last_sheet_lbl` at (17, 9)) restores `last_sheet_lbl` without
+                            // repainting SheetView; total stays 700.
+                            let overlay_emitted_lose = cache.paint_follow_net_labels(
                                 FollowLabelPaint {
-                                    doc: &doc,
+                                    doc: &dense_doc,
                                     camera: &camera,
                                     viewport,
                                     scale_factor: 1.0,
-                                    affected_labels: &extra_labels,
-                                    plan_labels_sorted: &[],
-                                    is_refused: true,
+                                    affected_labels: &[follow_lbl],
+                                    plan_labels_sorted: &[(follow_lbl, pt(17, 10))],
+                                    is_refused: false,
                                     moved_ink: ink,
                                     invalid_ink: ink,
+                                    sheet_ink,
                                     stationary_ink: ink,
                                 },
                                 window,
                                 |work| work(),
                             );
-                            assert_eq!(emitted_partial, 2);
-                            let mut kept_ids = cache.overlay_candidate_ids_for_test();
-                            kept_ids.sort_unstable_by_key(|id| id.0);
-                            // extra_labels[4] has y=0, extra_labels[3] has y=1 (lowest y values).
-                            assert_eq!(kept_ids, vec![extra_labels[3], extra_labels[4]]);
+                            assert_eq!(sheet_emitted + overlay_emitted_lose, MAX_VISIBLE_LABELS);
+                            assert_eq!(
+                                cache.overlay_winner_summary_for_test(),
+                                (vec![], vec![last_sheet_lbl]),
+                                "K9: higher-priority sheet label must win over lower-priority follow label without sheet repaint"
+                            );
                             ran.set(true);
                         },
                     )
                 }
             }
             CanvasHost {
-                doc,
+                edge_doc,
+                dense_doc,
                 camera,
                 viewport,
+                sheet_ink,
                 ink,
                 edge_lbl,
-                extra_labels,
+                follow_lbl,
+                last_sheet_lbl,
                 ran: ran_paint,
             }
         });
