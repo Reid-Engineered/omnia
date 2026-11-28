@@ -240,6 +240,92 @@ static RESISTOR_IEEE_STANDARD_ART: SymbolArt = SymbolArt {
 #[allow(dead_code)]
 pub const RESISTOR_IEEE_STANDARD: SymbolId = SymbolId(5);
 
+static SOURCE_COM_AC_PINS: &[Pin] = &[
+    Pin {
+        at: Pt { x: 5_080_000, y: 0 },
+        number: "1",
+    },
+    Pin {
+        at: Pt {
+            x: -5_080_000,
+            y: 0,
+        },
+        number: "2",
+    },
+];
+
+static SOURCE_COM_AC_PATHS: &[ArtPath] = &[
+    ArtPath {
+        d: "M 125 75 C 125 102.6142 102.6142 125 75 125 C 47.3858 125 25 102.6142 25 75 C 25 47.3858 47.3858 25 75 25 C 102.6142 25 125 47.3858 125 75 Z",
+        fill: false,
+        stroke: true,
+        linecap: LineCap::Butt,
+        linejoin: LineJoin::Miter,
+        miterlimit: 10.0,
+    },
+    ArtPath {
+        d: "M 25 75 L 0 75 M 125 75 L 150 75 M 37 75.38 C 37 75.38 43.38 59.75 59.13 59.75 C 74.88 59.75 68.63 90.5 90.63 90.5 C 112.63 90.5 112 75.38 112 75.38",
+        fill: false,
+        stroke: true,
+        linecap: LineCap::Butt,
+        linejoin: LineJoin::Miter,
+        miterlimit: 10.0,
+    },
+];
+
+static SOURCE_COM_AC_ART: SymbolArt = SymbolArt {
+    view_box_size: 150.0,
+    original_stroke_units: 5.0,
+    paths: SOURCE_COM_AC_PATHS,
+};
+
+/// `Source-COM-AC` (`SymbolId(6)`).
+#[allow(dead_code)]
+pub const SOURCE_COM_AC: SymbolId = SymbolId(6);
+
+static SOURCE_COM_DC_PINS: &[Pin] = &[
+    Pin {
+        at: Pt { x: 5_080_000, y: 0 },
+        number: "1",
+    },
+    Pin {
+        at: Pt {
+            x: -5_080_000,
+            y: 0,
+        },
+        number: "2",
+    },
+];
+
+static SOURCE_COM_DC_PATHS: &[ArtPath] = &[
+    ArtPath {
+        d: "M 125 75 C 125 102.6142 102.6142 125 75 125 C 47.3858 125 25 102.6142 25 75 C 25 47.3858 47.3858 25 75 25 C 102.6142 25 125 47.3858 125 75 Z",
+        fill: false,
+        stroke: true,
+        linecap: LineCap::Butt,
+        linejoin: LineJoin::Miter,
+        miterlimit: 10.0,
+    },
+    ArtPath {
+        d: "M 25 75 L 0 75 M 125 75 L 150 75 M 87.5 75 L 112.5 75 M 100 62.5 L 100 87.5 M 62.5 75 L 37.5 75",
+        fill: false,
+        stroke: true,
+        linecap: LineCap::Butt,
+        linejoin: LineJoin::Miter,
+        miterlimit: 10.0,
+    },
+];
+
+static SOURCE_COM_DC_ART: SymbolArt = SymbolArt {
+    view_box_size: 150.0,
+    original_stroke_units: 5.0,
+    paths: SOURCE_COM_DC_PATHS,
+};
+
+/// `Source-COM-DC` (`SymbolId(7)`).
+#[allow(dead_code)]
+pub const SOURCE_COM_DC: SymbolId = SymbolId(7);
+
 pub static SYMBOLS: &[SymbolDef] = &[
     SymbolDef {
         id: SymbolId(0),
@@ -336,5 +422,37 @@ pub static SYMBOLS: &[SymbolDef] = &[
         },
         pins: RESISTOR_IEEE_STANDARD_PINS,
         art: &RESISTOR_IEEE_STANDARD_ART,
+    },
+    SymbolDef {
+        id: SymbolId(6),
+        name: "Source-COM-AC",
+        bounds: Rect {
+            min: Pt {
+                x: -5_080_000,
+                y: -5_080_000,
+            },
+            max: Pt {
+                x: 5_080_000,
+                y: 5_080_000,
+            },
+        },
+        pins: SOURCE_COM_AC_PINS,
+        art: &SOURCE_COM_AC_ART,
+    },
+    SymbolDef {
+        id: SymbolId(7),
+        name: "Source-COM-DC",
+        bounds: Rect {
+            min: Pt {
+                x: -5_080_000,
+                y: -5_080_000,
+            },
+            max: Pt {
+                x: 5_080_000,
+                y: 5_080_000,
+            },
+        },
+        pins: SOURCE_COM_DC_PINS,
+        art: &SOURCE_COM_DC_ART,
     },
 ];

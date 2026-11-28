@@ -1,8 +1,8 @@
 //! GPUI-independent symbol definitions compiled from vendored artwork.
 
-use std::{io::Write as _, sync::Arc};
+use std::{fmt, io::Write as _, sync::Arc};
 
-use omnia_doc::{Command, Orient, Part, Pt, Rect};
+use omnia_doc::{Command, Doc, Orient, Part, Pt, Rect};
 
 mod generated;
 
@@ -120,6 +120,21 @@ pub struct SymbolDef {
     pub art: &'static SymbolArt,
 }
 
+/// Error returned by [`SymbolLibrary::check_doc`] when a document references a [`SymbolId`]
+/// not present in the library (`PD8`, `PTC-unknown-symbol`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnknownSymbol {
+    pub symbol: SymbolId,
+}
+
+impl fmt::Display for UnknownSymbol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "unknown symbol id {}", self.symbol.raw())
+    }
+}
+
+impl std::error::Error for UnknownSymbol {}
+
 /// Library of compiled schematic symbols.
 #[derive(Debug)]
 pub struct SymbolLibrary {
@@ -138,6 +153,30 @@ impl SymbolLibrary {
     #[inline]
     pub fn get(&self, id: SymbolId) -> &SymbolDef {
         &self.defs[id.index()]
+    }
+
+    /// Looks up a symbol definition by its [`SymbolId`], returning `None` if out of range (`PD8`).
+    #[inline]
+    pub fn try_get(&self, id: SymbolId) -> Option<&SymbolDef> {
+        self.defs.get(id.index())
+    }
+
+    /// Checks that every live part and every referenced part definition in `doc` names a
+    /// symbol present in this library (`PD8`, `PTC-unknown-symbol`).
+    pub fn check_doc(&self, doc: &Doc) -> Result<(), UnknownSymbol> {
+        for (_, part) in doc.parts() {
+            if self.try_get(part.symbol).is_none() {
+                return Err(UnknownSymbol {
+                    symbol: part.symbol,
+                });
+            }
+        }
+        for (_, def) in doc.part_defs() {
+            if self.try_get(def.symbol).is_none() {
+                return Err(UnknownSymbol { symbol: def.symbol });
+            }
+        }
+        Ok(())
     }
 
     /// Finds a symbol by name (e.g. `"Resistor-IEEE-Standard"`).
@@ -256,5 +295,81 @@ mod tests {
             }
         }
         assert_eq!(placed, library.len() * 8);
+    }
+
+    /// `PD8` / `PTC-unknown-symbol` (`check_doc` half): `try_get` returns `None` for out-of-range
+    /// ids, and `check_doc` accepts valid documents while refusing a document carrying
+    /// `SymbolId(999)`.
+    #[test]
+    fn pd8_try_get_and_check_doc_refuse_unknown_symbol() {
+        let library = SymbolLibrary::builtin();
+        for def in library.iter() {
+            assert_eq!(library.try_get(def.id).map(|d| d.id), Some(def.id));
+        }
+        assert!(library.try_get(SymbolId(999)).is_none());
+
+        // Existing symbol ids remain unchanged when new symbols are added (PD11).
+        for (expected_id, expected_name) in [
+            (SymbolId(0), "Capacitor-IEEE-NonPolarized"),
+            (SymbolId(1), "Diode-COM-Standard"),
+            (SymbolId(2), "Ground-COM-General"),
+            (SymbolId(3), "IC-COM-OpAmp"),
+            (SymbolId(4), "Resistor-IEEE-Potentiometer"),
+            (SymbolId(5), "Resistor-IEEE-Standard"),
+        ] {
+            assert_eq!(
+                library.try_get(expected_id).map(|d| d.name),
+                Some(expected_name)
+            );
+        }
+
+        // Empty and valid documents pass check_doc.
+        let empty = Doc::new();
+        assert_eq!(library.check_doc(&empty), Ok(()));
+
+        let mut valid = Doc::new();
+        let res_id = library.by_name("Resistor-IEEE-Standard").unwrap();
+        valid
+            .apply(library.place_command(
+                res_id,
+                Pt::ZERO,
+                Orient::IDENTITY,
+                "R1".into(),
+                "10k".into(),
+            ))
+            .unwrap();
+        assert_eq!(library.check_doc(&valid), Ok(()));
+
+        // Document with SymbolId(999) is refused with UnknownSymbol.
+        let bad_part = Part {
+            symbol: SymbolId(999),
+            at: Pt::ZERO,
+            orient: Orient::IDENTITY,
+            designator: "X1".into(),
+            value: "".into(),
+        };
+        let bounds = Rect::new(
+            Pt {
+                x: -PIN_LATTICE_NM,
+                y: -PIN_LATTICE_NM,
+            },
+            Pt {
+                x: PIN_LATTICE_NM,
+                y: PIN_LATTICE_NM,
+            },
+        )
+        .unwrap();
+        let bad_doc = Doc::from_items(
+            [(bad_part, vec![Pt::ZERO], bounds)],
+            std::iter::empty(),
+            std::iter::empty(),
+        )
+        .unwrap();
+        assert_eq!(
+            library.check_doc(&bad_doc),
+            Err(UnknownSymbol {
+                symbol: SymbolId(999)
+            })
+        );
     }
 }

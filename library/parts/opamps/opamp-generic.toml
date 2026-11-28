@@ -1,0 +1,50 @@
+schema = 1
+id = "opamp-generic"
+name = "Op-amp (generic)"
+category = "Op-Amps"
+description = "Behavioural voltage-feedback operational amplifier macromodel"
+tags = ["opamp", "analog"]
+designator_prefix = "U"
+
+[symbol]
+builtin = "IC-COM-OpAmp"
+default = true
+
+[[pins]]
+number = "3"
+name = "in+"
+role = "input"
+
+[[pins]]
+number = "2"
+name = "in-"
+role = "input"
+
+[[pins]]
+number = "8"
+name = "v+"
+role = "power"
+
+[[pins]]
+number = "4"
+name = "v-"
+role = "power"
+
+[[pins]]
+number = "1"
+name = "out"
+role = "output"
+
+[sim]
+kind = "subckt"
+file = "models/opamps/opamp-generic.lib"
+entry = "OPAMP_GENERIC"
+pins = ["3", "2", "8", "4", "1"]
+
+[sim.supply]
+pins = ["8", "4"]
+implicit = ["15", "-15"]
+
+[license]
+spdx = "CC0-1.0"
+source = "models/opamps/opamp-generic.lib"

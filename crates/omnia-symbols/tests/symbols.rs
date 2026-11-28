@@ -69,6 +69,8 @@ fn builtin_library_has_all_six_mockup_symbols() {
         "IC-COM-OpAmp",
         "Resistor-IEEE-Potentiometer",
         "Resistor-IEEE-Standard",
+        "Source-COM-AC",
+        "Source-COM-DC",
     ];
     assert_eq!(lib.len(), expected.len());
     assert!(!lib.is_empty());

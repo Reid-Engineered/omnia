@@ -1,9 +1,11 @@
-//! Asset generation commands: `cargo xtask tokens` (T1.2) and `cargo xtask symbols` (T2.3),
-//! and `cargo xtask golden [--update]` (T3.2).
+//! Asset generation commands: `cargo xtask tokens` (T1.2), `cargo xtask symbols` (T2.3),
+//! `cargo xtask golden [--update]` (T3.2), `cargo xtask parts [--check]` and
+//! `cargo xtask part pack <dir> <out.opart>` (P1.4).
 
-use std::process::ExitCode;
+use std::{path::Path, process::ExitCode};
 
 mod golden;
+mod parts;
 mod symbols;
 mod tokens;
 
@@ -19,7 +21,13 @@ fn main() -> ExitCode {
         ["symbols"] => symbols::run(&tokens::workspace_root()),
         ["golden"] => golden::run(&tokens::workspace_root(), false),
         ["golden", "--update"] => golden::run(&tokens::workspace_root(), true),
-        _ => Err("usage: cargo xtask <tokens|symbols|golden [--update]>".to_owned()),
+        ["parts"] => parts::run(&tokens::workspace_root(), false),
+        ["parts", "--check"] => parts::run(&tokens::workspace_root(), true),
+        ["part", "pack", dir, out] => parts::run_part_pack(Path::new(dir), Path::new(out)),
+        _ => Err(
+            "usage: cargo xtask <tokens|symbols|golden [--update]|parts [--check]|part pack <dir> <out.opart>>"
+                .to_owned(),
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

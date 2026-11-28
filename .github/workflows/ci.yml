@@ -119,6 +119,9 @@ jobs:
       - name: Check licences, advisories, bans and sources with cargo-deny
         run: cargo deny check
 
+      - name: Check compiled built-in part library
+        run: cargo xtask parts --check
+
       # Save the Cargo and target cache even when a check above failed,
       # so a red run still warms the cache for the next one. Skipped on
       # an exact cache hit, when there is nothing new to save.

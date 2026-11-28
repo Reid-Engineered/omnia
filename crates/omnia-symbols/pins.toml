@@ -50,3 +50,17 @@ anchor = [75.0, 0.0]
 pins = [
   { number = "1", at = [75.0, 0.0] },
 ]
+
+[symbols.Source-COM-AC]
+size_px = 80
+pins = [
+  { number = "1", at = [150.0, 75.0] },
+  { number = "2", at = [0.0, 75.0] },
+]
+
+[symbols.Source-COM-DC]
+size_px = 80
+pins = [
+  { number = "1", at = [150.0, 75.0] },
+  { number = "2", at = [0.0, 75.0] },
+]

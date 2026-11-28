@@ -1,0 +1,6 @@
+* SPDX-License-Identifier: CC0-1.0
+* Generic small-signal silicon switching diode model (authored for Omnia)
+* Standard silicon junction parameters (forward drop ~0.68 V at 10 mA)
+.model DIODE_SIGNAL D(
++ IS=2.52e-9 N=1.752 RS=0.568 CJO=4e-12 VJ=0.7 M=0.333
++ TT=20e-9 BV=100 IBV=1e-4)

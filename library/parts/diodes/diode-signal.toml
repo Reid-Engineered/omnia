@@ -1,0 +1,32 @@
+schema = 1
+id = "diode-signal"
+name = "Signal diode"
+category = "Diodes"
+description = "Generic small-signal silicon switching diode"
+tags = ["diode", "silicon", "switching", "signal"]
+designator_prefix = "D"
+
+[symbol]
+builtin = "Diode-COM-Standard"
+default = true
+
+[[pins]]
+number = "1"
+name = "a"
+role = "passive"
+
+[[pins]]
+number = "2"
+name = "k"
+role = "passive"
+
+[sim]
+kind = "model"
+spice_prefix = "D"
+file = "models/diodes/diode-signal.lib"
+entry = "DIODE_SIGNAL"
+pins = ["1", "2"]
+
+[license]
+spdx = "CC0-1.0"
+source = "models/diodes/diode-signal.lib"

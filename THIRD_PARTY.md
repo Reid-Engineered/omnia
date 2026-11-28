@@ -56,3 +56,13 @@ The text field (UD16) adapts the input handler and element wiring from
 [GPUI's input example](https://github.com/zed-industries/zed/blob/15d136bf8e72ae43b284183ec46940c009460f5c/crates/gpui/examples/input.rs)
 at the pinned revision. Omnia adds its own key handling, single-line editing, theme tokens
 and shaped-line caching. [Apache License 2.0](https://github.com/zed-industries/zed/blob/15d136bf8e72ae43b284183ec46940c009460f5c/LICENSE-APACHE).
+
+## Bundled SPICE models
+
+Every model file under `library/models/` carries an explicit SPDX licence from the `PK11`
+allow-list and is verified by `cargo xtask parts --check` (`PD11`, `PQ7`):
+
+- `library/models/diodes/diode-signal.lib` — `CC0-1.0` (authored for Omnia; generic small-signal
+  silicon diode model).
+- `library/models/opamps/opamp-generic.lib` — `CC0-1.0` (authored for Omnia; behavioural
+  voltage-feedback operational amplifier macromodel).

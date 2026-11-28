@@ -1,0 +1,126 @@
+schema = 1
+id = "vsource-ac"
+name = "AC voltage source"
+category = "Sources"
+description = "Independent voltage source defaulting to a sinusoidal and AC stimulus"
+tags = ["source", "voltage", "ac", "sine"]
+designator_prefix = "V"
+primary_param = "ampl"
+
+[symbol]
+builtin = "Source-COM-AC"
+
+[[pins]]
+number = "1"
+name = "+"
+role = "power"
+
+[[pins]]
+number = "2"
+name = "-"
+role = "power"
+
+[params.waveform]
+kind = "enum"
+variants = ["dc", "sin", "pulse"]
+default = "sin"
+label = "Waveform"
+
+[params.dc]
+kind = "real"
+unit = "V"
+default = "0"
+label = "DC voltage"
+optional = true
+
+[params.ac_mag]
+kind = "real"
+unit = "V"
+default = "1"
+min = "0"
+label = "AC magnitude"
+
+[params.ac_phase]
+kind = "real"
+default = "0"
+label = "AC phase (deg)"
+optional = true
+
+[params.offset]
+kind = "real"
+unit = "V"
+default = "0"
+label = "Sine offset"
+optional = true
+
+[params.ampl]
+kind = "real"
+unit = "V"
+default = "1"
+label = "Sine amplitude"
+
+[params.freq]
+kind = "real"
+unit = "Hz"
+default = "1k"
+min = "0"
+label = "Sine frequency"
+
+[params.delay]
+kind = "real"
+unit = "s"
+default = "0"
+min = "0"
+label = "Delay"
+optional = true
+
+[params.v1]
+kind = "real"
+unit = "V"
+default = "0"
+label = "Pulse initial value"
+optional = true
+
+[params.v2]
+kind = "real"
+unit = "V"
+default = "1"
+label = "Pulse pulsed value"
+optional = true
+
+[params.rise]
+kind = "real"
+unit = "s"
+default = "1u"
+min = "0"
+label = "Pulse rise time"
+optional = true
+
+[params.fall]
+kind = "real"
+unit = "s"
+default = "1u"
+min = "0"
+label = "Pulse fall time"
+optional = true
+
+[params.width]
+kind = "real"
+unit = "s"
+default = "500u"
+min = "0"
+label = "Pulse width"
+optional = true
+
+[params.period]
+kind = "real"
+unit = "s"
+default = "1m"
+min = "0"
+label = "Pulse period"
+optional = true
+
+[sim]
+kind = "primitive"
+primitive = "vsource"
+pins = ["1", "2"]
