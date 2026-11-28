@@ -104,7 +104,7 @@ pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
             out_path.display()
         ));
     }
-    let stage_dir = reserve_staging_dir(out_path)?;
+    let stage_dir = reserve_staging_dir(dir, out_path)?;
     let stage_path = stage_dir.join("staged.opart");
     let pack_result = (|| -> Result<(omnia_parts::ContentHash, Vec<u8>), Error> {
         let hash = pack_opart(dir, &stage_path)
@@ -135,9 +135,32 @@ pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn reserve_staging_dir(out_path: &Path) -> Result<PathBuf, Error> {
+fn reserve_staging_dir(input_dir: &Path, out_path: &Path) -> Result<PathBuf, Error> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let parent = out_path.parent().unwrap_or_else(|| Path::new("."));
+    let canon_input = fs::canonicalize(input_dir).ok();
+    let is_outside_input = |base: &Path| -> bool {
+        let Some(ref root) = canon_input else {
+            return true;
+        };
+        fs::canonicalize(base).is_ok_and(|c| !c.starts_with(root))
+    };
+    let mut bases = Vec::with_capacity(3);
+    bases.push(std::env::temp_dir());
+    if let Some(parent) = out_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        bases.push(parent.to_path_buf());
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        bases.push(cwd);
+    }
+    let stage_parent = bases
+        .into_iter()
+        .find(|b| is_outside_input(b))
+        .ok_or_else(|| {
+            format!(
+                "could not locate a staging directory outside input {}",
+                input_dir.display()
+            )
+        })?;
     let stem = out_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -145,7 +168,7 @@ fn reserve_staging_dir(out_path: &Path) -> Result<PathBuf, Error> {
     let pid = std::process::id();
     for _ in 0..1024 {
         let seq = NEXT.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(".{stem}.stage-{pid}-{seq}"));
+        let candidate = stage_parent.join(format!(".{stem}.stage-{pid}-{seq}"));
         match fs::create_dir(&candidate) {
             Ok(()) => return Ok(candidate),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -159,7 +182,7 @@ fn reserve_staging_dir(out_path: &Path) -> Result<PathBuf, Error> {
     }
     Err(format!(
         "could not reserve exclusive staging directory in {}",
-        parent.display()
+        stage_parent.display()
     ))
 }
 
@@ -1616,6 +1639,28 @@ pins = ["1", "2"]
         assert!(
             fs::read_dir(&bad_out_dir).unwrap().next().is_none(),
             "neither output nor staging archive may remain after failure"
+        );
+
+        // B4 / PK3: when the destination sits inside the source tree and the source tree is right
+        // at PK3's 1,024-entry cap, staging outside the source tree avoids tripping TooManyEntries.
+        let limit_src = root.join("at-pk3-limit");
+        fs::create_dir_all(&limit_src).unwrap();
+        fs::copy(src.join("part.toml"), limit_src.join("part.toml")).unwrap();
+        for idx in 0..1023usize {
+            fs::write(limit_src.join(format!("pad-{idx:04}.txt")), b"x").unwrap();
+        }
+        let in_tree_out = limit_src.join("in-tree.opart");
+        run_part_pack(&limit_src, &in_tree_out)
+            .expect("in-tree output at PK3's 1,024-entry cap must succeed");
+        let in_tree_archive = LibrarySource::open(&in_tree_out).expect("reopen in-tree .opart");
+        assert_eq!(
+            in_tree_archive
+                .resolve_part("part.toml")
+                .expect("resolve in-tree")
+                .part
+                .id
+                .as_str(),
+            "custom-res"
         );
 
         let _ = fs::remove_dir_all(&root);
