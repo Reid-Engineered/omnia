@@ -145,45 +145,50 @@ fn reserve_staging_dir(input_dir: &Path, out_path: &Path) -> Result<PathBuf, Err
         fs::canonicalize(base).is_ok_and(|c| !c.starts_with(root))
     };
     let mut bases = Vec::with_capacity(3);
-    bases.push(std::env::temp_dir());
     if let Some(parent) = out_path.parent().filter(|p| !p.as_os_str().is_empty()) {
         bases.push(parent.to_path_buf());
     }
+    bases.push(std::env::temp_dir());
     if let Ok(cwd) = std::env::current_dir() {
         bases.push(cwd);
     }
-    let stage_parent = bases
-        .into_iter()
-        .find(|b| is_outside_input(b))
-        .ok_or_else(|| {
-            format!(
-                "could not locate a staging directory outside input {}",
-                input_dir.display()
-            )
-        })?;
     let stem = out_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("part");
     let pid = std::process::id();
-    for _ in 0..1024 {
-        let seq = NEXT.fetch_add(1, Ordering::Relaxed);
-        let candidate = stage_parent.join(format!(".{stem}.stage-{pid}-{seq}"));
-        match fs::create_dir(&candidate) {
-            Ok(()) => return Ok(candidate),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => {
-                return Err(format!(
-                    "create staging directory {}: {err}",
-                    candidate.display()
-                ));
+    let mut last_err: Option<String> = None;
+    for stage_parent in bases.into_iter().filter(|b| is_outside_input(b)) {
+        let mut parent_exhausted = true;
+        for _ in 0..1024 {
+            let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+            let candidate = stage_parent.join(format!(".{stem}.stage-{pid}-{seq}"));
+            match fs::create_dir(&candidate) {
+                Ok(()) => return Ok(candidate),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(err) => {
+                    last_err = Some(format!(
+                        "create staging directory {}: {err}",
+                        candidate.display()
+                    ));
+                    parent_exhausted = false;
+                    break;
+                }
             }
         }
+        if parent_exhausted {
+            last_err = Some(format!(
+                "could not reserve exclusive staging directory in {}",
+                stage_parent.display()
+            ));
+        }
     }
-    Err(format!(
-        "could not reserve exclusive staging directory in {}",
-        stage_parent.display()
-    ))
+    Err(last_err.unwrap_or_else(|| {
+        format!(
+            "could not locate a staging directory outside input {}",
+            input_dir.display()
+        )
+    }))
 }
 
 /// Reads `library/` and `THIRD_PARTY.md` under `root`, validates every part and model licence,
@@ -1638,8 +1643,33 @@ pins = ["1", "2"]
         );
         assert!(
             fs::read_dir(&bad_out_dir).unwrap().next().is_none(),
-            "neither output nor staging archive may remain after failure"
+            "neither output nor staging directory may remain in out_dir after failure"
         );
+        // Also verify cleanup in the fallback temp staging parent when the failing output path
+        // sits inside the source tree.
+        let pid = std::process::id();
+        let bad_in_tree_stem = format!("bad-in-tree-{pid}");
+        let bad_in_tree_out = bad_src.join(format!("{bad_in_tree_stem}.opart"));
+        let err_in_tree =
+            run_part_pack(&bad_src, &bad_in_tree_out).expect_err("in-tree PD10 check must fail");
+        assert!(err_in_tree.contains("PD10"), "{err_in_tree}");
+        assert!(!bad_in_tree_out.exists());
+        let stage_prefix = format!(".{bad_in_tree_stem}.stage-{pid}-");
+        for dir_to_check in [&bad_src, &std::env::temp_dir()] {
+            let leftover = fs::read_dir(dir_to_check)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|e| {
+                    e.file_name()
+                        .to_str()
+                        .is_some_and(|n| n.starts_with(&stage_prefix))
+                });
+            assert!(
+                !leftover,
+                "leftover staging directory with prefix {stage_prefix} in {}",
+                dir_to_check.display()
+            );
+        }
 
         // B4 / PK3: when the destination sits inside the source tree and the source tree is right
         // at PK3's 1,024-entry cap, staging outside the source tree avoids tripping TooManyEntries.
