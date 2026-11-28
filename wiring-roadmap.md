@@ -331,10 +331,14 @@ HW1 answered WQ1 "yes" on 2026-11-16 (W0.2); this milestone is unblocked.
   `delete_wires_with_part` the way `ToolRequest::DeleteSelection` does (WD10: Cut behaves
   like Delete; one command, one undo step).
 
-### W3.6 Labels ride their runs · todo
+### W3.6 Labels ride their runs · done
 - Lane: doc, canvas · Depends: T7.2, W2.2 · Read: WD9, WINV9
 - Owns: `crates/schematic-doc/src/follow.rs` (label placement), `crates/schematic-canvas/src/tool/label.rs`
-  (split on placement)
+  (split on placement), widened to `crates/omnia-doc/src/route.rs` (validate label-induced splits
+  during route candidate selection), `crates/omnia-canvas/src/{tool.rs,tool/move_.rs,sheet.rs,
+  sheet/text.rs,overlay.rs,overlay/ghosts.rs,overlay/follow.rs}` (hide affected run/pin labels at lift-off,
+  plan unwired pin-label drags, and paint moved/stationary label text with zero warm allocations),
+  and `wiring-plan.md` (W3.6 preview note)
 - Do: placing a label on a wire body splits the wire there; `plan_follow` fills
   `FollowPlan::labels` per WD9 and splits the new run at each label; the preview draws
   moved labels.
@@ -980,3 +984,47 @@ wire + part) plus a non-rigid labelled-run regression test. Status stays `needs-
 for the Orion Linux/Wayland `Alt`-during-drag session check (`docs/measurements/W2.3.md`).
 
 2026-11-26 W3.1 done — verified and completed W3.1 (wire tool first corner and snap markers: `WD5`, `WD6`, `WK1`, `WK4`, `M10`, `INV5`, `INV6`, `INV11`, `K14`, `B10`, `TC-corner-01..04`, `TC-snap-09`). Confirmed `T6.2` already implemented the `WD6` first-leg choice/lock/Space-flip state in `crates/omnia-canvas/src/tool/wire.rs` and the five distinct `stage/snap` marker shapes (`Pin`, `WireEnd`, `Junction`, `WireBody`, `Grid`, using `omnia-theme` tokens only) in `crates/omnia-canvas/src/overlay/snap_marker.rs`, plus the 30 wire-preview/snap-marker goldens across both themes (`graphite`, `gray`) at 100%/125%/150% in `tests/golden/tests/overlay.rs`. Added GPUI simulated-input tests in `crates/omnia-canvas/src/tool/wire.rs` (`tc_corner_01_to_04_simulated_input_and_zero_sheet_paints`, `tc_snap_09_simulated_input_25_and_800_zoom_zero_sheet_paints`) verifying `TC-corner-01..04` (right -> horizontal, up -> vertical, diagonal tie -> horizontal, lock until Space flip, fresh leg per segment, zero `CachedSheet` notifies / zero pointer `SheetView` paints) and `TC-snap-09` (identical snap-class selection at 8 px inside / `Grid` fallback at 12 px outside across 25% and 800% zoom for `Pin`, `WireEnd`, `Junction`, and `WireBody` with zero `SheetView` paints). No files outside W3.1's `Owns` were modified. All five standard checks (`fmt`, workspace clippy, bench clippy with `scene-counts,readback`, `cargo test --workspace` incl. `omnia-golden`, `cargo deny check`) plus `git diff --check` pass locally on Windows; no checks weakened; no reference measurements run.
+
+2026-11-26 W3.6 done — implemented WD9 label placement on rerouted runs, splitting of
+planned rerouted segments at placed label coordinates, moved-part pin-riding labels, and
+follow-preview painting of all moved labels. `crates/omnia-doc/src/follow.rs` adds
+`has_pin_labels`, `collect_pin_labels_only`, `nearest_lattice_point_on_run` (Manhattan
+nearest lattice point on the new run, breaking ties toward the unmoved end `b` when
+present and then `(x, y)`), and `split_wires_at_points` (splitting `wires` at each
+placed corner label before inserting into `View` and `FollowPlan::add`), plus moves
+non-selected labels sitting on moved parts' pins with those pins (keeping zero allocations
+on the empty-boundary/pin-label-free fast path). Widened ownership to
+`crates/omnia-canvas/src/overlay/follow.rs` so `paint_follow_preview` renders every
+moved label in `plan_labels_sorted` (rigid corners, rerouted corners, and pin-riding
+labels) while retaining stationary `ink_secondary` dots for hidden `affected_labels` on
+refusal/detach (`B10` zero warm Omnia allocations). `crates/omnia-doc/src/command.rs` was
+left untouched (it already consumes `FollowPlan::labels` and splits on `AddLabel`).
+Added `w3_6_winv9_winv6_random_labelled_runs_and_pin_labels` (128-case `WINV9`/`WINV6`/
+`WINV4`/`INV10`/`WINV3` property test) and `w3_6_tc_label_01`–`04` in `follow.rs`,
+`w3_6_wd9_wire_body_split_on_lattice_and_half_grid_and_tc_label_04` in `tool/label.rs`,
+and `w3_6_b10_warm_rerouted_and_pin_label_follow_paint_makes_zero_omnia_allocations` in
+`overlay/follow.rs`. All five standard checks (`cargo fmt --all --check`, workspace
+all-target `clippy -D warnings`, `omnia-bench` `--features scene-counts,readback`
+`clippy -D warnings`, `cargo test --workspace`, `cargo deny check`) and Rule-1 scan pass
+locally on Windows; no budgets certified or thresholds weakened.
+
+2026-11-26 W3.6 done (review of #160 addressed) — fixed all independent review findings: (B1)
+removed `tie_along` from `nearest_lattice_point_on_run` so reroute ties break strictly by
+Manhattan distance to unmoved end `b` then `(x, y)`, with dogleg regression
+`w3_6_b1_dogleg_tie_break_uses_coordinates_without_along_distance`; (B2) added
+`route_on_checked` in `crates/omnia-doc/src/route.rs` so rerouted runs with riding corner
+labels validate label-induced segment splits during WD4 candidate selection (rejecting
+candidates whose label split lands on a crossing foreign wire body), with regression
+`w3_6_b2_label_split_on_foreign_crossing_is_rejected_and_nets_stay_separate`; (B3)
+widened `affected_labels` in `tool/move_.rs` to collect all affected run corner labels
+(rigid and rerouted) plus moved-part pin labels at lift-off (`WINV11`), enabled
+`plan_follow` for unwired pin-label drags, and exposed `TextCache::paint_follow_net_labels`
+so `overlay/follow.rs` paints cached K8/K9/K11 label text for both moved and stationary
+hidden labels (culling stationary text by glyph bounds rather than the 16 px marker margin
+and enforcing K9's global 700-label cap + `(font size, y, x, id)` priority across sheet +
+overlay by deferring runner-up sheet candidates to the overlay without extra `SheetView`
+repaints) with zero warm Omnia allocations (`B10`), updating `wiring-plan.md` and tests in
+`tool/move_.rs`, `tool.rs`, `sheet/text.rs`, and `overlay/follow.rs`; (N1) strengthened
+the `WINV4` refusal check in `follow.rs` from `content_eq` to full `Doc` `PartialEq`.
+Merged `origin/main` (keeping `W3.1` and `W3.6` entries in order). All five standard
+checks pass locally.
