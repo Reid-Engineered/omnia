@@ -167,22 +167,16 @@ pub(super) fn paint_follow_preview(
                         );
                     }
                 }
-                for &id in data.affected_labels {
-                    if let Ok(idx) = data
-                        .plan_labels_sorted
-                        .binary_search_by_key(&id.0, |(lid, _)| lid.0)
-                    {
-                        let moved_at = data.plan_labels_sorted[idx].1;
-                        paint_ghost_label_halo(
-                            GhostLabel {
-                                at: moved_at,
-                                in_bounds: moved_at.is_in_bounds(),
-                            },
-                            params,
-                            palette,
-                            window,
-                        );
-                    }
+                for &(_, moved_at) in data.plan_labels_sorted {
+                    paint_ghost_label_halo(
+                        GhostLabel {
+                            at: moved_at,
+                            in_bounds: moved_at.is_in_bounds(),
+                        },
+                        params,
+                        palette,
+                        window,
+                    );
                 }
             }
             paint_drag_items_halo(
@@ -255,13 +249,8 @@ pub(super) fn paint_follow_preview(
                 }
             }
             paint_junction_dots(data.preview_junctions, full_ink, params, window, cx);
-            for &id in data.affected_labels {
-                if !is_refused
-                    && let Ok(idx) = data
-                        .plan_labels_sorted
-                        .binary_search_by_key(&id.0, |(lid, _)| lid.0)
-                {
-                    let moved_at = data.plan_labels_sorted[idx].1;
+            if !is_refused {
+                for &(_, moved_at) in data.plan_labels_sorted {
                     paint_ghost_label_fg(
                         GhostLabel {
                             at: moved_at,
@@ -273,7 +262,15 @@ pub(super) fn paint_follow_preview(
                         palette,
                         window,
                     );
-                } else if let Some(label) = params.doc.label(id)
+                }
+            }
+            for &id in data.affected_labels {
+                if (is_refused
+                    || data
+                        .plan_labels_sorted
+                        .binary_search_by_key(&id.0, |(lid, _)| lid.0)
+                        .is_err())
+                    && let Some(label) = params.doc.label(id)
                     && params.visible_padded.contains(label.at)
                 {
                     let screen = params.camera.world_to_screen(label.at);
@@ -286,6 +283,25 @@ pub(super) fn paint_follow_preview(
                         params.scope,
                     );
                 }
+            }
+            if let Some(text_cache) = params.text_cache {
+                text_cache.borrow_mut().paint_follow_net_labels(
+                    crate::sheet::text::FollowLabelPaint {
+                        doc: params.doc,
+                        camera: params.camera,
+                        viewport: params.bounds,
+                        scale_factor: params.sf,
+                        affected_labels: data.affected_labels,
+                        plan_labels_sorted: data.plan_labels_sorted,
+                        is_refused,
+                        moved_ink: palette.ink_for(true),
+                        invalid_ink: palette.ink_for(false),
+                        sheet_ink: full_ink,
+                        stationary_ink: ink_secondary,
+                    },
+                    window,
+                    |work| run_gpui(params.scope, work),
+                );
             }
             paint_drag_items_fg(
                 data.items,
@@ -694,5 +710,328 @@ mod tests {
             0,
             "B10: warm rigid-label follow overlay paint must make 0 Omnia allocations"
         );
+    }
+
+    /// W3.6 / B10 / WINV5: rerouted-run corner labels and pin-riding labels in `plan_labels_sorted`
+    /// draw during a non-rigid follow drag with zero warm Omnia heap allocations.
+    #[gpui::test]
+    fn w3_6_b10_warm_rerouted_and_pin_label_follow_paint_makes_zero_omnia_allocations(
+        cx: &mut TestAppContext,
+    ) {
+        let mut doc_val = Doc::new();
+        let r1 = place_resistor(&mut doc_val, pt(-6, 0), "R1");
+        let _r2 = place_resistor(&mut doc_val, pt(6, 4), "R2");
+        doc_val
+            .apply(Command::AddWires(vec![
+                Wire {
+                    a: pt(-4, 0),
+                    b: pt(4, 0),
+                },
+                Wire {
+                    a: pt(4, 0),
+                    b: pt(4, 4),
+                },
+            ]))
+            .unwrap();
+        let ItemId::Label(corner_lid) = doc_val
+            .apply(Command::AddLabel(Label {
+                at: pt(4, 0),
+                text: "CORNER".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+        let ItemId::Label(pin_lid) = doc_val
+            .apply(Command::AddLabel(Label {
+                at: pt(-4, 0),
+                text: "PIN".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+
+        let doc = cx.new(|_| doc_val);
+        let scope = Rc::new(FollowAllocScope::new());
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let doc_clone = doc.clone();
+        let scope_clone = scope.clone();
+
+        struct Host(gpui::Entity<OverlayView>);
+        impl Render for Host {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                self.0.clone()
+            }
+        }
+
+        let (host, cx) = cx.add_window_view(move |_, cx| {
+            let overlay = cx.new(|cx| {
+                OverlayView::new(
+                    doc_clone,
+                    Camera::new(Pt::ZERO, 1.0, viewport),
+                    &GRAPHITE,
+                    cx,
+                )
+                .with_paint_scope(scope_clone)
+            });
+            Host(overlay)
+        });
+        let overlay = host.read_with(cx, |h, _| h.0.clone());
+
+        // Warm non-rigid drag of only `R1`: reroutes the L-run, hides both `corner_lid` and
+        // `pin_lid` in `SheetView`, moves `corner_lid` to (4, 2) and `pin_lid` with R1's right
+        // pin to (-3, 2), and paints their cached text in the overlay.
+        overlay.update(cx, |o, cx| {
+            assert!(o.set_move_preview([ItemId::Part(r1)], pt(1, 2), Orient::IDENTITY, false, cx));
+            let crate::tool::ToolState::Dragging(drag) = o.tool_state() else {
+                panic!("expected Dragging");
+            };
+            assert_eq!(drag.affected_labels(), &[corner_lid, pin_lid]);
+            assert_eq!(
+                drag.plan_labels_sorted(),
+                &[(corner_lid, pt(4, 2)), (pin_lid, pt(-3, 2))]
+            );
+        });
+        cx.run_until_parked();
+
+        scope.omnia_allocs.set(0);
+        scope.omnia_calls.set(0);
+        scope.counting.set(true);
+        for (step, theme) in [(2, &GRAY), (3, &GRAPHITE), (1, &GRAY)] {
+            overlay.update(cx, |o, cx| {
+                o.set_theme(theme, cx);
+                assert!(o.set_move_preview(
+                    [ItemId::Part(r1)],
+                    pt(step, 2),
+                    Orient::IDENTITY,
+                    false,
+                    cx,
+                ));
+            });
+            cx.run_until_parked();
+        }
+        scope.counting.set(false);
+        assert!(scope.omnia_calls.get() >= 3);
+        assert_eq!(
+            scope.omnia_allocs.get(),
+            0,
+            "B10: warm rerouted/pin-label follow overlay paint must make 0 Omnia allocations"
+        );
+    }
+
+    /// W3.6 / K9: follow-preview label text renders long stationary labels whose anchors sit
+    /// past the 16 px marker margin when their glyphs extend into the viewport, and enforces
+    /// K9's global `MAX_VISIBLE_LABELS` (700) per-frame cap and `(font size, y, x, id)` priority
+    /// across BOTH `SheetView` and the follow overlay so a higher-priority follow label displaces
+    /// a lower-priority sheet label (and loses to a higher-priority sheet label) without extra
+    /// `SheetView` repaints.
+    #[gpui::test]
+    fn w3_6_follow_net_labels_edge_visibility_and_k9_shared_cap(cx: &mut TestAppContext) {
+        use crate::sheet::text::{FollowLabelPaint, MAX_VISIBLE_LABELS, TextCache};
+        use gpui::{Hsla, Pixels};
+        use omnia_doc::LabelId;
+
+        let viewport = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        // Camera centered at (0, 0) at 100% zoom: viewport spans x in [-20, 20], y in [-15, 15] grid.
+        let camera = Camera::new(Pt::ZERO, 1.0, viewport);
+        let sheet_ink = super::gpui_color(GRAPHITE.stage_ink);
+        let ink = super::gpui_color(GRAPHITE.stage_ink_secondary);
+
+        // 1. Stationary edge-crossing label beyond the 16 px marker margin.
+        let mut edge_doc = Doc::new();
+        let ItemId::Label(edge_lbl) = edge_doc
+            .apply(Command::AddLabel(Label {
+                at: Pt {
+                    x: -22 * GRID_NM,
+                    y: 0,
+                },
+                text: "VERY_LONG_NET_LABEL_EXTENDING_INTO_VIEWPORT".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+
+        // 2. Dense sheet with exactly 700 visible unaffected sheet net labels (y in -10..=9,
+        // x in -17..=17) plus 1 hidden follow label whose K9 priority beats the 700th sheet
+        // label (`last_sheet_lbl` at (17, 9)) when placed at (-17, -11), and loses to it when
+        // moved to (17, 10) — all strictly inside the viewport.
+        let mut dense_doc = Doc::new();
+        let mut last_sheet_lbl = LabelId(0);
+        for row in -10..=9i32 {
+            for col in -17..=17i32 {
+                let ItemId::Label(id) = dense_doc
+                    .apply(Command::AddLabel(Label {
+                        at: pt(col, row),
+                        text: "N".into(),
+                    }))
+                    .unwrap()
+                    .added[0]
+                else {
+                    unreachable!();
+                };
+                last_sheet_lbl = id;
+            }
+        }
+        assert_eq!(dense_doc.labels().count(), MAX_VISIBLE_LABELS);
+        let ItemId::Label(follow_lbl) = dense_doc
+            .apply(Command::AddLabel(Label {
+                at: pt(-17, -11),
+                text: "FOLLOW".into(),
+            }))
+            .unwrap()
+            .added[0]
+        else {
+            unreachable!();
+        };
+
+        let ran = Rc::new(Cell::new(false));
+        let ran_paint = ran.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| {
+            struct CanvasHost {
+                edge_doc: Doc,
+                dense_doc: Doc,
+                camera: Camera,
+                viewport: Bounds<Pixels>,
+                sheet_ink: Hsla,
+                ink: Hsla,
+                edge_lbl: LabelId,
+                follow_lbl: LabelId,
+                last_sheet_lbl: LabelId,
+                ran: Rc<Cell<bool>>,
+            }
+            impl Render for CanvasHost {
+                fn render(
+                    &mut self,
+                    _window: &mut Window,
+                    _cx: &mut Context<Self>,
+                ) -> impl IntoElement {
+                    let edge_doc = self.edge_doc.fork();
+                    let dense_doc = self.dense_doc.fork();
+                    let camera = self.camera.clone();
+                    let viewport = self.viewport;
+                    let sheet_ink = self.sheet_ink;
+                    let ink = self.ink;
+                    let edge_lbl = self.edge_lbl;
+                    let follow_lbl = self.follow_lbl;
+                    let last_sheet_lbl = self.last_sheet_lbl;
+                    let ran = self.ran.clone();
+                    gpui::canvas(
+                        |_, _, _| {},
+                        move |_, _, window, _| {
+                            // 1. Stationary edge-crossing label beyond the 16 px marker margin renders.
+                            let mut edge_cache = TextCache::new();
+                            let emitted_edge = edge_cache.paint_follow_net_labels(
+                                FollowLabelPaint {
+                                    doc: &edge_doc,
+                                    camera: &camera,
+                                    viewport,
+                                    scale_factor: 1.0,
+                                    affected_labels: &[edge_lbl],
+                                    plan_labels_sorted: &[],
+                                    is_refused: true,
+                                    moved_ink: ink,
+                                    invalid_ink: ink,
+                                    sheet_ink,
+                                    stationary_ink: ink,
+                                },
+                                window,
+                                |work| work(),
+                            );
+                            assert_eq!(
+                                emitted_edge, 1,
+                                "stationary label whose glyphs enter viewport must render even when anchor is >16 px outside"
+                            );
+
+                            // 2. Real SheetView paint with 700 visible sheet labels + 1 hidden
+                            // follow label: SheetView paints the 699 guaranteed winners and defers
+                            // the 700th (`last_sheet_lbl`) to the overlay.
+                            let mut cache = TextCache::new();
+                            let sheet_emitted = cache.paint_sheet_for_test(
+                                &dense_doc,
+                                &[ItemId::Label(follow_lbl)],
+                                1,
+                                (&camera, viewport),
+                                (sheet_ink, ink),
+                                window,
+                            );
+                            assert_eq!(sheet_emitted, MAX_VISIBLE_LABELS - 1);
+
+                            // 3. Higher-priority follow label at (-17, -11) displaces the
+                            // lower-priority 700th sheet label at (17, 9); total stays 700.
+                            let overlay_emitted_win = cache.paint_follow_net_labels(
+                                FollowLabelPaint {
+                                    doc: &dense_doc,
+                                    camera: &camera,
+                                    viewport,
+                                    scale_factor: 1.0,
+                                    affected_labels: &[follow_lbl],
+                                    plan_labels_sorted: &[(follow_lbl, pt(-17, -11))],
+                                    is_refused: false,
+                                    moved_ink: ink,
+                                    invalid_ink: ink,
+                                    sheet_ink,
+                                    stationary_ink: ink,
+                                },
+                                window,
+                                |work| work(),
+                            );
+                            assert_eq!(sheet_emitted + overlay_emitted_win, MAX_VISIBLE_LABELS);
+                            assert_eq!(
+                                cache.overlay_winner_summary_for_test(),
+                                (vec![follow_lbl], vec![]),
+                                "K9: higher-priority follow label must displace lower-priority 700th sheet label"
+                            );
+
+                            // 4. Moving the follow label to (17, 10) (lower priority than
+                            // `last_sheet_lbl` at (17, 9)) restores `last_sheet_lbl` without
+                            // repainting SheetView; total stays 700.
+                            let overlay_emitted_lose = cache.paint_follow_net_labels(
+                                FollowLabelPaint {
+                                    doc: &dense_doc,
+                                    camera: &camera,
+                                    viewport,
+                                    scale_factor: 1.0,
+                                    affected_labels: &[follow_lbl],
+                                    plan_labels_sorted: &[(follow_lbl, pt(17, 10))],
+                                    is_refused: false,
+                                    moved_ink: ink,
+                                    invalid_ink: ink,
+                                    sheet_ink,
+                                    stationary_ink: ink,
+                                },
+                                window,
+                                |work| work(),
+                            );
+                            assert_eq!(sheet_emitted + overlay_emitted_lose, MAX_VISIBLE_LABELS);
+                            assert_eq!(
+                                cache.overlay_winner_summary_for_test(),
+                                (vec![], vec![last_sheet_lbl]),
+                                "K9: higher-priority sheet label must win over lower-priority follow label without sheet repaint"
+                            );
+                            ran.set(true);
+                        },
+                    )
+                }
+            }
+            CanvasHost {
+                edge_doc,
+                dense_doc,
+                camera,
+                viewport,
+                sheet_ink,
+                ink,
+                edge_lbl,
+                follow_lbl,
+                last_sheet_lbl,
+                ran: ran_paint,
+            }
+        });
+        cx.run_until_parked();
+        assert!(ran.get(), "paint callback must execute");
     }
 }

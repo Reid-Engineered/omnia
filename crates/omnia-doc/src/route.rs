@@ -678,6 +678,20 @@ pub(crate) fn route_on<S: RouteSheet>(
     scratch: &mut RouteScratch,
     out: &mut Vec<Wire>,
 ) -> Result<(), Blocker> {
+    route_on_checked(doc, a, b, first_leg, scratch, out, |_| None)
+}
+
+/// [`route_on`] with an extra candidate validity predicate (used by `follow.rs` to validate
+/// WD9 label-induced segment splits before admitting a route).
+pub(crate) fn route_on_checked<S: RouteSheet, F: FnMut(&[Wire]) -> Option<Blocker>>(
+    doc: &S,
+    a: Pt,
+    b: Pt,
+    first_leg: Axis,
+    scratch: &mut RouteScratch,
+    out: &mut Vec<Wire>,
+    mut extra_check: F,
+) -> Result<(), Blocker> {
     out.clear();
     if a == b {
         return Ok(());
@@ -698,6 +712,7 @@ pub(crate) fn route_on<S: RouteSheet>(
     let min_bodies = if a.x == b.x || a.y == b.y {
         let w0 = Wire { a, b };
         let (s0, v0, inside) = assess(doc, &[w0], [a, b], 0, ends_on_lattice);
+        let v0 = v0.or_else(|| extra_check(&[w0]));
         let min_bodies = u8::from(inside[0]) + u8::from(inside[1]);
         if v0.is_none() && s0.bodies <= min_bodies {
             out.push(w0);
@@ -717,6 +732,7 @@ pub(crate) fn route_on<S: RouteSheet>(
         };
         let w1 = [Wire { a, b: first }, Wire { a: first, b }];
         let (s1, v1, inside) = assess(doc, &w1, [a, b], 1, ends_on_lattice);
+        let v1 = v1.or_else(|| extra_check(&w1));
         let min_bodies = u8::from(inside[0]) + u8::from(inside[1]);
         // L1 has lower bound `(min_bodies, 1, 0, manhattan, 2)`; if L0 is valid with
         // `min_bodies` and 0 crossings, L0 provably beats both L1 and every dogleg.
@@ -732,6 +748,7 @@ pub(crate) fn route_on<S: RouteSheet>(
 
         let w2 = [Wire { a, b: second }, Wire { a: second, b }];
         let (s2, v2, _) = assess(doc, &w2, [a, b], 2, ends_on_lattice);
+        let v2 = v2.or_else(|| extra_check(&w2));
         let k2 = s2.key();
         match v2 {
             None => {
@@ -803,9 +820,13 @@ pub(crate) fn route_on<S: RouteSheet>(
             let wires = d.wires(a, b);
             match assess_local_for_valid(doc, local, &wires, [a, b], d.number, d.length, best_key) {
                 FastEval::Valid(score) => {
-                    let key = score.key();
-                    if key < best_key {
-                        best_valid = Some((key, wires, 3));
+                    if extra_check(&wires).is_none() {
+                        let key = score.key();
+                        if key < best_key {
+                            best_valid = Some((key, wires, 3));
+                        }
+                    } else if best_valid.is_none() {
+                        deferred_invalid.push(idx as u16);
                     }
                 }
                 FastEval::Invalid => {
@@ -830,7 +851,9 @@ pub(crate) fn route_on<S: RouteSheet>(
             let wires = d.wires(a, b);
             let judged = ends_on_lattice && -limit <= d.m && d.m <= limit;
             let (score, verdict, _) = assess_local(doc, local, &wires, [a, b], d.number, judged);
-            let blocker = verdict.expect("deferred dogleg must be invalid");
+            let blocker = verdict
+                .or_else(|| extra_check(&wires))
+                .expect("deferred dogleg must be invalid");
             let key = score.key();
             if best_invalid.is_none_or(|(bk, _)| key < bk) {
                 best_invalid = Some((key, blocker));
@@ -852,6 +875,7 @@ pub(crate) fn route_on<S: RouteSheet>(
         let wires = d.wires(a, b);
         let judged = ends_on_lattice && -limit <= d.m && d.m <= limit;
         let (score, verdict, _) = assess(doc, &wires, [a, b], d.number, judged);
+        let verdict = verdict.or_else(|| extra_check(&wires));
         let key = score.key();
         match verdict {
             None => {
