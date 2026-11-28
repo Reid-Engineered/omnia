@@ -85,9 +85,10 @@ pub fn run(root: &Path, check: bool) -> Result<(), Error> {
     }
 }
 
-/// Runs `cargo xtask part pack <dir> <out.opart>`: validates the `.opart` extension, packs to a
-/// staging archive, validates the packed archive's `part.toml` snapshot with `PD10`, and publishes
-/// `out.opart` exclusively (never overwriting an existing file) only on success.
+/// Runs `cargo xtask part pack <dir> <out.opart>`: validates the `.opart` extension, packs into an
+/// exclusively reserved staging directory, reads the staged archive once into memory, validates
+/// that exact buffer with `LibrarySource::from_zip` + `PD10`, cleans up only the owned staging
+/// directory, and publishes the validated buffer exclusively (`File::create_new`).
 pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
     if out_path.extension().and_then(|ext| ext.to_str()) != Some("opart") {
         return Err(format!(
@@ -103,23 +104,24 @@ pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
             out_path.display()
         ));
     }
-    let stage_path = staging_opart_path(out_path);
+    let stage_dir = reserve_staging_dir(out_path)?;
+    let stage_path = stage_dir.join("staged.opart");
     let pack_result = (|| -> Result<(omnia_parts::ContentHash, Vec<u8>), Error> {
         let hash = pack_opart(dir, &stage_path)
             .map_err(|e| format!("pack {} -> {}: {e}", dir.display(), out_path.display()))?;
-        let archive = LibrarySource::open(&stage_path)
-            .map_err(|e| format!("reopen staged archive {}: {e}", stage_path.display()))?;
+        let bytes = fs::read(&stage_path)
+            .map_err(|e| format!("read staged archive {}: {e}", stage_path.display()))?;
+        let archive = LibrarySource::from_zip(bytes.as_slice())
+            .map_err(|e| format!("open staged archive {}: {e}", stage_path.display()))?;
         let part_path = "part.toml";
         let resolved = resolve_with_context(&archive, part_path, "")?;
         let symbols = SymbolLibrary::builtin();
         let embedded = build_embedded(&resolved, &symbols, format!("custom:{}", resolved.part.id))?;
         validate(&embedded)
             .map_err(|e| format!("{}/{part_path}: PD10 validation failed: {e}", dir.display()))?;
-        let bytes = fs::read(&stage_path)
-            .map_err(|e| format!("read staged archive {}: {e}", stage_path.display()))?;
         Ok((hash, bytes))
     })();
-    let _ = fs::remove_file(&stage_path);
+    let _ = fs::remove_dir_all(&stage_dir);
 
     let (hash, bytes) = pack_result?;
     let mut output =
@@ -133,15 +135,32 @@ pub fn run_part_pack(dir: &Path, out_path: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn staging_opart_path(out_path: &Path) -> PathBuf {
+fn reserve_staging_dir(out_path: &Path) -> Result<PathBuf, Error> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
-    let seq = NEXT.fetch_add(1, Ordering::Relaxed);
     let parent = out_path.parent().unwrap_or_else(|| Path::new("."));
     let stem = out_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("part");
-    parent.join(format!(".{stem}.tmp-{}-{seq}.opart", std::process::id()))
+    let pid = std::process::id();
+    for _ in 0..1024 {
+        let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(".{stem}.stage-{pid}-{seq}"));
+        match fs::create_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => {
+                return Err(format!(
+                    "create staging directory {}: {err}",
+                    candidate.display()
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "could not reserve exclusive staging directory in {}",
+        parent.display()
+    ))
 }
 
 /// Reads `library/` and `THIRD_PARTY.md` under `root`, validates every part and model licence,
@@ -290,10 +309,13 @@ fn compile_library(root: &Path) -> Result<Vec<CompiledPart>, Error> {
 fn parse_model_spdx(repo_rel: &str, text: &str) -> Result<String, Error> {
     let mut found: Option<String> = None;
     for line in text.lines() {
-        // Only treat a line as an SPDX declaration when the comment body itself starts with
-        // `SPDX-License-Identifier:` (rejecting prose like `* No SPDX-License-Identifier: MIT`).
-        let body = line
-            .trim_start()
+        // Require a SPICE/header comment marker (`*`, `;`, or `#`) followed immediately by
+        // `SPDX-License-Identifier:` (rejecting bare uncommented lines and prose).
+        let trimmed = line.trim_start();
+        let Some(after_comment) = trimmed.strip_prefix(['*', ';', '#']) else {
+            continue;
+        };
+        let body = after_comment
             .trim_start_matches(['*', ';', '#'])
             .trim_start();
         if let Some(rest) = body.strip_prefix("SPDX-License-Identifier:") {
@@ -1189,6 +1211,19 @@ source = "models/diodes/bad.lib"
         )
         .unwrap();
         let err = run(&root, true).expect_err("model without leading SPDX declaration must fail");
+        assert!(
+            err.contains("library/models/diodes/nohdr.lib")
+                && err.contains("SPDX-License-Identifier"),
+            "unexpected diagnostic: {err}"
+        );
+
+        // Bare uncommented SPDX-License-Identifier line must also be rejected.
+        fs::write(
+            root.join("library/models/diodes/nohdr.lib"),
+            "SPDX-License-Identifier: MIT\n.model D_NOHDR D(IS=1e-12)\n",
+        )
+        .unwrap();
+        let err = run(&root, true).expect_err("bare uncommented SPDX declaration must fail");
         assert!(
             err.contains("library/models/diodes/nohdr.lib")
                 && err.contains("SPDX-License-Identifier"),
